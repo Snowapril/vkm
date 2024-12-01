@@ -87,6 +87,8 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
 		#/RTCc        # -> value is assigned to a smaller data type and results in a data loss
 		#>
 
+		/utf-8 		  # -> spdlog
+
 		$<$<CONFIG:Release>:
 		/Gw           # -> whole program global optimization
 		/GS-          # -> buffer security check: no

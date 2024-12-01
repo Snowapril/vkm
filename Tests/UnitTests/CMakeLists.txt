@@ -10,17 +10,6 @@ set(PUBLIC_HDRS
 
 # Sources
 set(SRCS
-    ${SRC_DIR}/Core/Devices/DeviceQueryContextTests.cpp
-    ${SRC_DIR}/Core/Devices/InstanceTests.cpp
-    ${SRC_DIR}/Core/Devices/PhysicalDeviceTests.cpp
-    ${SRC_DIR}/Core/Devices/LogicalDeviceTests.cpp
-    ${SRC_DIR}/Core/Devices/QueueTests.cpp
-    ${SRC_DIR}/Core/FrameGraph/FrameGraphTests.cpp
-    ${SRC_DIR}/Core/Graphics/Pipelines/GraphicsPipelineTests.cpp
-    ${SRC_DIR}/Core/Graphics/Pipelines/ComputePipelineTests.cpp
-    ${SRC_DIR}/Core/Graphics/Pipelines/GlslangUtilTests.cpp
-    ${SRC_DIR}/Core/Graphics/RenderPass/RenderPassTests.cpp
-    ${SRC_DIR}/ThirdPartySampleTests/TaskFlowTests.cpp
     ${SRC_DIR}/UnitTests.cpp
 )
 

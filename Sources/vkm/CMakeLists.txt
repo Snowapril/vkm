@@ -15,7 +15,7 @@ set(SRCS
 )
 
 # Build library
-add_executable(${target} ${SRCS} ${BACKWARD_ENABLE})
+add_library(${target} ${SRCS} ${BACKWARD_ENABLE})
 
 # Enable backward-cpp stack-trace for this build
 add_backward(${target})
@@ -37,8 +37,8 @@ target_include_directories(${target}
     ${LIBRARY_DIR}/glfw/include
     ${LIBRARY_DIR}/volk
     ${LIBRARY_DIR}/glslang
-    ${LIBRARY_DIR}/assimp/include
-    ${LIBRARY_DIR}/cxxopts/include
+    ${LIBRARY_DIR}/vma/src
+    ${LIBRARY_DIR}
 )
 
 # Compile options
@@ -53,13 +53,13 @@ target_link_libraries(${target}
     PUBLIC
     ${DEFAULT_LINKER_OPTIONS}
 	${DEFAULT_LIBRARIES}
-    vkmcore
     PRIVATE
     glfw
     volk
     glslang
     SPIRV
-    assimp
+    spirv-cross-core
+    VulkanMemoryAllocator
 )
 
 # Compile definitions
@@ -67,4 +67,13 @@ target_compile_definitions(${target}
     PRIVATE
     RESOURCES_DIR="${RESOURCES_DIR}"
     ${DEFAULT_COMPILE_DEFINITIONS}
+)
+
+# Install
+install(TARGETS  
+        ${target} 
+        RUNTIME  DESTINATION bin
+        LIBRARY  DESTINATION lib
+        ARCHIVE  DESTINATION lib
+        PUBLIC_HEADER DESTINATION include
 )

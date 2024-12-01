@@ -3,7 +3,6 @@
     {
       "name": "x64-RelWithDebInfo",
       "configurationType": "RelWithDebInfo",
-      "generator": "Ninja",
       "inheritEnvironments": [ "msvc_x64_x64" ],
       "buildRoot": "${workspaceRoot}\\build\\${name}",
       "enableClangTidyCodeAnalysis": true
@@ -11,7 +10,6 @@
     {
       "name": "x64-Release",
       "configurationType": "Release",
-      "generator": "Ninja",
       "inheritEnvironments": [ "msvc_x64_x64" ],
       "buildRoot": "${workspaceRoot}\\build\\${name}",
       "enableClangTidyCodeAnalysis": true
@@ -19,7 +17,6 @@
     {
       "name": "x64-Debug",
       "configurationType": "Debug",
-      "generator": "Ninja",
       "inheritEnvironments": [ "msvc_x64_x64" ],
       "buildRoot": "${workspaceRoot}\\build\\${name}",
       "enableClangTidyCodeAnalysis": true
@@ -27,7 +24,6 @@
     {
       "name": "x86-RelWithDebInfo",
       "configurationType": "RelWithDebInfo",
-      "generator": "Ninja",
       "inheritEnvironments": [ "msvc_x86" ],
       "buildRoot": "${workspaceRoot}\\build\\${name}",
       "enableClangTidyCodeAnalysis": true
@@ -35,7 +31,6 @@
     {
       "name": "x86-Release",
       "configurationType": "Release",
-      "generator": "Ninja",
       "inheritEnvironments": [ "msvc_x86" ],
       "buildRoot": "${workspaceRoot}\\build\\${name}",
       "enableClangTidyCodeAnalysis": true
@@ -43,7 +38,6 @@
     {
       "name": "x86-Debug",
       "configurationType": "Debug",
-      "generator": "Ninja",
       "inheritEnvironments": [ "msvc_x86" ],
       "buildRoot": "${workspaceRoot}\\build\\${name}",
       "enableClangTidyCodeAnalysis": true
