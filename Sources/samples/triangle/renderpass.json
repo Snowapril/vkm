@@ -1,0 +1,35 @@
+{
+    "rendertargets": {
+        "color": {
+            "viewport_relative" : {
+                "ratio": 1.0
+            },
+            "format": "bgra8unorm"
+        }
+    },
+    "inputlayout": {
+        "simple": [
+            {
+                "name": "position",
+                "format": "float3"
+            },
+            {
+                "name": "color",
+                "format": "float4"
+            }
+        ]
+    },
+    "renderpass": {
+        "name": "triangle",
+        "shaders": {
+            "vertex": "triangle.vert",
+            "fragment": "triangle.frag"
+        },
+        "inputlayout": "simple",
+        "depth_stencil": {
+            "depth_test": "lessequal",
+            "depth_write": true
+        },
+        "color_attachments": ["color"]
+    }
+}
