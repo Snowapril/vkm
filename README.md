@@ -23,8 +23,6 @@ cmake .. && cmake --build .
 *   [imgui](https://github.com/ocornut/imgui)
 *   [ImGuizmo](https://github.com/CedricGuillemet/ImGuizmo)
 *   [stb](https://github.com/nothings/stb)
-*   [assimp](https://github.com/assimp/assimp)
-*   [etc2comp](https://github.com/google/etc2comp)
 *   [taskflow](https://github.com/taskflow/taskflow)
 *   [meshoptimizer](https://github.com/zeux/meshoptimizer)
 *   [glslang](https://github.com/KhronosGroup/glslang)
