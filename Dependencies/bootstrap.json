@@ -1,0 +1,162 @@
+[
+  {
+    "name": "vulkan",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/KhronosGroup/Vulkan-Headers.git",
+      "revision": "v1.3.208"
+    }
+  },
+  {
+    "name": "volk",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/zeux/volk.git",
+      "revision": "1.3.204"
+    }
+  },
+  {
+    "name": "vma",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator",
+      "revision": "v3.0.1"
+    }
+  },
+  {
+    "name": "glfw",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/glfw/glfw.git",
+      "revision": "3.3.4"
+    }
+  },
+  {
+    "name": "glm",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/g-truc/glm.git",
+      "revision": "0.9.9.8"
+    }
+  },
+  {
+    "name": "imgui",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/ocornut/imgui.git",
+      "revision": "v1.87"
+    }
+  },
+  {
+    "name": "stb",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/nothings/stb.git",
+      "revision": "c9064e317699d2e495f36ba4f9ac037e88ee371a"
+    }
+  },
+  {
+    "name": "assimp",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/assimp/assimp.git",
+      "revision": "a9f82dbe0b8a658003f93c7b5108ee4521458a18"
+    }
+  },
+  {
+    "name": "etc2comp",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/google/etc2comp",
+      "revision": "9cd0f9cae0f32338943699bb418107db61bb66f2"
+    }
+  },
+  {
+    "name": "taskflow",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/taskflow/taskflow.git",
+      "revision": "v3.1.0"
+    }
+  },
+  {
+    "name": "meshoptimizer",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/zeux/meshoptimizer",
+      "revision": "v0.16"
+    }
+  },
+  {
+    "name": "glslang",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/KhronosGroup/glslang.git",
+      "revision": "9bb8cfffb0eed010e07132282c41d73064a7a609"
+    }
+  },
+  {
+    "name": "DirectXShaderCompiler",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/microsoft/DirectXShaderCompiler",
+      "revision": "v1.7.2212"
+    }
+  },
+  {
+    "name": "spirv-cross",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/KhronosGroup/SPIRV-Cross",
+      "revision": "0e2880ab990e79ce6cc8c79c219feda42d98b1e8"
+    }
+  },
+  {
+    "name": "ImGuizmo",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/CedricGuillemet/ImGuizmo",
+      "revision": "1.83"
+    }
+  },
+  {
+    "name": "spdlog",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/gabime/spdlog.git",
+      "revision": "v1.9.2"
+    }
+  },
+  {
+    "name": "doctest",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/doctest/doctest",
+      "revision": "7b9885133108ae301ddd16e2651320f54cafeba7"
+    }
+  },
+  {
+    "name": "backward-cpp",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/bombela/backward-cpp",
+      "revision": "v1.6"
+    }
+  },
+  {
+    "name": "json",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/nlohmann/json",
+      "revision": "v3.11.2"
+    }
+  },
+  {
+    "name": "cxxopts",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/jarro2783/cxxopts",
+      "revision": "v3.1.1"
+    }
+  }
+]
