@@ -1,7 +1,13 @@
 // Copyright (c) 2024 Snowapril
 
-#include <cstdint>
+#pragma once
 
-#if defined(VKM_USE_VULKAN_API) || defined(VKM_USE_METAL_API)
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
-#endif // defined(VKM_USE_VULKAN_API) || defined(VKM_USE_METAL_API)
+#include <vkm/base/logger.h>
+
+namespace vkm
+{
+    #define VKM_DEBUG_LOG(fmt, ...) LoggerManager::singleton().debug(fmt, ##__VA_ARGS__)
+    #define VKM_DEBUG_WARN(fmt, ...) LoggerManager::singleton().warn(fmt, ##__VA_ARGS__)
+    #define VKM_DEBUG_INFO(fmt, ...) LoggerManager::singleton().info(fmt, ##__VA_ARGS__)
+    #define VKM_DEBUG_ERROR(fmt, ...) LoggerManager::singleton().error(fmt, ##__VA_ARGS__)
+}

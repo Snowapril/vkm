@@ -7,14 +7,19 @@ set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../)
 
 # Set public headers
 set(PUBLIC_HDRS
+    ${PUBLIC_HDR_DIR}/vkm/base/platform.h
     ${PUBLIC_HDR_DIR}/vkm/base/common.h
+    ${PUBLIC_HDR_DIR}/vkm/base/logger.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/swapchain.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/engine.h
 )
 
 # Set Sources
 set(SRCS
     ${SRC_DIR}/vkm/base/common.cpp
+    ${SRC_DIR}/vkm/base/logger.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/swapchain.cpp
+    ${SRC_DIR}/vkm/renderer/engine.cpp
 )
 
 if (VKM_USE_VULKAN_API)

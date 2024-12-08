@@ -27,6 +27,7 @@ namespace vkm
 
     void SwapChain::resize(uint32_t width, uint32_t height)
     {
+        (void)width; (void)height;
         // TODO: Implement this
         
         // 1. check we need to destroy and recreate swapchain

@@ -174,3 +174,8 @@ set_property(TARGET SPVRemapper   PROPERTY FOLDER "ThirdPartyLibraries/glslang")
 add_subdirectory(Sources/vkm)
 add_subdirectory(Tests/UnitTests)
 add_subdirectory(Tests/RenderingTests)
+
+option(BUILD_SAMPLES "Build samples" ON)
+if (BUILD_SAMPLES)
+    add_subdirectory(Sources/samples/triangle)
+endif()

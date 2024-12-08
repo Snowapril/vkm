@@ -1,5 +1,7 @@
 // Copyright (c) 2024 Snowapril
 
+#pragma once
+
 #include "vkm/renderer/backend/common/swapchain.h"
 
 namespace vkm
