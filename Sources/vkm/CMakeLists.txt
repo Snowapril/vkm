@@ -7,12 +7,33 @@ set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../)
 
 # Set public headers
 set(PUBLIC_HDRS
+    ${PUBLIC_HDR_DIR}/vkm/base/common.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/swapchain.h
 )
 
 # Set Sources
 set(SRCS
-    ${SRC_DIR}/vkm/WinMain.cpp
+    ${SRC_DIR}/vkm/base/common.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/swapchain.cpp
 )
+
+if (VKM_USE_VULKAN_API)
+    # list(APPEND PUBLIC_HDRS
+    #     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.h
+    # )
+    # list(APPEND SRCS
+    #     ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.cpp
+    # )
+endif()
+
+if (VKM_USE_METAL_API)
+    list(APPEND PUBLIC_HDRS
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_swapchain.h
+    )
+    list(APPEND SRCS
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_swapchain.mm
+    )
+endif()
 
 # Build library
 add_library(${target} ${SRCS} ${BACKWARD_ENABLE})

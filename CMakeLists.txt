@@ -7,6 +7,10 @@ set(CMAKE_VISIBILITY_INLINES_HIDDEN 1)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED 20)
 
+if (APPLE AND NOT IOS)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "14.5" CACHE STRING "Minimum OS X deployment version")
+endif()
+
 # Include cmake modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Builds/CMake")
 
@@ -31,6 +35,34 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 elseif(CMAKE_BUILD_TYPE MATCHES "Debug")
     add_definitions(-DVKM_DEBUG)
+endif()
+
+if (UNIX AND NOT APPLE AND NOT ANDROID AND NOT WEBGL)
+    set(LINUX TRUE)
+else()
+    # since cmake 3.25 LINUX is automatically set based on CMAKE_SYSTEM_NAME, which the android
+    # cmake files are setting to "Linux".
+    set(LINUX FALSE)
+endif()
+
+if (LINUX OR WIN32)
+    option(VKM_USE_VULKAN_API "Use Vulkan API" ON)
+else()
+    option(VKM_USE_VULKAN_API "Use Vulkan API" OFF)
+endif()
+
+if (APPLE)
+    option(VKM_USE_METAL_API "Use Metal API on macOS/iOS" ON)
+else()
+    option(VKM_USE_METAL_API "Use Metal API on macOS/iOS" OFF)
+endif()
+
+if (VKM_USE_VULKAN_API)
+    add_definitions(-DVKM_USE_VULKAN_API)
+endif()
+
+if (VKM_USE_METAL_API)
+    add_definitions(-DVKM_USE_METAL_API)
 endif()
 
 # Build Options
