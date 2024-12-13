@@ -88,6 +88,10 @@ target_link_libraries(${target}
     VulkanMemoryAllocator
 )
 
+if (VKM_USE_METAL_API)
+    target_link_libraries(${target} PUBLIC "-framework Cocoa -framework Metal -framework CoreVideo -framework QuartzCore -framework AppKit")
+endif()
+
 # Compile definitions
 target_compile_definitions(${target}
     PRIVATE
