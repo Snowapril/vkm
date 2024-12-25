@@ -431,3 +431,5 @@ Dependencies/.bootstrap.json
 Dependencies/archives/
 Dependencies/src/
 *.vfpipeline
+
+.DS_Store
