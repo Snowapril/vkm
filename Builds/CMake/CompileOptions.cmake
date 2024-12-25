@@ -3,8 +3,8 @@
 #
 
 # Set warnings as errors flag
-option(VOX_FLOW_WARNINGS_AS_ERRORS "Treat all warnings as errors" ON)
-if(VOX_FLOW_WARNINGS_AS_ERRORS)
+option(VKM_WARNINGS_AS_ERRORS "Treat all warnings as errors" ON)
+if(VKM_WARNINGS_AS_ERRORS)
 	if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
 		set(WARN_AS_ERROR_FLAGS	"/WX")
 	else()
@@ -107,6 +107,19 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang"
 		-Wno-missing-braces
 		-Wno-register			# -> disable warning: ISO c++1z does not allow 'register' storage class specifier [-wregister] (caused by pybind11)
         -Wno-error=register		# -> disable warning: ISO c++1z does not allow 'register' storage class specifier [-wregister] (caused by pybind11)
+		-Wunused-private-field	# -> disable warning: '...' is a private field of '...'
+		${WARN_AS_ERROR_FLAGS}
+		-std=c++2a
+	)
+endif ()
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "AppleClang")
+	set(DEFAULT_COMPILE_OPTIONS ${DEFAULT_COMPILE_OPTIONS}
+		-Wall
+		-Wno-missing-braces
+		-Wno-register			# -> disable warning: ISO c++1z does not allow 'register' storage class specifier [-wregister] (caused by pybind11)
+        -Wno-error=register		# -> disable warning: ISO c++1z does not allow 'register' storage class specifier [-wregister] (caused by pybind11)
+		-Wno-unused-private-field	# -> disable warning: '...' is a private field of '...'
 		${WARN_AS_ERROR_FLAGS}
 		-std=c++2a
 	)

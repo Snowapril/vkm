@@ -6,15 +6,16 @@
 
 namespace vkm
 {
+    class VkmDriverBase;
     /*
     * @brief Engine base class
     * @details manage whole engine lifecycle and drive the render driver and other modules
     */
-    class VkmEngineBase
+    class VkmEngine
     {
     public:
-        VkmEngineBase();
-        ~VkmEngineBase();
+        VkmEngine(VkmDriverBase* driver);
+        ~VkmEngine();
 
         /*
         * @brief Initialize engine
@@ -35,5 +36,6 @@ namespace vkm
         void destroy();
 
     private:
+        VkmDriverBase* _driver;
     };
 }

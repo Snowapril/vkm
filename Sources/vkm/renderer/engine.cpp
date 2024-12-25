@@ -6,15 +6,16 @@
 
 namespace vkm
 {
-    VkmEngineBase::VkmEngineBase()
+    VkmEngine::VkmEngine(VkmDriverBase* driver)
+        : _driver(driver)
     {
     }
 
-    VkmEngineBase::~VkmEngineBase()
+    VkmEngine::~VkmEngine()
     {
     }
 
-    bool VkmEngineBase::initialize()
+    bool VkmEngine::initialize()
     {
         bool result = LoggerManager::singleton().initialize();
         if (!result)
@@ -28,11 +29,11 @@ namespace vkm
         return true;
     }
 
-    void VkmEngineBase::runLoop()
+    void VkmEngine::runLoop()
     {
     }
 
-    void VkmEngineBase::destroy()
+    void VkmEngine::destroy()
     {
     }
 }
