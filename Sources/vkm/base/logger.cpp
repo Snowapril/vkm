@@ -30,6 +30,26 @@ namespace vkm
         return true;
     }
 
+    void Logger::debug(const char* msg)
+    {
+        _logger->debug(msg);
+    }
+
+    void Logger::info(const char* msg)
+    {
+        _logger->info(msg);
+    }
+
+    void Logger::warn(const char* msg)
+    {
+        _logger->warn(msg);
+    }
+
+    void Logger::error(const char* msg)
+    {
+        _logger->error(msg);
+    }
+
     void Logger::flush()
     {
         _logger->flush();
@@ -124,6 +144,30 @@ namespace vkm
     void LoggerManager::addLogger(std::unique_ptr<Logger>&& logger)
     {
         _loggers.push_back(std::move(logger));
+    }
+
+    void LoggerManager::debug(const char* msg)
+    {
+        for ( auto& logger : _loggers)
+            logger->debug(msg);
+    }
+
+    void LoggerManager::info(const char* msg)
+    {
+        for ( auto& logger : _loggers)
+            logger->info(msg);
+    }
+
+    void LoggerManager::warn(const char* msg)
+    {
+        for ( auto& logger : _loggers)
+            logger->warn(msg);
+    }
+
+    void LoggerManager::error(const char* msg)
+    {
+        for ( auto& logger : _loggers)
+            logger->error(msg);
     }
 
     void LoggerManager::flush()

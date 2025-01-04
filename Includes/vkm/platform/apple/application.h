@@ -5,13 +5,16 @@
 #include <vkm/base/common.h>
 #import <Cocoa/Cocoa.h>
 
+@interface VkmWindow : NSWindow
+@end
+
 @interface VkmApplication : NSObject <NSApplicationDelegate, NSWindowDelegate>
 
 /*
 * @brief Enter into application entrypoint
 * @details entrypoint of application
 */
-- (int)entryPoint:(int)argc argv:(const char*[])argv;
+- (int)entryPoint:(int)argc argv:(char*[])argv;
 
 /*
 * @brief Destroy application

@@ -110,9 +110,6 @@ static void* renderWorker( void* _Nullable obj )
 }
 @end
 
-@interface VkmWindow : NSWindow
-@end
-
 @implementation VkmWindow
 // Overriding this function allows to prevent clicking noise when using keyboard and esc key to go windowed
 - (void)keyDown:(NSEvent *)event
@@ -247,7 +244,7 @@ static void* renderWorker( void* _Nullable obj )
     //
 }
 
-- (int) entryPoint:(int)argc argv:(const char*[])argv
+- (int) entryPoint:(int)argc argv:(char*[])argv
 {
     return NSApplicationMain(argc, argv);
 }

@@ -51,6 +51,10 @@ else()
     option(VKM_USE_VULKAN_API "Use Vulkan API" OFF)
 endif()
 
+if (WIN32)
+    add_definitions(-DVKM_PLATFORM_WINDOWS)
+endif()
+
 if (APPLE)
     option(VKM_USE_METAL_API "Use Metal API on macOS/iOS" ON)
 else()
@@ -77,7 +81,7 @@ if (CMAKE_BUILD_TYPE MATCHES Debug AND CMAKE_COMPILER_IS_GNUCXX AND BUILD_COVERA
 endif()
 
 if (GPU_RESOURCE_DEBUG_NAME)
-    add_definitions(-DVK_DEBUG_NAME_ENABLED)
+    add_definitions(-DVKM_DEBUG_NAME_ENABLED)
 endif()
 
 if (CHROME_TRACING)

@@ -11,4 +11,14 @@ namespace vkm
     VkmDriverBase::~VkmDriverBase()
     {
     }
+
+    bool VkmDriverBase::initialize()
+    {
+        return initializeInner();
+    }
+
+    void VkmDriverBase::destroy()
+    {
+        destroyInner();
+    }
 }

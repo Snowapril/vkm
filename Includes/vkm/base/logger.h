@@ -23,23 +23,19 @@ namespace vkm
         /*
         * @brief Log message with format with debug level
         */
-        template <typename... Args>
-        void debug(const char* fmt, Args&&... args);
+        void debug(const char* msg);
         /*
         * @brief Log message with format with info level
         */
-        template <typename... Args>
-        void info(const char* fmt, Args&&... args);
+        void info(const char* msg);
         /*
         * @brief Log message with format with warn level
         */
-        template <typename... Args>
-        void warn(const char* fmt, Args&&... args);
+        void warn(const char* msg);
         /*
         * @brief Log message with format with error level
         */
-        template <typename... Args>
-        void error(const char* fmt, Args&&... args);
+        void error(const char* msg);
 
         /*
         * @brief setup spdlog common preferences
@@ -132,23 +128,19 @@ namespace vkm
         /*
         * @brief Log message with format with debug level
         */
-        template <typename... Args>
-        void debug(const char* fmt, Args&&... args);
+        void debug(const char* fmt);
         /*
         * @brief Log message with format with info level
         */
-        template <typename... Args>
-        void info(const char* fmt, Args&&... args);
+        void info(const char* fmt);
         /*
         * @brief Log message with format with warn level
         */
-        template <typename... Args>
-        void warn(const char* fmt, Args&&... args);
+        void warn(const char* fmt);
         /*
         * @brief Log message with format with error level
         */
-        template <typename... Args>
-        void error(const char* fmt, Args&&... args);
+        void error(const char* fmt);
 
         /*
         * @brief flush all loggers

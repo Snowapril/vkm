@@ -25,12 +25,16 @@ set(SRCS
 )
 
 if (VKM_USE_VULKAN_API)
-    # list(APPEND PUBLIC_HDRS
-    #     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.h
-    # )
-    # list(APPEND SRCS
-    #     ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.cpp
-    # )
+    list(APPEND PUBLIC_HDRS
+        $(PUBLIC_HDR_DIR)/vkm/platform/windows/application.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_driver.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_util.h
+    )
+    list(APPEND SRCS
+        ${SRC_DIR}/vkm/platform/windows/application.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_driver.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_util.cpp
+    )
 endif()
 
 if (VKM_USE_METAL_API)

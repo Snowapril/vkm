@@ -4,25 +4,22 @@
 
 #include <vkm/renderer/backend/common/driver.h>
 
-class MTLDevice;
-
 namespace vkm
 {
     /*
     * @brief renderer backend driver base class
     * @details 
     */
-    class VkmDriverMetal : public VkmDriverBase
+    class VkmDriverVulkan : public VkmDriverBase
     {
     public:
-        VkmDriverMetal(MTLDevice* mtlDevice);
-        ~VkmDriverMetal();
+        VkmDriverVulkan();
+        ~VkmDriverVulkan();
 
     protected:
         virtual bool initializeInner() override final;
         virtual void destroyInner() override final;
 
     private:
-        MTLDevice* _mtlDevice;
     };
 }

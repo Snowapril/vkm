@@ -16,6 +16,13 @@ namespace vkm
         VkmDriverBase();
         ~VkmDriverBase();
 
+        bool initialize();
+        void destroy();
+        
+    protected:
+        virtual bool initializeInner() = 0;
+        virtual void destroyInner() = 0;
+
     private:
     };
 }
