@@ -7,7 +7,7 @@
 namespace vkm
 {
     VkmEngine::VkmEngine(VkmDriverBase* driver)
-        : _driver(driver)
+        : _driver(driver), _lastUpdateTime(0.0)
     {
     }
 
@@ -36,8 +36,11 @@ namespace vkm
         return true;
     }
 
-    void VkmEngine::runLoop()
+    void VkmEngine::update(VkmTexture* backBuffer, const double currentUpdateTime)
     {
+        const double deltaTime = currentUpdateTime - _lastUpdateTime;
+        _lastUpdateTime = currentUpdateTime;
+        VKM_DEBUG_INFO(fmt::format("Engine update : delta time : {}", deltaTime).c_str());
     }
 
     void VkmEngine::destroy()

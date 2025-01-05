@@ -13,7 +13,7 @@ using namespace vkm;
 
 int main(int argc, char* argv[])
 {
-    VkmApplication app;
+    VkmApplication app("Triangle");
     
     int ret = app.entryPoint(argc, argv);
     app.destroy();

@@ -3,23 +3,33 @@
 #pragma once
 
 #include <vkm/base/common.h>
-#import <Cocoa/Cocoa.h>
 
-@interface VkmWindow : NSWindow
-@end
+namespace vkm
+{
+    class VkmWindow
+    {
+    public:
+        VkmWindow();
+        ~VkmWindow();
 
-@interface VkmApplication : NSObject <NSApplicationDelegate, NSWindowDelegate>
+        void create(uint32_t width, uint32_t height, const char* title);
+        void destroy();
 
-/*
-* @brief Enter into application entrypoint
-* @details entrypoint of application
-*/
-- (int)entryPoint:(int)argc argv:(char*[])argv;
+    private:
+        class VkmWindowImpl* _impl;
+    };
 
-/*
-* @brief Destroy application
-* @details 
-*/
-- (void) destroy;
+    class VkmApplication
+    {
+    public:
+        VkmApplication(const char* appName);
+        ~VkmApplication();
 
-@end
+        int entryPoint(int argc, char* argv[]);
+
+        void destroy();
+
+    private:
+        class VkmApplicationImpl* _impl;
+    };
+}

@@ -14,4 +14,14 @@ namespace vkm
     {
 
     }
+    
+    bool VkmDriverMetal::initializeInner()
+    {
+        return true;
+    }
+
+    void VkmDriverMetal::destroyInner()
+    {
+
+    }
 }

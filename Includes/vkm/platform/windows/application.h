@@ -23,7 +23,7 @@ namespace vkm
     class VkmApplication
     {
     public:
-        VkmApplication();
+        VkmApplication(const char* appName);
         ~VkmApplication();
 
         int entryPoint(int argc, char* argv[]);

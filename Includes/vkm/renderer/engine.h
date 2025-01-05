@@ -7,6 +7,8 @@
 namespace vkm
 {
     class VkmDriverBase;
+    class VkmTexture;
+
     /*
     * @brief Engine base class
     * @details manage whole engine lifecycle and drive the render driver and other modules
@@ -27,7 +29,7 @@ namespace vkm
         * @brief Run engine loop
         * @details run main loop of engine
         */
-        void runLoop();
+        void update(VkmTexture* backBuffer, const double currentUpdateTime);
 
         /*
         * @brief Destroy engine
@@ -37,5 +39,6 @@ namespace vkm
 
     private:
         VkmDriverBase* _driver;
+        double _lastUpdateTime;
     };
 }

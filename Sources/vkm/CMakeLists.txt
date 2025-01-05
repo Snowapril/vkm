@@ -11,6 +11,8 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/base/common.h
     ${PUBLIC_HDR_DIR}/vkm/base/logger.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/driver.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_resource.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/texture.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/swapchain.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/engine.h
 )
@@ -20,6 +22,8 @@ set(SRCS
     ${SRC_DIR}/vkm/base/common.cpp
     ${SRC_DIR}/vkm/base/logger.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/driver.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/render_resource.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/texture.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/swapchain.cpp
     ${SRC_DIR}/vkm/renderer/engine.cpp
 )

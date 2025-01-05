@@ -28,7 +28,7 @@ namespace vkm
     {
     }
 
-    VkmApplication::VkmApplication()
+    VkmApplication::VkmApplication(const char* appName)
         : _engine( nullptr )
     {
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);

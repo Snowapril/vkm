@@ -4,6 +4,8 @@
 #include <vkm/renderer/engine.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
 
+#import <Cocoa/Cocoa.h>
+
 #if TARGET_OS_IOS
 #import <UIKit/UIKit.h>
 #endif
@@ -12,6 +14,12 @@
 #include <QuartzCore/QuartzCore.h>
 #include <QuartzCore/CAMetalLayer.h>
 #include <QuartzCore/CAFrameRateRange.h>
+
+@interface VkmWindowImpl : NSWindow
+@end
+
+@interface VkmApplicationImpl : NSObject <NSApplicationDelegate, NSWindowDelegate>
+@end
 
 @interface RendererCoordinatorController : NSObject <CAMetalDisplayLinkDelegate>
 - (nonnull instancetype)initWithMetalLayer:(nonnull CAMetalLayer *)metalLayer uiCanvasSize:(NSUInteger)uiCanvasSize;
@@ -31,9 +39,9 @@ static void* renderWorker( void* _Nullable obj )
 
 @implementation RendererCoordinatorController
 {
-    std::unique_ptr<vkm::VkmEngine>      _engine;
     CAMetalLayer*                   _metalLayer;
     CAMetalDisplayLink*             _metalDisplayLink;
+    vkm::VkmEngine*                 _engine;
 }
 
 - (nonnull instancetype)initWithMetalLayer:(nonnull CAMetalLayer *)metalLayer uiCanvasSize:(NSUInteger)uiCanvasSize
@@ -43,7 +51,6 @@ static void* renderWorker( void* _Nullable obj )
     {
         _metalLayer = metalLayer;
         
-        _engine = std::make_unique<vkm::VkmEngine>( new vkm::VkmDriverMetal((__bridge MTLDevice *)_metalLayer.device) );
         // TODO(snowapril) : init swapchain in driver base with ui canvas size and pixel format
 
         _metalDisplayLink = [[CAMetalDisplayLink alloc] initWithMetalLayer:_metalLayer];
@@ -85,7 +92,6 @@ static void* renderWorker( void* _Nullable obj )
 - (void)dealloc
 {
     self->_metalDisplayLink = nil;
-    _engine.reset();
     [super dealloc];
 }
 
@@ -105,25 +111,32 @@ static void* renderWorker( void* _Nullable obj )
 #endif // TARGET_OS_IOS
     
     // id<CAMetalDrawable> drawable = update.drawable;
-    // TODO(snowapril)
     // _engine->draw((__bridge CA::MetalDrawable *)drawable, CACurrentMediaTime());
+    _engine->update(nil, CACurrentMediaTime());
+}
+
+- (void)setEngine:(nonnull vkm::VkmEngine*)engine
+{
+    _engine = engine;
 }
 @end
 
-@implementation VkmWindow
+@implementation VkmWindowImpl
 // Overriding this function allows to prevent clicking noise when using keyboard and esc key to go windowed
 - (void)keyDown:(NSEvent *)event
 {
 }
 @end
 
-@implementation VkmApplication
+@implementation VkmApplicationImpl
 {
-    VkmWindow*                _window;
-    NSView*                   _view;
-    CAMetalLayer*             _metalLayer;
-    vkm::VkmEngine*            _engine;
-    RendererCoordinatorController* _rendererCoordinator;
+    id<MTLDevice>                   _mtlDevice;
+    VkmWindowImpl*                  _window;
+    NSView*                         _view;
+    CAMetalLayer*                   _metalLayer;
+    std::unique_ptr<vkm::VkmEngine> _engine;
+    RendererCoordinatorController*  _rendererCoordinator;
+    const char*                    _appName;
 }
 
 - (BOOL) applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender
@@ -139,7 +152,7 @@ static void* renderWorker( void* _Nullable obj )
     // Center window to the middle of the screen
     contentRect.origin.x = (screen.frame.size.width / 2) - (contentRect.size.width / 2);
     contentRect.origin.y = (screen.frame.size.height / 2) - (contentRect.size.height / 2);
-    _window = [[VkmWindow alloc] initWithContentRect:contentRect
+    _window = [[VkmWindowImpl alloc] initWithContentRect:contentRect
                                             styleMask:mask
                                             backing:NSBackingStoreBuffered
                                                 defer:NO
@@ -148,6 +161,8 @@ static void* renderWorker( void* _Nullable obj )
     _window.minSize = NSMakeSize(640, 360);
     _window.delegate = self;
     [self updateWindowTitle:_window];
+    
+    vkm::VKM_DEBUG_INFO("VkmWindow setup complete");
 }
 
 - (void)showWindow
@@ -163,7 +178,7 @@ static void* renderWorker( void* _Nullable obj )
     NSAssert(_window, @"You need to create the window before the view");
     
     _metalLayer = [[CAMetalLayer alloc] init];
-    _metalLayer.device = MTLCreateSystemDefaultDevice();
+    _metalLayer.device = _mtlDevice;
     
     // Set layer size and make it opaque:
     _metalLayer.drawableSize = NSMakeSize(1920 , 1080);
@@ -183,6 +198,8 @@ static void* renderWorker( void* _Nullable obj )
     _view = [[NSView alloc] initWithFrame:_window.contentLayoutRect];
     _view.layer = _metalLayer;
     _window.contentView = _view;
+    
+    vkm::VKM_DEBUG_INFO("Metal layer & view setup complete");
 }
 
 - (void)createGame
@@ -195,6 +212,8 @@ static void* renderWorker( void* _Nullable obj )
     NSUInteger uiCanvasSize = 30;
     _rendererCoordinator = [[RendererCoordinatorController alloc] initWithMetalLayer:_metalLayer
                                                                 uiCanvasSize:uiCanvasSize];
+    
+    [_rendererCoordinator setEngine: _engine.get()];
 }
 
 - (void)evaluateCommandLine
@@ -210,6 +229,12 @@ static void* renderWorker( void* _Nullable obj )
 
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification
 {
+    _mtlDevice = MTLCreateSystemDefaultDevice();
+    
+    // Note : initialize engine first for logger manager initialization precede
+    _engine = std::make_unique<vkm::VkmEngine>( new vkm::VkmDriverMetal((__bridge MTLDevice *)_mtlDevice) );
+    _engine->initialize();
+    
     [self createWindow];
     [self createView];
     [self createGame];
@@ -226,12 +251,18 @@ static void* renderWorker( void* _Nullable obj )
 - (void)updateWindowTitle:(nonnull NSWindow *) window
 {
     NSScreen* screen = window.screen;
-    NSString* title = [NSString stringWithFormat:@"Game Project (%@ @ %ldHz, EDR max: %.2f)",
+    NSString* title = [NSString stringWithFormat:@"%s (%@ @ %ldHz, EDR max: %.2f)",
+                    _appName,
                     screen.localizedName,
                     (long)screen.maximumFramesPerSecond,
                     screen.maximumExtendedDynamicRangeColorComponentValue
     ];
     window.title = title;
+}
+
+- (void)setAppName:(nonnull const char *) appName
+{
+    _appName = appName;
 }
 
 - (void)windowDidChangeScreen:(NSNotification *)notification
@@ -244,12 +275,56 @@ static void* renderWorker( void* _Nullable obj )
     //
 }
 
-- (int) entryPoint:(int)argc argv:(char*[])argv
-{
-    return NSApplicationMain(argc, argv);
-}
-
 - (void)destroy
 {
 }
 @end
+
+namespace vkm
+{
+    VkmWindow::VkmWindow()
+    {
+    }
+
+    VkmWindow::~VkmWindow()
+    {
+    }
+
+    void VkmWindow::create(uint32_t width, uint32_t height, const char* title)
+    {
+        (void)width; (void)height; (void)title;
+    }
+
+    void VkmWindow::destroy()
+    {
+    }
+
+    VkmApplication::VkmApplication(const char* appName)
+    {
+        _impl = (__bridge vkm::VkmApplicationImpl*)[[::VkmApplicationImpl alloc] init];
+        if ( _impl == nil )
+            VKM_DEBUG_ERROR("Failed to initialize VkmApplication for apple platform");
+        [((::VkmApplicationImpl*)_impl) setAppName:appName];
+    }
+
+    VkmApplication::~VkmApplication()
+    {
+        if ( (::VkmApplicationImpl*)_impl != nullptr )
+        {
+            [(__bridge ::VkmApplicationImpl*)_impl destroy];
+            [(__bridge ::VkmApplicationImpl*)_impl release];
+            _impl = nullptr;
+        }
+    }
+
+    int VkmApplication::entryPoint(int argc, char* argv[])
+    {
+        NSApplication* app = [NSApplication sharedApplication];
+        [app setDelegate: (::VkmApplicationImpl*)_impl];
+        return NSApplicationMain(argc, (const char**)argv);
+    }
+
+    void VkmApplication::destroy()
+    {
+    }
+} // namespace vkm
