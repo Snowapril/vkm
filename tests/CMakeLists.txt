@@ -32,9 +32,9 @@ target_include_directories(${target}
     $<BUILD_INTERFACE:${PUBLIC_HDR_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_PREFIX}/include>
     PRIVATE
-    ${ROOT_DIR}/Dependencies/src/doctest
-    ${ROOT_DIR}/Dependencies/src/taskflow
-    ${ROOT_DIR}/Includes
+    ${ROOT_DIR}/dependencies/src/doctest
+    ${ROOT_DIR}/dependencies/src/taskflow
+    ${ROOT_DIR}/include
 )
 
 # Compile options

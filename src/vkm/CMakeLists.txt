@@ -1,8 +1,8 @@
 # Target name
 set(target vkmcore)
 set(ROOT_DIR ${PROJECT_SOURCE_DIR})
-set(LIBRARY_DIR ${PROJECT_SOURCE_DIR}/Dependencies/src)
-set(PUBLIC_HDR_DIR ${PROJECT_SOURCE_DIR}/Includes)
+set(LIBRARY_DIR ${PROJECT_SOURCE_DIR}/dependencies/src)
+set(PUBLIC_HDR_DIR ${PROJECT_SOURCE_DIR}/include)
 set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../)
 
 # Set public headers

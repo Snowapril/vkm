@@ -1,16 +1,15 @@
-set(target RenderingTests)
+set(target triangle)
 set(ROOT_DIR ${PROJECT_SOURCE_DIR})
 set(PUBLIC_HDR_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Includes
 set(PUBLIC_HDRS 
-    ${PUBLIC_HDR_DIR}/RenderingTestsUtils.hpp
 )
 
 # Sources
 set(SRCS
-    ${SRC_DIR}/RenderingTests.cpp
+    ${SRC_DIR}/main.cpp
 )
 
 # Build executable
@@ -32,8 +31,8 @@ target_include_directories(${target}
     $<BUILD_INTERFACE:${PUBLIC_HDR_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_PREFIX}/include>
     PRIVATE
-    ${ROOT_DIR}/Dependencies/src/doctest
-    ${ROOT_DIR}/Includes
+    ${ROOT_DIR}/dependencies/src/cxxopts/include
+    ${ROOT_DIR}/include
 )
 
 # Compile options

@@ -427,9 +427,9 @@ build/
 
 # End of https://www.toptal.com/developers/gitignore/api/visualstudio,visualstudiocode,c++,cmake
 
-Dependencies/.bootstrap.json
-Dependencies/archives/
-Dependencies/src/
+dependencies/.bootstrap.json
+dependencies/archives/
+dependencies/src/
 *.vfpipeline
 
 .DS_Store

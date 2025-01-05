@@ -12,7 +12,7 @@ if (APPLE AND NOT IOS)
 endif()
 
 # Include cmake modules
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Builds/CMake")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/buildscripts")
 
 # Declare project
 project(vkm)
@@ -27,7 +27,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE INTERNAL "")
 
 # Compile options
-include(Builds/CMake/CompileOptions.cmake)
+include(buildscripts/CompileOptions.cmake)
 
 # Build type - Release by default
 message("CMake build type: " ${CMAKE_BUILD_TYPE})
@@ -97,7 +97,7 @@ endif()
 set(CMAKE_MACOSX_RPATH ON)
 
 # Set resource directory
-set(RESOURCES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Resources/")
+set(RESOURCES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/")
 
 # Add definitions for third-party dependencies
 add_definitions(-DGLM_FORCE_SWIZZLE)
@@ -106,20 +106,20 @@ add_definitions(-DGLM_FORCE_CTOR_INIT)
 add_definitions(-DGLM_ENABLE_EXPERIMENTAL)
 
 # Includes
-include_directories(Dependencies/src)
-include_directories(Dependencies/src/vulkan/include)
-include_directories(Dependencies/src/vma/src)
-include_directories(Dependencies/src/glfw/include)
-include_directories(Dependencies/src/glm)
-include_directories(Dependencies/src/glslang/glslang/Include)
-include_directories(Dependencies/src/taskflow)
-include_directories(Dependencies/src/stb)
-include_directories(Dependencies/src/glslang)
-include_directories(Dependencies/src/glslang/StandAlone)
-include_directories(Dependencies/src/glslang/src)
-include_directories(Dependencies/src/ImGuizmo/src)
-include_directories(Dependencies/src/spdlog/include)
-include_directories(Dependencies/src/json/include)
+include_directories(dependencies/src)
+include_directories(dependencies/src/vulkan/include)
+include_directories(dependencies/src/vma/src)
+include_directories(dependencies/src/glfw/include)
+include_directories(dependencies/src/glm)
+include_directories(dependencies/src/glslang/glslang/Include)
+include_directories(dependencies/src/taskflow)
+include_directories(dependencies/src/stb)
+include_directories(dependencies/src/glslang)
+include_directories(dependencies/src/glslang/StandAlone)
+include_directories(dependencies/src/glslang/src)
+include_directories(dependencies/src/ImGuizmo/src)
+include_directories(dependencies/src/spdlog/include)
+include_directories(dependencies/src/json/include)
 
 set(VMA_BUILD_SAMPLE                    OFF CACHE BOOL "")
 set(VMA_BUILD_SAMPLE_SHADERS            OFF CACHE BOOL "")
@@ -127,32 +127,32 @@ set(VMA_STATIC_VULKAN_FUNCTIONS         OFF CACHE BOOL "")
 set(VMA_DYNAMIC_VULKAN_FUNCTIONS         ON CACHE BOOL "")
 set(VMA_DEBUG_INITIALIZE_ALLOCATIONS     ON CACHE BOOL "")
 set(VMA_RECORDING_ENABLED                ON CACHE BOOL "")
-add_subdirectory(Dependencies/src/vma)
+add_subdirectory(dependencies/src/vma)
 
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "")
 set(GLFW_BUILD_TESTS    OFF CACHE BOOL "")
 set(GLFW_BUILD_DOCS     OFF CACHE BOOL "")
 set(GLFW_INSTALL        OFF CACHE BOOL "")
-add_subdirectory(Dependencies/src/glfw)
+add_subdirectory(dependencies/src/glfw)
 
 set(MESHOPT_BUILD_DEMO          OFF CACHE BOOL "")
 set(MESHOPT_BUILD_TOOLS         OFF CACHE BOOL "")
 set(MESHOPT_BUILD_SHARED_LIBS   OFF CACHE BOOL "")
-add_subdirectory(Dependencies/src/meshoptimizer)
+add_subdirectory(dependencies/src/meshoptimizer)
 
 set(ENABLE_GLSLANG_BINARIES  OFF  CACHE BOOL "")
 set(ENABLE_HLSL              OFF  CACHE BOOL "")
 set(ENABLE_CTEST             OFF  CACHE BOOL "")
 set(ENABLE_OPT               OFF  CACHE BOOL "")
 set(SKIP_GLSLANG_INSTALL      ON  CACHE BOOL "")
-add_subdirectory(Dependencies/src/glslang)
+add_subdirectory(dependencies/src/glslang)
 
 if (WIN32)
    set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_WIN32_KHR)
 elseif()
    # TODO
 endif()
-add_subdirectory(Dependencies/src/volk)
+add_subdirectory(dependencies/src/volk)
 
 set(SPIRV_CROSS_CLI             OFF CACHE BOOL "" FORCE)
 set(SPIRV_CROSS_ENABLE_TESTS    OFF CACHE BOOL "")
@@ -161,9 +161,9 @@ set(SPIRV_CROSS_ENABLE_MSL      OFF CACHE BOOL "")
 set(SPIRV_CROSS_ENABLE_CPP       ON CACHE BOOL "")
 set(SPIRV_CROSS_ENABLE_REFLECT   ON CACHE BOOL "")
 set(SPIRV_CROSS_ENABLE_C_API    OFF CACHE BOOL "")
-add_subdirectory(Dependencies/src/spirv-cross)
-add_subdirectory(Dependencies/src/spdlog)
-add_subdirectory(Dependencies/src/backward-cpp)
+add_subdirectory(dependencies/src/spirv-cross)
+add_subdirectory(dependencies/src/spdlog)
+add_subdirectory(dependencies/src/backward-cpp)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set_property(TARGET glfw          PROPERTY FOLDER "ThirdPartyLibraries")
@@ -175,11 +175,10 @@ set_property(TARGET SPIRV         PROPERTY FOLDER "ThirdPartyLibraries/glslang")
 set_property(TARGET SPVRemapper   PROPERTY FOLDER "ThirdPartyLibraries/glslang")
 
 # Project modules
-add_subdirectory(Sources/vkm)
-add_subdirectory(Tests/UnitTests)
-add_subdirectory(Tests/RenderingTests)
+add_subdirectory(src/vkm)
+add_subdirectory(tests)
 
 option(BUILD_SAMPLES "Build samples" ON)
 if (BUILD_SAMPLES)
-    add_subdirectory(Sources/samples/triangle)
+    add_subdirectory(src/samples/triangle)
 endif()
