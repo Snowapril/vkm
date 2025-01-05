@@ -12,6 +12,9 @@ namespace vkm
 {
     class VkmEngine;
 
+    // Window handle type
+    using VkmWindowHandle = GLFWwindow*;
+
     /*
     * @brief Window class
     */

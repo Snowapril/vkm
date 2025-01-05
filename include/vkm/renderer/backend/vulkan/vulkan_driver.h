@@ -17,6 +17,10 @@ namespace vkm
         VkmDriverVulkan();
         ~VkmDriverVulkan();
 
+        inline VkDevice getDevice() const { return _device; }
+        inline VkPhysicalDevice getPhysicalDevice() const { return _physicalDevice; }
+        inline VkInstance getInstance() const { return _instance; }
+
     protected:
         virtual bool initializeInner(const VkmEngineLaunchOptions* options) override final;
         virtual void destroyInner() override final;

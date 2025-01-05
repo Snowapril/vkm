@@ -4,8 +4,8 @@
 
 namespace vkm
 {
-    MetalSwapChain::MetalSwapChain()
-        : SwapChain()
+    MetalSwapChain::MetalSwapChain(VkmDriverBase* driver)
+        : SwapChain(driver)
     {
 
     }
@@ -25,9 +25,9 @@ namespace vkm
 
     }
 
-    uint8_t MetalSwapChain::acquireNextImageIndexInner()
+    VkmResourceHandle MetalSwapChain::acquireNextImageIndex()
     {
-        return 0;
+        return VKM_INVALID_RESOURCE_HANDLE;
     }
 
     void MetalSwapChain::presentInner()

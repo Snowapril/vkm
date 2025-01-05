@@ -4,7 +4,8 @@
 
 namespace vkm
 {
-    SwapChain::SwapChain()
+    SwapChain::SwapChain(VkmDriverBase* driver)
+        : _driver(driver)
     {
 
     }
@@ -35,10 +36,9 @@ namespace vkm
         // 3. recreate swapchain and update extent
     }
     
-    uint8_t SwapChain::acquireNextImageIndex()
+    VkmResourceHandle SwapChain::acquireNextImage()
     {
-
-        return acquireNextImageIndexInner();
+        return acquireNextImageInner();
     }
 
     void SwapChain::present()

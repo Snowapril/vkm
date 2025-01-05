@@ -6,6 +6,9 @@
 
 namespace vkm
 {
+    // Window handle type
+    using VkmWindowHandle = class NSWindow*;
+
     class VkmWindow
     {
     public:

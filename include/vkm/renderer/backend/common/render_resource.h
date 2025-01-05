@@ -8,6 +8,10 @@ namespace vkm
 {
     class VkmDriverBase;
 
+    /**
+     * @brief Render resource base class
+     * @details 
+     */
     class VkmRenderResource
     {
     public:

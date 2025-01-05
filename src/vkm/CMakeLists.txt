@@ -10,6 +10,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/base/platform.h
     ${PUBLIC_HDR_DIR}/vkm/base/common.h
     ${PUBLIC_HDR_DIR}/vkm/base/logger.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/backend_util.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/driver.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_resource.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/texture.h
@@ -32,11 +33,13 @@ if (VKM_USE_VULKAN_API)
     list(APPEND PUBLIC_HDRS
         $(PUBLIC_HDR_DIR)/vkm/platform/windows/application.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_driver.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_util.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/windows/application.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_driver.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_util.cpp
     )
 endif()
