@@ -12,30 +12,58 @@ namespace vkm
 {
     class VkmEngine;
 
+    /*
+    * @brief Window class
+    */
     class VkmWindow
     {
     public:
         VkmWindow();
         ~VkmWindow();
 
+        /*
+        * @brief Create window
+        */
         bool create(uint32_t width, uint32_t height, const char* title);
+
+        /*
+        * @brief Destroy window
+        */
         void destroy();
 
+        /*
+        * @brief Update window
+        */
         void update();
+        
+        /*
+        * @brief Check window receive close signal
+        */
         bool shouldClose() const;
         
+        inline GLFWwindow* getHandle() const { return _windowHandle; }
+
     private:
         GLFWwindow* _windowHandle;
     };
 
+    /*
+    * @brief Application class
+    */
     class VkmApplication
     {
     public:
         VkmApplication(const char* appName);
         ~VkmApplication();
 
+        /*
+        * @brief Entry point of application
+        */
         int entryPoint(int argc, char* argv[]);
 
+        /*
+        * @brief Destroy application
+        */
         void destroy();
 
     private:

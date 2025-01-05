@@ -12,6 +12,7 @@
 namespace vkm
 {
     VkmWindow::VkmWindow()
+        : _windowHandle( nullptr )
     {
     }
 
@@ -54,6 +55,9 @@ namespace vkm
 
     int VkmApplication::entryPoint(int argc, char* argv[])
     {
+        VKM_ASSERT(glfwInit(), "Failed to initialize GLFW");
+        VKM_ASSERT(glfwVulkanSupported(), "This system does not support Vulkan API");
+
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
         if ( _engine.initialize( VkmEngine::parseEngineLaunchOptions(argc, argv)) == false )
@@ -73,6 +77,7 @@ namespace vkm
             _window.update();
         }
 
+        glfwTerminate();
         return 0;
     }
 
