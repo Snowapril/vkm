@@ -1,4 +1,4 @@
-// Copyright (c) 2024 Snowapril
+// Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/common/driver.h>
 

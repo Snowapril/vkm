@@ -1,4 +1,4 @@
-// Copyright (c) 2024 Snowapril
+// Copyright (c) 2025 Snowapril
 
 #include <vkm/base/logger.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
