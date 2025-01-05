@@ -12,7 +12,7 @@ namespace vkm
         VkmWindow();
         ~VkmWindow();
 
-        void create(uint32_t width, uint32_t height, const char* title);
+        bool create(uint32_t width, uint32_t height, const char* title);
         void destroy();
 
     private:

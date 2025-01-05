@@ -9,4 +9,5 @@ namespace vkm
     #define VKM_DEBUG_WARN(msg) LoggerManager::singleton().warn(msg)
     #define VKM_DEBUG_INFO(msg) LoggerManager::singleton().info(msg)
     #define VKM_DEBUG_ERROR(msg) LoggerManager::singleton().error(msg)
+    #define VKM_ASSERT(condition, msg) if (!(condition)) { VKM_DEBUG_ERROR(msg); __debugbreak(); }
 }

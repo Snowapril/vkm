@@ -290,9 +290,10 @@ namespace vkm
     {
     }
 
-    void VkmWindow::create(uint32_t width, uint32_t height, const char* title)
+    bool VkmWindow::create(uint32_t width, uint32_t height, const char* title)
     {
         (void)width; (void)height; (void)title;
+        return true;
     }
 
     void VkmWindow::destroy()

@@ -15,7 +15,7 @@ namespace vkm
 
     }
     
-    bool VkmDriverMetal::initializeInner()
+    bool VkmDriverMetal::initializeInner(const VkmEngineLaunchOptions* options)
     {
         return true;
     }

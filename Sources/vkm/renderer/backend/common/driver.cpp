@@ -12,9 +12,9 @@ namespace vkm
     {
     }
 
-    bool VkmDriverBase::initialize()
+    bool VkmDriverBase::initialize(const VkmEngineLaunchOptions* options)
     {
-        return initializeInner();
+        return initializeInner(options);
     }
 
     void VkmDriverBase::destroy()

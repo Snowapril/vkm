@@ -6,6 +6,8 @@
 
 namespace vkm
 {
+    struct VkmEngineLaunchOptions;
+
     /*
     * @brief renderer backend driver base class
     * @details manage whole engine lifecycle and drive the render driver and other modules
@@ -16,11 +18,11 @@ namespace vkm
         VkmDriverBase();
         ~VkmDriverBase();
 
-        bool initialize();
+        bool initialize(const VkmEngineLaunchOptions* options);
         void destroy();
         
     protected:
-        virtual bool initializeInner() = 0;
+        virtual bool initializeInner(const VkmEngineLaunchOptions* options) = 0;
         virtual void destroyInner() = 0;
 
     private:

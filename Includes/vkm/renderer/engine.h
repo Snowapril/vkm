@@ -9,6 +9,12 @@ namespace vkm
     class VkmDriverBase;
     class VkmTexture;
 
+    struct VkmEngineLaunchOptions
+    {
+        bool enableValidationLayer;
+    };
+    constexpr const VkmEngineLaunchOptions DEFAULT_ENGINE_LAUNCH_OPTIONS = { true };
+
     /*
     * @brief Engine base class
     * @details manage whole engine lifecycle and drive the render driver and other modules
@@ -23,7 +29,7 @@ namespace vkm
         * @brief Initialize engine
         * @details initialize logger manager and other modules
         */
-        bool initialize();
+        bool initialize(VkmEngineLaunchOptions options = DEFAULT_ENGINE_LAUNCH_OPTIONS);
 
         /*
         * @brief Run engine loop
@@ -36,6 +42,11 @@ namespace vkm
         * @details destroy all modules and logger manager
         */
         void destroy();
+
+        /*
+        * @brief Parse engine launch options from command line arguments
+        */
+        static VkmEngineLaunchOptions parseEngineLaunchOptions(int argc, char* argv[]);
 
     private:
         VkmDriverBase* _driver;

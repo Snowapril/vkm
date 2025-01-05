@@ -4,6 +4,7 @@
 
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_util.h>
+#include <vkm/renderer/engine.h>
 
 #include <volk.h>
 
@@ -49,8 +50,9 @@ namespace vkm
 
     }
 
-    bool VkmDriverVulkan::initializeInner()
+    bool VkmDriverVulkan::initializeInner(const VkmEngineLaunchOptions* options)
     {
+        (void)options;
         VKM_VK_CHECK_RESULT_MSG_RETURN(volkInitialize(), "Failed to initialize volk");
 
         uint32_t instanceExtensionCount;

@@ -6,6 +6,8 @@
 #include <vkm/renderer/engine.h>
 #include <memory>
 
+struct GLFWwindow;
+
 namespace vkm
 {
     class VkmEngine;
@@ -16,8 +18,14 @@ namespace vkm
         VkmWindow();
         ~VkmWindow();
 
-        void create(uint32_t width, uint32_t height, const char* title);
+        bool create(uint32_t width, uint32_t height, const char* title);
         void destroy();
+
+        void update();
+        bool shouldClose() const;
+        
+    private:
+        GLFWwindow* _windowHandle;
     };
 
     class VkmApplication
@@ -31,6 +39,9 @@ namespace vkm
         void destroy();
 
     private:
-        std::unique_ptr<VkmEngine> _engine;
+        VkmEngine _engine;
+        VkmWindow _window;
+
+        const char* _appName;
     };
 }

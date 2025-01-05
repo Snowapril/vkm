@@ -17,7 +17,7 @@ namespace vkm
         ~VkmDriverVulkan();
 
     protected:
-        virtual bool initializeInner() override final;
+        virtual bool initializeInner(const VkmEngineLaunchOptions* options) override final;
         virtual void destroyInner() override final;
 
     private:
