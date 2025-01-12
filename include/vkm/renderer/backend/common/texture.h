@@ -2,8 +2,8 @@
 
 #pragma once
 
-#include "vkm/base/common.h"
-#include "vkm/renderer/backend/common/render_resource.h"
+#include <vkm/base/common.h>
+#include <vkm/renderer/backend/common/render_resource.h>
 
 namespace vkm
 {
@@ -13,5 +13,12 @@ namespace vkm
         VkmTexture(VkmDriverBase* driver);
         ~VkmTexture();
 
+        virtual bool initialize(const VkmTextureInfo& info, void* externalHandleOrNull = nullptr) = 0;
+
+    protected:
+        bool initializeCommon(const VkmTextureInfo& info);
+
+    protected:
+        VkmTextureInfo _textureInfo;
     };
 } // namespace vkm

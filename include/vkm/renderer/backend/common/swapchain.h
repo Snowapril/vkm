@@ -2,8 +2,8 @@
 
 #pragma once
 
-#include "vkm/base/common.h"
-#include "vkm/renderer/backend/common/backend_util.h"
+#include <vkm/base/common.h>
+#include <vkm/renderer/backend/common/backend_util.h>
 #include <glm/vec2.hpp>
 
 namespace vkm
@@ -16,7 +16,7 @@ namespace vkm
     {
     public:
         SwapChain(VkmDriverBase* driver);
-        ~SwapChain();
+        virtual ~SwapChain();
 
         /*
         * @brief Initialize swapchain

@@ -1,6 +1,6 @@
 // Copyright (c) 2025 Snowapril
 
-#include "vkm/renderer/backend/metal/metal_swapchain.h"
+#include <vkm/renderer/backend/metal/metal_swapchain.h>
 
 namespace vkm
 {
@@ -25,7 +25,7 @@ namespace vkm
 
     }
 
-    VkmResourceHandle MetalSwapChain::acquireNextImageIndex()
+    VkmResourceHandle MetalSwapChain::acquireNextImageInner()
     {
         return VKM_INVALID_RESOURCE_HANDLE;
     }

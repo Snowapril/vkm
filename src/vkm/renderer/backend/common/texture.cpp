@@ -1,6 +1,6 @@
 // Copyright (c) 2025 Snowapril
 
-#include "vkm/renderer/backend/common/texture.h"
+#include <vkm/renderer/backend/common/texture.h>
 
 namespace vkm
 {
@@ -11,5 +11,11 @@ namespace vkm
 
     VkmTexture::~VkmTexture()
     {
+    }
+
+    bool VkmTexture::initializeCommon(const VkmTextureInfo& info)
+    {
+        _textureInfo = info;
+        return true;
     }
 } // namespace vkm

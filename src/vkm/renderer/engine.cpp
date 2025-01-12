@@ -2,6 +2,7 @@
 
 #include <vkm/renderer/engine.h>
 #include <vkm/renderer/backend/common/driver.h>
+#include <vkm/renderer/backend/common/swapchain.h>
 #include <iostream>
 
 namespace vkm
@@ -36,9 +37,9 @@ namespace vkm
         return true;
     }
 
-    void VkmEngine::update(VkmTexture* backBuffer, const double currentUpdateTime)
+    void VkmEngine::update(const double currentUpdateTime)
     {
-        (void)backBuffer;
+        // VkmTexture* backBuffer = _swapChain->acquireNextImage();
 
         const double deltaTime = currentUpdateTime - _lastUpdateTime;
         _lastUpdateTime = currentUpdateTime;
@@ -47,6 +48,20 @@ namespace vkm
 
     void VkmEngine::destroy()
     {
+        if (_mainSwapChain != nullptr)
+        {
+            delete _mainSwapChain;
+            _mainSwapChain = nullptr;
+        }
+    }
+
+    void VkmEngine::addSwapChain(const VkmWindowInfo& windowInfo)
+    {
+        SwapChain* swapChain = _driver->newSwapChain(windowInfo);
+
+        VKM_ASSERT(swapChain != nullptr, "Failed to create swapchain");
+        VKM_ASSERT(_mainSwapChain == nullptr, "Main swapchain already exists");
+        _mainSwapChain = swapChain;
     }
 
     VkmEngineLaunchOptions VkmEngine::parseEngineLaunchOptions(int argc, char* argv[])

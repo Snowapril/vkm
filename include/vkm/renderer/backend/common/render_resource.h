@@ -2,7 +2,8 @@
 
 #pragma once
 
-#include "vkm/base/common.h"
+#include <vkm/base/common.h>
+#include <vkm/renderer/backend/common/backend_util.h>
 
 namespace vkm
 {
@@ -20,5 +21,9 @@ namespace vkm
 
     protected:
         VkmDriverBase* _driver;
+
+        // TODO(snowapril) : represent that this resource is managed by vkm resource pool or by external code.
+        bool _isPooledResource{true};
+
     };
 } // namespace vkm

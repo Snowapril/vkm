@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "vkm/renderer/backend/common/swapchain.h"
+#include <vkm/renderer/backend/common/swapchain.h>
 
 namespace vkm
 {

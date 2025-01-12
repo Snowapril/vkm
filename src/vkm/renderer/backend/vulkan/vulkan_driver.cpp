@@ -29,7 +29,7 @@
 #pragma warning(disable : 4127)  // Conditional expression is constant
 #pragma warning(disable : 4324)  // Structure was padded due to alignment specifier
 #pragma warning(disable : 4505)  // Unreferenced function with internal linkage has been removed
-#include "vk_mem_alloc.h"
+#include <vk_mem_alloc.h>
 #pragma warning(pop)
 #ifdef __clang__
 #pragma clang diagnostic pop
@@ -37,6 +37,8 @@
 
 #include <vulkan/vk_enum_string_helper.h>
 #include <GLFW/glfw3.h>
+
+#include <vkm/renderer/backend/vulkan/vulkan_texture.h>
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                                     VkDebugUtilsMessageTypeFlagsEXT,
@@ -134,6 +136,18 @@ namespace vkm
     VkmDriverVulkan::~VkmDriverVulkan()
     {
 
+    }
+
+    VkmTexture* VkmDriverVulkan::newTexture(void* externalHandle, const VkmTextureInfo& info)
+    {
+        return new VkmTextureVulkan(this);
+    }
+
+    SwapChain* VkmDriverVulkan::newSwapChain(const VkmWindowInfo& windowInfo)
+    {
+        (void)windowInfo;
+        // TODO(snowapril) : implement swapchain creation
+        return nullptr;
     }
 
     static bool isExtensionSupported(const char* extensionName, const std::vector<VkExtensionProperties>& availableExtensions)

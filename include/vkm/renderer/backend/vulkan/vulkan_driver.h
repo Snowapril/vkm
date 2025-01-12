@@ -17,6 +17,19 @@ namespace vkm
         VkmDriverVulkan();
         ~VkmDriverVulkan();
 
+        /*
+         * @brief Create texture with existing rhi external handle
+         * @param externalHandle external handle of texture which is created or managed by api
+         * @param info texture info
+         */
+        virtual VkmTexture* newTexture(void* externalHandle, const VkmTextureInfo& info) override final;
+
+        /*
+        * @brief Create swapchain with window info
+        * @param windowInfo window info
+        */
+        virtual SwapChain* newSwapChain(const VkmWindowInfo& windowInfo) override final;
+
         inline VkDevice getDevice() const { return _device; }
         inline VkPhysicalDevice getPhysicalDevice() const { return _physicalDevice; }
         inline VkInstance getInstance() const { return _instance; }

@@ -57,6 +57,7 @@ endif()
 
 if (APPLE)
     option(VKM_USE_METAL_API "Use Metal API on macOS/iOS" ON)
+    add_definitions(-DVKM_PLATFORM_APPLE)
 else()
     option(VKM_USE_METAL_API "Use Metal API on macOS/iOS" OFF)
 endif()

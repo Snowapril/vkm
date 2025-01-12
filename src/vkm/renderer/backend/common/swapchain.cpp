@@ -1,6 +1,6 @@
 // Copyright (c) 2025 Snowapril
 
-#include "vkm/renderer/backend/common/swapchain.h"
+#include <vkm/renderer/backend/common/swapchain.h>
 
 namespace vkm
 {
@@ -12,7 +12,7 @@ namespace vkm
 
     SwapChain::~SwapChain()
     {
-
+        destroy();
     }
 
     bool SwapChain::initialize(uint32_t width, uint32_t height, const char* title)

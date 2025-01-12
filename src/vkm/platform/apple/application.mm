@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/platform/apple/application.h>
+
 #include <vkm/renderer/engine.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
 
@@ -14,6 +15,8 @@
 #include <QuartzCore/QuartzCore.h>
 #include <QuartzCore/CAMetalLayer.h>
 #include <QuartzCore/CAFrameRateRange.h>
+
+#include <vkm/platform/common/window.h>
 
 @interface VkmWindowImpl : NSWindow
 @end
@@ -51,7 +54,12 @@ static void* renderWorker( void* _Nullable obj )
     {
         _metalLayer = metalLayer;
         
-        // TODO(snowapril) : init swapchain in driver base with ui canvas size and pixel format
+        vkm::VkmWindowInfo windowInfo;
+        // TODO(snowapril) : set window info
+        // windowInfo._width = uiCanvasSize.x;
+        // windowInfo._height = uiCanvasSize.y;
+        // windowInfo._windowHandle = _metalLayer;
+        _engine->addSwapChain(windowInfo);
 
         _metalDisplayLink = [[CAMetalDisplayLink alloc] initWithMetalLayer:_metalLayer];
         _metalDisplayLink.delegate = self;
@@ -110,9 +118,12 @@ static void* renderWorker( void* _Nullable obj )
     // _engine->setMaxEDRValue(maxEDRValue);
 #endif // TARGET_OS_IOS
     
-    // id<CAMetalDrawable> drawable = update.drawable;
-    // _engine->draw((__bridge CA::MetalDrawable *)drawable, CACurrentMediaTime());
-    _engine->update(nil, CACurrentMediaTime());
+    id<CAMetalDrawable> drawable = update.drawable;
+    id<MTLTexture> texture = drawable.texture;
+    // (__bridge void*)texture
+    (void)texture;
+
+    _engine->update(CACurrentMediaTime());
 }
 
 - (void)setEngine:(nonnull vkm::VkmEngine*)engine
