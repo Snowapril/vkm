@@ -22,7 +22,7 @@ namespace vkm
 
         if (externalHandleOrNull != nullptr)
         {
-            _vkTexture = static_cast<VkTexture>(externalHandleOrNull);
+            _vkTexture = static_cast<VkImage>(externalHandleOrNull);
         }
         else if ((info._flags & VkmResourceCreateInfo::DeferredCreation) == 0)
         {

@@ -71,6 +71,11 @@ namespace vkm
             VKM_DEBUG_ERROR("Failed to initialize window");
             return -1;
         }
+        else
+        {
+            VkmWindowInfo windowInfo = { 1280, 720, _appName, _window.getHandle() };
+            _engine.addSwapChain(windowInfo);
+        }
         
         while (_window.shouldClose() == false)
         {

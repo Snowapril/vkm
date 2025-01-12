@@ -27,10 +27,9 @@ namespace vkm
 
         /*
          * @brief Create texture with existing rhi external handle
-         * @param externalHandle external handle of texture which is created or managed by api
          * @param info texture info
          */
-        virtual VkmTexture* newTexture(void* externalHandle, const VkmTextureInfo& info) = 0;
+        VkmTexture* newTexture(const VkmTextureInfo& info);
 
         /*
         * @brief Create swapchain with window info
@@ -41,6 +40,7 @@ namespace vkm
     protected:
         virtual bool initializeInner(const VkmEngineLaunchOptions* options) = 0;
         virtual void destroyInner() = 0;
+        virtual VkmTexture* newTextureInner() = 0;
 
     private:
     };

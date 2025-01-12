@@ -18,13 +18,6 @@ namespace vkm
         ~VkmDriverVulkan();
 
         /*
-         * @brief Create texture with existing rhi external handle
-         * @param externalHandle external handle of texture which is created or managed by api
-         * @param info texture info
-         */
-        virtual VkmTexture* newTexture(void* externalHandle, const VkmTextureInfo& info) override final;
-
-        /*
         * @brief Create swapchain with window info
         * @param windowInfo window info
         */
@@ -37,6 +30,7 @@ namespace vkm
     protected:
         virtual bool initializeInner(const VkmEngineLaunchOptions* options) override final;
         virtual void destroyInner() override final;
+        virtual VkmTexture* newTextureInner() override final;
 
     private:
         VkInstance                  _instance{VK_NULL_HANDLE};

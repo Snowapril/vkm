@@ -17,7 +17,7 @@ namespace vkm
     {
     public:
         VkmRenderResource(VkmDriverBase* driver);
-        ~VkmRenderResource();
+        virtual ~VkmRenderResource();
 
     protected:
         VkmDriverBase* _driver;

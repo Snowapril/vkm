@@ -16,7 +16,7 @@ namespace vkm
 
     }
 
-    VkmTexture* VkmDriverMetal::newTexture(void* externalHandle, const VkmTextureInfo& info)
+    VkmTexture* VkmDriverMetal::newTextureInner()
     {
         return new VkmTextureMetal(this);
     }

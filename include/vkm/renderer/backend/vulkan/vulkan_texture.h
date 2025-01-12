@@ -3,6 +3,7 @@
 #pragma once
 
 #include <vkm/renderer/backend/common/texture.h>
+#include <volk/volk.h>
 
 namespace vkm
 {
@@ -15,6 +16,6 @@ namespace vkm
         virtual bool initialize(const VkmTextureInfo& info, void* externalHandleOrNull = nullptr) override final;
 
     private:
-        VkTexture _vkTexture;
+        VkImage _vkTexture;
     };
 } // namespace vkm

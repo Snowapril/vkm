@@ -138,7 +138,7 @@ namespace vkm
 
     }
 
-    VkmTexture* VkmDriverVulkan::newTexture(void* externalHandle, const VkmTextureInfo& info)
+    VkmTexture* VkmDriverVulkan::newTextureInner()
     {
         return new VkmTextureVulkan(this);
     }
