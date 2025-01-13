@@ -38,6 +38,7 @@
 #include <vulkan/vk_enum_string_helper.h>
 #include <GLFW/glfw3.h>
 
+#include <vkm/renderer/backend/vulkan/vulkan_swapchain.h>
 #include <vkm/renderer/backend/vulkan/vulkan_texture.h>
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
@@ -143,11 +144,9 @@ namespace vkm
         return new VkmTextureVulkan(this);
     }
 
-    SwapChain* VkmDriverVulkan::newSwapChain(const VkmWindowInfo& windowInfo)
+    VkmSwapChain* VkmDriverVulkan::newSwapChain()
     {
-        (void)windowInfo;
-        // TODO(snowapril) : implement swapchain creation
-        return nullptr;
+        return new VkmSwapChainVulkan(this);
     }
 
     static bool isExtensionSupported(const char* extensionName, const std::vector<VkExtensionProperties>& availableExtensions)

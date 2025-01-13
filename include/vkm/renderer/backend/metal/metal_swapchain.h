@@ -6,14 +6,14 @@
 
 namespace vkm
 {
-    class MetalSwapChain final : public SwapChain
+    class VkmSwapChainMetal final : public VkmSwapChain
     {
     public:
-        MetalSwapChain(VkmDriverBase* driver);
-        ~MetalSwapChain();
+        VkmSwapChainMetal(VkmDriverBase* driver);
+        ~VkmSwapChainMetal();
 
     protected:
-        virtual bool createSwapChain(const char* title) override final;
+        virtual bool createSwapChain(VkmWindowHandle windowHandle) override final;
         virtual void destroySwapChain() override final;
         virtual VkmResourceHandle acquireNextImageInner() override final;
         virtual void presentInner() override final;

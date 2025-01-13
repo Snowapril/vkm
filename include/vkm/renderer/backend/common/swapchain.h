@@ -3,6 +3,7 @@
 #pragma once
 
 #include <vkm/base/common.h>
+#include <vkm/platform/common/window.h>
 #include <vkm/renderer/backend/common/backend_util.h>
 #include <glm/vec2.hpp>
 
@@ -10,18 +11,18 @@ namespace vkm
 {
     class VkmDriverBase;
     /*
-    * @brief SwapChain base class
+    * @brief VkmSwapChain base class
     */
-    class SwapChain
+    class VkmSwapChain
     {
     public:
-        SwapChain(VkmDriverBase* driver);
-        virtual ~SwapChain();
+        VkmSwapChain(VkmDriverBase* driver);
+        virtual ~VkmSwapChain();
 
         /*
         * @brief Initialize swapchain
         */
-        bool initialize(uint32_t width, uint32_t height, const char* title);
+        bool initialize(const VkmWindowInfo& windowInfo);
 
         /*
         * @brief Destroy swapchain
@@ -63,7 +64,7 @@ namespace vkm
         }
 
     protected:
-        virtual bool createSwapChain(const char* title) = 0;
+        virtual bool createSwapChain(VkmWindowHandle windowHandle) = 0;
         virtual void destroySwapChain() = 0;
         virtual VkmResourceHandle acquireNextImageInner() = 0;
         virtual void presentInner() = 0;

@@ -10,7 +10,7 @@ namespace vkm
 {
     struct VkmEngineLaunchOptions;
     class VkmTexture;
-    class SwapChain;
+    class VkmSwapChain;
 
     /*
     * @brief renderer backend driver base class
@@ -33,9 +33,8 @@ namespace vkm
 
         /*
         * @brief Create swapchain with window info
-        * @param windowInfo window info
         */
-        virtual SwapChain* newSwapChain(const VkmWindowInfo& windowInfo) = 0;
+        virtual VkmSwapChain* newSwapChain() = 0;
         
     protected:
         virtual bool initializeInner(const VkmEngineLaunchOptions* options) = 0;

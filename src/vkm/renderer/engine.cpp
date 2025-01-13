@@ -57,9 +57,10 @@ namespace vkm
 
     void VkmEngine::addSwapChain(const VkmWindowInfo& windowInfo)
     {
-        SwapChain* swapChain = _driver->newSwapChain(windowInfo);
+        VkmSwapChain* swapChain = _driver->newSwapChain();
+        const bool result = swapChain->initialize(windowInfo);
+        VKM_ASSERT(result, "Failed to create swapchain");
 
-        VKM_ASSERT(swapChain != nullptr, "Failed to create swapchain");
         VKM_ASSERT(_mainSwapChain == nullptr, "Main swapchain already exists");
         _mainSwapChain = swapChain;
     }

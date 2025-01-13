@@ -4,33 +4,33 @@
 
 namespace vkm
 {
-    MetalSwapChain::MetalSwapChain(VkmDriverBase* driver)
-        : SwapChain(driver)
+    VkmSwapChainMetal::VkmSwapChainMetal(VkmDriverBase* driver)
+        : VkmSwapChain(driver)
     {
 
     }
 
-    MetalSwapChain::~MetalSwapChain()
+    VkmSwapChainMetal::~VkmSwapChainMetal()
     {
 
     }
 
-    bool MetalSwapChain::createSwapChain(const char* title)
+    bool VkmSwapChainMetal::createSwapChain(VkmWindowHandle windowHandle)
     {
         return true;
     }
 
-    void MetalSwapChain::destroySwapChain()
+    void VkmSwapChainMetal::destroySwapChain()
     {
 
     }
 
-    VkmResourceHandle MetalSwapChain::acquireNextImageInner()
+    VkmResourceHandle VkmSwapChainMetal::acquireNextImageInner()
     {
         return VKM_INVALID_RESOURCE_HANDLE;
     }
 
-    void MetalSwapChain::presentInner()
+    void VkmSwapChainMetal::presentInner()
     {
 
     }

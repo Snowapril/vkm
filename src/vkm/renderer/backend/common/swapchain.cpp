@@ -4,29 +4,29 @@
 
 namespace vkm
 {
-    SwapChain::SwapChain(VkmDriverBase* driver)
+    VkmSwapChain::VkmSwapChain(VkmDriverBase* driver)
         : _driver(driver)
     {
 
     }
 
-    SwapChain::~SwapChain()
+    VkmSwapChain::~VkmSwapChain()
     {
         destroy();
     }
 
-    bool SwapChain::initialize(uint32_t width, uint32_t height, const char* title)
+    bool VkmSwapChain::initialize(const VkmWindowInfo& windowInfo)
     {
-        _extent = glm::uvec2(width, height);
-        return createSwapChain(title);
+        _extent = glm::uvec2(windowInfo._width, windowInfo._height);
+        return createSwapChain(windowInfo._windowHandle);
     }
 
-    void SwapChain::destroy()
+    void VkmSwapChain::destroy()
     {
         destroySwapChain();
     }
 
-    void SwapChain::resize(uint32_t width, uint32_t height)
+    void VkmSwapChain::resize(uint32_t width, uint32_t height)
     {
         (void)width; (void)height;
         // TODO: Implement this
@@ -36,12 +36,12 @@ namespace vkm
         // 3. recreate swapchain and update extent
     }
     
-    VkmResourceHandle SwapChain::acquireNextImage()
+    VkmResourceHandle VkmSwapChain::acquireNextImage()
     {
         return acquireNextImageInner();
     }
 
-    void SwapChain::present()
+    void VkmSwapChain::present()
     {
         presentInner();
     }

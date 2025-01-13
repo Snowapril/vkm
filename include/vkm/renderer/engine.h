@@ -9,7 +9,7 @@ namespace vkm
 {
     class VkmDriverBase;
     class VkmTexture;
-    class SwapChain;
+    class VkmSwapChain;
 
     struct VkmEngineLaunchOptions
     {
@@ -59,6 +59,6 @@ namespace vkm
         VkmDriverBase* _driver;
         double _lastUpdateTime;
 
-        SwapChain* _mainSwapChain {nullptr}; // main swapchain. engine should have multiple swapchains but at now, only one swapchain is supported.
+        VkmSwapChain* _mainSwapChain {nullptr}; // main swapchain. engine should have multiple swapchains but at now, only one swapchain is supported.
     };
 }

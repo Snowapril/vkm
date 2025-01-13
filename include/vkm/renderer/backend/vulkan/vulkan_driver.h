@@ -19,9 +19,8 @@ namespace vkm
 
         /*
         * @brief Create swapchain with window info
-        * @param windowInfo window info
         */
-        virtual SwapChain* newSwapChain(const VkmWindowInfo& windowInfo) override final;
+        virtual VkmSwapChain* newSwapChain() override final;
 
         inline VkDevice getDevice() const { return _device; }
         inline VkPhysicalDevice getPhysicalDevice() const { return _physicalDevice; }

@@ -7,21 +7,21 @@
 
 namespace vkm
 {
-    class VulkanSwapChain final : public SwapChain
+    class VkmSwapChainVulkan final : public VkmSwapChain
     {
     public:
-        VulkanSwapChain(VkmDriverBase* driver);
-        ~VulkanSwapChain();
+        VkmSwapChainVulkan(VkmDriverBase* driver);
+        ~VkmSwapChainVulkan();
 
     protected:
-        virtual bool createSwapChain(const char* title) override final;
+        virtual bool createSwapChain(VkmWindowHandle windowHandle) override final;
         virtual void destroySwapChain() override final;
         virtual VkmResourceHandle acquireNextImageInner() override final;
         virtual void presentInner() override final;
 
     private:
-        VkSwapchainKHR  _swapchain;
-        VkFormat        _format;
+        VkSwapchainKHR  _swapChain;
+        VkFormat        _imageFormat;
         VkSurfaceKHR    _surface;
     };
 } // namespace vkm

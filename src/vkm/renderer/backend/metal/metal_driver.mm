@@ -2,6 +2,7 @@
 
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
+#include <vkm/renderer/backend/metal/metal_swapchain.h>
 
 namespace vkm
 {
@@ -21,11 +22,9 @@ namespace vkm
         return new VkmTextureMetal(this);
     }
     
-    SwapChain* VkmDriverMetal::newSwapChain(const VkmWindowInfo& windowInfo)
+    VkmSwapChain* VkmDriverMetal::newSwapChain()
     {
-        (void)windowInfo;
-        // TODO(snowapril) : implement swapchain creation
-        return nullptr;
+        return new SwapChainMetal(this);
     }
 
     bool VkmDriverMetal::initializeInner(const VkmEngineLaunchOptions* options)
