@@ -144,7 +144,7 @@ namespace vkm
         return new VkmTextureVulkan(this);
     }
 
-    VkmSwapChain* VkmDriverVulkan::newSwapChain()
+    VkmSwapChainBase* VkmDriverVulkan::newSwapChainInner()
     {
         return new VkmSwapChainVulkan(this);
     }

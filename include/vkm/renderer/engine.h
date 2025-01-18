@@ -11,7 +11,7 @@ namespace vkm
 {
     class VkmDriverBase;
     class VkmTexture;
-    class VkmSwapChain;
+    class VkmSwapChainBase;
 
     struct VkmEngineLaunchOptions
     {
@@ -56,7 +56,7 @@ namespace vkm
         /*
          * @brief returns engine's main swapchain created
          */
-        inline VkmSwapChain* getMainSwapChain() { return _mainSwapChain; }
+        inline VkmSwapChainBase* getMainSwapChain() { return _mainSwapChain; }
         
     public:
 
@@ -69,7 +69,7 @@ namespace vkm
         VkmDriverBase* _driver;
         double _lastUpdateTime;
 
-        VkmSwapChain* _mainSwapChain {nullptr}; // main swapchain. engine should have multiple swapchains but at now, only one swapchain is supported.
+        VkmSwapChainBase* _mainSwapChain {nullptr}; // main swapchain. engine should have multiple swapchains but at now, only one swapchain is supported.
 
     private:
         std::unique_ptr<AppDelegate> _appDelegate;

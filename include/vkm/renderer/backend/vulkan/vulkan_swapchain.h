@@ -7,7 +7,7 @@
 
 namespace vkm
 {
-    class VkmSwapChainVulkan final : public VkmSwapChain
+    class VkmSwapChainVulkan final : public VkmSwapChainBase
     {
     public:
         VkmSwapChainVulkan(VkmDriverBase* driver);

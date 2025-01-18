@@ -36,7 +36,7 @@ namespace vkm
 
         _appDelegate.reset(appDelegate);
         _appDelegate->onDriverInit();
-        
+
         return true;
     }
 
@@ -65,7 +65,7 @@ namespace vkm
 
     void VkmEngine::addSwapChain(const VkmWindowInfo& windowInfo)
     {
-        VkmSwapChain* swapChain = _driver->newSwapChain();
+        VkmSwapChainBase* swapChain = _driver->newSwapChain();
         const bool result = swapChain->initialize(windowInfo);
         VKM_ASSERT(result, "Failed to create swapchain");
 

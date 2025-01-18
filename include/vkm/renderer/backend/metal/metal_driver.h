@@ -21,7 +21,7 @@ namespace vkm
         /*
         * @brief Create swapchain with window info
         */
-        virtual VkmSwapChain* newSwapChain() override final;
+        virtual VkmSwapChainBase* newSwapChainInner() override final;
 
     protected:
         virtual bool initializeInner(const VkmEngineLaunchOptions* options) override final;

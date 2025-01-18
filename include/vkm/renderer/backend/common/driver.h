@@ -6,11 +6,15 @@
 #include <vkm/platform/common/window.h>
 #include <vkm/renderer/backend/common/backend_util.h>
 
+#include <array>
+#include <vector>
+
 namespace vkm
 {
     struct VkmEngineLaunchOptions;
     class VkmTexture;
-    class VkmSwapChain;
+    class VkmSwapChainBase;
+    class VkmCommandQueueBase;
 
     /*
     * @brief renderer backend driver base class
@@ -34,13 +38,16 @@ namespace vkm
         /*
         * @brief Create swapchain with window info
         */
-        virtual VkmSwapChain* newSwapChain() = 0;
+        VkmSwapChainBase* newSwapChain();
         
     protected:
         virtual bool initializeInner(const VkmEngineLaunchOptions* options) = 0;
         virtual void destroyInner() = 0;
         virtual VkmTexture* newTextureInner() = 0;
+        virtual VkmSwapChainBase* newSwapChainInner() = 0;
 
-    private:
+    protected:
+        std::array<std::vector<VkmCommandQueueBase*>, (uint8_t)VkmCommandQueueType::Count> _commandQueues;
+
     };
 }

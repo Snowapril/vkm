@@ -22,7 +22,7 @@ namespace vkm
         return new VkmTextureMetal(this);
     }
     
-    VkmSwapChain* VkmDriverMetal::newSwapChain()
+    VkmSwapChainBase* VkmDriverMetal::newSwapChainInner()
     {
         return new VkmSwapChainMetal(this);
     }

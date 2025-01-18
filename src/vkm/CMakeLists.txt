@@ -13,6 +13,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/base/common.h
     ${PUBLIC_HDR_DIR}/vkm/base/logger.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/backend_util.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_queue.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/driver.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_resource.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/texture.h
@@ -25,6 +26,7 @@ set(SRCS
     ${SRC_DIR}/vkm/base/common.cpp
     ${SRC_DIR}/vkm/base/logger.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/backend_util.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/command_queue.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/driver.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_resource.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/texture.cpp
@@ -53,12 +55,14 @@ if (VKM_USE_METAL_API)
     list(APPEND PUBLIC_HDRS
         $(PUBLIC_HDR_DIR)/vkm/platform/apple/application.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_driver.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_command_queue.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_swapchain.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_texture.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/apple/application.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_driver.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_command_queue.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_swapchain.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_texture.mm
     )

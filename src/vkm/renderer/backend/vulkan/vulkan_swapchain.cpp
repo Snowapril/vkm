@@ -79,7 +79,7 @@ namespace vkm
     }
 
     VkmSwapChainVulkan::VkmSwapChainVulkan(VkmDriverBase* driver)
-        : VkmSwapChain(driver)
+        : VkmSwapChainBase(driver)
     {
 
     }

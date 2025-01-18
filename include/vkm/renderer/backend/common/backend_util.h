@@ -99,4 +99,19 @@ namespace vkm
         uint32_t _numArrayLayers;
         VkmFormat _format;
     };
+
+    enum class VkmCommandQueueType : uint8_t
+    {
+        Graphics = 0,
+        Compute = 1,
+        Transfer = 2,
+        Count = 3,
+    };
+
+    enum class VkmCommandQueueTypeBits : uint32_t
+    {
+        Graphics = 1 << 0,
+        Compute = 1 << 1,
+        Transfer = 1 << 2,
+    };
 } // namespace vkm

@@ -9,15 +9,24 @@
 
 namespace vkm
 {
+    class VkmCommandQueueBase;
     class VkmDriverBase;
     /*
-    * @brief VkmSwapChain base class
+    * @brief VkmSwapChainBase base class
     */
-    class VkmSwapChain
+    class VkmSwapChainBase
     {
     public:
-        VkmSwapChain(VkmDriverBase* driver);
-        virtual ~VkmSwapChain();
+        VkmSwapChainBase(VkmDriverBase* driver);
+        virtual ~VkmSwapChainBase();
+
+        /*
+        * @brief Set present queue for swapchain
+        */
+        inline void setPresentQueue(VkmCommandQueueBase* presentQueue)
+        {
+            _presentQueue = presentQueue;
+        }
 
         /*
         * @brief Initialize swapchain
@@ -71,6 +80,7 @@ namespace vkm
 
     protected:
         VkmDriverBase* _driver;
+        VkmCommandQueueBase* _presentQueue = nullptr;
         glm::uvec2 _extent;
         uint8_t _backBufferCount;
     };

@@ -6,7 +6,7 @@
 namespace vkm
 {
     VkmSwapChainMetal::VkmSwapChainMetal(VkmDriverBase* driver)
-        : VkmSwapChain(driver)
+        : VkmSwapChainBase(driver)
     {
 
     }

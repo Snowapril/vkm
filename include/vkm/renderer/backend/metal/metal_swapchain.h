@@ -8,7 +8,7 @@ class CAMetalDrawable;
 
 namespace vkm
 {
-    class VkmSwapChainMetal final : public VkmSwapChain
+    class VkmSwapChainMetal final : public VkmSwapChainBase
     {
     public:
         VkmSwapChainMetal(VkmDriverBase* driver);
