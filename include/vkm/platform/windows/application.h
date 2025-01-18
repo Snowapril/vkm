@@ -11,6 +11,7 @@ struct GLFWwindow;
 namespace vkm
 {
     class VkmEngine;
+    class AppDelegate;
 
     /*
     * @brief Window class
@@ -53,13 +54,13 @@ namespace vkm
     class VkmApplication
     {
     public:
-        VkmApplication(const char* appName);
+        VkmApplication();
         ~VkmApplication();
 
         /*
         * @brief Entry point of application
         */
-        int entryPoint(int argc, char* argv[]);
+        int entryPoint(AppDelegate* appDelegate, int argc, char* argv[]);
 
         /*
         * @brief Destroy application

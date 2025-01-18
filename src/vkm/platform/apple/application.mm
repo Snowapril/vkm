@@ -2,8 +2,8 @@
 
 #include <vkm/platform/apple/application.h>
 
-#include <vkm/renderer/engine.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
+#include <vkm/renderer/backend/metal/metal_swapchain.h>
 
 #import <Cocoa/Cocoa.h>
 
@@ -13,9 +13,9 @@
 
 #include <Metal/Metal.h>
 #include <QuartzCore/QuartzCore.h>
-#include <QuartzCore/CAMetalLayer.h>
 #include <QuartzCore/CAFrameRateRange.h>
 
+#include <QuartzCore/CAMetalLayer.h>
 #include <vkm/platform/common/window.h>
 
 @interface VkmWindowImpl : NSWindow
@@ -45,6 +45,7 @@ static void* renderWorker( void* _Nullable obj )
     CAMetalLayer*                   _metalLayer;
     CAMetalDisplayLink*             _metalDisplayLink;
     vkm::VkmEngine*                 _engine;
+    vkm::VkmSwapChainMetal*         _swapChain;
 }
 
 - (nonnull instancetype)initWithMetalLayer:(nonnull CAMetalLayer *)metalLayer uiCanvasSize:(NSUInteger)uiCanvasSize
@@ -53,13 +54,6 @@ static void* renderWorker( void* _Nullable obj )
     if(self)
     {
         _metalLayer = metalLayer;
-        
-        vkm::VkmWindowInfo windowInfo;
-        // TODO(snowapril) : set window info
-        // windowInfo._width = uiCanvasSize.x;
-        // windowInfo._height = uiCanvasSize.y;
-        // windowInfo._windowHandle = _metalLayer;
-        _engine->addSwapChain(windowInfo);
 
         _metalDisplayLink = [[CAMetalDisplayLink alloc] initWithMetalLayer:_metalLayer];
         _metalDisplayLink.delegate = self;
@@ -119,9 +113,8 @@ static void* renderWorker( void* _Nullable obj )
 #endif // TARGET_OS_IOS
     
     id<CAMetalDrawable> drawable = update.drawable;
-    id<MTLTexture> texture = drawable.texture;
-    // (__bridge void*)texture
-    (void)texture;
+    
+    _swapChain->overrideCurrentDrawable((__bridge CAMetalDrawable*)drawable);
 
     _engine->update(CACurrentMediaTime());
 }
@@ -129,6 +122,11 @@ static void* renderWorker( void* _Nullable obj )
 - (void)setEngine:(nonnull vkm::VkmEngine*)engine
 {
     _engine = engine;
+}
+
+- (void)setSwapChain:(nonnull vkm::VkmSwapChainMetal*)swapChain
+{
+    _swapChain = swapChain;
 }
 @end
 
@@ -145,7 +143,7 @@ static void* renderWorker( void* _Nullable obj )
     VkmWindowImpl*                  _window;
     NSView*                         _view;
     CAMetalLayer*                   _metalLayer;
-    std::unique_ptr<vkm::VkmEngine> _engine;
+    vkm::VkmEngine*                 _engine;
     RendererCoordinatorController*  _rendererCoordinator;
     const char*                    _appName;
 }
@@ -211,6 +209,12 @@ static void* renderWorker( void* _Nullable obj )
     _window.contentView = _view;
     
     vkm::VKM_DEBUG_INFO("Metal layer & view setup complete");
+    
+    vkm::VkmWindowInfo windowInfo;
+    windowInfo._width = _metalLayer.drawableSize.width;
+    windowInfo._height = _metalLayer.drawableSize.height;
+    windowInfo._windowHandle = _metalLayer;
+    _engine->addSwapChain(windowInfo);
 }
 
 - (void)createGame
@@ -224,7 +228,8 @@ static void* renderWorker( void* _Nullable obj )
     _rendererCoordinator = [[RendererCoordinatorController alloc] initWithMetalLayer:_metalLayer
                                                                 uiCanvasSize:uiCanvasSize];
     
-    [_rendererCoordinator setEngine: _engine.get()];
+    [_rendererCoordinator setEngine: _engine];
+    [_rendererCoordinator setSwapChain: (vkm::VkmSwapChainMetal*)_engine->getMainSwapChain()];
 }
 
 - (void)evaluateCommandLine
@@ -240,12 +245,6 @@ static void* renderWorker( void* _Nullable obj )
 
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification
 {
-    _mtlDevice = MTLCreateSystemDefaultDevice();
-    
-    // Note : initialize engine first for logger manager initialization precede
-    _engine = std::make_unique<vkm::VkmEngine>( new vkm::VkmDriverMetal((__bridge MTLDevice *)_mtlDevice) );
-    _engine->initialize();
-    
     [self createWindow];
     [self createView];
     [self createGame];
@@ -274,6 +273,16 @@ static void* renderWorker( void* _Nullable obj )
 - (void)setAppName:(nonnull const char *) appName
 {
     _appName = appName;
+}
+
+- (void)setDevice:(nonnull id<MTLDevice>) device
+{
+    _mtlDevice = device;
+}
+
+- (void)setEngine:(nonnull vkm::VkmEngine*) engine
+{
+    _engine = engine;
 }
 
 - (void)windowDidChangeScreen:(NSNotification *)notification
@@ -311,12 +320,9 @@ namespace vkm
     {
     }
 
-    VkmApplication::VkmApplication(const char* appName)
+    VkmApplication::VkmApplication()
+        : _mtlDevice((__bridge MTLDevice*)MTLCreateSystemDefaultDevice()), _engine( new vkm::VkmDriverMetal(_mtlDevice) )
     {
-        _impl = (__bridge vkm::VkmApplicationImpl*)[[::VkmApplicationImpl alloc] init];
-        if ( _impl == nil )
-            VKM_DEBUG_ERROR("Failed to initialize VkmApplication for apple platform");
-        [((::VkmApplicationImpl*)_impl) setAppName:appName];
     }
 
     VkmApplication::~VkmApplication()
@@ -329,8 +335,29 @@ namespace vkm
         }
     }
 
-    int VkmApplication::entryPoint(int argc, char* argv[])
+    int VkmApplication::entryPoint(AppDelegate* appDelegate, int argc, char* argv[])
     {
+        {
+            // Note : initialize engine first for logger manager initialization precede
+            
+            if (_engine.initialize( appDelegate ) == false)
+            {
+                VKM_DEBUG_ERROR("Failed to initialize VkmEngine for apple platform");
+                return -1;
+            }
+
+            _impl = (__bridge vkm::VkmApplicationImpl*)[[::VkmApplicationImpl alloc] init];
+            if ( _impl == nil )
+            {
+                VKM_DEBUG_ERROR("Failed to initialize VkmApplication for apple platform");
+                return -1;
+            }
+
+            [((::VkmApplicationImpl*)_impl) setAppName:appDelegate->getAppName()];
+            [((::VkmApplicationImpl*)_impl) setDevice:(id <MTLDevice>)_mtlDevice];
+            [((::VkmApplicationImpl*)_impl) setEngine:&_engine];
+        }
+
         NSApplication* app = [NSApplication sharedApplication];
         [app setDelegate: (::VkmApplicationImpl*)_impl];
         return NSApplicationMain(argc, (const char**)argv);

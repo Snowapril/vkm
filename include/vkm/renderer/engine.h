@@ -3,7 +3,9 @@
 #pragma once
 
 #include <vkm/base/common.h>
+#include <vkm/platform/common/app_delegate.h>
 #include <vkm/platform/common/window.h>
+#include <memory>
 
 namespace vkm
 {
@@ -31,7 +33,7 @@ namespace vkm
         * @brief Initialize engine
         * @details initialize logger manager and other modules
         */
-        bool initialize(VkmEngineLaunchOptions options = DEFAULT_ENGINE_LAUNCH_OPTIONS);
+        bool initialize(AppDelegate* appDelegate, VkmEngineLaunchOptions options = DEFAULT_ENGINE_LAUNCH_OPTIONS);
 
         /*
         * @brief Run engine loop
@@ -49,6 +51,14 @@ namespace vkm
         * @brief Add swapchain to engine
         */
         void addSwapChain(const VkmWindowInfo& windowInfo);
+        
+    public:
+        /*
+         * @brief returns engine's main swapchain created
+         */
+        inline VkmSwapChain* getMainSwapChain() { return _mainSwapChain; }
+        
+    public:
 
         /*
         * @brief Parse engine launch options from command line arguments
@@ -60,5 +70,8 @@ namespace vkm
         double _lastUpdateTime;
 
         VkmSwapChain* _mainSwapChain {nullptr}; // main swapchain. engine should have multiple swapchains but at now, only one swapchain is supported.
+
+    private:
+        std::unique_ptr<AppDelegate> _appDelegate;
     };
 }

@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/metal/metal_swapchain.h>
+#include <QuartzCore/CAMetalLayer.h>
 
 namespace vkm
 {
@@ -15,7 +16,12 @@ namespace vkm
 
     }
 
-    bool VkmSwapChainMetal::createSwapChain(VkmWindowHandle windowHandle)
+    void VkmSwapChainMetal::overrideCurrentDrawable(CAMetalDrawable* currentDrawable)
+    {
+        _currentDrawable = currentDrawable;
+    }
+
+    bool VkmSwapChainMetal::createSwapChain(void* windowHandle)
     {
         return true;
     }
@@ -27,6 +33,11 @@ namespace vkm
 
     VkmResourceHandle VkmSwapChainMetal::acquireNextImageInner()
     {
+        if ( _currentDrawable != nullptr )
+        {
+            
+        }
+        
         return VKM_INVALID_RESOURCE_HANDLE;
     }
 

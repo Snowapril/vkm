@@ -24,7 +24,7 @@ namespace vkm
     
     VkmSwapChain* VkmDriverMetal::newSwapChain()
     {
-        return new SwapChainMetal(this);
+        return new VkmSwapChainMetal(this);
     }
 
     bool VkmDriverMetal::initializeInner(const VkmEngineLaunchOptions* options)

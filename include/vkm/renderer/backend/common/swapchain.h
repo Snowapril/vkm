@@ -64,7 +64,7 @@ namespace vkm
         }
 
     protected:
-        virtual bool createSwapChain(VkmWindowHandle windowHandle) = 0;
+        virtual bool createSwapChain(void* windowHandle) = 0;
         virtual void destroySwapChain() = 0;
         virtual VkmResourceHandle acquireNextImageInner() = 0;
         virtual void presentInner() = 0;

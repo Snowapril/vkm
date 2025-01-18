@@ -15,6 +15,12 @@ namespace vkm
         Unknown = 255,
     };
 
+    enum class VkmResourcePoolType : uint8_t
+    {
+        Default = 0,
+        Undefined = (uint8_t)-1,
+    };
+
     /*
     * @brief Resource handle
     * @details
@@ -22,19 +28,27 @@ namespace vkm
     struct VkmResourceHandle
     {
         uint64_t id;
-        uint16_t poolIndex;
+        VkmResourcePoolType poolType;
         VkmResourceType type;
 
         constexpr const bool operator==(const VkmResourceHandle& other) const
         {
-            return id == other.id && poolIndex == other.poolIndex && type == other.type;
+            return id == other.id && poolType == other.poolType && type == other.type;
         }
         constexpr const bool operator!=(const VkmResourceHandle& other) const
         {
-            return id != other.id || poolIndex != other.poolIndex || type != other.type;
+            return id != other.id || poolType != other.poolType || type != other.type;
+        }
+        const bool isValid() const
+        {
+            return (id != -1);
+        }
+        const bool isPooledResource() const
+        {
+            return (poolType != VkmResourcePoolType::Undefined);
         }
     };
-    constexpr const VkmResourceHandle VKM_INVALID_RESOURCE_HANDLE{(uint64_t)-1, (uint16_t)-1, VkmResourceType::Unknown};
+    constexpr const VkmResourceHandle VKM_INVALID_RESOURCE_HANDLE{(uint64_t)-1, VkmResourcePoolType::Undefined, VkmResourceType::Unknown};
 
     enum class VkmFormat : uint32_t
     {

@@ -3,9 +3,14 @@
 #pragma once
 
 #include <vkm/base/common.h>
+#include <vkm/renderer/engine.h>
+
+class MTLDevice;
 
 namespace vkm
 {
+    class AppDelegate;
+
     class VkmWindow
     {
     public:
@@ -22,14 +27,23 @@ namespace vkm
     class VkmApplication
     {
     public:
-        VkmApplication(const char* appName);
+        VkmApplication();
         ~VkmApplication();
 
-        int entryPoint(int argc, char* argv[]);
+        /*
+        * @brief Entry point of application
+        */
+        int entryPoint(AppDelegate* appDelegate, int argc, char* argv[]);
 
+        /*
+        * @brief Destroy application
+        */
         void destroy();
 
     private:
         class VkmApplicationImpl* _impl;
+        MTLDevice* _mtlDevice;
+        VkmEngine _engine;
+
     };
 }

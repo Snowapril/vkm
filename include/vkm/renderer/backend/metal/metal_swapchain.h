@@ -4,6 +4,8 @@
 
 #include <vkm/renderer/backend/common/swapchain.h>
 
+class CAMetalDrawable;
+
 namespace vkm
 {
     class VkmSwapChainMetal final : public VkmSwapChain
@@ -11,12 +13,16 @@ namespace vkm
     public:
         VkmSwapChainMetal(VkmDriverBase* driver);
         ~VkmSwapChainMetal();
-
+        
+        void overrideCurrentDrawable(CAMetalDrawable* currentDrawable);
+        
     protected:
-        virtual bool createSwapChain(VkmWindowHandle windowHandle) override final;
+        virtual bool createSwapChain(void* windowHandle) override final;
         virtual void destroySwapChain() override final;
         virtual VkmResourceHandle acquireNextImageInner() override final;
         virtual void presentInner() override final;
-
+        
+    private:
+        CAMetalDrawable* _currentDrawable = nullptr;
     };
 } // namespace vkm

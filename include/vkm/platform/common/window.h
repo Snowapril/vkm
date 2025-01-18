@@ -6,9 +6,9 @@
 
 // Window handle type
 #if defined(VKM_PLATFORM_WINDOWS)
-    using VkmWindowHandle = struct GLFWwindow*;
+#define VKM_WINDOW_HANDLE GLFWwindow*
 #elif defined(VKM_PLATFORM_APPLE)
-    using VkmWindowHandle = class CAMetalLayer*;
+#define VKM_WINDOW_HANDLE CAMetalLayer*
 #else
     #error "Unsupported platform"
 #endif
@@ -24,6 +24,6 @@ namespace vkm
         uint32_t _width;
         uint32_t _height;
         const char* _title;
-        VkmWindowHandle _windowHandle;
+        void* _windowHandle;
     };
 }

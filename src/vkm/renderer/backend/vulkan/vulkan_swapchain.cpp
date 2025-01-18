@@ -89,7 +89,7 @@ namespace vkm
 
     }
 
-    bool VkmSwapChainVulkan::createSwapChain(VkmWindowHandle windowHandle)
+    bool VkmSwapChainVulkan::createSwapChain(void* windowHandle)
     {
         // TODO(snowapril) : provide vsync as option
         const bool vSync = false;

@@ -14,7 +14,7 @@ namespace vkm
         ~VkmSwapChainVulkan();
 
     protected:
-        virtual bool createSwapChain(VkmWindowHandle windowHandle) override final;
+        virtual bool createSwapChain(void* windowHandle) override final;
         virtual void destroySwapChain() override final;
         virtual VkmResourceHandle acquireNextImageInner() override final;
         virtual void presentInner() override final;

@@ -53,14 +53,14 @@ namespace vkm
         destroy();
     }
 
-    int VkmApplication::entryPoint(int argc, char* argv[])
+    int VkmApplication::entryPoint(AppDelegate* appDelegate, int argc, char* argv[])
     {
         VKM_ASSERT(glfwInit(), "Failed to initialize GLFW");
         VKM_ASSERT(glfwVulkanSupported(), "This system does not support Vulkan API");
 
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
-        if ( _engine.initialize( VkmEngine::parseEngineLaunchOptions(argc, argv)) == false )
+        if ( _engine.initialize( appDelegate, VkmEngine::parseEngineLaunchOptions(argc, argv)) == false )
         {
             VKM_DEBUG_ERROR("Failed to initialize engine");
             return -1;

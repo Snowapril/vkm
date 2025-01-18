@@ -7,6 +7,7 @@ set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../)
 
 # Set public headers
 set(PUBLIC_HDRS
+    $(PUBLIC_HDR_DIR)/vkm/platform/common/app_delegate.h
     $(PUBLIC_HDR_DIR)/vkm/platform/common/window.h
     ${PUBLIC_HDR_DIR}/vkm/base/platform.h
     ${PUBLIC_HDR_DIR}/vkm/base/common.h
