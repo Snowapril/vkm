@@ -5,6 +5,7 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <iostream>
 #include <chrono>
+#include <backward.hpp>
 
 namespace vkm
 {
@@ -47,7 +48,26 @@ namespace vkm
 
     void Logger::error(const char* msg)
     {
-        _logger->error(msg);
+        // Note(snowapril) : error log automatically generate additional stack trace
+        backward::StackTrace st;
+        st.load_here(32);
+
+        backward::TraceResolver tr; 
+        tr.load_stacktrace(st);
+        
+        static thread_local std::ostringstream os;
+        os << msg << "\n";
+        for (size_t i = 0; i < st.size(); ++i)
+        {
+            backward::ResolvedTrace trace = tr.resolve(st[i]);
+            os << "#" << i
+                << " " << trace.object_filename
+                << " " << trace.object_function
+                << " [" << trace.addr << "]" << "\n";
+        }
+
+        _logger->error(os.str().c_str());
+        os.clear();
     }
 
     void Logger::flush()

@@ -109,6 +109,7 @@ add_definitions(-DGLM_ENABLE_EXPERIMENTAL)
 # Includes
 include_directories(dependencies/src)
 include_directories(dependencies/src/vulkan/include)
+include_directories(dependencies/src/backward-cpp)
 include_directories(dependencies/src/vma/src)
 include_directories(dependencies/src/glfw/include)
 include_directories(dependencies/src/glm)
