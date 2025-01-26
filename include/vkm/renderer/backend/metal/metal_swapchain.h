@@ -8,6 +8,7 @@
 
 namespace vkm
 {
+    class VkmTextureMetal;
     class VkmSwapChainMetal final : public VkmSwapChainBase
     {
     public:
@@ -26,5 +27,6 @@ namespace vkm
         
     private:
         id<CAMetalDrawable> _currentDrawable = nullptr;
+        std::array<std::unique_ptr<VkmTextureMetal>, FRAME_BUFFER_COUNT> _backBuffers;
     };
 } // namespace vkm

@@ -82,9 +82,11 @@ namespace vkm
         AllowPresent = 0x00000040,
         ExternalHandleOwner = 0x00000080,
         DeferredCreation = 0x00000100,
+
+        AllowShaderReadWrite = AllowShaderRead | AllowShaderWrite,
     };
 
-    uint32_t operator|(VkmResourceCreateInfo lhs, VkmResourceCreateInfo rhs);
+    VkmResourceCreateInfo operator|(VkmResourceCreateInfo lhs, VkmResourceCreateInfo rhs);
     uint32_t operator&(VkmResourceCreateInfo lhs, VkmResourceCreateInfo rhs);
 
     enum class VkmResourceUsageBits : uint32_t

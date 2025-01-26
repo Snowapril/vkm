@@ -4,7 +4,7 @@
 
 #include <vkm/renderer/backend/common/texture.h>
 
-class MTLTexture;
+@protocol MTLTexture;
 
 namespace vkm
 {
@@ -14,14 +14,15 @@ namespace vkm
         VkmTextureMetal(VkmDriverBase* driver);
         ~VkmTextureMetal();
 
-        static VkmTextureInfo getTextureInfoFromMTLTexture(MTLTexture* mtlTexture);
+        static VkmTextureInfo getTextureInfoFromMTLTexture(id<MTLTexture> mtlTexture);
 
-        virtual bool initialize(const VkmTextureInfo& info, void* externalHandleOrNull = nullptr) override final;
+        virtual bool initialize(const VkmTextureInfo& info) override final;
+        virtual bool overrideExternalHandle(void* externalHandle) override final;
         virtual void setDebugName(const char* name) override final;
         
-        inline MTLTexture* getInternalHandle() const { return _mtlTexture; }
+        inline id<MTLTexture> getInternalHandle() const { return _mtlTexture; }
 
     private:
-        MTLTexture* _mtlTexture {nullptr};
+        id<MTLTexture> _mtlTexture {nullptr};
     };
 } // namespace vkm

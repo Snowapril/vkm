@@ -15,7 +15,7 @@ namespace vkm
     /*
     * @brief VkmSwapChainBase base class
     */
-    class VkmSwapChainBase : public IVkmDriverResource
+    class VkmSwapChainBase : public VkmDriverResourceBase
     {
     public:
         VkmSwapChainBase(VkmDriverBase* driver);
@@ -84,5 +84,6 @@ namespace vkm
         VkmCommandQueueBase* _presentQueue = nullptr;
         glm::uvec2 _extent;
         uint8_t _backBufferCount;
+        uint32_t _currentBackBufferIndex = INVALID_VALUE32;
     };
 } // namespace vkm

@@ -14,7 +14,7 @@ namespace vkm
      * @brief Render resource base class
      * @details 
      */
-    class VkmRenderResource : public IVkmDriverResource
+    class VkmRenderResource : public VkmDriverResourceBase
     {
     public:
         VkmRenderResource(VkmDriverBase* driver);

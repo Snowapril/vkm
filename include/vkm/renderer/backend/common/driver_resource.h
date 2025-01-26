@@ -7,12 +7,17 @@
 
 namespace vkm
 {
-    class IVkmDriverResource
+    class VkmDriverResourceBase
     {
     public:
-        IVkmDriverResource() = default;
-        virtual ~IVkmDriverResource() = default;
+        VkmDriverResourceBase() = default;
+        virtual ~VkmDriverResourceBase() = default;
 
         virtual void setDebugName(const char* name) = 0;
+
+        inline VkmResourceHandle getHandle() const { return _handle; }
+        
+    protected:
+        VkmResourceHandle _handle;
     };
 }

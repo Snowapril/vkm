@@ -20,15 +20,17 @@ namespace vkm
             return false;
         }
 
-        if (externalHandleOrNull != nullptr)
-        {
-            _vkTexture = static_cast<VkImage>(externalHandleOrNull);
-        }
-        else if ((info._flags & VkmResourceCreateInfo::DeferredCreation) == 0)
+        if ((info._flags & VkmResourceCreateInfo::DeferredCreation) == 0)
         {
             // TODO(snowapril) : create texture with info
         }
+        return true;
+    }
 
+    bool VkmTextureVulkan::overrideExternalHandle(void* externalHandle)
+    {
+        _vkTexture = static_cast<VkImage>(externalHandle);
+        // TODO(snowapril) : validate external handle with current texture info
         return true;
     }
 } // namespace vkm

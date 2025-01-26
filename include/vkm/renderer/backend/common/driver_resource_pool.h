@@ -12,7 +12,7 @@
 namespace vkm
 {
     class VkmDriverBase;
-    
+
     class VkmDriverResourcePool
     {
     public:
@@ -31,7 +31,7 @@ namespace vkm
             ~VkmDriverResourceSubPool();
 
         private:
-            std::array<std::vector<std::unique_ptr<IVkmDriverResource>>, (uint8_t)VkmResourceType::Count> _resources;
+            std::array<std::vector<std::unique_ptr<VkmDriverResourceBase>>, (uint8_t)VkmResourceType::Count> _resources;
         };
 
     private:

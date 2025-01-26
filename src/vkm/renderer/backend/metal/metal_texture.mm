@@ -14,31 +14,33 @@ namespace vkm
     {
     }
 
-    VkmTextureInfo VkmTextureMetal::getTextureInfoFromMTLTexture(MTLTexture* mtlTexture)
+    VkmTextureInfo VkmTextureMetal::getTextureInfoFromMTLTexture(id<MTLTexture> mtlTexture)
     {
-        id<MTLTexture> mtlTextureCasted = static_cast<id<MTLTexture>>(mtlTexture);
         VkmTextureInfo info = {
-            ._extent = {[mtlTextureCasted width], [mtlTextureCasted height], [mtlTextureCasted depth]},
+            ._extent = {[mtlTexture width], [mtlTexture height], [mtlTexture depth]},
         };
         return info;
     }
 
-    bool VkmTextureMetal::initialize(const VkmTextureInfo& info, void* externalHandleOrNull)
+    bool VkmTextureMetal::initialize(const VkmTextureInfo& info)
     {
         if (!initializeCommon(info))
         {
             return false;
         }
 
-        if (externalHandleOrNull != nullptr)
-        {
-            _mtlTexture = static_cast<MTLTexture*>(externalHandleOrNull);
-        }
-        else if ((info._flags & VkmResourceCreateInfo::DeferredCreation) == 0)
+        if ((info._flags & VkmResourceCreateInfo::DeferredCreation) == 0)
         {
             // TODO(snowapril) : create texture with info
         }
 
+        return true;
+    }
+
+    bool VkmTextureMetal::overrideExternalHandle(void* externalHandle)
+    {
+        _mtlTexture = static_cast<id<MTLTexture>>(externalHandle);
+        // TODO(snowapril) : validate external handle with current texture info
         return true;
     }
 

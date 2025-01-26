@@ -24,7 +24,7 @@ namespace vkm
     /*
     * @brief Command buffer ppol base class
     */
-    class VkmCommandBufferPoolBase : public IVkmDriverResource
+    class VkmCommandBufferPoolBase : public VkmDriverResourceBase
     {
     public:
         VkmCommandBufferPoolBase(VkmDriverBase* driver, VkmCommandQueueBase* commandQueue);
@@ -48,7 +48,7 @@ namespace vkm
     /*
     * @brief Command queue base class
     */
-    class VkmCommandQueueBase : public IVkmDriverResource
+    class VkmCommandQueueBase : public VkmDriverResourceBase
     {
     public:
         VkmCommandQueueBase(VkmDriverBase* driver);

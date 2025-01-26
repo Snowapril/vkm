@@ -141,6 +141,7 @@ namespace vkm
 
     VkmTexture* VkmDriverVulkan::newTextureInner()
     {
+        // TODO(snowapril) : create texture via resource pool backend
         return new VkmTextureVulkan(this);
     }
 
