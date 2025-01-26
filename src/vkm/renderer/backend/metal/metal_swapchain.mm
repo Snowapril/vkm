@@ -21,6 +21,11 @@ namespace vkm
         _currentDrawable = currentDrawable;
     }
 
+    void VkmSwapChainMetal::setDebugName(const char* name)
+    {
+        
+    }
+
     bool VkmSwapChainMetal::createSwapChain(void* windowHandle)
     {
         return true;

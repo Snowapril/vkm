@@ -18,14 +18,16 @@ namespace vkm
         ~VkmDriverMetal();
 
         /*
-        * @brief Create swapchain with window info
+        * @brief Get driver metal device
         */
         inline id<MTLDevice> getMTLDevice() const { return _mtlDevice; }
 
     protected:
         virtual bool initializeInner(const VkmEngineLaunchOptions* options) override final;
         virtual void destroyInner() override final;
+        virtual VkmSwapChainBase* newSwapChainInner() override final;
         virtual VkmTexture* newTextureInner() override final;
+        virtual VkmCommandQueueBase* newCommandQueueInner() override final;
 
     private:
         id<MTLDevice> _mtlDevice;

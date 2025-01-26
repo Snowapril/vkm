@@ -5,6 +5,7 @@
 #include <vkm/base/common.h>
 #include <vkm/platform/common/window.h>
 #include <vkm/renderer/backend/common/backend_util.h>
+#include <vkm/renderer/backend/common/driver_resource.h>
 #include <glm/vec2.hpp>
 
 namespace vkm
@@ -14,7 +15,7 @@ namespace vkm
     /*
     * @brief VkmSwapChainBase base class
     */
-    class VkmSwapChainBase
+    class VkmSwapChainBase : public IVkmDriverResource
     {
     public:
         VkmSwapChainBase(VkmDriverBase* driver);

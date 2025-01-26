@@ -21,6 +21,7 @@ namespace vkm
     public:
         virtual void submit(const CommandSubmitInfo& submitInfos) override final;
         virtual void waitIdle() override final;
+        virtual void setDebugName(const char* name) override final;
 
     protected:
         virtual bool initializeInner() override final;

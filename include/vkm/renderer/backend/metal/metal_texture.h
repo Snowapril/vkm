@@ -17,6 +17,8 @@ namespace vkm
         static VkmTextureInfo getTextureInfoFromMTLTexture(MTLTexture* mtlTexture);
 
         virtual bool initialize(const VkmTextureInfo& info, void* externalHandleOrNull = nullptr) override final;
+        virtual void setDebugName(const char* name) override final;
+        
         inline MTLTexture* getInternalHandle() const { return _mtlTexture; }
 
     private:

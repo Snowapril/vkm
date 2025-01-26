@@ -12,4 +12,9 @@ namespace vkm
     #define VKM_DEBUG_INFO(msg) LoggerManager::singleton().info(msg)
     #define VKM_DEBUG_ERROR(msg) LoggerManager::singleton().error(msg)
     #define VKM_ASSERT(condition, msg) if (!(condition)) { VKM_DEBUG_ERROR(msg); DEBUG_BREAK; }
+
+    constexpr const uint8_t  INVALID_VALUE8  = 0xFF;
+    constexpr const uint16_t INVALID_VALUE16 = 0xFFFF;
+    constexpr const uint32_t INVALID_VALUE32 = 0xFFFFFFFF;
+    constexpr const uint64_t INVALID_VALUE64 = 0xFFFFFFFFFFFFFFFF;
 }

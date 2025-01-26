@@ -26,7 +26,19 @@ namespace vkm
         VkmDriverBase();
         ~VkmDriverBase();
 
+        /*
+        * @brief initialize each graphics api setup and create necessary resources
+        */
         bool initialize(const VkmEngineLaunchOptions* options);
+
+        /*
+        * @brief create command queues for each necessary needs
+        */
+        bool setUpPredefinedCommandQueues();
+
+        /*
+        * @brief desrtroy all resources and clean up
+        */
         void destroy();
 
         /*
@@ -39,12 +51,16 @@ namespace vkm
         * @brief Create swapchain with window info
         */
         VkmSwapChainBase* newSwapChain();
-        
+
+    protected:
+        VkmCommandQueueBase* newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
+
     protected:
         virtual bool initializeInner(const VkmEngineLaunchOptions* options) = 0;
         virtual void destroyInner() = 0;
         virtual VkmTexture* newTextureInner() = 0;
         virtual VkmSwapChainBase* newSwapChainInner() = 0;
+        virtual VkmCommandQueueBase* newCommandQueueInner() = 0;
 
     protected:
         std::array<std::vector<VkmCommandQueueBase*>, (uint8_t)VkmCommandQueueType::Count> _commandQueues;

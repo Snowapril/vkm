@@ -106,6 +106,7 @@ namespace vkm
         Compute = 1,
         Transfer = 2,
         Count = 3,
+        Undefined = Count,
     };
 
     enum class VkmCommandQueueTypeBits : uint32_t

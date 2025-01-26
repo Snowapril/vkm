@@ -1,7 +1,9 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/metal/metal_command_queue.h>
-#include <Metal/Metal.h>
+#include <vkm/renderer/backend/metal/metal_driver.h>
+
+#include <Metal/MTLCommandQueue.h>
 
 namespace vkm
 {
@@ -37,5 +39,17 @@ namespace vkm
             // Wait until the command buffer is completed
         }
         */
+    }
+
+    void VkmCommandQueueMetal::setDebugName(const char* name)
+    {
+        [_mtlCommandQueue setLabel:[NSString stringWithUTF8String:name]];
+    }
+
+    bool VkmCommandQueueMetal::initializeInner()
+    {
+        VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
+        _mtlCommandQueue = [driverMetal->getMTLDevice() newCommandQueue];
+        return _mtlCommandQueue != nil;
     }
 }

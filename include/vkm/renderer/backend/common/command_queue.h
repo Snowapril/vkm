@@ -4,6 +4,7 @@
 
 #include <vkm/base/common.h>
 #include <vkm/renderer/backend/common/backend_util.h>
+#include <vkm/renderer/backend/common/driver_resource.h>
 
 namespace vkm
 {
@@ -23,7 +24,7 @@ namespace vkm
     /*
     * @brief Command buffer ppol base class
     */
-    class VkmCommandBufferPoolBase
+    class VkmCommandBufferPoolBase : public IVkmDriverResource
     {
     public:
         VkmCommandBufferPoolBase(VkmDriverBase* driver, VkmCommandQueueBase* commandQueue);
@@ -47,17 +48,29 @@ namespace vkm
     /*
     * @brief Command queue base class
     */
-    class VkmCommandQueueBase
+    class VkmCommandQueueBase : public IVkmDriverResource
     {
     public:
         VkmCommandQueueBase(VkmDriverBase* driver);
         ~VkmCommandQueueBase();
 
+        bool initialize(VkmCommandQueueType queueType, uint32_t queueIndex, const char* queueName);
+
+        inline VkmCommandQueueType getQueueType() const { return _queueType; }
+        inline const char* getQueueName() const { return _queueName; }
+        inline uint32_t getQueueIndex() const { return _queueIndex; }
+        
     public:
         virtual void submit(const CommandSubmitInfo& submitInfos) = 0;
         virtual void waitIdle() = 0;
 
     protected:
+        virtual bool initializeInner() = 0;
+
+    protected:
         VkmDriverBase* _driver;
+        VkmCommandQueueType _queueType;
+        const char* _queueName;
+        uint32_t _queueIndex;
     };
 }

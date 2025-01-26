@@ -4,6 +4,7 @@
 
 #include <vkm/base/common.h>
 #include <vkm/renderer/backend/common/backend_util.h>
+#include <vkm/renderer/backend/common/driver_resource.h>
 
 namespace vkm
 {
@@ -13,7 +14,7 @@ namespace vkm
      * @brief Render resource base class
      * @details 
      */
-    class VkmRenderResource
+    class VkmRenderResource : public IVkmDriverResource
     {
     public:
         VkmRenderResource(VkmDriverBase* driver);

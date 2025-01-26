@@ -3,16 +3,27 @@
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/metal/metal_swapchain.h>
+#include <vkm/renderer/backend/metal/metal_command_queue.h>
 
 namespace vkm
 {
-    VkmDriverMetal::VkmDriverMetal(MTLDevice* mtlDevice)
+    VkmDriverMetal::VkmDriverMetal(id<MTLDevice> mtlDevice)
         : VkmDriverBase(), _mtlDevice(mtlDevice)
     {
         
     }
 
     VkmDriverMetal::~VkmDriverMetal()
+    {
+
+    }
+
+    bool VkmDriverMetal::initializeInner(const VkmEngineLaunchOptions* options)
+    {
+        return true;
+    }
+
+    void VkmDriverMetal::destroyInner()
     {
 
     }
@@ -27,13 +38,8 @@ namespace vkm
         return new VkmSwapChainMetal(this);
     }
 
-    bool VkmDriverMetal::initializeInner(const VkmEngineLaunchOptions* options)
+    VkmCommandQueueBase* VkmDriverMetal::newCommandQueueInner()
     {
-        return true;
-    }
-
-    void VkmDriverMetal::destroyInner()
-    {
-
+        return new VkmCommandQueueMetal(this);
     }
 }

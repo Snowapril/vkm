@@ -16,6 +16,8 @@ namespace vkm
         
         void overrideCurrentDrawable(CAMetalDrawable* currentDrawable);
         
+        virtual void setDebugName(const char* name) override final;
+
     protected:
         virtual bool createSwapChain(void* windowHandle) override final;
         virtual void destroySwapChain() override final;

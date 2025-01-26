@@ -41,4 +41,9 @@ namespace vkm
 
         return true;
     }
+
+    void VkmTextureMetal::setDebugName(const char* name)
+    {
+        [(id<MTLTexture>)_mtlTexture setLabel:[NSString stringWithUTF8String:name]];
+    }
 } // namespace vkm
