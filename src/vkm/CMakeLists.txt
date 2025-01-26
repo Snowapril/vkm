@@ -68,6 +68,12 @@ if (VKM_USE_METAL_API)
     )
 endif()
 
+if (VKM_PLATFORM_APPLE)
+    # Compile source/headers as objective-c++
+    set_source_files_properties(${SRCS} PROPERTIES
+        COMPILE_FLAGS "-x objective-c++")
+endif()
+
 # Build library
 add_library(${target} ${SRCS} ${BACKWARD_ENABLE})
 

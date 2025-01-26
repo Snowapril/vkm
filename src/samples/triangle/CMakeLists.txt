@@ -12,6 +12,12 @@ set(SRCS
     ${SRC_DIR}/main.cpp
 )
 
+if (VKM_PLATFORM_APPLE)
+    # Compile source/headers as objective-c++
+    set_source_files_properties(${SRCS} PROPERTIES
+        COMPILE_FLAGS "-x objective-c++")
+endif()
+
 # Build executable
 add_executable(${target} ${SRCS} ${BACKWARD_ENABLE})
 

@@ -52,14 +52,17 @@ else()
 endif()
 
 if (WIN32)
-    add_definitions(-DVKM_PLATFORM_WINDOWS)
+    option(VKM_PLATFORM_WINDOWS "Build target device is windows platform" ON)
+else()
+    option(VKM_PLATFORM_WINDOWS "Build target device is windows platform" OFF)
 endif()
 
 if (APPLE)
     option(VKM_USE_METAL_API "Use Metal API on macOS/iOS" ON)
-    add_definitions(-DVKM_PLATFORM_APPLE)
+    option(VKM_PLATFORM_APPLE "Build target device is apple platform" ON)
 else()
     option(VKM_USE_METAL_API "Use Metal API on macOS/iOS" OFF)
+    option(VKM_PLATFORM_APPLE "Build target device is apple platform" OFF)
 endif()
 
 if (VKM_USE_VULKAN_API)
@@ -68,6 +71,14 @@ endif()
 
 if (VKM_USE_METAL_API)
     add_definitions(-DVKM_USE_METAL_API)
+endif()
+
+if (VKM_PLATFORM_WINDOWS)
+    add_definitions(-DVKM_PLATFORM_WINDOWS)
+endif()
+
+if (VKM_PLATFORM_APPLE)
+    add_definitions(-DVKM_PLATFORM_APPLE)
 endif()
 
 # Build Options
