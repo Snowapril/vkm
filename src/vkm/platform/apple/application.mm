@@ -114,7 +114,7 @@ static void* renderWorker( void* _Nullable obj )
     
     id<CAMetalDrawable> drawable = update.drawable;
     
-    _swapChain->overrideCurrentDrawable((__bridge CAMetalDrawable*)drawable);
+    _swapChain->overrideCurrentDrawable(drawable);
 
     _engine->update(CACurrentMediaTime());
 }

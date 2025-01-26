@@ -17,6 +17,8 @@ namespace vkm
     public:
         VkmCommandQueueMetal(VkmDriverBase* driver);
         ~VkmCommandQueueMetal();
+
+        inline id<MTLCommandQueue> getMTLCommandQueue() const { return _mtlCommandQueue; }
     
     public:
         virtual void submit(const CommandSubmitInfo& submitInfos) override final;

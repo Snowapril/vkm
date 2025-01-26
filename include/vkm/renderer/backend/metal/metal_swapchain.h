@@ -4,7 +4,7 @@
 
 #include <vkm/renderer/backend/common/swapchain.h>
 
-class CAMetalDrawable;
+@protocol CAMetalDrawable;
 
 namespace vkm
 {
@@ -14,7 +14,7 @@ namespace vkm
         VkmSwapChainMetal(VkmDriverBase* driver);
         ~VkmSwapChainMetal();
         
-        void overrideCurrentDrawable(CAMetalDrawable* currentDrawable);
+        void overrideCurrentDrawable(id<CAMetalDrawable> currentDrawable);
         
         virtual void setDebugName(const char* name) override final;
 
@@ -25,6 +25,6 @@ namespace vkm
         virtual void presentInner() override final;
         
     private:
-        CAMetalDrawable* _currentDrawable = nullptr;
+        id<CAMetalDrawable> _currentDrawable = nullptr;
     };
 } // namespace vkm
