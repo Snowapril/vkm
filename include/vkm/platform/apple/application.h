@@ -5,8 +5,7 @@
 #include <vkm/base/common.h>
 #include <vkm/renderer/engine.h>
 
-class MTLDevice;
-
+@protocol MTLDevice;
 namespace vkm
 {
     class AppDelegate;
@@ -42,7 +41,7 @@ namespace vkm
 
     private:
         class VkmApplicationImpl* _impl;
-        MTLDevice* _mtlDevice;
+        id<MTLDevice> _mtlDevice;
         VkmEngine _engine;
 
     };

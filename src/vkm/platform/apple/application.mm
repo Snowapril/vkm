@@ -321,7 +321,7 @@ namespace vkm
     }
 
     VkmApplication::VkmApplication()
-        : _mtlDevice((__bridge MTLDevice*)MTLCreateSystemDefaultDevice()), _engine( new vkm::VkmDriverMetal(_mtlDevice) )
+        : _mtlDevice(MTLCreateSystemDefaultDevice()), _engine( new vkm::VkmDriverMetal(_mtlDevice) )
     {
     }
 

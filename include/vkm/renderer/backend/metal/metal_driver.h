@@ -4,8 +4,7 @@
 
 #include <vkm/renderer/backend/common/driver.h>
 
-class MTLDevice;
-
+@protocol MTLDevice;
 namespace vkm
 {
     /*
@@ -15,13 +14,13 @@ namespace vkm
     class VkmDriverMetal : public VkmDriverBase
     {
     public:
-        VkmDriverMetal(MTLDevice* mtlDevice);
+        VkmDriverMetal(id<MTLDevice> mtlDevice);
         ~VkmDriverMetal();
 
         /*
         * @brief Create swapchain with window info
         */
-        virtual VkmSwapChainBase* newSwapChainInner() override final;
+        inline id<MTLDevice> getMTLDevice() const { return _mtlDevice; }
 
     protected:
         virtual bool initializeInner(const VkmEngineLaunchOptions* options) override final;
@@ -29,6 +28,6 @@ namespace vkm
         virtual VkmTexture* newTextureInner() override final;
 
     private:
-        MTLDevice* _mtlDevice;
+        id<MTLDevice> _mtlDevice;
     };
 }

@@ -5,7 +5,7 @@
 #include <vkm/renderer/backend/common/command_queue.h>
 #include <vector>
 
-class MTLCommandQueue;
+@protocol MTLCommandQueue;
 
 namespace vkm
 {
@@ -23,7 +23,10 @@ namespace vkm
         virtual void waitIdle() override final;
 
     protected:
-        MTLCommandQueue* _mtlCommandQueue;
+        virtual bool initializeInner() override final;
+
+    protected:
+        id<MTLCommandQueue> _mtlCommandQueue;
         std::vector<VkmCommandBufferBase*> _commandBuffersSubmitted;
     };
 }
