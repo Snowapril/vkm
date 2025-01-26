@@ -15,13 +15,15 @@ namespace vkm
         Texture = 0,
         Buffer = 1,
         StagingBuffer = 2,
-        Unknown = 255,
+        Count = 3,
+        Undefined = Count,
     };
 
     enum class VkmResourcePoolType : uint8_t
     {
         Default = 0,
-        Undefined = (uint8_t)-1,
+        Count = 1,
+        Undefined = Count,
     };
 
     /*
@@ -51,7 +53,7 @@ namespace vkm
             return (poolType != VkmResourcePoolType::Undefined);
         }
     };
-    constexpr const VkmResourceHandle VKM_INVALID_RESOURCE_HANDLE{(uint64_t)-1, VkmResourcePoolType::Undefined, VkmResourceType::Unknown};
+    constexpr const VkmResourceHandle VKM_INVALID_RESOURCE_HANDLE{(uint64_t)-1, VkmResourcePoolType::Undefined, VkmResourceType::Undefined};
 
     enum class VkmFormat : uint32_t
     {
