@@ -12,7 +12,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/base/platform.h
     ${PUBLIC_HDR_DIR}/vkm/base/common.h
     ${PUBLIC_HDR_DIR}/vkm/base/logger.h
-    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/backend_util.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/renderer_common.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_queue.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/driver.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_resource.h
@@ -25,7 +25,7 @@ set(PUBLIC_HDRS
 set(SRCS
     ${SRC_DIR}/vkm/base/common.cpp
     ${SRC_DIR}/vkm/base/logger.cpp
-    ${SRC_DIR}/vkm/renderer/backend/common/backend_util.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/renderer_common.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/command_queue.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/driver.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_resource.cpp

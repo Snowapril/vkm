@@ -7,6 +7,9 @@
 
 namespace vkm
 {
+    constexpr const uint32_t BACK_BUFFER_COUNT = 3;
+    constexpr const uint32_t FRAME_BUFFER_COUNT = 3;
+
     enum class VkmResourceType : uint8_t
     {
         Texture = 0,

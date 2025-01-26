@@ -3,7 +3,7 @@
 #pragma once
 
 #include <vkm/base/common.h>
-#include <vkm/renderer/backend/common/backend_util.h>
+#include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/driver_resource.h>
 
 namespace vkm

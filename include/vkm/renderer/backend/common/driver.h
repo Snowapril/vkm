@@ -4,7 +4,7 @@
 
 #include <vkm/base/common.h>
 #include <vkm/platform/common/window.h>
-#include <vkm/renderer/backend/common/backend_util.h>
+#include <vkm/renderer/backend/common/renderer_common.h>
 
 #include <array>
 #include <vector>
