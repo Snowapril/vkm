@@ -16,7 +16,7 @@ namespace vkm
     {
     }
 
-    bool VkmEngine::initialize(AppDelegate* appDelegate, VkmEngineLaunchOptions options)
+    bool VkmEngine::initializeEngine(AppDelegate* appDelegate, VkmEngineLaunchOptions options)
     {
         bool result = LoggerManager::singleton().initialize();
         if (!result)
@@ -26,15 +26,21 @@ namespace vkm
         }
         VKM_DEBUG_INFO("LoggerManager initialized");
 
-        result = _driver->initialize(&options);
+        _appDelegate.reset(appDelegate);
+        _engineOptions = options;
+
+        return true;
+    }
+    
+    bool VkmEngine::initializeBackendDriver()
+    {
+        const bool result = _driver->initialize(&_engineOptions);
         if (!result)
         {
             VKM_DEBUG_ERROR("Failed to initialize renderer backend driver");
             return false;
         }
         VKM_DEBUG_INFO("Renderer backend driver initialized");
-
-        _appDelegate.reset(appDelegate);
         _appDelegate->onDriverInit();
 
         return true;

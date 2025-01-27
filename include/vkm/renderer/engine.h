@@ -33,7 +33,12 @@ namespace vkm
         * @brief Initialize engine
         * @details initialize logger manager and other modules
         */
-        bool initialize(AppDelegate* appDelegate, VkmEngineLaunchOptions options = DEFAULT_ENGINE_LAUNCH_OPTIONS);
+        bool initializeEngine(AppDelegate* appDelegate, VkmEngineLaunchOptions options = DEFAULT_ENGINE_LAUNCH_OPTIONS);
+
+        /*
+        * @brief Initialize backend driver
+        */
+        bool initializeBackendDriver();
 
         /*
         * @brief Run engine loop
@@ -57,6 +62,11 @@ namespace vkm
          * @brief returns engine's main swapchain created
          */
         inline VkmSwapChainBase* getMainSwapChain() { return _mainSwapChain; }
+
+        /*
+        * @brief returns engine's launch options
+        */
+        inline const VkmEngineLaunchOptions& getEngineOptions() const { return _engineOptions; }
         
     public:
 
@@ -73,5 +83,6 @@ namespace vkm
 
     private:
         std::unique_ptr<AppDelegate> _appDelegate;
+        VkmEngineLaunchOptions _engineOptions {};
     };
 }

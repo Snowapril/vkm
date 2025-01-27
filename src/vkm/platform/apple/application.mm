@@ -340,9 +340,15 @@ namespace vkm
         {
             // Note : initialize engine first for logger manager initialization precede
             
-            if (_engine.initialize( appDelegate ) == false)
+            if (_engine.initializeEngine( appDelegate ) == false)
             {
                 VKM_DEBUG_ERROR("Failed to initialize VkmEngine for apple platform");
+                return -1;
+            }
+            
+            if (_engine.initializeBackendDriver() == false)
+            {
+                VKM_DEBUG_ERROR("Failed to initialize backend metal api");
                 return -1;
             }
 

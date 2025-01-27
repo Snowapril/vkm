@@ -55,14 +55,20 @@ namespace vkm
 
     int VkmApplication::entryPoint(AppDelegate* appDelegate, int argc, char* argv[])
     {
+        if ( _engine.initializeEngine( appDelegate, VkmEngine::parseEngineLaunchOptions(argc, argv)) == false )
+        {
+            VKM_DEBUG_ERROR("Failed to initialize engine");
+            return -1;
+        }
+
         VKM_ASSERT(glfwInit(), "Failed to initialize GLFW");
         VKM_ASSERT(glfwVulkanSupported(), "This system does not support Vulkan API");
 
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
-        if ( _engine.initialize( appDelegate, VkmEngine::parseEngineLaunchOptions(argc, argv)) == false )
+        if ( _engine.initializeBackendDriver() == false )
         {
-            VKM_DEBUG_ERROR("Failed to initialize engine");
+            VKM_DEBUG_ERROR("Failed to initialize backend vulkan api");
             return -1;
         }
 
