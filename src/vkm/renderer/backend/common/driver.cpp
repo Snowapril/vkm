@@ -73,6 +73,18 @@ namespace vkm
         return swapChain;
     }
 
+    VkmCommandBufferBase* VkmDriverBase::beginCommandBuffer(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
+    {
+        VkmCommandQueueBase* commandQueue = _commandQueues[(uint8_t)queueType][commandQueueIndex];
+        if (commandQueue == nullptr)
+        {
+            VKM_DEBUG_ERROR("Command queue is not requested in advance");
+            return nullptr;
+        }
+
+        return commandQueue->beginCommandBuffer(name);
+    }
+
     VkmCommandQueueBase* VkmDriverBase::newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name)
     {
         VkmCommandQueueBase* commandQueue = newCommandQueueInner();

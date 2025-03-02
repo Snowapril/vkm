@@ -17,7 +17,7 @@ namespace vkm
         virtual void onDriverInit() = 0;
         virtual void onShutdown() = 0;
         virtual void onUpdate(const double deltaTime) = 0;
-        virtual void onRender(VkmResourceHandle currentBackBuffer) = 0;
+        virtual void onRender(VkmDriverBase* driver, VkmResourceHandle currentBackBuffer) = 0;
         virtual const char* getAppName() const = 0;
     };
 }

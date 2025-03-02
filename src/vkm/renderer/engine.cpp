@@ -55,7 +55,7 @@ namespace vkm
         
         VkmResourceHandle currentBackBuffer = _mainSwapChain->acquireNextImage();
         VKM_DEBUG_INFO(fmt::format("Engine update : delta time : {}", deltaTime).c_str());
-        _appDelegate->onRender(currentBackBuffer);
+        _appDelegate->onRender(_driver, currentBackBuffer);
 
         _mainSwapChain->present();
     }

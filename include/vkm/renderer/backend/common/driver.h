@@ -11,6 +11,22 @@
 
 namespace vkm
 {
+    enum class VkmDriverCapabilityFlags : uint32_t
+    {
+        None                    = 0x000000000,
+        CommandBufferReusable   = 0x00000001,
+    };
+
+    inline VkmDriverCapabilityFlags operator|(VkmDriverCapabilityFlags lhs, VkmDriverCapabilityFlags rhs)
+    {
+        return static_cast<VkmDriverCapabilityFlags>(static_cast<uint32_t>(lhs) | static_cast<uint32_t>(rhs));
+    }
+
+    inline uint32_t operator&(VkmDriverCapabilityFlags lhs, VkmDriverCapabilityFlags rhs)
+    {
+        return static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs);
+    }
+    
     struct VkmEngineLaunchOptions;
     class VkmTexture;
     class VkmSwapChainBase;
@@ -52,6 +68,16 @@ namespace vkm
         */
         VkmSwapChainBase* newSwapChain();
 
+        /*
+        * @brief Allocate command buffer from pool for given queue type and start command buffer scope with name
+        * @param queueType command queue type
+        * @param commandQueueIndex command queue index within given command queue type
+        * @param name command buffer name
+        */
+        VkmCommandBufferBase* beginCommandBuffer(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
+
+        inline VkmDriverCapabilityFlags getDriverCapabilityFlags() const { return _driverCapabilityFlags; }
+
     protected:
         VkmCommandQueueBase* newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
 
@@ -64,6 +90,6 @@ namespace vkm
 
     protected:
         std::array<std::vector<VkmCommandQueueBase*>, (uint8_t)VkmCommandQueueType::Count> _commandQueues;
-
+        VkmDriverCapabilityFlags _driverCapabilityFlags;
     };
 }

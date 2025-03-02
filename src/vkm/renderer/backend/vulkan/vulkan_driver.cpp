@@ -408,6 +408,9 @@ namespace vkm
         }
 
         volkLoadDevice(_device);
+
+        _driverCapabilityFlags = VkmDriverCapabilityFlags::CommandBufferReusable;
+
         return true;
     }
 

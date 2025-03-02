@@ -10,6 +10,20 @@
 namespace vkm
 {
     /*
+    * @brief Command buffer ppol base class
+    */
+    class VkmCommandBufferPoolMetal : public VkmCommandBufferPoolBase
+    {
+    public:
+        VkmCommandBufferPoolMetal(VkmDriverBase* driver, VkmCommandQueueBase* commandQueue);
+        ~VkmCommandBufferPoolMetal();
+
+    protected:
+        virtual VkmCommandBufferBase* newCommandBuffer() override final;
+
+    };
+
+    /*
     * @brief Command queue 
     */
     class VkmCommandQueueMetal : public VkmCommandQueueBase

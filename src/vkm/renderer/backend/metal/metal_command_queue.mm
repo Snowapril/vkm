@@ -7,6 +7,25 @@
 
 namespace vkm
 {
+    VkmCommandBufferPoolMetal::VkmCommandBufferPoolMetal(VkmDriverBase* driver, VkmCommandQueueBase* commandQueue)
+        : VkmCommandBufferPoolBase(driver, commandQueue)
+    {
+
+    }
+
+    VkmCommandBufferPoolMetal::~VkmCommandBufferPoolMetal()
+    {
+
+    }
+
+    VkmCommandBufferBase* VkmCommandBufferPoolMetal::newCommandBuffer()
+    {
+        VkmCommandBufferMetal* commandBufferMetal = new VkmCommandBufferMetal(_driver, _commandQueue);
+        VkmCommandQueueMetal* commandQueueMetal = static_cast<VkmCommandQueueMetal*>(_commandQueue);
+        commandBufferMetal->_mtlCommandBuffer = [commandQueueMetal->getMTLCommandQueue() newCommandBuffer];
+        return commandBufferMetal;
+    }
+
     VkmCommandQueueMetal::VkmCommandQueueMetal(VkmDriverBase* driver)
         : VkmCommandQueueBase(driver)
     {
@@ -50,6 +69,9 @@ namespace vkm
     {
         VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
         _mtlCommandQueue = [driverMetal->getMTLDevice() newCommandQueue];
+
+        _commandBufferPool = [driverMetal->getMTLDevice() newCommandQueue];
+
         return _mtlCommandQueue != nil;
     }
 }

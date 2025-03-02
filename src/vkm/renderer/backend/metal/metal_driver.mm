@@ -20,6 +20,7 @@ namespace vkm
 
     bool VkmDriverMetal::initializeInner(const VkmEngineLaunchOptions* options)
     {
+        _driverCapabilityFlags = VkmDriverCapabilityFlags::None;
         return true;
     }
 

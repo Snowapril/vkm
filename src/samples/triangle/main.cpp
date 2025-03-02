@@ -33,9 +33,11 @@ public:
         VKM_DEBUG_LOG("TriangleApplication::onUpdate");
     }
 
-    virtual void onRender(VkmResourceHandle currentBackBuffer) override final
+    virtual void onRender(VkmDriverBase* driver, VkmResourceHandle currentBackBuffer) override final
     {
         VKM_DEBUG_LOG("TriangleApplication::onRender");
+
+        driver->beginCommandBuffer(vkm::CommandBufferType::Graphics, "TriangleApplication::onRender");
     }
 
     virtual const char* getAppName() const override final

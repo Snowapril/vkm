@@ -5,6 +5,7 @@
 #include <vkm/base/common.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/driver_resource.h>
+#include <memory>
 
 namespace vkm
 {
@@ -43,6 +44,9 @@ namespace vkm
 
         std::mutex _commandBufferMutex;
         std::vector<VkmCommandBufferBase*> _commandBuffers;
+
+    private:
+        bool _doesCommandBufferReusable;
     };
 
     /*
@@ -68,6 +72,9 @@ namespace vkm
         virtual bool initializeInner() = 0;
 
     protected:
+        // Note(snowapril) : at now, each command queue maintain exact one command buffer pool
+        std::unique_ptr<VkmCommandBufferPoolBase> _commandBufferPool;
+
         VkmDriverBase* _driver;
         VkmCommandQueueType _queueType;
         const char* _queueName;
