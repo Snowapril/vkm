@@ -12,7 +12,9 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/base/platform.h
     ${PUBLIC_HDR_DIR}/vkm/base/common.h
     ${PUBLIC_HDR_DIR}/vkm/base/logger.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/dispatcher.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/renderer_common.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_stream.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_queue.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/driver.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/driver_resource_pool.h
