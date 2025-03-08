@@ -4,6 +4,7 @@
 #include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/command_queue.h>
+#include <vkm/renderer/backend/common/command_dispatcher.h>
 
 namespace vkm
 {
@@ -73,7 +74,7 @@ namespace vkm
         return swapChain;
     }
 
-    VkmCommandBufferBase* VkmDriverBase::beginCommandBuffer(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
+    VkmCommandDispatcher* VkmDriverBase::allocateCommandDispatcher(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex)
     {
         VkmCommandQueueBase* commandQueue = _commandQueues[(uint8_t)queueType][commandQueueIndex];
         if (commandQueue == nullptr)
@@ -82,7 +83,8 @@ namespace vkm
             return nullptr;
         }
 
-        return commandQueue->beginCommandBuffer(name);
+        // TODO(snowapril) : at now just allocate new command dispatcher for each request
+        return new VkmCommandDispatcher(commandQueue);
     }
 
     VkmCommandQueueBase* VkmDriverBase::newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name)

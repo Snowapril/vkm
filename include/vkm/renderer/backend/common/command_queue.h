@@ -25,11 +25,11 @@ namespace vkm
     /*
     * @brief Command buffer ppol base class
     */
-    class VkmCommandBufferPoolBase : public VkmDriverResourceBase
+    class VkmCommandBufferPoolBase
     {
     public:
         VkmCommandBufferPoolBase(VkmDriverBase* driver, VkmCommandQueueBase* commandQueue);
-        ~VkmCommandBufferPoolBase();
+        virtual ~VkmCommandBufferPoolBase();
 
     public:
         VkmCommandBufferBase* allocate();
@@ -63,7 +63,8 @@ namespace vkm
         inline VkmCommandQueueType getQueueType() const { return _queueType; }
         inline const char* getQueueName() const { return _queueName; }
         inline uint32_t getQueueIndex() const { return _queueIndex; }
-        
+        inline VkmCommandBufferPoolBase* getCommandBufferPool() const { return _commandBufferPool.get(); }
+
     public:
         virtual void submit(const CommandSubmitInfo& submitInfos) = 0;
         virtual void waitIdle() = 0;

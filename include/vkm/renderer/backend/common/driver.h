@@ -11,6 +11,12 @@
 
 namespace vkm
 {
+    struct VkmEngineLaunchOptions;
+    class VkmTexture;
+    class VkmSwapChainBase;
+    class VkmCommandQueueBase;
+    class VkmCommandDispatcher;
+
     enum class VkmDriverCapabilityFlags : uint32_t
     {
         None                    = 0x000000000,
@@ -27,11 +33,6 @@ namespace vkm
         return static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs);
     }
     
-    struct VkmEngineLaunchOptions;
-    class VkmTexture;
-    class VkmSwapChainBase;
-    class VkmCommandQueueBase;
-
     /*
     * @brief renderer backend driver base class
     * @details manage whole engine lifecycle and drive the render driver and other modules
@@ -69,13 +70,13 @@ namespace vkm
         VkmSwapChainBase* newSwapChain();
 
         /*
-        * @brief Allocate command buffer from pool for given queue type and start command buffer scope with name
-        * @param queueType command queue type
-        * @param commandQueueIndex command queue index within given command queue type
-        * @param name command buffer name
+        * @brief allocate command dispatcher for specific queue
         */
-        VkmCommandBufferBase* beginCommandBuffer(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
+        VkmCommandDispatcher* allocateCommandDispatcher(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex);
 
+        /*
+        * @brief get driver capability flags
+        */
         inline VkmDriverCapabilityFlags getDriverCapabilityFlags() const { return _driverCapabilityFlags; }
 
     protected:

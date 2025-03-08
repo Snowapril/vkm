@@ -7,6 +7,7 @@
 
 namespace vkm
 {
+    class VkmDriverBase;
     class AppDelegate
     {
     public:

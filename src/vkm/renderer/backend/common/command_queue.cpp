@@ -1,13 +1,15 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/common/command_queue.h>
+#include <vkm/renderer/backend/common/command_buffer.h>
+#include <vkm/renderer/backend/common/driver.h>
 
 namespace vkm
 {
     VkmCommandBufferPoolBase::VkmCommandBufferPoolBase(VkmDriverBase* driver, VkmCommandQueueBase* commandQueue)
         : _driver(driver), _commandQueue(commandQueue)
     {
-        _doesCommandBufferReusable = (_driver->getCapabilityFlags() & VkmDriverCapabilityFlags::CommandBufferReusable) != 0;
+        _doesCommandBufferReusable = (_driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::CommandBufferReusable) != 0;
     }
 
     VkmCommandBufferPoolBase::~VkmCommandBufferPoolBase()

@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/metal/metal_command_queue.h>
+#include <vkm/renderer/backend/metal/metal_command_buffer.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
 
 #include <Metal/MTLCommandQueue.h>
@@ -20,9 +21,9 @@ namespace vkm
 
     VkmCommandBufferBase* VkmCommandBufferPoolMetal::newCommandBuffer()
     {
-        VkmCommandBufferMetal* commandBufferMetal = new VkmCommandBufferMetal(_driver, _commandQueue);
+        VkmCommandBufferMetal* commandBufferMetal = new VkmCommandBufferMetal(_driver, _commandQueue, this);
         VkmCommandQueueMetal* commandQueueMetal = static_cast<VkmCommandQueueMetal*>(_commandQueue);
-        commandBufferMetal->_mtlCommandBuffer = [commandQueueMetal->getMTLCommandQueue() newCommandBuffer];
+        commandBufferMetal->_mtlCommandBuffer = [commandQueueMetal->getMTLCommandQueue() commandBuffer];
         return commandBufferMetal;
     }
 
@@ -70,7 +71,7 @@ namespace vkm
         VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
         _mtlCommandQueue = [driverMetal->getMTLDevice() newCommandQueue];
 
-        _commandBufferPool = [driverMetal->getMTLDevice() newCommandQueue];
+        _commandBufferPool.reset(new VkmCommandBufferPoolMetal(_driver, this));
 
         return _mtlCommandQueue != nil;
     }
