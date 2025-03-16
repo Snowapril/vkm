@@ -122,4 +122,6 @@ namespace vkm
         Compute = 1 << 1,
         Transfer = 1 << 2,
     };
+
+    using VKM_COMMAND_BUFFER_HANDLE = void*;
 } // namespace vkm

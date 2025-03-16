@@ -16,4 +16,9 @@ namespace vkm
     {
 
     }
+
+    void VkmCommandBufferMetal::setRHICommandBuffer(VKM_COMMAND_BUFFER_HANDLE handle)
+    {
+        _mtlCommandBuffer = (__bridge id<MTLCommandBuffer>)handle;
+    }
 }

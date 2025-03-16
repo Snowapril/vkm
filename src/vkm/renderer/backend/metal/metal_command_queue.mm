@@ -22,9 +22,14 @@ namespace vkm
     VkmCommandBufferBase* VkmCommandBufferPoolMetal::newCommandBuffer()
     {
         VkmCommandBufferMetal* commandBufferMetal = new VkmCommandBufferMetal(_driver, _commandQueue, this);
-        VkmCommandQueueMetal* commandQueueMetal = static_cast<VkmCommandQueueMetal*>(_commandQueue);
-        commandBufferMetal->_mtlCommandBuffer = [commandQueueMetal->getMTLCommandQueue() commandBuffer];
         return commandBufferMetal;
+    }
+
+    VKM_COMMAND_BUFFER_HANDLE VkmCommandBufferPoolMetal::getOrCreateRHICommandBuffer()
+    {
+        VkmCommandQueueMetal* commandQueueMetal = static_cast<VkmCommandQueueMetal*>(_commandQueue);
+        id<MTLCommandBuffer> mtlCommandBuffer = [commandQueueMetal->getMTLCommandQueue() commandBuffer];
+        return (__bridge VKM_COMMAND_BUFFER_HANDLE)mtlCommandBuffer;
     }
 
     VkmCommandQueueMetal::VkmCommandQueueMetal(VkmDriverBase* driver)

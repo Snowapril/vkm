@@ -15,6 +15,8 @@ namespace vkm
         VkmCommandBufferMetal(VkmDriverBase* driver, VkmCommandQueueBase* commandQueue, VkmCommandBufferPoolBase* commandBufferPool);
         ~VkmCommandBufferMetal();
 
+        virtual void setRHICommandBuffer(VKM_COMMAND_BUFFER_HANDLE handle) override final;
+
     private:
         id<MTLCommandBuffer> _mtlCommandBuffer;
     };

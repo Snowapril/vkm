@@ -19,6 +19,9 @@ namespace vkm
         ~VkmCommandBufferPoolMetal();
 
     protected:
+        virtual VKM_COMMAND_BUFFER_HANDLE getOrCreateRHICommandBuffer() override final;
+
+    protected:
         virtual VkmCommandBufferBase* newCommandBuffer() override final;
 
     };

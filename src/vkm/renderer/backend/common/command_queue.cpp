@@ -9,7 +9,6 @@ namespace vkm
     VkmCommandBufferPoolBase::VkmCommandBufferPoolBase(VkmDriverBase* driver, VkmCommandQueueBase* commandQueue)
         : _driver(driver), _commandQueue(commandQueue)
     {
-        _doesCommandBufferReusable = (_driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::CommandBufferReusable) != 0;
     }
 
     VkmCommandBufferPoolBase::~VkmCommandBufferPoolBase()
@@ -19,39 +18,29 @@ namespace vkm
     
     VkmCommandBufferBase* VkmCommandBufferPoolBase::allocate()
     {
+        // TODO(snowapril) : API command buffer handle and our command buffer instance have different life cycle.
+        // Our command buffer can be reused as soon as it is submitted to the driver, but API command buffer handle should be reused after it is completed.
+        
         VkmCommandBufferBase* commandBuffer = nullptr;
-        if ( _doesCommandBufferReusable )
+        std::lock_guard<std::mutex> lock(_commandBufferMutex);
+        if (_commandBuffers.empty() == false)
         {
-            std::lock_guard<std::mutex> lock(_commandBufferMutex);
-            if (_commandBuffers.empty() == false)
-            {
-                commandBuffer = _commandBuffers.back();
-                _commandBuffers.pop_back();
-            }
-            else
-            {
-                commandBuffer = newCommandBuffer();
-            }
+            commandBuffer = _commandBuffers.back();
+            _commandBuffers.pop_back();
         }
         else
         {
             commandBuffer = newCommandBuffer();
         }
+
+        commandBuffer->setRHICommandBuffer(getOrCreateRHICommandBuffer());
         return commandBuffer;
     }
 
     void VkmCommandBufferPoolBase::release(VkmCommandBufferBase* commandBuffer)
     {
-        // TODO(snowapril) : reuse VkmCommandBufferBase instance and discard it's rhi resource (MTLCommandBuffer or VkCommandBuffer)
-        if ( _doesCommandBufferReusable )
-        {
-            std::lock_guard<std::mutex> lock(_commandBufferMutex);
-            _commandBuffers.push_back(commandBuffer);
-        }
-        else
-        {
-            delete commandBuffer;
-        }
+        std::lock_guard<std::mutex> lock(_commandBufferMutex);
+        _commandBuffers.push_back(commandBuffer);
     }
 
     VkmCommandQueueBase::VkmCommandQueueBase(VkmDriverBase* driver)

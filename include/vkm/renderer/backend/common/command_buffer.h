@@ -21,6 +21,8 @@ namespace vkm
         VkmCommandBufferBase(VkmDriverBase* driver, VkmCommandQueueBase* commandQueue, VkmCommandBufferPoolBase* commandBufferPool);
         ~VkmCommandBufferBase();
 
+        virtual void setRHICommandBuffer(VKM_COMMAND_BUFFER_HANDLE handle) = 0;
+
     private:
         VkmDriverBase* _driver;
         VkmCommandQueueBase* _commandQueue;

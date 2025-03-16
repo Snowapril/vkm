@@ -37,6 +37,7 @@ namespace vkm
     
     protected:
         virtual VkmCommandBufferBase* newCommandBuffer() = 0;
+        virtual VKM_COMMAND_BUFFER_HANDLE getOrCreateRHICommandBuffer() = 0;
 
     protected:
         VkmDriverBase* _driver;
@@ -45,8 +46,6 @@ namespace vkm
         std::mutex _commandBufferMutex;
         std::vector<VkmCommandBufferBase*> _commandBuffers;
 
-    private:
-        bool _doesCommandBufferReusable;
     };
 
     /*

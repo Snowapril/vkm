@@ -7,7 +7,6 @@ namespace vkm
     VkmCommandBufferBase::VkmCommandBufferBase(VkmDriverBase* driver, VkmCommandQueueBase* commandQueue, VkmCommandBufferPoolBase* commandBufferPool)
         : _driver(driver), _commandQueue(commandQueue), _commandBufferPool(commandBufferPool)
     {
-
     }
 
     VkmCommandBufferBase::~VkmCommandBufferBase()
