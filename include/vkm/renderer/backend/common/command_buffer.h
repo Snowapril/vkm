@@ -4,6 +4,7 @@
 
 #include <vkm/base/common.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
+#include <vkm/renderer/backend/common/render_pass.h>
 #include <vkm/renderer/backend/common/driver_resource.h>
 
 namespace vkm
@@ -28,16 +29,26 @@ namespace vkm
         void endCommandBuffer();
 
         // Render pass related
-        void beginRenderPass();
+        void beginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc);
         void endRenderPass();
 
         // Pipeline related
         void bindPipeline();
         void unbindPipeline();
 
+    protected:
+        virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) = 0;
+        virtual void onEndRenderPass() = 0;
+
     private:
         VkmDriverBase* _driver;
         VkmCommandQueueBase* _commandQueue;
         VkmCommandBufferPoolBase* _commandBufferPool;
+
+    protected:
+        bool _isRecording; // Flag to indicate if the command buffer is currently recording commands
+        bool _isInRenderPass; // Flag to indicate if the command buffer is currently in a render pass
+
+        VkmFrameBufferDescriptor _currentFrameBufferDesc;
     };
 }

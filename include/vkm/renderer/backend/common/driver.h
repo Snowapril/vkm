@@ -74,6 +74,14 @@ namespace vkm
         */
         inline VkmDriverCapabilityFlags getDriverCapabilityFlags() const { return _driverCapabilityFlags; }
 
+        // @brief get command dispatcher for the driver
+        inline VkmCommandQueueBase* getCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex) const
+        {
+            VKM_ASSERT(queueType < VkmCommandQueueType::Count, "Invalid command queue type");
+            VKM_ASSERT(commandQueueIndex < _commandQueues[(uint8_t)queueType].size(), "Invalid command queue index");
+            return _commandQueues[(uint8_t)queueType][commandQueueIndex];
+        }
+
     protected:
         VkmCommandQueueBase* newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
 

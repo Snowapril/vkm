@@ -26,6 +26,9 @@ namespace vkm
             : _subGraphType(subGraphType), _subGraphId(subGraphId) {}
         virtual ~VkmRenderSubGraph() {};
 
+        virtual void commit(VkmCommandBufferBase* commandBuffer) = 0;
+
+    public:
         // Method to get the type of the subgraph
         inline VkmRenderSubGraphType getSubGraphType() const { return _subGraphType; }
         // Method to get the unique identifier for the subgraph
@@ -56,6 +59,8 @@ namespace vkm
             : VkmRenderSubGraph(VkmRenderSubGraphType::Graphics, subGraphId), _frameBufferDesc(desc) {}
         ~VkmRenderGraphicsSubGraph() override = default;
 
+        void commit(VkmCommandBufferBase* commandBuffer) override final;
+        
     private:
         VkmFrameBufferDescriptor _frameBufferDesc; // Frame buffer descriptor for the graphics subgraph
     };
@@ -65,6 +70,9 @@ namespace vkm
         // Frame buffer key for the compute subgraph
         VkmRenderComputeSubGraph(uint32_t subGraphId) : VkmRenderSubGraph(VkmRenderSubGraphType::Compute, subGraphId) {}
         ~VkmRenderComputeSubGraph() override = default;
+
+        void commit(VkmCommandBufferBase* commandBuffer) override final;
+
     };
     class VkmRenderTransferSubGraph : public VkmRenderSubGraph
     {
@@ -72,6 +80,21 @@ namespace vkm
         // Frame buffer key for the transfer subgraph
         VkmRenderTransferSubGraph(uint32_t subGraphId) : VkmRenderSubGraph(VkmRenderSubGraphType::Transfer, subGraphId) {}
         ~VkmRenderTransferSubGraph() override = default;
+
+        void commit(VkmCommandBufferBase* commandBuffer) override final;
+    };
+    
+    struct VkmRenderGraphCompileOptions
+    {
+        // Options for compiling the render graph, such as whether to optimize or validate
+        bool optimize = true; // Default to optimizing the render graph
+        bool validate = true; // Default to validating the render graph
+    };
+
+    struct VkmRenderGraphCommitOptions
+    {
+        // Options for committing the render graph, such as whether to wait for completion
+        bool waitForCompletion = true; // Default to waiting for completion
     };
 
     class VkmRenderGraph
@@ -88,8 +111,8 @@ namespace vkm
         // Method to add a transfer subgraph to the render graph
         VkmRenderTransferSubGraph* beginTransferSubGraph();
 
-        void compile();
-        void execute(VkmCommandBufferBase* commandBuffer);
+        void compile(const VkmRenderGraphCompileOptions& options = {});
+        void execute(const VkmRenderGraphCommitOptions& options = {});
         void reset();
 
     private:
