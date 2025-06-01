@@ -29,6 +29,11 @@ namespace vkm
         _appDelegate.reset(appDelegate);
         _engineOptions = options;
 
+        for (uint8_t i = 0; i < FRAME_COUNT; ++i)
+        {
+            _frameRenderGraphs[i] = std::make_unique<VkmRenderGraph>(_driver, i);
+        }
+
         return true;
     }
     
@@ -55,9 +60,18 @@ namespace vkm
         
         VkmResourceHandle currentBackBuffer = _mainSwapChain->acquireNextImage();
         VKM_DEBUG_INFO(fmt::format("Engine update : delta time : {}", deltaTime).c_str());
-        _appDelegate->onRender(_driver, currentBackBuffer);
+
+        VkmRenderGraph* renderGraph = _frameRenderGraphs[_currentFrameIndex].get();
+        renderGraph->setBackBuffer(currentBackBuffer);
+        _appDelegate->onRender(_driver, renderGraph);
+
+        renderGraph->compile();
+        //VkmCommandBufferBase* commandBuffer = _driver->newCommandBuffer(VkmCommandBufferType::Graphics, _currentFrameIndex);
+        //renderGraph->execute(commandBuffer);
 
         _mainSwapChain->present();
+
+        _currentFrameIndex = (_currentFrameIndex + 1) % FRAME_COUNT;
     }
 
     void VkmEngine::destroy()

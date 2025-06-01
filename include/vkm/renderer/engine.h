@@ -5,6 +5,7 @@
 #include <vkm/base/common.h>
 #include <vkm/platform/common/app_delegate.h>
 #include <vkm/platform/common/window.h>
+#include <vkm/renderer/backend/common/render_graph.h>
 #include <memory>
 
 namespace vkm
@@ -84,5 +85,8 @@ namespace vkm
     private:
         std::unique_ptr<AppDelegate> _appDelegate;
         VkmEngineLaunchOptions _engineOptions {};
+
+        std::array<std::unique_ptr<VkmRenderGraph>, FRAME_COUNT> _frameRenderGraphs;
+        uint32_t _currentFrameIndex {0}; // current frame index for render graph
     };
 }

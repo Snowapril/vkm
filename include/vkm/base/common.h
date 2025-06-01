@@ -17,4 +17,6 @@ namespace vkm
     constexpr const uint16_t INVALID_VALUE16 = 0xFFFF;
     constexpr const uint32_t INVALID_VALUE32 = 0xFFFFFFFF;
     constexpr const uint64_t INVALID_VALUE64 = 0xFFFFFFFFFFFFFFFF;
+
+    constexpr const uint8_t  FRAME_COUNT = 3; // Triple buffering
 }

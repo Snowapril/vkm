@@ -7,6 +7,7 @@
 
 namespace vkm
 {
+    class VkmRenderGraph;
     class VkmDriverBase;
     class AppDelegate
     {
@@ -18,7 +19,7 @@ namespace vkm
         virtual void onDriverInit() = 0;
         virtual void onShutdown() = 0;
         virtual void onUpdate(const double deltaTime) = 0;
-        virtual void onRender(VkmDriverBase* driver, VkmResourceHandle currentBackBuffer) = 0;
+        virtual void onRender(VkmDriverBase* driver, VkmRenderGraph* renderGraph) = 0;
         virtual const char* getAppName() const = 0;
     };
 }

@@ -33,9 +33,11 @@ public:
         VKM_DEBUG_LOG("TriangleApplication::onUpdate");
     }
 
-    virtual void onRender(VkmDriverBase* driver, VkmResourceHandle currentBackBuffer) override final
+    virtual void onRender(VkmDriverBase* driver, VkmRenderGraph* renderGraph) override final
     {
         VKM_DEBUG_LOG("TriangleApplication::onRender");
+        auto graphicsSubGraph = renderGraph->beginGraphicsSubGraph();
+        
     }
 
     virtual const char* getAppName() const override final

@@ -4,7 +4,6 @@
 #include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/command_queue.h>
-#include <vkm/renderer/backend/common/command_dispatcher.h>
 
 namespace vkm
 {
@@ -72,19 +71,6 @@ namespace vkm
         // TODO(snowapril) : pick appropriate queue instead of first one hard coded
         swapChain->setPresentQueue(_commandQueues[(uint8_t)VkmCommandQueueType::Graphics][0]);
         return swapChain;
-    }
-
-    VkmCommandDispatcher* VkmDriverBase::allocateCommandDispatcher(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex)
-    {
-        VkmCommandQueueBase* commandQueue = _commandQueues[(uint8_t)queueType][commandQueueIndex];
-        if (commandQueue == nullptr)
-        {
-            VKM_DEBUG_ERROR("Command queue is not requested in advance");
-            return nullptr;
-        }
-
-        // TODO(snowapril) : at now just allocate new command dispatcher for each request
-        return new VkmCommandDispatcher(commandQueue);
     }
 
     VkmCommandQueueBase* VkmDriverBase::newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name)

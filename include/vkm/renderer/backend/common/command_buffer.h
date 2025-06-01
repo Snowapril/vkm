@@ -23,6 +23,18 @@ namespace vkm
 
         virtual void setRHICommandBuffer(VKM_COMMAND_BUFFER_HANDLE handle) = 0;
 
+        // Command buffer lifecycle related
+        void beginCommandBuffer();
+        void endCommandBuffer();
+
+        // Render pass related
+        void beginRenderPass();
+        void endRenderPass();
+
+        // Pipeline related
+        void bindPipeline();
+        void unbindPipeline();
+
     private:
         VkmDriverBase* _driver;
         VkmCommandQueueBase* _commandQueue;

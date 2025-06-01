@@ -13,4 +13,28 @@ namespace vkm
     {
 
     }
+
+    void VkmCommandBufferBase::beginCommandBuffer()
+    {
+    }
+    
+    void VkmCommandBufferBase::endCommandBuffer()
+    {
+    }
+    
+    void VkmCommandBufferBase::beginRenderPass()
+    {
+    }
+
+    void VkmCommandBufferBase::endRenderPass()
+    {
+    }
+    
+    void VkmCommandBufferBase::bindPipeline()
+    {
+    }
+
+    void VkmCommandBufferBase::unbindPipeline()
+    {
+    }
 }

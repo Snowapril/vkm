@@ -171,7 +171,7 @@ static void* renderWorker( void* _Nullable obj )
     _window.delegate = self;
     [self updateWindowTitle:_window];
     
-    vkm::VKM_DEBUG_INFO("VkmWindow setup complete");
+    vkm::VKM_DEBUG_INFO(fmt::format("Creating window with size: {}x{}", (int)_window.contentLayoutRect.size.width, (int)_window.contentLayoutRect.size.height).c_str());
 }
 
 - (void)showWindow

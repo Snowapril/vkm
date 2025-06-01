@@ -70,11 +70,6 @@ namespace vkm
         VkmSwapChainBase* newSwapChain();
 
         /*
-        * @brief allocate command dispatcher for specific queue
-        */
-        VkmCommandDispatcher* allocateCommandDispatcher(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex);
-
-        /*
         * @brief get driver capability flags
         */
         inline VkmDriverCapabilityFlags getDriverCapabilityFlags() const { return _driverCapabilityFlags; }
