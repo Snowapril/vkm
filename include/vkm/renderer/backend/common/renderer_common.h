@@ -125,3 +125,12 @@ namespace vkm
 
     using VKM_COMMAND_BUFFER_HANDLE = void*;
 } // namespace vkm
+
+template <>
+struct std::hash<vkm::VkmResourceHandle>
+{
+    std::size_t operator()(const vkm::VkmResourceHandle& handle) const noexcept
+    {
+        return std::hash<uint64_t>()(handle.id) ^ std::hash<uint8_t>()(static_cast<uint8_t>(handle.poolType)) ^ std::hash<uint8_t>()(static_cast<uint8_t>(handle.type));
+    }
+};

@@ -18,26 +18,41 @@ public:
     TriangleApplication() = default;
     virtual ~TriangleApplication() = default;
 
-    virtual void onDriverInit() override final
+    virtual void postDriverReady() override final
     {
-        VKM_DEBUG_LOG("TriangleApplication::onDriverInit");
+        VKM_DEBUG_LOG("TriangleApplication::postDriverReady");
     }
 
-    virtual void onShutdown() override final
+    virtual void preShutdown() override final
     {
-        VKM_DEBUG_LOG("TriangleApplication::onShutdown");
+        VKM_DEBUG_LOG("TriangleApplication::preShutdown");
     }
 
-    virtual void onUpdate(const double deltaTime) override final
+    virtual void update(const double deltaTime) override final
     {
-        VKM_DEBUG_LOG("TriangleApplication::onUpdate");
+        VKM_DEBUG_LOG("TriangleApplication::update");
     }
 
-    virtual void onRender(VkmDriverBase* driver, VkmRenderGraph* renderGraph) override final
+    virtual void render(VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) override final
     {
-        VKM_DEBUG_LOG("TriangleApplication::onRender");
-        auto graphicsSubGraph = renderGraph->beginGraphicsSubGraph();
-        
+        VKM_DEBUG_LOG("TriangleApplication::render");
+
+        VkmFrameBufferDescriptor frameBufferDesc;
+        frameBufferDesc._renderPass._colorAttachmentCount = 1;
+        frameBufferDesc._renderPass._colorAttachments[0]._attachmentId = 0;
+        frameBufferDesc._renderPass._colorAttachments[0]._loadAction = VkmLoadAction::Clear;
+        frameBufferDesc._renderPass._colorAttachments[0]._storeAction = VkmStoreAction::Store;
+        frameBufferDesc._renderPass._colorAttachments[0]._clearColors[0] = 1.0f; // R
+        frameBufferDesc._renderPass._colorAttachments[0]._clearColors[1] = 0.0f; // G
+        frameBufferDesc._renderPass._colorAttachments[0]._clearColors[2] = 0.0f; // B
+        frameBufferDesc._renderPass._colorAttachments[0]._clearColors[3] = 1.0f; // A
+
+        frameBufferDesc._width = 800; // Set the width of the framebuffer
+        frameBufferDesc._height = 600; // Set the height of the framebuffer
+        frameBufferDesc._colorAttachments[0] = backBuffer; // Attach the back buffer
+
+        auto graphicsSubGraph = renderGraph->beginGraphicsSubGraph(frameBufferDesc);
+        (void)graphicsSubGraph;
     }
 
     virtual const char* getAppName() const override final

@@ -16,10 +16,10 @@ namespace vkm
         virtual ~AppDelegate() = default;
 
     public:
-        virtual void onDriverInit() = 0;
-        virtual void onShutdown() = 0;
-        virtual void onUpdate(const double deltaTime) = 0;
-        virtual void onRender(VkmDriverBase* driver, VkmRenderGraph* renderGraph) = 0;
+        virtual void postDriverReady() = 0;
+        virtual void preShutdown() = 0;
+        virtual void update(const double deltaTime) = 0;
+        virtual void render(VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) = 0;
         virtual const char* getAppName() const = 0;
     };
 }

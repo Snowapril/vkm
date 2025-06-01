@@ -46,7 +46,7 @@ namespace vkm
             return false;
         }
         VKM_DEBUG_INFO("Renderer backend driver initialized");
-        _appDelegate->onDriverInit();
+        _appDelegate->postDriverReady();
 
         return true;
     }
@@ -56,14 +56,13 @@ namespace vkm
         const double deltaTime = currentUpdateTime - _lastUpdateTime;
         _lastUpdateTime = currentUpdateTime;
 
-        _appDelegate->onUpdate(deltaTime);
+        _appDelegate->update(deltaTime);
         
         VkmResourceHandle currentBackBuffer = _mainSwapChain->acquireNextImage();
         VKM_DEBUG_INFO(fmt::format("Engine update : delta time : {}", deltaTime).c_str());
 
         VkmRenderGraph* renderGraph = _frameRenderGraphs[_currentFrameIndex].get();
-        renderGraph->setBackBuffer(currentBackBuffer);
-        _appDelegate->onRender(_driver, renderGraph);
+        _appDelegate->render(renderGraph, currentBackBuffer);
 
         renderGraph->compile();
         //VkmCommandBufferBase* commandBuffer = _driver->newCommandBuffer(VkmCommandBufferType::Graphics, _currentFrameIndex);

@@ -14,6 +14,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/base/logger.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/renderer_common.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_graph.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_pass.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_buffer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_queue.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/driver.h

@@ -4,13 +4,14 @@
 
 #include <vkm/base/common.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
+#include <vkm/renderer/backend/common/render_pass.h>
 #include <vkm/renderer/backend/common/driver_resource.h>
 
 namespace vkm
 {
     class VkmCommandBufferBase;
     class VkmDriverBase;
-    
+
     enum class VkmRenderSubGraphType : uint8_t
     {
         Graphics,
@@ -51,8 +52,12 @@ namespace vkm
     {
     public:
         // Frame buffer key for the graphics subgraph
-        VkmRenderGraphicsSubGraph(uint32_t subGraphId) : VkmRenderSubGraph(VkmRenderSubGraphType::Graphics, subGraphId) {}
+        VkmRenderGraphicsSubGraph(uint32_t subGraphId, const VkmFrameBufferDescriptor& desc) 
+            : VkmRenderSubGraph(VkmRenderSubGraphType::Graphics, subGraphId), _frameBufferDesc(desc) {}
         ~VkmRenderGraphicsSubGraph() override = default;
+
+    private:
+        VkmFrameBufferDescriptor _frameBufferDesc; // Frame buffer descriptor for the graphics subgraph
     };
     class VkmRenderComputeSubGraph : public VkmRenderSubGraph
     {
@@ -77,7 +82,7 @@ namespace vkm
         ~VkmRenderGraph() = default;
 
         // Method to add a subgraph to the render graph
-        VkmRenderGraphicsSubGraph* beginGraphicsSubGraph();
+        VkmRenderGraphicsSubGraph* beginGraphicsSubGraph(const VkmFrameBufferDescriptor& desc);
         // Method to add a compute subgraph to the render graph
         VkmRenderComputeSubGraph* beginComputeSubGraph();
         // Method to add a transfer subgraph to the render graph
@@ -85,16 +90,18 @@ namespace vkm
 
         void compile();
         void execute(VkmCommandBufferBase* commandBuffer);
+        void reset();
 
-        void setBackBuffer(VkmResourceHandle backBuffer)
+    private:
+        template <typename RenderSubGraphT, typename... Arg>
+        RenderSubGraphT* beginSubGraph(Arg&&... arg)
         {
-            // Set the back buffer for the render graph
-            _backBuffer = backBuffer;
-        }
-        VkmResourceHandle getBackBuffer() const
-        {
-            // Get the back buffer for the render graph
-            return _backBuffer;
+            // Create a new subgraph of the specified type
+            auto subGraph = std::make_unique<RenderSubGraphT>(_currentSubGraphId++, std::forward<Arg>(arg)...);
+            // Add the subgraph to the list of subgraphs
+            _subGraphs.push_back(std::move(subGraph));
+            // Return a pointer to the newly created subgraph
+            return static_cast<RenderSubGraphT*>(_subGraphs.back().get());
         }
 
     private:
@@ -102,6 +109,5 @@ namespace vkm
         uint32_t _frameIndex; // Frame index for this render graph
         std::vector<std::unique_ptr<VkmRenderSubGraph>> _subGraphs;
         uint32_t _currentSubGraphId = 0; // Current subgraph ID for tracking
-        VkmResourceHandle _backBuffer; // Handle to the back buffer for rendering
     };
 }

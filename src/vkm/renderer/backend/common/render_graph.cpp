@@ -6,28 +6,20 @@
 
 namespace vkm
 {
-    VkmRenderGraphicsSubGraph* VkmRenderGraph::beginGraphicsSubGraph()
+    VkmRenderGraphicsSubGraph* VkmRenderGraph::beginGraphicsSubGraph(const VkmFrameBufferDescriptor& desc)
     {
-        auto subGraph = std::make_unique<VkmRenderGraphicsSubGraph>(_currentSubGraphId++);
-        VkmRenderGraphicsSubGraph* subGraphPtr = subGraph.get();
-        _subGraphs.push_back(std::move(subGraph));
-        return subGraphPtr;
+        // Create a new graphics subgraph with the provided framebuffer descriptor
+        return beginSubGraph<VkmRenderGraphicsSubGraph>(desc);
     }
 
     VkmRenderComputeSubGraph* VkmRenderGraph::beginComputeSubGraph()
     {
-        auto subGraph = std::make_unique<VkmRenderComputeSubGraph>(_currentSubGraphId++);
-        VkmRenderComputeSubGraph* subGraphPtr = subGraph.get();
-        _subGraphs.push_back(std::move(subGraph));
-        return subGraphPtr;
+        return beginSubGraph<VkmRenderComputeSubGraph>();
     }
 
     VkmRenderTransferSubGraph* VkmRenderGraph::beginTransferSubGraph()
     {
-        auto subGraph = std::make_unique<VkmRenderTransferSubGraph>(_currentSubGraphId++);
-        VkmRenderTransferSubGraph* subGraphPtr = subGraph.get();
-        _subGraphs.push_back(std::move(subGraph));
-        return subGraphPtr;
+        return beginSubGraph<VkmRenderTransferSubGraph>();
     }
 
     void VkmRenderGraph::compile()
@@ -37,11 +29,17 @@ namespace vkm
         // {
         // }
         // Reset the current subgraph ID for the next frame
-        _currentSubGraphId = 0;
     }
 
     void VkmRenderGraph::execute(VkmCommandBufferBase* commandBuffer)
     {
         
+    }
+
+    void VkmRenderGraph::reset()
+    {
+        // Reset the render graph state for the next frame
+        _subGraphs.clear();
+        _currentSubGraphId = 0;
     }
 }
