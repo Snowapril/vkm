@@ -93,6 +93,7 @@ namespace vkm
         VkmRenderPassDescriptor _renderPass; // Render pass descriptor
         uint32_t _width; // Width of the framebuffer
         uint32_t _height; // Height of the framebuffer
+        uint32_t _colorAttachmentCount; // Number of color attachments in the framebuffer
         
         std::array<VkmResourceHandle, MAX_COLOR_ATTACHMENTS> _colorAttachments; // Handles to color attachments
         std::optional<VkmResourceHandle> _depthStencilAttachment; // Handle to the depth/stencil attachment
@@ -102,6 +103,7 @@ namespace vkm
             return _renderPass == other._renderPass &&
                    _width == other._width &&
                    _height == other._height &&
+                   _colorAttachmentCount == other._colorAttachmentCount &&
                    _colorAttachments == other._colorAttachments &&
                    _depthStencilAttachment == other._depthStencilAttachment;
         }

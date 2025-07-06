@@ -13,11 +13,14 @@ namespace vkm
         VkmTexture(VkmDriverBase* driver);
         ~VkmTexture();
 
-        virtual bool initialize(const VkmTextureInfo& info) = 0;
+        virtual bool initialize(VkmResourceHandle handle, const VkmTextureInfo& info) = 0;
         virtual bool overrideExternalHandle(void* externalHandle) = 0;
 
+        inline const VkmTextureInfo& getTextureInfo() const { return _textureInfo; }
+        VkmResourceType getResourceType() const override { return VkmResourceType::Texture; }
+
     protected:
-        bool initializeCommon(const VkmTextureInfo& info);
+        bool initializeTextureCommon(VkmResourceHandle handle, const VkmTextureInfo& info);
 
     protected:
         VkmTextureInfo _textureInfo;

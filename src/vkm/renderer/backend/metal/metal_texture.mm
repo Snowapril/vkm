@@ -22,9 +22,9 @@ namespace vkm
         return info;
     }
 
-    bool VkmTextureMetal::initialize(const VkmTextureInfo& info)
+    bool VkmTextureMetal::initialize(VkmResourceHandle handle, const VkmTextureInfo& info)
     {
-        if (!initializeCommon(info))
+        if (!initializeTextureCommon(handle, info))
         {
             return false;
         }

@@ -170,6 +170,7 @@ namespace vkm
     void VkmSwapChainVulkan::destroySwapChain()
     {
 
+        destroySwapChainCommon();
     }
 
     VkmResourceHandle VkmSwapChainVulkan::acquireNextImageInner()

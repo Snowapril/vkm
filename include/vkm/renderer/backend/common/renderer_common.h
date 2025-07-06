@@ -71,6 +71,16 @@ namespace vkm
         D32_SFLOAT_S8_UINT = 11,
     };
 
+    inline bool hasDepth(const VkmFormat format)
+    {
+        return (format == VkmFormat::D32_SFLOAT || format == VkmFormat::D24_UNORM_S8_UINT || format == VkmFormat::D32_SFLOAT_S8_UINT);
+    }
+
+    inline bool hasStencil(const VkmFormat format)
+    {
+        return (format == VkmFormat::D24_UNORM_S8_UINT || format == VkmFormat::D32_SFLOAT_S8_UINT);
+    }
+
     enum class VkmResourceCreateInfo : uint32_t
     {
         AllowTransferSrc = 0x00000001,

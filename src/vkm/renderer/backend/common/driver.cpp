@@ -4,6 +4,7 @@
 #include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/command_queue.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
 
 namespace vkm
 {
@@ -17,6 +18,7 @@ namespace vkm
 
     bool VkmDriverBase::initialize(const VkmEngineLaunchOptions* options)
     {
+        _renderResourcePool = std::make_unique<VkmRenderResourcePool>(this);
         if (initializeInner(options) == false)
         {
             return false;
@@ -49,10 +51,14 @@ namespace vkm
     VkmTexture* VkmDriverBase::newTexture(const VkmTextureInfo& info)
     {
         VkmTexture* texture = newTextureInner();
-        if (texture->initialize(info) == false)
+        VkmResourceHandle handle = _renderResourcePool->allocateTexture(texture, VkmResourcePoolType::Default);
+        if (texture->initialize(handle, info) == false)
         {
             VKM_DEBUG_ERROR("Failed to initialize texture");
-            delete texture;
+            if (handle.isValid())
+                _renderResourcePool->releaseResource(handle);
+            else
+                delete texture;
             return nullptr;
         }
 

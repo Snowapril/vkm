@@ -14,10 +14,5 @@ namespace vkm
         virtual ~VkmDriverResourceBase() = default;
 
         virtual void setDebugName(const char* name) = 0;
-
-        inline VkmResourceHandle getHandle() const { return _handle; }
-        
-    protected:
-        VkmResourceHandle _handle;
     };
 }

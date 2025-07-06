@@ -1,23 +1,51 @@
 // Copyright (c) 2025 Snowapril
 
+#include <vkm/renderer/backend/common/driver.h>
+#include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
+#include <vkm/renderer/backend/metal/metal_texture.h>
 
 #include <Metal/MTLCommandBuffer.h>
+#include <Metal/MTLRenderCommandEncoder.h>
+#include <Metal/MTLComputeCommandEncoder.h>
+#include <Metal/MTLBlitCommandEncoder.h>
 
 namespace vkm
 {
-    void VkmCommandEncoderMetal::beginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc)
+    void VkmCommandEncoderMetal::beginRenderPass(VkmRenderResourcePool* renderResourcePool, const VkmFrameBufferDescriptor& frameBufferDesc)
     {
-        _mtlRenderPassDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
-        _mtlRenderPassDescriptor.colorAttachments[0].texture = (__bridge id<MTLTexture>)frameBufferDesc.colorAttachments[0].texture;
-        _mtlRenderPassDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
-        _mtlRenderPassDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
-        _mtlRenderPassDescriptor.depthAttachment.texture = (__bridge id<MTLTexture>)frameBufferDesc.depthAttachment.texture;
-        _mtlRenderPassDescriptor.depthAttachment.loadAction = MTLLoadActionClear;
-        _mtlRenderPassDescriptor.depthAttachment.storeAction = MTLStoreActionStore;
+        MTLRenderPassDescriptor* mtlRenderPassDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
+        for (uint32_t i = 0; i < frameBufferDesc._colorAttachmentCount; ++i)
+        {
+            auto colorAttachmentHandle = frameBufferDesc._colorAttachments[i];
+            VkmTextureMetal* colorTextureMetal = static_cast<VkmTextureMetal*>(renderResourcePool->getResource<VkmTexture>(colorAttachmentHandle));
 
-        _mtlRenderCommandEncoder = [_mtlCommandBuffer renderCommandEncoderWithDescriptor:_mtlRenderPassDescriptor];
+            mtlRenderPassDescriptor.colorAttachments[i].texture = colorTextureMetal->getInternalHandle();
+            mtlRenderPassDescriptor.colorAttachments[i].loadAction = MTLLoadActionClear;
+            mtlRenderPassDescriptor.colorAttachments[i].storeAction = MTLStoreActionStore;
+        }
 
+        if (frameBufferDesc._depthStencilAttachment.has_value())
+        {
+            VkmTextureMetal* depthStencilTextureMetal = static_cast<VkmTextureMetal*>(renderResourcePool->getResource<VkmTexture>(frameBufferDesc._depthStencilAttachment.value()));;
+            const VkmTextureInfo& textureInfo = depthStencilTextureMetal->getTextureInfo();
+
+            if (hasDepth(textureInfo._format))
+            {
+                mtlRenderPassDescriptor.depthAttachment.texture = depthStencilTextureMetal->getInternalHandle();
+                mtlRenderPassDescriptor.depthAttachment.loadAction = MTLLoadActionClear;
+                mtlRenderPassDescriptor.depthAttachment.storeAction = MTLStoreActionStore;
+            }
+            
+            if (hasStencil(textureInfo._format))
+            {
+                mtlRenderPassDescriptor.stencilAttachment.texture = depthStencilTextureMetal->getInternalHandle();
+                mtlRenderPassDescriptor.stencilAttachment.loadAction = MTLLoadActionClear;
+                mtlRenderPassDescriptor.stencilAttachment.storeAction = MTLStoreActionStore;
+            }
+        }
+
+        _mtlRenderCommandEncoder = [_mtlCommandBuffer renderCommandEncoderWithDescriptor:mtlRenderPassDescriptor];
         _currentEncoderType = VkmCommandEncoderType::Graphics;
     }
 
@@ -37,7 +65,7 @@ namespace vkm
     {
         switch(_currentEncoderType)
         {
-            case VkmCommandEncoderType::Render:
+            case VkmCommandEncoderType::Graphics:
                 [_mtlRenderCommandEncoder endEncoding];
                 _mtlRenderCommandEncoder = nil;
                 break;
@@ -76,7 +104,7 @@ namespace vkm
 
     void VkmCommandBufferMetal::onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc)
     {
-        _commandEncoder.beginRenderPass(frameBufferDesc);
+        _commandEncoder.beginRenderPass(_driver->getRenderResourcePool(), frameBufferDesc);
     }
 
     void VkmCommandBufferMetal::onEndRenderPass()

@@ -40,7 +40,7 @@ namespace vkm
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) = 0;
         virtual void onEndRenderPass() = 0;
 
-    private:
+    protected:
         VkmDriverBase* _driver;
         VkmCommandQueueBase* _commandQueue;
         VkmCommandBufferPoolBase* _commandBufferPool;

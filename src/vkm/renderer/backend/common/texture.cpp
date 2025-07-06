@@ -13,8 +13,13 @@ namespace vkm
     {
     }
 
-    bool VkmTexture::initializeCommon(const VkmTextureInfo& info)
+    bool VkmTexture::initializeTextureCommon(VkmResourceHandle handle, const VkmTextureInfo& info)
     {
+        if (!initializeCommon(handle))
+        {
+            return false;
+        }
+
         _textureInfo = info;
         return true;
     }

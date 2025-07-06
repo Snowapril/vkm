@@ -8,6 +8,7 @@
 
 #include <array>
 #include <vector>
+#include <memory>
 
 namespace vkm
 {
@@ -16,6 +17,7 @@ namespace vkm
     class VkmSwapChainBase;
     class VkmCommandQueueBase;
     class VkmCommandDispatcher;
+    class VkmRenderResourcePool;
 
     enum class VkmDriverCapabilityFlags : uint32_t
     {
@@ -82,6 +84,11 @@ namespace vkm
             return _commandQueues[(uint8_t)queueType][commandQueueIndex];
         }
 
+        /*
+        * @brief get render resource pool
+        */
+        inline VkmRenderResourcePool* getRenderResourcePool() const { return _renderResourcePool.get(); }
+
     protected:
         VkmCommandQueueBase* newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
 
@@ -95,5 +102,8 @@ namespace vkm
     protected:
         std::array<std::vector<VkmCommandQueueBase*>, (uint8_t)VkmCommandQueueType::Count> _commandQueues;
         VkmDriverCapabilityFlags _driverCapabilityFlags;
+
+    private:
+        std::unique_ptr<VkmRenderResourcePool> _renderResourcePool;
     };
 }

@@ -5,7 +5,7 @@
 namespace vkm
 {
     VkmTextureVulkan::VkmTextureVulkan(VkmDriverBase* driver)
-        : VkmTexture(driver)
+        : VkmTexture(driver), _vkTexture(VK_NULL_HANDLE)
     {
     }
 
@@ -13,9 +13,9 @@ namespace vkm
     {
     }
 
-    bool VkmTextureVulkan::initialize(const VkmTextureInfo& info, void* externalHandleOrNull)
+    bool VkmTextureVulkan::initialize(VkmResourceHandle handle, const VkmTextureInfo& info, void* externalHandleOrNull)
     {
-        if (!initializeCommon(info))
+        if (!initializeTextureCommon(handle, info))
         {
             return false;
         }

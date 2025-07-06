@@ -11,6 +11,13 @@ namespace vkm
     void VkmRenderGraphicsSubGraph::commit(VkmCommandBufferBase* commandBuffer)
     {
         commandBuffer->beginRenderPass(_frameBufferDesc);
+        // Draw/Dispatch commands would go here
+        // For example, binding pipelines, setting viewport, scissor, etc.
+        // commandBuffer->bindPipeline(pipeline);
+        // commandBuffer->drawIndexed(indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+        // commandBuffer->dispatch(groupCountX, groupCountY, groupCountZ);
+        // ...  
+        commandBuffer->endRenderPass();
     }
 
     void VkmRenderComputeSubGraph::commit(VkmCommandBufferBase* commandBuffer)

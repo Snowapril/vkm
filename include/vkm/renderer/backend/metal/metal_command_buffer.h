@@ -5,9 +5,13 @@
 #include <vkm/renderer/backend/common/command_buffer.h>
 
 @protocol MTLCommandBuffer;
+@protocol MTLRenderCommandEncoder;
+@protocol MTLComputeCommandEncoder;
+@protocol MTLBlitCommandEncoder;
 
 namespace vkm
 {
+    class VkmRenderResourcePool;
     enum class VkmCommandEncoderType : uint8_t
     {
         None = 0,
@@ -27,7 +31,7 @@ namespace vkm
             _mtlCommandBuffer = mtlCommandBuffer;
         }
 
-        void beginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc);
+        void beginRenderPass(VkmRenderResourcePool* renderResourcePool, const VkmFrameBufferDescriptor& frameBufferDesc);
         void beginComputePass();
         void beginBlitPass();
         void commit();
@@ -36,12 +40,12 @@ namespace vkm
     private:
         id<MTLCommandBuffer> _mtlCommandBuffer; // Metal command buffer
 
-        MTLRenderCommandEncoder* _mtlRenderCommandEncoder = nullptr; // Metal render command encoder
-        MTLComputeCommandEncoder* _mtlComputeCommandEncoder = nullptr; // Metal compute command encoder
-        MTLBlitCommandEncoder* _mtlBlitCommandEncoder = nullptr; // Metal blit command encoder
+        id<MTLRenderCommandEncoder> _mtlRenderCommandEncoder = nullptr; // Metal render command encoder
+        id<MTLComputeCommandEncoder> _mtlComputeCommandEncoder = nullptr; // Metal compute command encoder
+        id<MTLBlitCommandEncoder> _mtlBlitCommandEncoder = nullptr; // Metal blit command encoder
 
         VkmCommandEncoderType _currentEncoderType = VkmCommandEncoderType::None; // Current encoder type
-    }
+    };
 
     class VkmCommandBufferMetal : public VkmCommandBufferBase
     {

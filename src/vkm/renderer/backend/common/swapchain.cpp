@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/common/swapchain.h>
+#include <vkm/renderer/backend/common/driver.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
 
 namespace vkm
 {
@@ -44,5 +46,12 @@ namespace vkm
     void VkmSwapChainBase::present()
     {
         presentInner();
+    }
+
+    void VkmSwapChainBase::destroySwapChainCommon()
+    {
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        for (VkmResourceHandle& handle : _backBuffers)
+            renderResourcePool->releaseResource(handle);
     }
 } // namespace vkm

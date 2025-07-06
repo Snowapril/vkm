@@ -13,7 +13,7 @@ namespace vkm
         VkmTextureVulkan(VkmDriverBase* driver);
         ~VkmTextureVulkan();
 
-        virtual bool initialize(const VkmTextureInfo& info) override final;
+        virtual bool initialize(VkmResourceHandle handle, const VkmTextureInfo& info) override final;
         virtual bool overrideExternalHandle(void* externalHandle) override final;
 
     private:

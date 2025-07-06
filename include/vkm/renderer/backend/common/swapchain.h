@@ -80,6 +80,11 @@ namespace vkm
         virtual void presentInner() = 0;
 
     protected:
+        void destroySwapChainCommon();
+
+    protected:
+        std::array<VkmResourceHandle, FRAME_BUFFER_COUNT> _backBuffers;
+
         VkmDriverBase* _driver;
         VkmCommandQueueBase* _presentQueue = nullptr;
         glm::uvec2 _extent;
