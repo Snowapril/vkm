@@ -65,8 +65,8 @@ namespace vkm
         _appDelegate->render(renderGraph, currentBackBuffer);
 
         renderGraph->compile();
-        //VkmCommandBufferBase* commandBuffer = _driver->newCommandBuffer(VkmCommandBufferType::Graphics, _currentFrameIndex);
-        //renderGraph->execute(commandBuffer);
+        
+        renderGraph->execute(VkmRenderGraphCommitOptions{ .waitForCompletion = true } );
 
         _mainSwapChain->present();
 

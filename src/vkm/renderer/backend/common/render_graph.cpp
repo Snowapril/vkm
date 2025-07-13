@@ -46,7 +46,6 @@ namespace vkm
 
     void VkmRenderGraph::compile(const VkmRenderGraphCompileOptions& options)
     {
-        
         // Compile the render graph by processing all subgraphs
         // for (const auto& subGraph : _subGraphs)
         // {
@@ -75,7 +74,11 @@ namespace vkm
         }
 
         commandBuffer->endCommandBuffer();
-        commandQueue->submit(CommandSubmitInfo{ commandBuffer, 1 });
+        
+        CommandSubmitInfo submitInfo;
+        submitInfo.commandBuffers[0] = commandBuffer;
+        submitInfo.commandBufferCount = 1;
+        commandQueue->submit(submitInfo);
 
         (void)options; // Suppress unused variable warning at now
     }

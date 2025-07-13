@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/driver_resource.h>
 #include <memory>
+#include <array>
 
 namespace vkm
 {
@@ -13,12 +14,14 @@ namespace vkm
     class VkmCommandQueueBase;
     class VkmDriverBase;
 
+    static constexpr const uint32_t MAX_NUM_COMMAND_BUFFER_SUBMITS = 8;
+
     /*
     * @brief Command submit informations
     */
     struct CommandSubmitInfo
     {
-        VkmCommandBufferBase* commandBuffers;
+        std::array<VkmCommandBufferBase*, MAX_NUM_COMMAND_BUFFER_SUBMITS> commandBuffers;
         uint32_t commandBufferCount;
     };
 

@@ -12,17 +12,47 @@
 
 namespace vkm
 {
+    static MTLLoadAction getLoadAction(VkmLoadAction loadAction)
+    {
+        switch(loadAction)
+        {
+            case VkmLoadAction::Load:
+                return MTLLoadActionLoad;
+            case VkmLoadAction::Clear:
+                return MTLLoadActionClear;
+            case VkmLoadAction::DontCare:
+                return MTLLoadActionDontCare;
+        }
+    }
+
+    static MTLStoreAction getStoreAction(VkmStoreAction storeAction)
+    {
+        switch(storeAction)
+        {
+            case VkmStoreAction::Store:
+                return MTLStoreActionStore;
+            case VkmStoreAction::DontCare:
+                return MTLStoreActionDontCare;
+        }
+    }
+
     void VkmCommandEncoderMetal::beginRenderPass(VkmRenderResourcePool* renderResourcePool, const VkmFrameBufferDescriptor& frameBufferDesc)
     {
         MTLRenderPassDescriptor* mtlRenderPassDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
-        for (uint32_t i = 0; i < frameBufferDesc._colorAttachmentCount; ++i)
+        const VkmRenderPassDescriptor& renderPassDesc = frameBufferDesc._renderPass;
+        for (uint32_t i = 0; i < renderPassDesc._colorAttachmentCount; ++i)
         {
             auto colorAttachmentHandle = frameBufferDesc._colorAttachments[i];
             VkmTextureMetal* colorTextureMetal = static_cast<VkmTextureMetal*>(renderResourcePool->getResource<VkmTexture>(colorAttachmentHandle));
-
+            
+            const VkmColorAttachmentDescriptor& colorAttachmentDesc = renderPassDesc._colorAttachments[i];
             mtlRenderPassDescriptor.colorAttachments[i].texture = colorTextureMetal->getInternalHandle();
-            mtlRenderPassDescriptor.colorAttachments[i].loadAction = MTLLoadActionClear;
-            mtlRenderPassDescriptor.colorAttachments[i].storeAction = MTLStoreActionStore;
+            mtlRenderPassDescriptor.colorAttachments[i].loadAction = getLoadAction(colorAttachmentDesc._loadAction);
+            mtlRenderPassDescriptor.colorAttachments[i].storeAction = getStoreAction(colorAttachmentDesc._storeAction);
+            mtlRenderPassDescriptor.colorAttachments[i].clearColor = MTLClearColorMake( colorAttachmentDesc._clearColors[0],
+                                                                                       colorAttachmentDesc._clearColors[1],
+                                                                                       colorAttachmentDesc._clearColors[2],
+                                                                                       colorAttachmentDesc._clearColors[3]);
         }
 
         if (frameBufferDesc._depthStencilAttachment.has_value())

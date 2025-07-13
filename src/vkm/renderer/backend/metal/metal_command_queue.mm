@@ -45,15 +45,12 @@ namespace vkm
     
     void VkmCommandQueueMetal::submit(const CommandSubmitInfo& submitInfos)
     {
-        /* 
-        for (uint32_t i = 0; i < submitInfos.commandBufferCount; ++i)
+        for (uint32_t i = 0; i < std::min(submitInfos.commandBufferCount, MAX_NUM_COMMAND_BUFFER_SUBMITS); ++i)
         {
-            VkmCommandBufferBase* commandBuffer = submitInfos.commandBuffers[i];
-            // submit
-
-            _commandBuffersSubmitted.push_back(commandBuffer);
+            VkmCommandBufferMetal* commandBufferMetal = static_cast<VkmCommandBufferMetal*>(submitInfos.commandBuffers[i]);
+            id<MTLCommandBuffer> mtlCommandBuffer = commandBufferMetal->getMTLCommandBuffer();
+            [mtlCommandBuffer commit];
         }
-        */
     }
 
     void VkmCommandQueueMetal::waitIdle()

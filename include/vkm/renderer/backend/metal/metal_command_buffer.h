@@ -58,6 +58,8 @@ namespace vkm
 
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) override final;
         virtual void onEndRenderPass() override final;
+        
+        inline id<MTLCommandBuffer> getMTLCommandBuffer() const { return _mtlCommandBuffer; }
 
     private:
         id<MTLCommandBuffer> _mtlCommandBuffer;
