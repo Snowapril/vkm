@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/render_pass.h>
 #include <vkm/renderer/backend/common/driver_resource.h>
+#include <vkm/renderer/backend/common/command_queue.h>
 
 namespace vkm
 {
@@ -114,6 +115,7 @@ namespace vkm
         void compile(const VkmRenderGraphCompileOptions& options = {});
         void execute(const VkmRenderGraphCommitOptions& options = {});
         void reset();
+        void ensureCompleted();
 
     private:
         template <typename RenderSubGraphT, typename... Arg>
@@ -132,5 +134,7 @@ namespace vkm
         uint32_t _frameIndex; // Frame index for this render graph
         std::vector<std::unique_ptr<VkmRenderSubGraph>> _subGraphs;
         uint32_t _currentSubGraphId = 0; // Current subgraph ID for tracking
+
+        VkmGpuEventTimelineObject _lastSubmitInfo; // GPU event timeline object for synchronization
     };
 }

@@ -19,4 +19,5 @@ namespace vkm
     constexpr const uint64_t INVALID_VALUE64 = 0xFFFFFFFFFFFFFFFF;
 
     constexpr const uint8_t  FRAME_COUNT = 3; // Triple buffering
+    constexpr const uint64_t MAX_GPU_TIMEOUT_PER_FRAME = 300; // 300ms seconds per frame
 }

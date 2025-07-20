@@ -116,7 +116,7 @@ static void* renderWorker( void* _Nullable obj )
     
     _swapChain->overrideCurrentDrawable(drawable);
 
-    _engine->update(CACurrentMediaTime());
+    _engine->loopInner(CACurrentMediaTime());
 }
 
 - (void)setEngine:(nonnull vkm::VkmEngine*)engine

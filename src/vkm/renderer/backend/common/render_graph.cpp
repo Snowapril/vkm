@@ -78,8 +78,8 @@ namespace vkm
         CommandSubmitInfo submitInfo;
         submitInfo.commandBuffers[0] = commandBuffer;
         submitInfo.commandBufferCount = 1;
-        commandQueue->submit(submitInfo);
-
+        
+        _lastSubmitInfo = commandQueue->submit(submitInfo);
         (void)options; // Suppress unused variable warning at now
     }
 
@@ -88,5 +88,14 @@ namespace vkm
         // Reset the render graph state for the next frame
         _subGraphs.clear();
         _currentSubGraphId = 0;
+    }
+
+    void VkmRenderGraph::ensureCompleted()
+    {
+        // Ensure that the last submitted command buffer has completed execution
+        if (_lastSubmitInfo._gpuEventTimeline)
+        {
+            _lastSubmitInfo._gpuEventTimeline->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME); // Wait for 1000 ms
+        }
     }
 }

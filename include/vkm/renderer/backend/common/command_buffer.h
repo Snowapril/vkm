@@ -6,12 +6,16 @@
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/render_pass.h>
 #include <vkm/renderer/backend/common/driver_resource.h>
+#include <vkm/renderer/backend/common/command_queue.h>
 
 namespace vkm
 {
     class VkmDriverBase;
     class VkmCommandQueueBase;
     class VkmCommandBufferPoolBase;
+    class VkmGpuEventTimelineBase;
+    struct VkmGpuEventTimelineObject;
+
     /*
     * @brief Command dispatcher
     * @details Record command to command stream that will be executed by druver
@@ -36,6 +40,8 @@ namespace vkm
         void bindPipeline();
         void unbindPipeline();
 
+        inline const VkmGpuEventTimelineObject& getGpuEventTimelineObject() const { return _gpuEventTimelineObject; }
+
     protected:
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) = 0;
         virtual void onEndRenderPass() = 0;
@@ -44,6 +50,8 @@ namespace vkm
         VkmDriverBase* _driver;
         VkmCommandQueueBase* _commandQueue;
         VkmCommandBufferPoolBase* _commandBufferPool;
+
+        VkmGpuEventTimelineObject _gpuEventTimelineObject; // GPU event timeline object for synchronization
 
     protected:
         bool _isRecording; // Flag to indicate if the command buffer is currently recording commands

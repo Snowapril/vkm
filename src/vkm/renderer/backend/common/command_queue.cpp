@@ -67,4 +67,9 @@ namespace vkm
 
         return true;
     }
+
+    void VkmCommandQueueBase::waitIdle( const uint64_t timeoutMs )
+    {
+        _gpuEventTimeline->waitIdle(timeoutMs);
+    }
 }

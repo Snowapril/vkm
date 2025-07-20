@@ -45,7 +45,7 @@ namespace vkm
         * @brief Run engine loop
         * @details run main loop of engine
         */
-        void update(const double currentUpdateTime);
+        void loopInner(const double currentUpdateTime);
 
         /*
         * @brief Destroy engine
@@ -57,6 +57,18 @@ namespace vkm
         * @brief Add swapchain to engine
         */
         void addSwapChain(const VkmWindowInfo& windowInfo);
+        
+    private:
+        /*
+         
+         */
+        void update(const double deltaTime);
+        
+        /*
+         
+         */
+        void render(const double deltaTime);
+        void prepareRender();
         
     public:
         /*

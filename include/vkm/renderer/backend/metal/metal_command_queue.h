@@ -6,6 +6,7 @@
 #include <vector>
 
 @protocol MTLCommandQueue;
+@protocol MTLSharedEvent;
 
 namespace vkm
 {
@@ -27,6 +28,24 @@ namespace vkm
     };
 
     /*
+    * @brief GPU event timeline for Metal
+    */
+    class VkmGpuEventTimelineMetal : public VkmGpuEventTimelineBase
+    {
+    public:
+        VkmGpuEventTimelineMetal(VkmDriverBase* driver);
+        ~VkmGpuEventTimelineMetal();
+
+        virtual uint64_t queryLastCompletedTimeline() override final;
+        virtual void waitIdle( const uint64_t timeoutMs ) override final;
+
+        inline id<MTLSharedEvent> getMTLSharedEvent() const { return _mtlSharedEvent; }
+
+    private:
+        id<MTLSharedEvent> _mtlSharedEvent; // Metal shared event for GPU/CPU synchronization
+    };
+
+    /*
     * @brief Command queue 
     */
     class VkmCommandQueueMetal : public VkmCommandQueueBase
@@ -38,8 +57,7 @@ namespace vkm
         inline id<MTLCommandQueue> getMTLCommandQueue() const { return _mtlCommandQueue; }
     
     public:
-        virtual void submit(const CommandSubmitInfo& submitInfos) override final;
-        virtual void waitIdle() override final;
+        virtual VkmGpuEventTimelineObject submit(const CommandSubmitInfo& submitInfos) override final;
         virtual void setDebugName(const char* name) override final;
 
     protected:

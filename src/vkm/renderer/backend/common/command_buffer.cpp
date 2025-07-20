@@ -20,6 +20,9 @@ namespace vkm
         _isInRenderPass = false;
         // Reset the current frame buffer descriptor
         _currentFrameBufferDesc = {};
+
+        VkmGpuEventTimelineBase* gpuEventTimeline = _commandQueue->getGpuEventTimeline();
+        _gpuEventTimelineObject = gpuEventTimeline->allocateGpuEventTimelineObject();
     }
     
     void VkmCommandBufferBase::endCommandBuffer()

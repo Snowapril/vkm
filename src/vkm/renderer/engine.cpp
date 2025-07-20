@@ -51,25 +51,14 @@ namespace vkm
         return true;
     }
 
-    void VkmEngine::update(const double currentUpdateTime)
+    void VkmEngine::loopInner(const double currentUpdateTime)
     {
         const double deltaTime = currentUpdateTime - _lastUpdateTime;
         _lastUpdateTime = currentUpdateTime;
 
-        _appDelegate->update(deltaTime);
+        update( deltaTime );
+        render( deltaTime );
         
-        VkmResourceHandle currentBackBuffer = _mainSwapChain->acquireNextImage();
-        VKM_DEBUG_INFO(fmt::format("Engine update : delta time : {}", deltaTime).c_str());
-
-        VkmRenderGraph* renderGraph = _frameRenderGraphs[_currentFrameIndex].get();
-        _appDelegate->render(renderGraph, currentBackBuffer);
-
-        renderGraph->compile();
-        
-        renderGraph->execute(VkmRenderGraphCommitOptions{ .waitForCompletion = true } );
-
-        _mainSwapChain->present();
-
         _currentFrameIndex = (_currentFrameIndex + 1) % FRAME_COUNT;
     }
 
@@ -90,6 +79,38 @@ namespace vkm
 
         VKM_ASSERT(_mainSwapChain == nullptr, "Main swapchain already exists");
         _mainSwapChain = swapChain;
+    }
+
+    void VkmEngine::update(const double deltaTime)
+    {
+        _appDelegate->update(deltaTime);
+    }
+
+    void VkmEngine::prepareRender()
+    {
+        // Need to wait gpu
+        VkmRenderGraph* renderGraph = _frameRenderGraphs[_currentFrameIndex].get();
+        // Ensure the render graph is completed before proceeding
+        renderGraph->ensureCompleted();
+        // Reset the render graph for the current frame
+        renderGraph->reset();
+    }
+
+    void VkmEngine::render(const double deltaTime)
+    {
+        VkmResourceHandle currentBackBuffer = _mainSwapChain->acquireNextImage();
+        VKM_DEBUG_INFO(fmt::format("Engine update : delta time : {}", deltaTime).c_str());
+        
+        VkmRenderGraph* renderGraph = _frameRenderGraphs[_currentFrameIndex].get();
+        renderGraph->reset();
+        
+        _appDelegate->render(renderGraph, currentBackBuffer);
+
+        renderGraph->compile();
+        
+        renderGraph->execute(VkmRenderGraphCommitOptions{ .waitForCompletion = true } );
+
+        _mainSwapChain->present();
     }
 
     VkmEngineLaunchOptions VkmEngine::parseEngineLaunchOptions(int argc, char* argv[])
