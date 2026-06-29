@@ -40,6 +40,7 @@
 
 #include <vkm/renderer/backend/vulkan/vulkan_swapchain.h>
 #include <vkm/renderer/backend/vulkan/vulkan_texture.h>
+#include <vkm/renderer/backend/vulkan/vulkan_command_queue.h>
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                                     VkDebugUtilsMessageTypeFlagsEXT,
@@ -148,6 +149,22 @@ namespace vkm
     VkmSwapChainBase* VkmDriverVulkan::newSwapChainInner()
     {
         return new VkmSwapChainVulkan(this);
+    }
+
+    uint32_t VkmDriverVulkan::getQueueFamilyIndex(VkmCommandQueueType queueType) const
+    {
+        switch (queueType)
+        {
+            case VkmCommandQueueType::Graphics: return _graphicsQueueFamilyIndex;
+            case VkmCommandQueueType::Compute:  return _computeQueueFamilyIndex;
+            case VkmCommandQueueType::Transfer: return _transferQueueFamilyIndex;
+            default: VKM_ASSERT(false, "Invalid command queue type"); return UINT32_MAX;
+        }
+    }
+
+    VkmCommandQueueBase* VkmDriverVulkan::newCommandQueueInner()
+    {
+        return new VkmCommandQueueVulkan(this);
     }
 
     static bool isExtensionSupported(const char* extensionName, const std::vector<VkExtensionProperties>& availableExtensions)
@@ -342,9 +359,9 @@ namespace vkm
         std::vector<VkQueueFamilyProperties> queueFamilyProperties(queueFamilyCount);
         vkGetPhysicalDeviceQueueFamilyProperties(_physicalDevice, &queueFamilyCount, queueFamilyProperties.data());
 
-        uint32_t graphicsQueueFamilyIndex = UINT32_MAX;
+        _graphicsQueueFamilyIndex = UINT32_MAX;
         uint32_t presentQueueFamilyIndex = UINT32_MAX;
-        uint32_t computeQueueFamilyIndex = UINT32_MAX;
+        _computeQueueFamilyIndex = UINT32_MAX;
         bool dedicatedComputeQueueFound = false;
         for (uint32_t i = 0; i < queueFamilyCount; i++)
         {
@@ -352,7 +369,7 @@ namespace vkm
             // vkGetPhysicalDeviceSurfaceSupportKHR(_physicalDevice, i, nullptr, &presentSupport);
             if (queueFamilyProperties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
             {
-                graphicsQueueFamilyIndex = i;
+                _graphicsQueueFamilyIndex = i;
             }
             // if (presentSupport)
             // {
@@ -363,7 +380,7 @@ namespace vkm
             {
                 if ( dedicatedComputeQueueFound == false )
                 {
-                    computeQueueFamilyIndex = i;
+                    _computeQueueFamilyIndex = i;
                     if ( ( queueFamilyProperties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT ) == 0 )
                     {
                         dedicatedComputeQueueFound = true;
@@ -379,7 +396,7 @@ namespace vkm
 
         queueCreateInfos.push_back( VkDeviceQueueCreateInfo {
             .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-            .queueFamilyIndex = graphicsQueueFamilyIndex,
+            .queueFamilyIndex = _graphicsQueueFamilyIndex,
             .queueCount       = 1,
             .pQueuePriorities = queuePriorities.data(),
         } );
