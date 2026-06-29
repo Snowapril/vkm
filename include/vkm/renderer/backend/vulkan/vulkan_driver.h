@@ -26,12 +26,19 @@ namespace vkm
         inline VkPhysicalDevice getPhysicalDevice() const { return _physicalDevice; }
         inline VkInstance getInstance() const { return _instance; }
 
+        uint32_t getQueueFamilyIndex(VkmCommandQueueType queueType) const;
+
     protected:
         virtual bool initializeInner(const VkmEngineLaunchOptions* options) override final;
         virtual void destroyInner() override final;
         virtual VkmTexture* newTextureInner() override final;
+        virtual VkmCommandQueueBase* newCommandQueueInner() override final;
 
     private:
+        uint32_t _graphicsQueueFamilyIndex{UINT32_MAX};
+        uint32_t _computeQueueFamilyIndex{UINT32_MAX};
+        uint32_t _transferQueueFamilyIndex{UINT32_MAX};
+
         VkInstance                  _instance{VK_NULL_HANDLE};
         VkPhysicalDevice            _physicalDevice{VK_NULL_HANDLE};
         VkDevice                    _device{VK_NULL_HANDLE};

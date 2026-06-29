@@ -12,8 +12,8 @@ Target: **Windows Vulkan** — `VKM_PLATFORM_WINDOWS=ON` + `VKM_USE_VULKAN_API=O
 
 ```cpp
 // include/vkm/platform/common/window.h
-#ifdef VKM_PLATFORM_WINDOWS
-    using VkmNativeWindowHandle = GLFWwindow*;
+#if defined(VKM_PLATFORM_WINDOWS)
+    #define VKM_WINDOW_HANDLE GLFWwindow*
 #endif
 ```
 

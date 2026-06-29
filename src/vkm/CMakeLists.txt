@@ -48,6 +48,8 @@ if (VKM_USE_VULKAN_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_texture.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_util.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_command_queue.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/windows/application.cpp
@@ -55,6 +57,8 @@ if (VKM_USE_VULKAN_API)
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_texture.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_util.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_queue.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.cpp
     )
 endif()
 
@@ -132,7 +136,10 @@ target_link_libraries(${target}
 )
 
 if (VKM_USE_METAL_API)
-    target_link_libraries(${target} PUBLIC "-framework Cocoa -framework Metal -framework CoreVideo -framework QuartzCore -framework AppKit")
+    target_link_libraries(${target} PUBLIC "-framework Metal -framework CoreVideo -framework QuartzCore")
+    if (NOT IOS)
+        target_link_libraries(${target} PUBLIC "-framework Cocoa -framework AppKit")
+    endif()
 endif()
 
 # Compile definitions

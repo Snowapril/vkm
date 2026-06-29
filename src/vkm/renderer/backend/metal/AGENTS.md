@@ -13,7 +13,8 @@ Targets: **macOS Metal4** (`IOS=OFF`) and **iOS Metal4** (`IOS=ON`). Both use `V
 ## Linked Frameworks
 
 ```
-Metal, Cocoa, CoreVideo, QuartzCore, AppKit
+Metal, CoreVideo, QuartzCore (all Apple platforms)
+Cocoa, AppKit (macOS only — not linked on iOS; see `src/vkm/CMakeLists.txt`)
 ```
 These are linked in `src/vkm/CMakeLists.txt` for `VKM_USE_METAL_API`. Do not add system framework `#import` in headers exposed to pure C++ translation units.
 
@@ -46,7 +47,7 @@ Overrides all 5 `VkmDriverBase` pure virtuals:
 
 ### VkmCommandQueueMetal
 - Holds `id<MTLCommandQueue> _mtlCommandQueue`
-- `initializeInner` — `[_mtlDevice newCommandQueue]`
+- `initializeInner` — cast `_driver` to `VkmDriverMetal*`, call `getMTLDevice()`, then `[device newCommandQueue]`; also creates `VkmCommandBufferPoolMetal` and `VkmGpuEventTimelineMetal`
 - `submit(CommandSubmitInfo)` — commits all pending `VkmCommandBufferBase*` entries, signals `VkmGpuEventTimelineMetal`
 
 ### VkmGpuEventTimelineMetal

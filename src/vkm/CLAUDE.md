@@ -2,7 +2,7 @@
 
 ```
 vkm/
-├── src/sampels     # sample code that use vkm library and must not be referenced by vkm library
+├── src/samples     # sample code that use vkm library and must not be referenced by vkm library
 ├── src/vkm/
 │   ├── base       
 │   ├── platform    # Platform specific headers such as windowing

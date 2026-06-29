@@ -14,8 +14,8 @@ Also used for **macOS Vulkan** if `VKM_USE_VULKAN_API=ON` on Apple.
 
 ```cpp
 // include/vkm/platform/common/window.h
-#ifdef VKM_PLATFORM_APPLE
-    using VkmNativeWindowHandle = CAMetalLayer*;
+#if defined(VKM_PLATFORM_APPLE)
+    #define VKM_WINDOW_HANDLE CAMetalLayer*
 #endif
 ```
 

@@ -44,7 +44,7 @@ Do not query features before calling `vkGetPhysicalDeviceFeatures2`.
 - `destroyInner` — cleanup in reverse order
 - `newTextureInner` — returns `new VkmTextureVulkan`
 - `newSwapChainInner` — returns `new VkmSwapChainVulkan`
-- `newCommandQueueInner` — **not overridden** → base class handles command queue creation
+- `newCommandQueueInner` → returns `new VkmCommandQueueVulkan(this)` (see `vulkan_command_queue.h`)
 
 ## Platform-Specific Surface Creation
 
