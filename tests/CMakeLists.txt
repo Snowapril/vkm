@@ -11,10 +11,26 @@ set(PUBLIC_HDRS
 # Sources
 set(SRCS
     ${SRC_DIR}/UnitTests.cpp
+    ${SRC_DIR}/TestEngineSetup.cpp
 )
+
+if (VKM_USE_METAL_API)
+    list(APPEND SRCS
+        ${SRC_DIR}/TestMetalDriver.mm
+        ${SRC_DIR}/TestBackbufferReadback.mm
+    )
+endif()
 
 # Build executable
 add_executable(${target} ${SRCS} ${BACKWARD_ENABLE})
+
+if (VKM_USE_METAL_API)
+    set_source_files_properties(
+        ${SRC_DIR}/TestMetalDriver.mm
+        ${SRC_DIR}/TestBackbufferReadback.mm
+        PROPERTIES COMPILE_FLAGS "-x objective-c++"
+    )
+endif()
 
 # Enable backward-cpp stack-trace for this build
 add_backward(${target})
@@ -34,6 +50,7 @@ target_include_directories(${target}
     PRIVATE
     ${ROOT_DIR}/dependencies/src/doctest
     ${ROOT_DIR}/dependencies/src/taskflow
+    ${ROOT_DIR}/dependencies/src/stb
     ${ROOT_DIR}/include
 )
 

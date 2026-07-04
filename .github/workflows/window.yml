@@ -36,11 +36,7 @@ jobs:
     - name: Execute bootstrap script
       run: |
         python bootstrap.py
-    - name: Configure Build
-      run: |
-        mkdir build
-        cd build && cmake .. -DCMAKE_GENERATOR_PLATFORM=x64 -DCMAKE_BUILD_TYPE=${{env.build_type}}
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.0.2
-    - name: Build
-      run: cd build && MSBuild.exe vkm.sln /p:Configuration=${{env.build_type}}
+    - name: Build and run unit tests (Vulkan backend)
+      run: python scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}}

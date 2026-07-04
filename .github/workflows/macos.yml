@@ -1,0 +1,37 @@
+name: macOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-macos:
+    env:
+      build_type: "Release"
+      vulkan_version: "1.3.204.1"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "macOS 26 + AppleClang"
+            os: macos-26
+
+    runs-on: ${{matrix.os}}
+    name: ${{matrix.name}}
+
+    steps:
+      - uses: actions/checkout@v1
+        with:
+          submodules: true
+      - name: Configure Vulkan SDK (provides MoltenVK for Vulkan-on-Metal)
+        uses: humbletim/setup-vulkan-sdk@v1.2.0
+        with:
+          vulkan-query-version: ${{ env.vulkan_version }}
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+      - name: Execute bootstrap script
+        run: python3 bootstrap.py
+      - name: Build and run unit tests (Metal + Vulkan backends)
+        run: python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}}
