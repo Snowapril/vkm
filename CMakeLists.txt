@@ -177,6 +177,15 @@ set(SPIRV_CROSS_ENABLE_REFLECT   ON CACHE BOOL "")
 set(SPIRV_CROSS_ENABLE_C_API    OFF CACHE BOOL "")
 add_subdirectory(dependencies/src/spirv-cross)
 add_subdirectory(dependencies/src/spdlog)
+# backward-cpp v1.6 uses cmake_minimum_required(VERSION 2.8) which CMake >= 3.31
+# rejects as an error. Patch the file at configure time before processing the subdirectory.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/src/backward-cpp/CMakeLists.txt" _backward_content)
+string(REGEX REPLACE
+    "cmake_minimum_required\\(VERSION [0-9.]+\\)"
+    "cmake_minimum_required(VERSION 3.5)"
+    _backward_content "${_backward_content}")
+file(WRITE "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/src/backward-cpp/CMakeLists.txt" "${_backward_content}")
+unset(_backward_content)
 add_subdirectory(dependencies/src/backward-cpp)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
