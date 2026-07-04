@@ -161,10 +161,11 @@ set(SKIP_GLSLANG_INSTALL      ON  CACHE BOOL "")
 add_subdirectory(dependencies/src/glslang)
 
 if (WIN32)
-   set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_WIN32_KHR)
-elseif()
-   # TODO
+    set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_WIN32_KHR)
+elseif(LINUX)
+    set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_XLIB_KHR)
 endif()
+# macOS: no explicit platform define needed; MoltenVK handles surface extension
 add_subdirectory(dependencies/src/volk)
 
 set(SPIRV_CROSS_CLI             OFF CACHE BOOL "" FORCE)
