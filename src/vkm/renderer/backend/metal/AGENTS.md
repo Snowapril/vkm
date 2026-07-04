@@ -72,10 +72,15 @@ Do not use `#ifdef IOS` in `.mm` files — use Apple's standard `TARGET_OS_*` ma
 
 ## Metal4 GPU Family
 
-Minimum target: macOS 14.5 (`CMAKE_OSX_DEPLOYMENT_TARGET "14.5"`), iOS 18+.
-When checking GPU capabilities use:
+Minimum target: macOS 26.0 (`CMAKE_OSX_DEPLOYMENT_TARGET "26.0"`), iOS 26+. Non-Apple Silicon and pre-26 OS versions are not supported.
+
+`VkmDriverMetal::initializeInner()` enforces this at runtime:
+1. Nil device check → error + return false
+2. `@available(macOS 26.0, iOS 26.0, *)` OS version check → error + return false if not met
+3. `[device supportsFamily:MTLGPUFamilyApple9]` GPU family check → error + return false if not met
+
 ```objc
-[device supportsFamily:MTLGPUFamilyApple9]  // Metal4 feature set
+[device supportsFamily:MTLGPUFamilyApple9]  // Metal4 minimum GPU family
 ```
 
 ## Command Encoder Lifecycle

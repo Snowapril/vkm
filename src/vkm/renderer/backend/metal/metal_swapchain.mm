@@ -6,8 +6,7 @@
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <QuartzCore/CAMetalLayer.h>
-#include <Metal/MTLCommandBuffer.h>
-#include <Metal/MTLCommandQueue.h>
+#import <Metal/MTL4CommandQueue.h>
 
 namespace vkm
 {
@@ -82,6 +81,9 @@ namespace vkm
         _currentBackBufferIndex = (_currentBackBufferIndex + 1) % BACK_BUFFER_COUNT;
         if (_currentDrawable != nil)
         {
+            VkmCommandQueueMetal* commandQueueMetal = static_cast<VkmCommandQueueMetal*>(_presentQueue);
+            [commandQueueMetal->getMTLCommandQueue() waitForDrawable:_currentDrawable];
+
             id<MTLTexture> currentBackBuffer = [_currentDrawable texture];
 
             VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
@@ -90,7 +92,7 @@ namespace vkm
             VKM_ASSERT(result, "Failed to override external handle");
             return textureMetal->getHandle();
         }
-        
+
         return VKM_INVALID_RESOURCE_HANDLE;
     }
 
@@ -100,11 +102,7 @@ namespace vkm
             return;
 
         VkmCommandQueueMetal* commandQueueMetal = static_cast<VkmCommandQueueMetal*>(_presentQueue);
-        id<MTLCommandQueue> mtlCommandQueue = commandQueueMetal->getMTLCommandQueue();
-
-        id<MTLCommandBuffer> presentCommandBuffer = [mtlCommandQueue commandBuffer];
-        [presentCommandBuffer setLabel:@"Present Command Buffer"];
-        [presentCommandBuffer presentDrawable:_currentDrawable];
-        [presentCommandBuffer commit];
+        [commandQueueMetal->getMTLCommandQueue() signalDrawable:_currentDrawable];
+        [_currentDrawable present];
     }
 } // namespace vkm

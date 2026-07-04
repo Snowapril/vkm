@@ -4,10 +4,9 @@
 
 #include <vkm/renderer/backend/common/command_buffer.h>
 
-@protocol MTLCommandBuffer;
-@protocol MTLRenderCommandEncoder;
-@protocol MTLComputeCommandEncoder;
-@protocol MTLBlitCommandEncoder;
+@protocol MTL4CommandBuffer;
+@protocol MTL4RenderCommandEncoder;
+@protocol MTL4ComputeCommandEncoder;
 
 namespace vkm
 {
@@ -17,7 +16,6 @@ namespace vkm
         None = 0,
         Graphics,
         Compute,
-        Blit
     };
 
     class VkmCommandEncoderMetal
@@ -25,26 +23,24 @@ namespace vkm
     public:
         VkmCommandEncoderMetal() = default;
         ~VkmCommandEncoderMetal() = default;
-    
-        void setMTLCommandBuffer(id<MTLCommandBuffer> mtlCommandBuffer)
+
+        void setMTLCommandBuffer(id<MTL4CommandBuffer> mtlCommandBuffer)
         {
             _mtlCommandBuffer = mtlCommandBuffer;
         }
 
         void beginRenderPass(VkmRenderResourcePool* renderResourcePool, const VkmFrameBufferDescriptor& frameBufferDesc);
         void beginComputePass();
-        void beginBlitPass();
         void commit();
         void reset();
 
     private:
-        id<MTLCommandBuffer> _mtlCommandBuffer; // Metal command buffer
+        id<MTL4CommandBuffer> _mtlCommandBuffer;
 
-        id<MTLRenderCommandEncoder> _mtlRenderCommandEncoder = nullptr; // Metal render command encoder
-        id<MTLComputeCommandEncoder> _mtlComputeCommandEncoder = nullptr; // Metal compute command encoder
-        id<MTLBlitCommandEncoder> _mtlBlitCommandEncoder = nullptr; // Metal blit command encoder
+        id<MTL4RenderCommandEncoder> _mtlRenderCommandEncoder = nullptr;
+        id<MTL4ComputeCommandEncoder> _mtlComputeCommandEncoder = nullptr;
 
-        VkmCommandEncoderType _currentEncoderType = VkmCommandEncoderType::None; // Current encoder type
+        VkmCommandEncoderType _currentEncoderType = VkmCommandEncoderType::None;
     };
 
     class VkmCommandBufferMetal : public VkmCommandBufferBase
@@ -58,11 +54,11 @@ namespace vkm
 
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) override final;
         virtual void onEndRenderPass() override final;
-        
-        inline id<MTLCommandBuffer> getMTLCommandBuffer() const { return _mtlCommandBuffer; }
+
+        inline id<MTL4CommandBuffer> getMTLCommandBuffer() const { return _mtlCommandBuffer; }
 
     private:
-        id<MTLCommandBuffer> _mtlCommandBuffer;
-        VkmCommandEncoderMetal _commandEncoder; // Command encoder for Metal
+        id<MTL4CommandBuffer> _mtlCommandBuffer;
+        VkmCommandEncoderMetal _commandEncoder;
     };
 }

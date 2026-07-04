@@ -5,7 +5,8 @@
 #include <vkm/renderer/backend/common/command_queue.h>
 #include <vector>
 
-@protocol MTLCommandQueue;
+@protocol MTL4CommandQueue;
+@protocol MTL4CommandAllocator;
 @protocol MTLSharedEvent;
 
 namespace vkm
@@ -25,6 +26,8 @@ namespace vkm
     protected:
         virtual VkmCommandBufferBase* newCommandBuffer() override final;
 
+    private:
+        id<MTL4CommandAllocator> _commandAllocator;
     };
 
     /*
@@ -54,8 +57,8 @@ namespace vkm
         VkmCommandQueueMetal(VkmDriverBase* driver);
         ~VkmCommandQueueMetal();
 
-        inline id<MTLCommandQueue> getMTLCommandQueue() const { return _mtlCommandQueue; }
-    
+        inline id<MTL4CommandQueue> getMTLCommandQueue() const { return _mtlCommandQueue; }
+
     public:
         virtual VkmGpuEventTimelineObject submit(const CommandSubmitInfo& submitInfos) override final;
         virtual void setDebugName(const char* name) override final;
@@ -64,7 +67,7 @@ namespace vkm
         virtual bool initializeInner() override final;
 
     protected:
-        id<MTLCommandQueue> _mtlCommandQueue;
+        id<MTL4CommandQueue> _mtlCommandQueue;
         std::vector<VkmCommandBufferBase*> _commandBuffersSubmitted;
     };
 }

@@ -20,6 +20,26 @@ namespace vkm
 
     bool VkmDriverMetal::initializeInner(const VkmEngineLaunchOptions* options)
     {
+        if (_mtlDevice == nil)
+        {
+            VKM_DEBUG_ERROR("No Metal device available on this system.");
+            return false;
+        }
+
+        if (@available(macOS 26.0, iOS 26.0, *))
+        {
+            if (![_mtlDevice supportsFamily:MTLGPUFamilyApple9])
+            {
+                VKM_DEBUG_ERROR("Metal 4 requires Apple Silicon (MTLGPUFamilyApple9 or later). Non-Apple Silicon devices are not supported.");
+                return false;
+            }
+        }
+        else
+        {
+            VKM_DEBUG_ERROR("Metal 4 requires macOS 26 / iOS 26 or later. This OS version is not supported.");
+            return false;
+        }
+
         _driverCapabilityFlags = VkmDriverCapabilityFlags::None;
         return true;
     }
