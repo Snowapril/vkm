@@ -75,7 +75,9 @@ namespace vkm
 
     protected:
         virtual bool createSwapChain(void* windowHandle) = 0;
-        virtual void destroySwapChain() = 0;
+        // Non-pure so the base destructor can call it safely before the derived vtable
+        // is torn down. Derived classes override this to do backend-specific teardown.
+        virtual void destroySwapChain() { destroySwapChainCommon(); }
         virtual VkmResourceHandle acquireNextImageInner() = 0;
         virtual void presentInner() = 0;
 

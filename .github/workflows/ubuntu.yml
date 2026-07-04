@@ -69,9 +69,5 @@ jobs:
         shell: bash
         run: |
           python3 bootstrap.py
-      - name: Configure Build
-        run: |
-          mkdir build
-          cd build && cmake .. -DCMAKE_BUILD_TYPE=${{env.build_type}}
-      - name: Build
-        run: cd build && make
+      - name: Build and run unit tests (Vulkan backend)
+        run: python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}}

@@ -28,6 +28,36 @@ cmake .. && cmake --build .
 *   [glslang](https://github.com/KhronosGroup/glslang)
 *   [doctest](https://github.com/doctest/doctest)
 
+## Running Unit Tests
+
+After running `bootstrap.py`, use the platform-appropriate runner script.
+
+**macOS / Linux**
+```bash
+# Default backend (Metal on macOS, Vulkan on Linux)
+bash scripts/run_tests.sh
+
+# Explicit backend
+bash scripts/run_tests.sh --backend metal
+bash scripts/run_tests.sh --backend vulkan
+
+# All supported backends on the current platform
+bash scripts/run_tests.sh --backend all
+
+# Release build
+bash scripts/run_tests.sh --build-type Release
+```
+
+**Windows (PowerShell)**
+```powershell
+.\scripts\run_tests.ps1
+.\scripts\run_tests.ps1 -BuildType Release
+```
+
+Each backend is built in its own isolated directory (`build/metal/`, `build/vulkan/`).
+Pass `--no-deps-check` / `-NoDepsCheck` to skip the `dependencies/src/` existence check
+if you have already run the bootstrap script.
+
 ## How To Contribute
 
 Contributions are always welcome, either reporting issues/bugs or forking the repository and then issuing pull requests when you have completed some additional coding that you feel will be beneficial to the main project. If you are interested in contributing in a more dedicated capacity, then please contact me.
