@@ -15,6 +15,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: "macOS 26 + AppleClang"
+            os: macos-26
           - name: "macOS 15 Intel (x86_64) + AppleClang"
             os: macos-15-intel
           - name: "macOS 14 (arm64) + AppleClang"
@@ -41,10 +43,5 @@ jobs:
       - name: Execute bootstrap script
         run: python3 bootstrap.py
 
-      - name: Configure Build
-        run: |
-          mkdir build
-          cd build && cmake .. -DCMAKE_BUILD_TYPE=${{ env.build_type }}
-
-      - name: Build
-        run: cd build && cmake --build . --parallel
+      - name: Build and run unit tests (Metal + Vulkan backends)
+        run: python3 scripts/run_tests.py --no-bootstrap --build-type ${{ env.build_type }}
