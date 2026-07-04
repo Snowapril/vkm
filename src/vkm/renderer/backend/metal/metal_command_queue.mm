@@ -88,7 +88,7 @@ namespace vkm
             [mtlCommandBuffer encodeSignalEvent:mtlSharedEvent value:mtlGpuEvent._timelineValue];
             [mtlCommandBuffer commit];
         }
-        return VkmGpuEventTimelineObject(gpuEventTimelineMetal, lastSubmittedTimelineValue);
+        return VkmGpuEventTimelineObject{gpuEventTimelineMetal, lastSubmittedTimelineValue};
     }
 
     void VkmCommandQueueMetal::setDebugName(const char* name)
