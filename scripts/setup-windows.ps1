@@ -65,8 +65,7 @@ if (-not (Test-Command "git")) {
 
 Write-Host ""
 Write-Host "--- Installing Vulkan SDK ---"
-# LunarG Vulkan SDK winget ID
-winget install --id LunarG.VulkanSDK --silent --accept-source-agreements --accept-package-agreements
+winget install --id KhronosGroup.VulkanSDK --silent --accept-source-agreements --accept-package-agreements
 
 # ---------------------------------------------------------------------------
 # Refresh PATH so newly installed tools are found in this session

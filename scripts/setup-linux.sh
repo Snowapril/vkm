@@ -39,7 +39,7 @@ echo "--- Installing system packages ---"
 if is_debian; then
     sudo apt-get update -qq
     sudo apt-get install -y \
-        build-essential cmake git python3 \
+        build-essential cmake git python3 wget \
         xorg-dev libgl-dev libxcursor-dev libxi-dev \
         libxinerama-dev libxrandr-dev
 
