@@ -5,10 +5,10 @@
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
 
-#include <Metal/MTLCommandBuffer.h>
-#include <Metal/MTLRenderCommandEncoder.h>
-#include <Metal/MTLComputeCommandEncoder.h>
-#include <Metal/MTLBlitCommandEncoder.h>
+#import <Metal/MTL4CommandBuffer.h>
+#import <Metal/MTL4RenderCommandEncoder.h>
+#import <Metal/MTL4ComputeCommandEncoder.h>
+#import <Metal/MTL4RenderPass.h>
 
 namespace vkm
 {
@@ -38,13 +38,13 @@ namespace vkm
 
     void VkmCommandEncoderMetal::beginRenderPass(VkmRenderResourcePool* renderResourcePool, const VkmFrameBufferDescriptor& frameBufferDesc)
     {
-        MTLRenderPassDescriptor* mtlRenderPassDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
+        MTL4RenderPassDescriptor* mtlRenderPassDescriptor = [[MTL4RenderPassDescriptor alloc] init];
         const VkmRenderPassDescriptor& renderPassDesc = frameBufferDesc._renderPass;
         for (uint32_t i = 0; i < renderPassDesc._colorAttachmentCount; ++i)
         {
             auto colorAttachmentHandle = frameBufferDesc._colorAttachments[i];
             VkmTextureMetal* colorTextureMetal = static_cast<VkmTextureMetal*>(renderResourcePool->getResource<VkmTexture>(colorAttachmentHandle));
-            
+
             const VkmColorAttachmentDescriptor& colorAttachmentDesc = renderPassDesc._colorAttachments[i];
             mtlRenderPassDescriptor.colorAttachments[i].texture = colorTextureMetal->getInternalHandle();
             mtlRenderPassDescriptor.colorAttachments[i].loadAction = getLoadAction(colorAttachmentDesc._loadAction);
@@ -66,7 +66,7 @@ namespace vkm
                 mtlRenderPassDescriptor.depthAttachment.loadAction = MTLLoadActionClear;
                 mtlRenderPassDescriptor.depthAttachment.storeAction = MTLStoreActionStore;
             }
-            
+
             if (hasStencil(textureInfo._format))
             {
                 mtlRenderPassDescriptor.stencilAttachment.texture = depthStencilTextureMetal->getInternalHandle();
@@ -85,12 +85,6 @@ namespace vkm
         _currentEncoderType = VkmCommandEncoderType::Compute;
     }
 
-    void VkmCommandEncoderMetal::beginBlitPass()
-    {
-        _mtlBlitCommandEncoder = [_mtlCommandBuffer blitCommandEncoder];
-        _currentEncoderType = VkmCommandEncoderType::Blit;
-    }
-
     void VkmCommandEncoderMetal::commit()
     {
         switch(_currentEncoderType)
@@ -102,10 +96,6 @@ namespace vkm
             case VkmCommandEncoderType::Compute:
                 [_mtlComputeCommandEncoder endEncoding];
                 _mtlComputeCommandEncoder = nil;
-                break;
-            case VkmCommandEncoderType::Blit:
-                [_mtlBlitCommandEncoder endEncoding];
-                _mtlBlitCommandEncoder = nil;
                 break;
             default:
                 break;
@@ -128,7 +118,7 @@ namespace vkm
 
     void VkmCommandBufferMetal::setRHICommandBuffer(VKM_COMMAND_BUFFER_HANDLE handle)
     {
-        _mtlCommandBuffer = (__bridge id<MTLCommandBuffer>)handle;
+        _mtlCommandBuffer = (__bridge id<MTL4CommandBuffer>)handle;
         _commandEncoder.setMTLCommandBuffer(_mtlCommandBuffer);
     }
 
