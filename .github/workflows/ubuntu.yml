@@ -60,7 +60,7 @@ jobs:
             echo "CXX=clang++-${{ matrix.version }}" >> $GITHUB_ENV
           fi
       - name: Configure Vulkan SDK using the downloaded spec
-        uses: humbletim/setup-vulkan-sdk@v1.2.0
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: ${{ env.vulkan_version }}
           vulkan-components: Vulkan-Headers, Vulkan-Loader
