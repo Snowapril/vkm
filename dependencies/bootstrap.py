@@ -16,17 +16,19 @@ import traceback
 #import progressbar
 
 try:
-    from urllib.request import urlparse
-    from urllib.request import urlunparse
+    from urllib.parse import urlparse, urlunparse, quote
     from urllib.request import urlretrieve
-    from urllib.request import URLopener
-    from urllib.request import quote
+    try:
+        from urllib.request import URLopener
+    except ImportError:
+        URLopener = None  # removed in Python 3.13
 except ImportError:
-    from urlparse import urlparse
-    from urlparse import urlunparse
-    from urllib import urlretrieve
-    from urllib import URLopener
-    from urllib import quote
+    from urlparse import urlparse, urlunparse
+    from urllib import urlretrieve, quote
+    try:
+        from urllib import URLopener
+    except ImportError:
+        URLopener = None
 
 try:
     import paramiko
@@ -87,8 +89,18 @@ def dlog(string):
         print("*** " + string)
 
 
-class MyURLOpener(URLopener):
-    pass
+if URLopener is not None:
+    class MyURLOpener(URLopener):
+        pass
+else:
+    import urllib.request as _ureq
+    class MyURLOpener:
+        version = None
+        def retrieve(self, url, filename):
+            headers = {'User-Agent': self.version} if self.version else {}
+            req = _ureq.Request(url, headers=headers)
+            with _ureq.urlopen(req) as r, open(filename, 'wb') as f:
+                f.write(r.read())
 
 
 def executeCommand(command, printCommand = False, quiet = False):

@@ -1,0 +1,50 @@
+name: macOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-macos:
+    env:
+      build_type: "Release"
+      vulkan_version: "1.3.204.1"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "macOS 15 Intel (x86_64) + AppleClang"
+            os: macos-15-intel
+          - name: "macOS 14 (arm64) + AppleClang"
+            os: macos-14
+
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install MoltenVK
+        run: brew install molten-vk
+
+      - name: Configure Vulkan SDK
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: ${{ env.vulkan_version }}
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Execute bootstrap script
+        run: python3 bootstrap.py
+
+      - name: Configure Build
+        run: |
+          mkdir build
+          cd build && cmake .. -DCMAKE_BUILD_TYPE=${{ env.build_type }}
+
+      - name: Build
+        run: cd build && cmake --build . --parallel
