@@ -1,0 +1,54 @@
+name: WASM
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-wasm:
+    env:
+      build_type: "Release"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "Ubuntu (emsdk)"
+            os: ubuntu-latest
+          - name: "macOS (emsdk)"
+            os: macos-latest
+          - name: "Windows (emsdk)"
+            os: windows-latest
+
+    runs-on: ${{matrix.os}}
+    name: ${{matrix.name}}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Execute bootstrap script (fetches deps + installs/activates emsdk)
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            python bootstrap.py
+          else
+            python3 bootstrap.py
+          fi
+      - name: Configure Build
+        shell: bash
+        run: |
+          source dependencies/src/emsdk/emsdk_env.sh
+          emcmake cmake -B build-wasm -DCMAKE_BUILD_TYPE=${{env.build_type}} -DBUILD_SAMPLES=ON
+      - name: Build
+        shell: bash
+        run: |
+          source dependencies/src/emsdk/emsdk_env.sh
+          cmake --build build-wasm --target triangle
+      - name: Verify WASM artifacts
+        shell: bash
+        run: |
+          test -f build-wasm/bin/triangle.html
+          test -f build-wasm/bin/triangle.js
+          test -f build-wasm/bin/triangle.wasm

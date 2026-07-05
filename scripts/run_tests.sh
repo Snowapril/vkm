@@ -2,11 +2,15 @@
 # Build and run vkm unit tests for one or more graphics backends.
 #
 # Usage: ./scripts/run_tests.sh [options]
-#   --backend <metal|vulkan|all>   Backend to test (default: platform default)
+#   --backend <metal|vulkan|webgpu|all>  Backend to test (default: platform default)
 #   --build-type <Debug|Release>   cmake build type (default: Debug)
 #   --build-dir <path>             cmake binary root (default: <project_root>/build)
 #   --jobs <n>                     parallel build jobs (default: cpu count)
 #   --no-deps-check                skip verifying dependencies/src/ is populated
+#
+# The webgpu backend targets Emscripten/WASM and is executed headlessly in Chrome; it
+# requires the emsdk toolchain (bootstrapped by bootstrap.py) and a local Chrome/Chromium
+# install, and is delegated to scripts/run_tests.py (the one implementation of that logic).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -78,6 +82,9 @@ all_backends_for_platform() {
             echo "vulkan"
             ;;
     esac
+    # webgpu availability (emsdk + Chrome/Chromium) is checked at runtime by the Python
+    # delegate below, not here — always list it so `--backend all`/`--backend webgpu` reach it.
+    echo "webgpu"
 }
 
 if [[ -z "$BACKEND" ]]; then
@@ -102,9 +109,6 @@ cmake_flags_for_backend() {
             ;;
         vulkan)
             echo "-DVKM_USE_VULKAN_API=ON -DVKM_USE_METAL_API=OFF"
-            ;;
-        webgpu)
-            echo "SKIP"
             ;;
         *)
             echo "[ERROR] Unknown backend: $b" >&2
@@ -149,13 +153,24 @@ for b in "${BACKENDS[@]}"; do
     echo "  Backend: $b"
     echo "------------------------------------------------"
 
-    FLAGS=$(cmake_flags_for_backend "$b")
-
-    if [[ "$FLAGS" == "SKIP" ]]; then
-        echo "[SKIP] $b backend is not yet implemented."
-        RESULTS[$b]="SKIP"
+    if [[ "$b" == "webgpu" ]]; then
+        echo "[INFO] Delegating webgpu backend to scripts/run_tests.py (headless Chrome runner)..."
+        set +e
+        DELEGATE_OUTPUT=$(python3 "$PROJECT_ROOT/scripts/run_tests.py" \
+            --backend webgpu --build-dir "$BUILD_DIR" --build-type "$BUILD_TYPE" --no-bootstrap 2>&1)
+        set -e
+        echo "$DELEGATE_OUTPUT"
+        if echo "$DELEGATE_OUTPUT" | grep -q "RESULT:webgpu:PASS"; then
+            RESULTS[$b]="PASS"
+        elif echo "$DELEGATE_OUTPUT" | grep -q "RESULT:webgpu:SKIP"; then
+            RESULTS[$b]="SKIP"
+        else
+            RESULTS[$b]="FAIL"
+        fi
         continue
     fi
+
+    FLAGS=$(cmake_flags_for_backend "$b")
 
     BACKEND_BUILD_DIR="$BUILD_DIR/$b"
 

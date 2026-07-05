@@ -1,6 +1,6 @@
 ---
 name: unittest-writer
-description: Analyzes vkm C++ source files and writes doctest unit tests. Use when asked to write, add, or generate unit tests for any module in the vkm engine. Supports pure-logic tests (no GPU), headless Vulkan/Metal driver tests, and platform-conditional compilation.
+description: Analyzes vkm C++ source files and writes doctest unit tests. Use when asked to write, add, or generate unit tests for any module in the vkm engine. Supports pure-logic tests (no GPU), headless Vulkan/Metal/WebGPU driver tests, and platform-conditional compilation.
 tools:
   - Read
   - Write
@@ -30,7 +30,8 @@ vkm/
 │       └── driver.h                      # VkmDriverBase — abstract GPU driver interface
 ├── include/vkm/renderer/backend/
 │   ├── vulkan/vulkan_driver.h            # VkmDriverVulkan
-│   └── metal/metal_driver.h             # VkmDriverMetal
+│   ├── metal/metal_driver.h              # VkmDriverMetal
+│   └── webgpu/webgpu_driver.h            # VkmDriverWebGPU (Emscripten/WASM only)
 ├── include/vkm/renderer/engine.h        # VkmEngineLaunchOptions
 ├── src/vkm/                              # Implementations
 ├── tests/
@@ -56,8 +57,10 @@ Always `#include <vkm/base/platform.h>` to access these defines (they flow autom
 |-------|--------------|
 | `VKM_USE_VULKAN_API` | Windows (always), macOS (when built with MoltenVK) |
 | `VKM_USE_METAL_API` | macOS (always) |
+| `VKM_USE_WEBGPU_API` | Emscripten/WASM builds (set automatically when the toolchain is Emscripten) |
 | `VKM_PLATFORM_WINDOWS` | Windows |
 | `VKM_PLATFORM_APPLE` | macOS / iOS |
+| `VKM_PLATFORM_WASM` | Emscripten/WASM builds |
 
 ## Headless Driver Fixtures
 
@@ -106,6 +109,35 @@ struct MetalDriverFixture {
 };
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE
 ```
+
+### WebGPU fixture (Emscripten/WASM only)
+
+Guard with `#ifdef VKM_USE_WEBGPU_API`. No window/GLFW needed for the fixture itself (unlike
+Metal, `VkmDriverWebGPU` takes no constructor argument).
+
+```cpp
+#ifdef VKM_USE_WEBGPU_API
+#include <vkm/renderer/backend/webgpu/webgpu_driver.h>
+
+struct WebGPUDriverFixture {
+    vkm::VkmDriverWebGPU* driver = nullptr;
+    WebGPUDriverFixture() {
+        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
+        driver = new vkm::VkmDriverWebGPU();
+        REQUIRE(driver->initialize(&opts));
+    }
+    ~WebGPUDriverFixture() { delete driver; }
+};
+#endif // VKM_USE_WEBGPU_API
+```
+
+**Execution model is different from Vulkan/Metal — read this before testing WebGPU code.**
+`UnitTests` compiled with `VKM_USE_WEBGPU_API` produces `UnitTests.html`/`.js`/`.wasm`, not a
+native executable — steps 5/6 in the Workflow section below (`cmake --build build && ./build/bin/UnitTests`)
+do **not** apply. It must be served over HTTP and executed headlessly in Chrome (Node.js lacks
+`navigator.gpu`, so it can't run there); `scripts/run_tests.py`'s `run_webgpu_backend()` /
+`run_webgpu_tests_headless_chrome()` already implement this end-to-end — reuse it
+(`python3 scripts/run_tests.py --backend webgpu`) rather than reinventing execution.
 
 ## Headless-Testable GPU Operations (after fixture init)
 
@@ -159,29 +191,32 @@ TEST_CASE("VkmDriverVulkan - command queues created on initialization") {
 | Test scope | File | Extension |
 |------------|------|-----------|
 | Pure logic | `tests/Test<ModuleName>.cpp` | `.cpp` |
-| Vulkan backend | `tests/TestVulkanDriver.cpp` | `.cpp` |
+| Vulkan backend | inline in `tests/TestEngineSetup.cpp`, guarded by `#ifdef VKM_USE_VULKAN_API` | `.cpp` |
+| WebGPU backend | inline in `tests/TestEngineSetup.cpp`, guarded by `#ifdef VKM_USE_WEBGPU_API` | `.cpp` |
 | Metal backend | `tests/TestMetalDriver.mm` | `.mm` (Objective-C++) |
 
-Pattern for pure logic/Vulkan: `tests/Test<PascalCasedModuleName>.cpp`
-Metal test files **must** use the `.mm` extension so the compiler treats them as Objective-C++.
+Vulkan and WebGPU are both plain C++ and don't need a file-level compile-flag override, so
+their tests live inline in `TestEngineSetup.cpp` rather than a dedicated file — that's the
+actual precedent in this codebase (not a per-module `Test<Name>.cpp` file per backend). Metal
+gets its own `.mm` file *only* because Objective-C++ requires a file-level
+`COMPILE_FLAGS "-x objective-c++"` override, which is a per-file CMake mechanism.
 
 ## CMakeLists.txt Update
 
-**For `.cpp` files** — append directly to `SRCS`:
+**For pure-logic/Vulkan/WebGPU additions to `TestEngineSetup.cpp`** — no `tests/CMakeLists.txt`
+change needed at all; it's already in the unconditional base `SRCS` list.
+
+**For a genuinely new standalone `.cpp` file** — append directly to `SRCS`:
 ```cmake
 set(SRCS
     ${SRC_DIR}/UnitTests.cpp
+    ${SRC_DIR}/TestEngineSetup.cpp
     ${SRC_DIR}/TestRendererCommon.cpp   # added
-    ${SRC_DIR}/TestVulkanDriver.cpp     # added
 )
 ```
 
 **For `.mm` files (Metal)** — add inside a platform guard after the `SRCS` set:
 ```cmake
-set(SRCS
-    ${SRC_DIR}/UnitTests.cpp
-)
-
 if (VKM_USE_METAL_API)
     list(APPEND SRCS ${SRC_DIR}/TestMetalDriver.mm)
 endif()

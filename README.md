@@ -40,6 +40,7 @@ bash scripts/run_tests.sh
 # Explicit backend
 bash scripts/run_tests.sh --backend metal
 bash scripts/run_tests.sh --backend vulkan
+bash scripts/run_tests.sh --backend webgpu
 
 # All supported backends on the current platform
 bash scripts/run_tests.sh --backend all
@@ -47,6 +48,9 @@ bash scripts/run_tests.sh --backend all
 # Release build
 bash scripts/run_tests.sh --build-type Release
 ```
+`run_tests.sh` uses associative arrays and needs bash 4+; macOS ships bash 3.2, so install a
+newer one first (e.g. `brew install bash`) and invoke it explicitly if `bash --version` shows
+3.x (`$(brew --prefix)/bin/bash scripts/run_tests.sh ...`).
 
 **Windows (PowerShell)**
 ```powershell
@@ -54,9 +58,51 @@ bash scripts/run_tests.sh --build-type Release
 .\scripts\run_tests.ps1 -BuildType Release
 ```
 
-Each backend is built in its own isolated directory (`build/metal/`, `build/vulkan/`).
-Pass `--no-deps-check` / `-NoDepsCheck` to skip the `dependencies/src/` existence check
-if you have already run the bootstrap script.
+Each backend is built in its own isolated directory (`build/metal/`, `build/vulkan/`,
+`build/webgpu/`). Pass `--no-deps-check` / `-NoDepsCheck` to skip the `dependencies/src/`
+existence check if you have already run the bootstrap script.
+
+The **webgpu** backend targets Emscripten/WASM and is executed headlessly in a local Chrome
+or Chromium install (Node.js can't run it — it lacks `navigator.gpu`). It requires the emsdk
+toolchain, which `bootstrap.py` installs into `dependencies/src/emsdk`; if either emsdk or
+Chrome/Chromium isn't found, it's skipped with an informational message rather than failing.
+
+## WebGPU (Emscripten/WASM)
+
+`python bootstrap.py` already installs and pins the emsdk toolchain into
+`dependencies/src/emsdk` — no separate setup step needed. The only other prerequisite is a
+local Chrome or Chromium install.
+
+**Building the sample manually**
+```bash
+source dependencies/src/emsdk/emsdk_env.sh   # emsdk_env.bat on Windows
+emcmake cmake -B build-wasm -DCMAKE_BUILD_TYPE=Release
+cmake --build build-wasm --target triangle
+```
+
+**Running it in a browser** — serve the output directory and open it in Chrome:
+```bash
+cd build-wasm/bin
+python3 -m http.server 8080
+# open http://localhost:8080/triangle.html in Chrome
+```
+A normal (non-headless) Chrome window has WebGPU available by default on supported platforms
+— the `--enable-unsafe-webgpu --use-angle=swiftshader` flags below are a headless/software-rendering
+concern, not something you need for a manual, GUI browser check.
+
+**Building/running the WebGPU unit tests manually** — the same `emcmake`/`cmake --build --target UnitTests`
+sequence produces `build-wasm/bin/UnitTests.html`. For interactive debugging, just open it in a
+normal Chrome window and watch doctest's output in DevTools. To reproduce exactly what the
+automated runner (`scripts/run_tests.py --backend webgpu`, see above) does headlessly:
+```bash
+google-chrome --headless=new --disable-gpu-sandbox --enable-unsafe-webgpu \
+  --enable-features=Vulkan --use-angle=swiftshader --enable-logging=stderr --v=1 \
+  http://localhost:8080/UnitTests.html
+```
+(macOS: use `/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome` in place of `google-chrome`.)
+
+For the fully-automated path, prefer `scripts/run_tests.py --backend webgpu` (or `run_tests.sh`/`run_tests.ps1`,
+see "Running Unit Tests" above) over the manual steps here — it also handles the local HTTP server for you.
 
 ## How To Contribute
 
