@@ -43,7 +43,7 @@ namespace vkm
     {
     public:
         VkmDriverBase();
-        ~VkmDriverBase();
+        virtual ~VkmDriverBase();
 
         /*
         * @brief initialize each graphics api setup and create necessary resources

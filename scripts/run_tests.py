@@ -56,6 +56,24 @@ def vulkan_available() -> bool:
     return shutil.which("vulkaninfo") is not None
 
 
+def metal4_available() -> bool:
+    """Return True when the active macOS SDK provides the Metal 4 (MTL4*) headers.
+
+    Metal 4 headers only ship starting with the macOS 26 SDK. Older runner images
+    (e.g. macOS 14/15 with Xcode 15.x/16.x) lack them entirely, so the metal backend
+    build must be skipped there rather than hard-failing."""
+    try:
+        result = subprocess.run(
+            ["xcrun", "--sdk", "macosx", "--show-sdk-path"],
+            capture_output=True, text=True, check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    sdk_path = Path(result.stdout.strip())
+    header = sdk_path / "System/Library/Frameworks/Metal.framework/Headers/MTL4CommandBuffer.h"
+    return header.exists()
+
+
 def _emcmake_path(emsdk_dir: Path) -> Path:
     """emcmake lives under emsdk's upstream/emscripten checkout, not the emsdk repo root."""
     name = "emcmake.bat" if platform.system() == "Windows" else "emcmake"
@@ -103,11 +121,15 @@ def chrome_executable():
 def backends_for_platform(system: str) -> list:
     entries = []
 
-    if system == "Darwin":          # macOS — Metal always available; Vulkan needs MoltenVK
-        entries.append(("metal", {
-            "VKM_USE_METAL_API":  "ON",
-            "VKM_USE_VULKAN_API": "OFF",
-        }))
+    if system == "Darwin":          # macOS — Metal needs the Metal 4 SDK; Vulkan needs MoltenVK
+        if metal4_available():
+            entries.append(("metal", {
+                "VKM_USE_METAL_API":  "ON",
+                "VKM_USE_VULKAN_API": "OFF",
+            }))
+        else:
+            print("[INFO] Metal 4 headers (MTL4CommandBuffer.h) not found in the active macOS SDK.")
+            print("[INFO] Skipping Metal backend (requires the macOS 26 SDK or newer).")
         if vulkan_available():
             entries.append(("vulkan", {
                 "VKM_USE_VULKAN_API": "ON",

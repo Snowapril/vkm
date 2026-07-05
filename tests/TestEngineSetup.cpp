@@ -103,10 +103,7 @@ struct VulkanDriverFixture {
         REQUIRE(driver->initialize(&opts));
     }
     ~VulkanDriverFixture() {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdelete-non-abstract-non-virtual-dtor"
         driver.reset();
-#pragma clang diagnostic pop
         glfwTerminate();
     }
 };
@@ -161,10 +158,7 @@ TEST_CASE("VkmSwapChainVulkan - created and initialized with a hidden GLFW windo
         CHECK(sc->getExtent() == glm::uvec2(256u, 256u));
     }
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdelete-non-abstract-non-virtual-dtor"
     driver.reset();
-#pragma clang diagnostic pop
     glfwDestroyWindow(window);
     glfwTerminate();
 }

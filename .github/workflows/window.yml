@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main ]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-window:
     env:
@@ -18,8 +22,6 @@ jobs:
         include:
           - name: "Windows Server 2022 + Visual Studio 2022"
             os: windows-2022
-          - name: "Windows Server 2019 + Visual Studio 2019"
-            os: windows-2019
 
     runs-on: ${{matrix.os}}
     name: ${{matrix.name}}

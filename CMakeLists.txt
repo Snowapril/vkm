@@ -101,12 +101,16 @@ if (EMSCRIPTEN)
     # Emscripten doesn't support C++ exceptions by default (no -fexceptions passed);
     # tell spdlog's bundled fmt not to rely on try/catch.
     add_definitions(-DSPDLOG_NO_EXCEPTIONS)
+endif()
 
+if (EMSCRIPTEN OR VKM_PLATFORM_APPLE)
     # dependencies/src is bootstrapped fresh (git-cloned) by bootstrap.py and is not
     # tracked by this repo's git history, so a plain edit to the vendored file would be
     # silently lost on the next bootstrap (including in CI). Reapply the patch here,
     # idempotently, every configure. See src/vkm/renderer/backend/webgpu/AGENTS.md and
     # buildscripts/patches/spdlog-fmt-emscripten-consteval.patch for why this exists.
+    # Also required on Apple platforms: a newer AppleClang (macOS 26 SDK toolchain)
+    # reproduces the same fmt consteval bug the patch was originally written for.
     set(_vkm_spdlog_dir "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/src/spdlog")
     set(_vkm_spdlog_patch "${CMAKE_CURRENT_SOURCE_DIR}/buildscripts/patches/spdlog-fmt-emscripten-consteval.patch")
     if (EXISTS "${_vkm_spdlog_dir}" AND EXISTS "${_vkm_spdlog_patch}")
@@ -123,7 +127,7 @@ if (EMSCRIPTEN)
                 RESULT_VARIABLE _vkm_spdlog_patch_result
             )
             if (NOT _vkm_spdlog_patch_result EQUAL 0)
-                message(FATAL_ERROR "Failed to apply required spdlog/fmt Emscripten consteval patch (buildscripts/patches/spdlog-fmt-emscripten-consteval.patch)")
+                message(FATAL_ERROR "Failed to apply required spdlog/fmt consteval patch (buildscripts/patches/spdlog-fmt-emscripten-consteval.patch)")
             endif()
         endif()
     endif()
