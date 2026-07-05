@@ -5,6 +5,8 @@
 #include <vkm/base/common.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 
+#include <optional>
+
 namespace vkm
 {
     constexpr const uint32_t MAX_COLOR_ATTACHMENTS = 8; // Maximum number of color attachments in a render pass

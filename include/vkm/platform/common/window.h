@@ -11,6 +11,8 @@
 #define VKM_WINDOW_HANDLE CAMetalLayer*
 #elif defined(VKM_PLATFORM_WASM)
 #define VKM_WINDOW_HANDLE GLFWwindow*
+#elif defined(VKM_PLATFORM_LINUX)
+#define VKM_WINDOW_HANDLE GLFWwindow*
 #else
     #error "Unsupported platform"
 #endif

@@ -57,6 +57,12 @@ else()
     option(VKM_PLATFORM_WINDOWS "Build target device is windows platform" OFF)
 endif()
 
+if (LINUX)
+    option(VKM_PLATFORM_LINUX "Build target device is linux platform" ON)
+else()
+    option(VKM_PLATFORM_LINUX "Build target device is linux platform" OFF)
+endif()
+
 if (APPLE)
     option(VKM_USE_METAL_API "Use Metal API on macOS/iOS" ON)
     option(VKM_PLATFORM_APPLE "Build target device is apple platform" ON)
@@ -87,6 +93,10 @@ endif()
 
 if (VKM_PLATFORM_WINDOWS)
     add_definitions(-DVKM_PLATFORM_WINDOWS)
+endif()
+
+if (VKM_PLATFORM_LINUX)
+    add_definitions(-DVKM_PLATFORM_LINUX)
 endif()
 
 if (VKM_PLATFORM_APPLE)
