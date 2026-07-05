@@ -46,7 +46,7 @@ jobs:
         run: |
           sudo add-apt-repository ppa:ubuntu-toolchain-r/test
           sudo apt-get update && sudo apt-get upgrade && sudo apt-get dist-upgrade
-          sudo apt-get install xorg-dev build-essential libgl-dev libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev libxkbcommon-dev libwayland-bin wayland-protocols python3-setuptools
+          sudo apt-get install xorg-dev build-essential libgl-dev libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev libxkbcommon-dev libwayland-dev libwayland-bin wayland-protocols python3-setuptools
           if [ "${{ matrix.compiler }}" = "gcc" ]; then
             sudo apt-get install cmake gcc-${{ matrix.version }} g++-${{ matrix.version }}
           else

@@ -54,8 +54,9 @@ echo ""
 echo "--- Installing MoltenVK + Vulkan headers ---"
 # molten-vk provides the Vulkan-on-Metal ICD for macOS
 # vulkan-headers provides the Vulkan API headers
+# vulkan-loader provides libvulkan.dylib, dynamically loaded by volk at runtime
 # vulkan-tools provides vulkaninfo, used to detect the Vulkan backend at build time
-brew install molten-vk vulkan-headers vulkan-tools
+brew install molten-vk vulkan-headers vulkan-loader vulkan-tools
 
 # ---------------------------------------------------------------------------
 # Verify prerequisites

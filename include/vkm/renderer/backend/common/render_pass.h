@@ -120,10 +120,10 @@ struct std::hash<vkm::VkmColorAttachmentDescriptor>
         return std::hash<uint32_t>()(descriptor._attachmentId) ^
                std::hash<uint8_t>()(static_cast<uint8_t>(descriptor._loadAction)) ^
                std::hash<uint8_t>()(static_cast<uint8_t>(descriptor._storeAction)) ^
-               std::hash<uint32_t>()(descriptor._clearColors[0]) ^
-               std::hash<uint32_t>()(descriptor._clearColors[1]) ^
-               std::hash<uint32_t>()(descriptor._clearColors[2]) ^
-               std::hash<uint32_t>()(descriptor._clearColors[3]);
+               std::hash<uint32_t>()(static_cast<uint32_t>(descriptor._clearColors[0])) ^
+               std::hash<uint32_t>()(static_cast<uint32_t>(descriptor._clearColors[1])) ^
+               std::hash<uint32_t>()(static_cast<uint32_t>(descriptor._clearColors[2])) ^
+               std::hash<uint32_t>()(static_cast<uint32_t>(descriptor._clearColors[3]));
     }
 };
 
@@ -135,7 +135,7 @@ struct std::hash<vkm::VkmDepthStencilAttachmentDescriptor>
         return std::hash<uint32_t>()(descriptor._attachmentId) ^
                std::hash<uint8_t>()(static_cast<uint8_t>(descriptor._loadAction)) ^
                std::hash<uint8_t>()(static_cast<uint8_t>(descriptor._storeAction)) ^
-               std::hash<uint32_t>()(descriptor._clearDepth) ^
+               std::hash<uint32_t>()(static_cast<uint32_t>(descriptor._clearDepth)) ^
                std::hash<uint32_t>()(descriptor._clearStencil);
     }
 };

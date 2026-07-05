@@ -34,7 +34,7 @@ jobs:
           submodules: true
 
       - name: Install Vulkan SDK (MoltenVK + headers)
-        run: brew install molten-vk vulkan-headers vulkan-tools
+        run: brew install molten-vk vulkan-headers vulkan-loader vulkan-tools
 
       - name: Execute bootstrap script
         run: python3 bootstrap.py
