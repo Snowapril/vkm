@@ -23,7 +23,7 @@ namespace vkm
         inline id<MTLDevice> getMTLDevice() const { return _mtlDevice; }
 
     protected:
-        virtual bool initializeInner(const VkmEngineLaunchOptions* options) override final;
+        virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) override final;
         virtual void destroyInner() override final;
         virtual VkmSwapChainBase* newSwapChainInner() override final;
         virtual VkmTexture* newTextureInner() override final;

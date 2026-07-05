@@ -50,6 +50,15 @@ if (VKM_PLATFORM_WINDOWS)
     )
 endif()
 
+if (VKM_PLATFORM_LINUX)
+    list(APPEND PUBLIC_HDRS
+        $(PUBLIC_HDR_DIR)/vkm/platform/linux/application.h
+    )
+    list(APPEND SRCS
+        ${SRC_DIR}/vkm/platform/linux/application.cpp
+    )
+endif()
+
 if (VKM_PLATFORM_APPLE)
     list(APPEND PUBLIC_HDRS
         $(PUBLIC_HDR_DIR)/vkm/platform/apple/application.h

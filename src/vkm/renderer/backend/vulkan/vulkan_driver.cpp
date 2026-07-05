@@ -183,7 +183,7 @@ namespace vkm
         return false;
     }
 
-    bool VkmDriverVulkan::initializeInner(const VkmEngineLaunchOptions* options)
+    VkmInitResult VkmDriverVulkan::initializeInner(const VkmEngineLaunchOptions* options)
     {
         VKM_VK_CHECK_RESULT_MSG_RETURN(volkInitialize(), "Failed to initialize volk");
 
@@ -268,7 +268,7 @@ namespace vkm
         if (deviceCount == 0)
         {
             VKM_DEBUG_ERROR("No Vulkan GPU found");
-            return false;
+            return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "No Vulkan-compatible GPU found on this system."};
         }
         
         std::vector<VkPhysicalDevice> physicalDevices(deviceCount);
@@ -355,7 +355,7 @@ namespace vkm
         if ( _features13.dynamicRendering == false || _features13.maintenance4 == false )
         {
             VKM_DEBUG_ERROR("Required Vulkan 1.3 features are not supported");
-            return false;
+            return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "This GPU/driver does not support required Vulkan 1.3 features (dynamicRendering, maintenance4)."};
         }
 
         // Query queue families
@@ -433,7 +433,7 @@ namespace vkm
 
         _driverCapabilityFlags = VkmDriverCapabilityFlags::CommandBufferReusable;
 
-        return true;
+        return VkmInitResult{VkmInitResultCode::Success, ""};
     }
 
     void VkmDriverVulkan::destroyInner()

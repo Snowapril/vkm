@@ -16,20 +16,21 @@ namespace vkm
     {
     }
 
-    bool VkmDriverBase::initialize(const VkmEngineLaunchOptions* options)
+    VkmInitResult VkmDriverBase::initialize(const VkmEngineLaunchOptions* options)
     {
         _renderResourcePool = std::make_unique<VkmRenderResourcePool>(this);
-        if (initializeInner(options) == false)
+        VkmInitResult result = initializeInner(options);
+        if (result.code != VkmInitResultCode::Success)
         {
-            return false;
+            return result;
         }
 
         if (setUpPredefinedCommandQueues() == false)
         {
-            return false;
+            return VkmInitResult{VkmInitResultCode::Failed, "Failed to set up predefined command queues"};
         }
 
-        return true;
+        return VkmInitResult{VkmInitResultCode::Success, ""};
     }
 
     bool VkmDriverBase::setUpPredefinedCommandQueues()

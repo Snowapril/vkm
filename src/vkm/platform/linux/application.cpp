@@ -1,10 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
-#include <vkm/platform/windows/application.h>
+#include <vkm/platform/linux/application.h>
 
-#ifdef _WIN32
-#define GLFW_EXPOSE_NATIVE_WIN32
-#endif
 #include <GLFW/glfw3.h>
 
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
@@ -37,9 +34,9 @@ namespace vkm
         glfwPollEvents();
     }
 
-    bool VkmWindow::shouldClose() const 
-    { 
-        return glfwWindowShouldClose(_windowHandle); 
+    bool VkmWindow::shouldClose() const
+    {
+        return glfwWindowShouldClose(_windowHandle);
     }
 
     VkmApplication::VkmApplication()
@@ -85,7 +82,7 @@ namespace vkm
             VkmWindowInfo windowInfo = { 1280, 720, _appName, _window.getHandle() };
             _engine.addSwapChain(windowInfo);
         }
-        
+
         while (_window.shouldClose() == false)
         {
             _window.update();

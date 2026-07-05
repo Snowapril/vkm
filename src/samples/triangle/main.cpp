@@ -8,6 +8,8 @@
 #include <vkm/platform/windows/application.h>
 #elif defined(VKM_PLATFORM_WASM)
 #include <vkm/platform/wasm/application.h>
+#elif defined(VKM_PLATFORM_LINUX)
+#include <vkm/platform/linux/application.h>
 #else // defined(VKM_PLATFORM_WINDOWS)
 #include <vkm/platform/apple/application.h>
 #endif // defined(VKM_PLATFORM_WINDOWS)

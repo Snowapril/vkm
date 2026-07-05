@@ -83,6 +83,9 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
 		/wd4819       # -> disable warning: The file contains a character that cannot be represented in the current code page (949) (caused by pybind11)
 		/wd4201       # -> disable warning: nonstandard extension used: nameless struct/union
 		/wd4189       # -> disable warning: nonstandard extension used: nameless struct/union
+		/wd4100       # -> disable warning: unreferenced formal parameter (GCC/Clang don't warn on this without -Wextra)
+		/wd4244       # -> disable warning: narrowing conversion, possible loss of data (already tolerated on GCC/Clang via -Wno-implicit-int-float-conversion)
+		/wd4267       # -> disable warning: conversion from size_t to a smaller type, possible loss of data (caused by backward-cpp)
 		#$<$<CONFIG:Debug>:
 		#/RTCc        # -> value is assigned to a smaller data type and results in a data loss
 		#>

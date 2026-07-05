@@ -47,7 +47,7 @@ namespace vkm
     {
     }
 
-    bool VkmDriverWebGPU::initializeInner(const VkmEngineLaunchOptions* options)
+    VkmInitResult VkmDriverWebGPU::initializeInner(const VkmEngineLaunchOptions* options)
     {
         (void)options;
 
@@ -56,7 +56,7 @@ namespace vkm
         if (_instance == nullptr)
         {
             VKM_DEBUG_ERROR("Failed to create WebGPU instance");
-            return false;
+            return VkmInitResult{VkmInitResultCode::Failed, "Failed to create WebGPU instance"};
         }
 
         bool adapterRequestDone = false;
@@ -78,7 +78,7 @@ namespace vkm
         if (_adapter == nullptr)
         {
             VKM_DEBUG_ERROR("No WebGPU adapter available");
-            return false;
+            return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "No WebGPU adapter available on this system."};
         }
 
         WGPUAdapterInfo adapterInfo{};
@@ -110,14 +110,14 @@ namespace vkm
         if (_device == nullptr)
         {
             VKM_DEBUG_ERROR("Failed to create WebGPU device");
-            return false;
+            return VkmInitResult{VkmInitResultCode::Failed, "Failed to create WebGPU device"};
         }
 
         _queue = wgpuDeviceGetQueue(_device);
 
         _driverCapabilityFlags = VkmDriverCapabilityFlags::None;
 
-        return true;
+        return VkmInitResult{VkmInitResultCode::Success, ""};
     }
 
     void VkmDriverWebGPU::destroyInner()
