@@ -34,7 +34,12 @@ jobs:
           submodules: true
 
       - name: Install Vulkan SDK (MoltenVK + headers)
-        run: brew install molten-vk vulkan-headers vulkan-loader vulkan-tools
+        run: |
+          brew install molten-vk vulkan-headers vulkan-loader vulkan-tools
+          # volk's dlopen("libvulkan.dylib") only searches standard system paths;
+          # Homebrew's non-standard prefix (e.g. /opt/homebrew on Apple Silicon)
+          # needs to be added explicitly for the loader to be found at runtime.
+          echo "DYLD_LIBRARY_PATH=$(brew --prefix)/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
 
       - name: Execute bootstrap script
         run: python3 bootstrap.py
