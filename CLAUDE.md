@@ -92,3 +92,10 @@ vkm/
 - Before implementing a utility, check `<algorithm>`, `<numeric>`, `<utility>`, `<functional>`, `<memory>`, etc. for an existing equivalent.
 - Prefer `std::` containers, algorithms, and utilities over hand-rolled versions of the same behavior.
 - Only write a custom implementation when the STL genuinely lacks the needed functionality or has a documented limitation (e.g. performance, API fit) that rules it out.
+
+## 8. TODO.md Conventions
+
+**Entries are single lines. No descriptions, rationale, or "why/fix" explanations.**
+
+- Add new items as one short bullet line each.
+- Do not elaborate, justify, or explain the item — only the user adds additional detail to TODO.md.
