@@ -412,6 +412,7 @@ MigrationBackup/
 .ionide/
 
 build/
+build-wasm/
 
 ### VisualStudioCode ###
 .vscode/*
