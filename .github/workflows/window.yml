@@ -30,14 +30,18 @@ jobs:
     - name: Install Vulkan SDK
       shell: pwsh
       run: |
-        winget install --id KhronosGroup.VulkanSDK --silent --accept-source-agreements --accept-package-agreements
+        # GitHub-hosted windows-2022 runners don't ship winget (unlike a real Windows
+        # 10/11 dev machine), so download the official LunarG installer directly and run
+        # it silently via the Qt Installer Framework CLI flags.
+        Invoke-WebRequest -Uri "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe" -OutFile "$env:RUNNER_TEMP\vulkan-sdk.exe"
+        Start-Process -FilePath "$env:RUNNER_TEMP\vulkan-sdk.exe" -ArgumentList "--accept-licenses --default-answer --confirm-command install" -Wait -NoNewWindow
         $vulkanSdk = [System.Environment]::GetEnvironmentVariable("VULKAN_SDK", "Machine")
         if (-not $vulkanSdk) { $vulkanSdk = [System.Environment]::GetEnvironmentVariable("VULKAN_SDK", "User") }
         if ($vulkanSdk) {
           echo "VULKAN_SDK=$vulkanSdk" >> $env:GITHUB_ENV
           echo "$vulkanSdk\Bin" >> $env:GITHUB_PATH
         } else {
-          Write-Host "##[warning]VULKAN_SDK env var not found after winget install"
+          Write-Host "##[warning]VULKAN_SDK env var not found after installer run"
         }
     - name: Execute bootstrap script
       run: |
