@@ -99,3 +99,10 @@ vkm/
 
 - Add new items as one short bullet line each.
 - Do not elaborate, justify, or explain the item — only the user adds additional detail to TODO.md.
+
+## 9. Commit Policy
+
+**Commit changes once a requested task is finished — don't wait to be asked each time.**
+
+- After completing each user request that changes files, create a commit for it.
+- Still follow standard git safety rules (no force-push, no history rewriting, no `--no-verify`) unless explicitly requested.
