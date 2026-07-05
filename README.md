@@ -67,6 +67,72 @@ or Chromium install (Node.js can't run it — it lacks `navigator.gpu`). It requ
 toolchain, which `bootstrap.py` installs into `dependencies/src/emsdk`; if either emsdk or
 Chrome/Chromium isn't found, it's skipped with an informational message rather than failing.
 
+## Running Samples
+
+After running `bootstrap.py`, use `scripts/run_sample.*` to configure, build, and run any
+sample for a given backend in one step.
+
+**macOS / Linux**
+```bash
+bash scripts/run_sample.sh --backend metal --sample triangle
+bash scripts/run_sample.sh --backend vulkan --sample triangle
+bash scripts/run_sample.sh --backend webgpu --sample triangle
+```
+
+**Windows (PowerShell)**
+```powershell
+.\scripts\run_sample.ps1 -Backend vulkan -Sample triangle
+.\scripts\run_sample.ps1 -Backend webgpu -Sample triangle
+```
+
+Native backends (`metal`, `vulkan`) build into `build/<backend>/` and launch the sample
+directly as a normal GUI window. The `webgpu` backend builds into `build-wasm/` (matching
+the manual WebGPU instructions below) and opens the sample in your default browser via a
+short-lived local HTTP server. See "Native Backends" and "WebGPU" below for the equivalent
+manual, step-by-step commands each of these scripts automates.
+
+## Native Backends (Metal / Vulkan)
+
+Metal and Vulkan are both built directly by CMake (no browser/emsdk step). Metal is available
+on Apple platforms only and requires the Metal 4 (`MTL4*`) headers, which ship starting with
+the macOS 26 SDK — older Xcode/SDK installs will not have them. Vulkan is available on Linux
+and Windows natively, and on macOS via MoltenVK; it requires a Vulkan loader/SDK to be
+discoverable (either the `VULKAN_SDK` environment variable set, or `vulkaninfo` on `PATH`) —
+install the [LunarG Vulkan SDK](https://vulkan.lunarg.com/) if you don't already have one. No
+separate setup step is needed beyond `python bootstrap.py`.
+
+> **Known limitation:** building the `triangle` sample with the Vulkan backend on macOS
+> currently fails to link. The Apple platform windowing/render-coordinator code
+> (`src/vkm/platform/apple/application.mm`) references the Metal-specific driver/swapchain
+> types directly, regardless of which backend is selected, so a Vulkan-only build never
+> compiles those types in. This doesn't affect Vulkan on Linux/Windows, or the `UnitTests`
+> target on macOS (it doesn't create a window). Use Metal for the sample on macOS until
+> `application.mm` is updated to dispatch by backend.
+
+**Building the sample manually (Metal)**
+```bash
+cmake -B build/metal -DCMAKE_BUILD_TYPE=Release \
+  -DVKM_USE_METAL_API=ON -DVKM_USE_VULKAN_API=OFF -DBUILD_SAMPLES=ON
+cmake --build build/metal --target triangle
+```
+
+**Building the sample manually (Vulkan)**
+```bash
+cmake -B build/vulkan -DCMAKE_BUILD_TYPE=Release \
+  -DVKM_USE_VULKAN_API=ON -DVKM_USE_METAL_API=OFF -DBUILD_SAMPLES=ON
+cmake --build build/vulkan --target triangle
+```
+
+**Running it**
+```bash
+./build/metal/bin/triangle    # Metal
+./build/vulkan/bin/triangle   # Vulkan (triangle.exe on Windows)
+```
+
+For the fully-automated path, prefer `scripts/run_sample.py --backend metal --sample triangle`
+(or `--backend vulkan`, or `run_sample.sh`/`run_sample.ps1`, see "Running Samples" above) over
+the manual steps here.
+
 ## WebGPU (Emscripten/WASM)
 
 `python bootstrap.py` already installs and pins the emsdk toolchain into
@@ -103,6 +169,11 @@ google-chrome --headless=new --disable-gpu-sandbox --enable-unsafe-webgpu \
 
 For the fully-automated path, prefer `scripts/run_tests.py --backend webgpu` (or `run_tests.sh`/`run_tests.ps1`,
 see "Running Unit Tests" above) over the manual steps here — it also handles the local HTTP server for you.
+
+For the fully-automated **sample** path (as opposed to tests), use
+`scripts/run_sample.py --backend webgpu --sample triangle` (or `run_sample.sh`/`run_sample.ps1`,
+see "Running Samples" above) — it builds via `emcmake`, serves `build-wasm/bin` locally, and
+opens `triangle.html` directly in your default browser.
 
 ## How To Contribute
 
