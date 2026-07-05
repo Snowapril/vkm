@@ -37,18 +37,18 @@ namespace vkm
         return true;
     }
     
-    bool VkmEngine::initializeBackendDriver()
+    VkmInitResult VkmEngine::initializeBackendDriver()
     {
-        const bool result = _driver->initialize(&_engineOptions);
-        if (!result)
+        VkmInitResult result = _driver->initialize(&_engineOptions);
+        if (result.code != VkmInitResultCode::Success)
         {
-            VKM_DEBUG_ERROR("Failed to initialize renderer backend driver");
-            return false;
+            VKM_DEBUG_ERROR(fmt::format("Failed to initialize renderer backend driver: {}", result.reason).c_str());
+            return result;
         }
         VKM_DEBUG_INFO("Renderer backend driver initialized");
         _appDelegate->postDriverReady();
 
-        return true;
+        return result;
     }
 
     void VkmEngine::loopInner(const double currentUpdateTime)

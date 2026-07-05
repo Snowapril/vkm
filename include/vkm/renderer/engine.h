@@ -13,6 +13,7 @@ namespace vkm
     class VkmDriverBase;
     class VkmTexture;
     class VkmSwapChainBase;
+    struct VkmInitResult;
 
     struct VkmEngineLaunchOptions
     {
@@ -39,7 +40,7 @@ namespace vkm
         /*
         * @brief Initialize backend driver
         */
-        bool initializeBackendDriver();
+        VkmInitResult initializeBackendDriver();
 
         /*
         * @brief Run engine loop

@@ -24,7 +24,7 @@ namespace vkm
         inline WGPUQueue getQueue() const { return _queue; }
 
     protected:
-        virtual bool initializeInner(const VkmEngineLaunchOptions* options) override final;
+        virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) override final;
         virtual void destroyInner() override final;
         virtual VkmTexture* newTextureInner() override final;
         virtual VkmCommandQueueBase* newCommandQueueInner() override final;

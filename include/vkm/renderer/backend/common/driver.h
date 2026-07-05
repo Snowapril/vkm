@@ -9,6 +9,7 @@
 #include <array>
 #include <vector>
 #include <memory>
+#include <string>
 
 namespace vkm
 {
@@ -34,7 +35,20 @@ namespace vkm
     {
         return static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs);
     }
-    
+
+    enum class VkmInitResultCode
+    {
+        Success,
+        HardwareUnsupported,  // environment/hardware cannot satisfy this backend's requirements
+        Failed,               // any other initialization error - a real bug, must not be skipped
+    };
+
+    struct VkmInitResult
+    {
+        VkmInitResultCode code = VkmInitResultCode::Success;
+        std::string       reason;
+    };
+
     /*
     * @brief renderer backend driver base class
     * @details manage whole engine lifecycle and drive the render driver and other modules
@@ -48,7 +62,7 @@ namespace vkm
         /*
         * @brief initialize each graphics api setup and create necessary resources
         */
-        bool initialize(const VkmEngineLaunchOptions* options);
+        VkmInitResult initialize(const VkmEngineLaunchOptions* options);
 
         /*
         * @brief create command queues for each necessary needs
@@ -93,7 +107,7 @@ namespace vkm
         VkmCommandQueueBase* newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
 
     protected:
-        virtual bool initializeInner(const VkmEngineLaunchOptions* options) = 0;
+        virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) = 0;
         virtual void destroyInner() = 0;
         virtual VkmTexture* newTextureInner() = 0;
         virtual VkmSwapChainBase* newSwapChainInner() = 0;

@@ -96,11 +96,12 @@ TEST_CASE("VkmGpuEventTimelineBase - allocateGpuEventTimelineObject increments m
 
 struct VulkanDriverFixture {
     std::unique_ptr<vkm::VkmDriverVulkan> driver;
+    vkm::VkmInitResult initResult;
     VulkanDriverFixture() {
         glfwInit();
         vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
         driver = std::unique_ptr<vkm::VkmDriverVulkan>(new vkm::VkmDriverVulkan());
-        REQUIRE(driver->initialize(&opts));
+        initResult = driver->initialize(&opts);
     }
     ~VulkanDriverFixture() {
         driver.reset();
@@ -110,6 +111,7 @@ struct VulkanDriverFixture {
 
 TEST_CASE("VkmDriverVulkan - initialization succeeds") {
     VulkanDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
 
     SUBCASE("render resource pool is available") {
         CHECK(f.driver->getRenderResourcePool() != nullptr);
@@ -132,6 +134,7 @@ TEST_CASE("VkmDriverVulkan - initialization succeeds") {
 
 TEST_CASE("VkmDriverVulkan - graphics queue exposes a valid VkQueue handle") {
     VulkanDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
     auto* queue = static_cast<vkm::VkmCommandQueueVulkan*>(
         f.driver->getCommandQueue(vkm::VkmCommandQueueType::Graphics, 0));
     REQUIRE(queue != nullptr);
@@ -148,7 +151,14 @@ TEST_CASE("VkmSwapChainVulkan - created and initialized with a hidden GLFW windo
     vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
 
     std::unique_ptr<vkm::VkmDriverVulkan> driver(new vkm::VkmDriverVulkan());
-    REQUIRE(driver->initialize(&opts));
+    vkm::VkmInitResult initResult = driver->initialize(&opts);
+    if (initResult.code == vkm::VkmInitResultCode::HardwareUnsupported) {
+        MESSAGE("Skipping: " << initResult.reason);
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return;
+    }
+    REQUIRE_MESSAGE(initResult.code == vkm::VkmInitResultCode::Success, initResult.reason);
 
     {
         // unique_ptr destroyed before driver — correct order: swapchain uses driver's resource pool
@@ -173,16 +183,18 @@ TEST_CASE("VkmSwapChainVulkan - created and initialized with a hidden GLFW windo
 
 struct WebGPUDriverFixture {
     vkm::VkmDriverWebGPU* driver = nullptr;
+    vkm::VkmInitResult initResult;
     WebGPUDriverFixture() {
         vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
         driver = new vkm::VkmDriverWebGPU();
-        REQUIRE(driver->initialize(&opts));
+        initResult = driver->initialize(&opts);
     }
     ~WebGPUDriverFixture() { delete driver; }
 };
 
 TEST_CASE("VkmDriverWebGPU - initialization succeeds") {
     WebGPUDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
 
     SUBCASE("WGPUInstance is exposed and non-null") {
         CHECK(f.driver->getInstance() != nullptr);
@@ -212,6 +224,7 @@ TEST_CASE("VkmDriverWebGPU - initialization succeeds") {
 
 TEST_CASE("VkmDriverWebGPU - graphics queue exposes a valid WGPUQueue") {
     WebGPUDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
     auto* queue = static_cast<vkm::VkmCommandQueueWebGPU*>(
         f.driver->getCommandQueue(vkm::VkmCommandQueueType::Graphics, 0));
     REQUIRE(queue != nullptr);

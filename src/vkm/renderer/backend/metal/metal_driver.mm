@@ -20,12 +20,12 @@ namespace vkm
 
     }
 
-    bool VkmDriverMetal::initializeInner(const VkmEngineLaunchOptions* options)
+    VkmInitResult VkmDriverMetal::initializeInner(const VkmEngineLaunchOptions* options)
     {
         if (_mtlDevice == nil)
         {
             VKM_DEBUG_ERROR("No Metal device available on this system.");
-            return false;
+            return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "No Metal device available on this system."};
         }
 
         if (@available(macOS 26.0, iOS 26.0, *))
@@ -33,17 +33,17 @@ namespace vkm
             if (![_mtlDevice supportsFamily:MTLGPUFamilyApple9])
             {
                 VKM_DEBUG_ERROR("Metal 4 requires Apple Silicon (MTLGPUFamilyApple9 or later). Non-Apple Silicon devices are not supported.");
-                return false;
+                return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "Metal 4 requires Apple Silicon (MTLGPUFamilyApple9 or later); this GPU does not support it."};
             }
         }
         else
         {
             VKM_DEBUG_ERROR("Metal 4 requires macOS 26 / iOS 26 or later. This OS version is not supported.");
-            return false;
+            return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "Metal 4 requires macOS 26 / iOS 26 or later; this OS version is not supported."};
         }
 
         _driverCapabilityFlags = VkmDriverCapabilityFlags::None;
-        return true;
+        return VkmInitResult{VkmInitResultCode::Success, ""};
     }
 
     void VkmDriverMetal::destroyInner()

@@ -66,9 +66,10 @@ namespace vkm
 
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
-        if ( _engine.initializeBackendDriver() == false )
+        VkmInitResult driverInitResult = _engine.initializeBackendDriver();
+        if ( driverInitResult.code != VkmInitResultCode::Success )
         {
-            VKM_DEBUG_ERROR("Failed to initialize backend vulkan api");
+            VKM_DEBUG_ERROR(fmt::format("Failed to initialize backend vulkan api: {}", driverInitResult.reason).c_str());
             return -1;
         }
 

@@ -12,25 +12,27 @@
 #include <glm/vec2.hpp>
 
 struct MetalDriverFixture {
-    id<MTLDevice> device;
+    id<MTLDevice> device = nil;
     vkm::VkmDriverMetal* driver = nullptr;
+    vkm::VkmInitResult initResult;
     MetalDriverFixture() {
         device = MTLCreateSystemDefaultDevice();
-        REQUIRE(device != nil);
+        if (device == nil) {
+            initResult = vkm::VkmInitResult{vkm::VkmInitResultCode::HardwareUnsupported, "No Metal device available on this system."};
+            return;
+        }
         vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
         driver = new vkm::VkmDriverMetal(device);
-        REQUIRE(driver->initialize(&opts));
+        initResult = driver->initialize(&opts);
     }
     ~MetalDriverFixture() {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdelete-non-abstract-non-virtual-dtor"
         delete driver;
-#pragma clang diagnostic pop
     }
 };
 
 TEST_CASE("VkmDriverMetal - initialization succeeds") {
     MetalDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
 
     SUBCASE("MTLDevice is exposed and non-nil") {
         CHECK(f.driver->getMTLDevice() != nil);
@@ -52,6 +54,7 @@ TEST_CASE("VkmDriverMetal - initialization succeeds") {
 
 TEST_CASE("VkmDriverMetal - graphics queue exposes a valid MTLCommandQueue") {
     MetalDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
     auto* queue = static_cast<vkm::VkmCommandQueueMetal*>(
         f.driver->getCommandQueue(vkm::VkmCommandQueueType::Graphics, 0));
     REQUIRE(queue != nullptr);
@@ -60,6 +63,7 @@ TEST_CASE("VkmDriverMetal - graphics queue exposes a valid MTLCommandQueue") {
 
 TEST_CASE("VkmSwapChainMetal - created and initialized without a display surface") {
     MetalDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
 
     // Metal's createSwapChain ignores the windowHandle argument — it creates
     // deferred VkmTextureMetal slots that get their handles via overrideCurrentDrawable.

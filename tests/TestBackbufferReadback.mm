@@ -101,24 +101,26 @@ static std::vector<uint8_t> renderSolidColorAndReadback(
 // No raw Metal rendering work is done in or from this fixture.
 struct ReadbackFixture {
     vkm::VkmDriverMetal* driver = nullptr;
+    vkm::VkmInitResult initResult;
 
     ReadbackFixture() {
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-        REQUIRE(device != nil);
+        if (device == nil) {
+            initResult = vkm::VkmInitResult{vkm::VkmInitResultCode::HardwareUnsupported, "No Metal device available on this system."};
+            return;
+        }
         vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
         driver = new vkm::VkmDriverMetal(device);
-        REQUIRE(driver->initialize(&opts));
+        initResult = driver->initialize(&opts);
     }
     ~ReadbackFixture() {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdelete-non-abstract-non-virtual-dtor"
         delete driver;
-#pragma clang diagnostic pop
     }
 };
 
 TEST_CASE("Backbuffer readback - solid red renders and matches reference PNG") {
     ReadbackFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
 
     auto rendered = renderSolidColorAndReadback(f.driver, 1.0f, 0.0f, 0.0f, 1.0f);
 
@@ -142,6 +144,7 @@ TEST_CASE("Backbuffer readback - solid red renders and matches reference PNG") {
 
 TEST_CASE("Backbuffer readback - solid green renders and matches reference PNG") {
     ReadbackFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
 
     auto rendered = renderSolidColorAndReadback(f.driver, 0.0f, 1.0f, 0.0f, 1.0f);
 

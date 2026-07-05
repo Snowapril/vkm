@@ -346,9 +346,10 @@ namespace vkm
                 return -1;
             }
             
-            if (_engine.initializeBackendDriver() == false)
+            VkmInitResult driverInitResult = _engine.initializeBackendDriver();
+            if (driverInitResult.code != VkmInitResultCode::Success)
             {
-                VKM_DEBUG_ERROR("Failed to initialize backend metal api");
+                VKM_DEBUG_ERROR(fmt::format("Failed to initialize backend metal api: {}", driverInitResult.reason).c_str());
                 return -1;
             }
 
