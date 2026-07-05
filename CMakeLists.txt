@@ -104,33 +104,17 @@ if (EMSCRIPTEN)
 endif()
 
 if (EMSCRIPTEN OR VKM_PLATFORM_APPLE)
-    # dependencies/src is bootstrapped fresh (git-cloned) by bootstrap.py and is not
-    # tracked by this repo's git history, so a plain edit to the vendored file would be
-    # silently lost on the next bootstrap (including in CI). Reapply the patch here,
-    # idempotently, every configure. See src/vkm/renderer/backend/webgpu/AGENTS.md and
-    # buildscripts/patches/spdlog-fmt-emscripten-consteval.patch for why this exists.
-    # Also required on Apple platforms: a newer AppleClang (macOS 26 SDK toolchain)
-    # reproduces the same fmt consteval bug the patch was originally written for.
-    set(_vkm_spdlog_dir "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/src/spdlog")
-    set(_vkm_spdlog_patch "${CMAKE_CURRENT_SOURCE_DIR}/buildscripts/patches/spdlog-fmt-emscripten-consteval.patch")
-    if (EXISTS "${_vkm_spdlog_dir}" AND EXISTS "${_vkm_spdlog_patch}")
-        execute_process(
-            COMMAND git apply --reverse --check "${_vkm_spdlog_patch}"
-            WORKING_DIRECTORY "${_vkm_spdlog_dir}"
-            RESULT_VARIABLE _vkm_spdlog_patch_already_applied
-            OUTPUT_QUIET ERROR_QUIET
-        )
-        if (NOT _vkm_spdlog_patch_already_applied EQUAL 0)
-            execute_process(
-                COMMAND git apply "${_vkm_spdlog_patch}"
-                WORKING_DIRECTORY "${_vkm_spdlog_dir}"
-                RESULT_VARIABLE _vkm_spdlog_patch_result
-            )
-            if (NOT _vkm_spdlog_patch_result EQUAL 0)
-                message(FATAL_ERROR "Failed to apply required spdlog/fmt consteval patch (buildscripts/patches/spdlog-fmt-emscripten-consteval.patch)")
-            endif()
-        endif()
-    endif()
+    # Some Emscripten clang versions and newer AppleClang (macOS 26 SDK toolchain) fail to
+    # evaluate FMT_STRING's compile-time format-string check as a constant expression ("call
+    # to consteval function ... is not a constant expression"), even though they otherwise
+    # report consteval support. spdlog's bundled fmt (spdlog/fmt/bundled/base.h) already
+    # honors an externally-provided FMT_USE_CONSTEVAL definition before running its own
+    # auto-detection, so predefine it here to force the non-consteval (runtime) path on
+    # these targets. This used to be a source patch applied to the vendored spdlog checkout,
+    # but that broke whenever bootstrap.py fetched a newer spdlog/fmt with different
+    # surrounding context; a compile definition doesn't depend on the vendored source's
+    # exact text and can't drift out of sync with it.
+    add_definitions(-DFMT_USE_CONSTEVAL=0)
 endif()
 
 if (EMSCRIPTEN)
@@ -281,10 +265,12 @@ if (NOT EMSCRIPTEN)
     set_property(TARGET volk PROPERTY FOLDER "ThirdPartyLibraries")
 endif()
 set_property(TARGET meshoptimizer PROPERTY FOLDER "ThirdPartyLibraries")
-set_property(TARGET glslang       PROPERTY FOLDER "ThirdPartyLibraries/glslang")
-set_property(TARGET OSDependent   PROPERTY FOLDER "ThirdPartyLibraries/glslang")
-set_property(TARGET SPIRV         PROPERTY FOLDER "ThirdPartyLibraries/glslang")
-set_property(TARGET SPVRemapper   PROPERTY FOLDER "ThirdPartyLibraries/glslang")
+foreach(_vkm_glslang_target glslang OSDependent SPIRV SPVRemapper)
+    if (TARGET ${_vkm_glslang_target})
+        set_property(TARGET ${_vkm_glslang_target} PROPERTY FOLDER "ThirdPartyLibraries/glslang")
+    endif()
+endforeach()
+unset(_vkm_glslang_target)
 
 # Project modules
 add_subdirectory(src/vkm)
