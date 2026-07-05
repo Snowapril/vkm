@@ -95,14 +95,20 @@ TEST_CASE("VkmGpuEventTimelineBase - allocateGpuEventTimelineObject increments m
 #ifdef VKM_USE_VULKAN_API
 
 struct VulkanDriverFixture {
-    vkm::VkmDriverVulkan* driver = nullptr;
+    std::unique_ptr<vkm::VkmDriverVulkan> driver;
     VulkanDriverFixture() {
         glfwInit();
         vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
-        driver = new vkm::VkmDriverVulkan();
+        driver = std::unique_ptr<vkm::VkmDriverVulkan>(new vkm::VkmDriverVulkan());
         REQUIRE(driver->initialize(&opts));
     }
-    ~VulkanDriverFixture() { delete driver; glfwTerminate(); }
+    ~VulkanDriverFixture() {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdelete-non-abstract-non-virtual-dtor"
+        driver.reset();
+#pragma clang diagnostic pop
+        glfwTerminate();
+    }
 };
 
 TEST_CASE("VkmDriverVulkan - initialization succeeds") {
@@ -143,7 +149,8 @@ TEST_CASE("VkmSwapChainVulkan - created and initialized with a hidden GLFW windo
     REQUIRE(window != nullptr);
 
     vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
-    auto* driver = new vkm::VkmDriverVulkan();
+
+    std::unique_ptr<vkm::VkmDriverVulkan> driver(new vkm::VkmDriverVulkan());
     REQUIRE(driver->initialize(&opts));
 
     {
@@ -154,7 +161,10 @@ TEST_CASE("VkmSwapChainVulkan - created and initialized with a hidden GLFW windo
         CHECK(sc->getExtent() == glm::uvec2(256u, 256u));
     }
 
-    delete driver;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdelete-non-abstract-non-virtual-dtor"
+    driver.reset();
+#pragma clang diagnostic pop
     glfwDestroyWindow(window);
     glfwTerminate();
 }

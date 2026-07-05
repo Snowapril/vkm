@@ -84,3 +84,11 @@ vkm/
 ├── ...
 
 ```
+
+## 7. Prefer STL Over Custom Implementations
+
+**If the C++ Standard Library already provides the functionality, use it instead of writing new code.**
+
+- Before implementing a utility, check `<algorithm>`, `<numeric>`, `<utility>`, `<functional>`, `<memory>`, etc. for an existing equivalent.
+- Prefer `std::` containers, algorithms, and utilities over hand-rolled versions of the same behavior.
+- Only write a custom implementation when the STL genuinely lacks the needed functionality or has a documented limitation (e.g. performance, API fit) that rules it out.

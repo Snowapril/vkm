@@ -350,7 +350,9 @@ namespace vkm
         _deviceFeatures.pNext = &_features11;
         vkGetPhysicalDeviceFeatures2(_physicalDevice, &_deviceFeatures);
 
-        if ( _features13.dynamicRendering == false || _features13.maintenance4 == false || _maintenance5Features.maintenance5 == false || _maintenance6Features.maintenance6 == false )
+        // maintenance5/6 are requested and activated opportunistically above when the driver
+        // supports them, but are not required: MoltenVK does not expose either extension yet.
+        if ( _features13.dynamicRendering == false || _features13.maintenance4 == false )
         {
             VKM_DEBUG_ERROR("Required Vulkan 1.3 features are not supported");
             return false;
