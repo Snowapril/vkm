@@ -14,7 +14,6 @@ jobs:
   build-macos:
     env:
       build_type: "Release"
-      vulkan_version: "1.3.204.1"
     strategy:
       fail-fast: false
       matrix:
@@ -34,15 +33,8 @@ jobs:
         with:
           submodules: true
 
-      - name: Install MoltenVK
-        run: brew install molten-vk
-
-      - name: Configure Vulkan SDK
-        uses: humbletim/setup-vulkan-sdk@v1.2.1
-        with:
-          vulkan-query-version: ${{ env.vulkan_version }}
-          vulkan-components: Vulkan-Headers, Vulkan-Loader
-          vulkan-use-cache: true
+      - name: Install Vulkan SDK (MoltenVK + headers)
+        run: brew install molten-vk vulkan-headers vulkan-tools
 
       - name: Execute bootstrap script
         run: python3 bootstrap.py

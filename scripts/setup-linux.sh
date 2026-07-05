@@ -41,7 +41,7 @@ if is_debian; then
     sudo apt-get install -y \
         build-essential cmake git python3 wget \
         xorg-dev libgl-dev libxcursor-dev libxi-dev \
-        libxinerama-dev libxrandr-dev
+        libxinerama-dev libxrandr-dev libxkbcommon-dev
 
     # Install Vulkan SDK from LunarG apt repository (Ubuntu only)
     if [[ "$DISTRO_ID" == "ubuntu" ]]; then
