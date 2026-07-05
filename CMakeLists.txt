@@ -37,7 +37,7 @@ elseif(CMAKE_BUILD_TYPE MATCHES "Debug")
     add_definitions(-DVKM_DEBUG)
 endif()
 
-if (UNIX AND NOT APPLE AND NOT ANDROID AND NOT WEBGL)
+if (UNIX AND NOT APPLE AND NOT ANDROID AND NOT WEBGL AND NOT EMSCRIPTEN)
     set(LINUX TRUE)
 else()
     # since cmake 3.25 LINUX is automatically set based on CMAKE_SYSTEM_NAME, which the android
@@ -65,6 +65,14 @@ else()
     option(VKM_PLATFORM_APPLE "Build target device is apple platform" OFF)
 endif()
 
+if (EMSCRIPTEN)
+    option(VKM_USE_WEBGPU_API "Use WebGPU API (Emscripten/WASM only)" ON)
+    option(VKM_PLATFORM_WASM "Build target device is Emscripten/WASM platform" ON)
+else()
+    option(VKM_USE_WEBGPU_API "Use WebGPU API (Emscripten/WASM only)" OFF)
+    option(VKM_PLATFORM_WASM "Build target device is Emscripten/WASM platform" OFF)
+endif()
+
 if (VKM_USE_VULKAN_API)
     add_definitions(-DVKM_USE_VULKAN_API)
 endif()
@@ -73,12 +81,74 @@ if (VKM_USE_METAL_API)
     add_definitions(-DVKM_USE_METAL_API)
 endif()
 
+if (VKM_USE_WEBGPU_API)
+    add_definitions(-DVKM_USE_WEBGPU_API)
+endif()
+
 if (VKM_PLATFORM_WINDOWS)
     add_definitions(-DVKM_PLATFORM_WINDOWS)
 endif()
 
 if (VKM_PLATFORM_APPLE)
     add_definitions(-DVKM_PLATFORM_APPLE)
+endif()
+
+if (VKM_PLATFORM_WASM)
+    add_definitions(-DVKM_PLATFORM_WASM)
+endif()
+
+if (EMSCRIPTEN)
+    # Emscripten doesn't support C++ exceptions by default (no -fexceptions passed);
+    # tell spdlog's bundled fmt not to rely on try/catch.
+    add_definitions(-DSPDLOG_NO_EXCEPTIONS)
+
+    # dependencies/src is bootstrapped fresh (git-cloned) by bootstrap.py and is not
+    # tracked by this repo's git history, so a plain edit to the vendored file would be
+    # silently lost on the next bootstrap (including in CI). Reapply the patch here,
+    # idempotently, every configure. See src/vkm/renderer/backend/webgpu/AGENTS.md and
+    # buildscripts/patches/spdlog-fmt-emscripten-consteval.patch for why this exists.
+    set(_vkm_spdlog_dir "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/src/spdlog")
+    set(_vkm_spdlog_patch "${CMAKE_CURRENT_SOURCE_DIR}/buildscripts/patches/spdlog-fmt-emscripten-consteval.patch")
+    if (EXISTS "${_vkm_spdlog_dir}" AND EXISTS "${_vkm_spdlog_patch}")
+        execute_process(
+            COMMAND git apply --reverse --check "${_vkm_spdlog_patch}"
+            WORKING_DIRECTORY "${_vkm_spdlog_dir}"
+            RESULT_VARIABLE _vkm_spdlog_patch_already_applied
+            OUTPUT_QUIET ERROR_QUIET
+        )
+        if (NOT _vkm_spdlog_patch_already_applied EQUAL 0)
+            execute_process(
+                COMMAND git apply "${_vkm_spdlog_patch}"
+                WORKING_DIRECTORY "${_vkm_spdlog_dir}"
+                RESULT_VARIABLE _vkm_spdlog_patch_result
+            )
+            if (NOT _vkm_spdlog_patch_result EQUAL 0)
+                message(FATAL_ERROR "Failed to apply required spdlog/fmt Emscripten consteval patch (buildscripts/patches/spdlog-fmt-emscripten-consteval.patch)")
+            endif()
+        endif()
+    endif()
+endif()
+
+if (EMSCRIPTEN)
+    # Emscripten emits a companion .js/.wasm alongside the .html shell.
+    set(CMAKE_EXECUTABLE_SUFFIX ".html")
+endif()
+
+if (VKM_USE_WEBGPU_API)
+    # Single source of truth for Emscripten port/link flags: vkmcore and the
+    # sample executables must be compiled/linked with identical port settings
+    # or emcc fails to link ("mixing ports compiled with different settings").
+    # --use-port must also be passed at compile time (it controls header search
+    # paths); the -s linker settings below are rejected by emcc during compilation.
+    set(VKM_EMSCRIPTEN_COMPILE_FLAGS
+        "SHELL:--use-port=emdawnwebgpu"
+    )
+    set(VKM_EMSCRIPTEN_PORT_FLAGS
+        "SHELL:--use-port=emdawnwebgpu"
+        "SHELL:-s USE_GLFW=3"
+        "SHELL:-s ALLOW_MEMORY_GROWTH=1"
+        "SHELL:-s ASYNCIFY"
+    )
 endif()
 
 # Build Options
@@ -134,19 +204,25 @@ include_directories(dependencies/src/ImGuizmo/src)
 include_directories(dependencies/src/spdlog/include)
 include_directories(dependencies/src/json/include)
 
-set(VMA_BUILD_SAMPLE                    OFF CACHE BOOL "")
-set(VMA_BUILD_SAMPLE_SHADERS            OFF CACHE BOOL "")
-set(VMA_STATIC_VULKAN_FUNCTIONS         OFF CACHE BOOL "")
-set(VMA_DYNAMIC_VULKAN_FUNCTIONS         ON CACHE BOOL "")
-set(VMA_DEBUG_INITIALIZE_ALLOCATIONS     ON CACHE BOOL "")
-set(VMA_RECORDING_ENABLED                ON CACHE BOOL "")
-add_subdirectory(dependencies/src/vma)
+if (NOT EMSCRIPTEN)
+    set(VMA_BUILD_SAMPLE                    OFF CACHE BOOL "")
+    set(VMA_BUILD_SAMPLE_SHADERS            OFF CACHE BOOL "")
+    set(VMA_STATIC_VULKAN_FUNCTIONS         OFF CACHE BOOL "")
+    set(VMA_DYNAMIC_VULKAN_FUNCTIONS         ON CACHE BOOL "")
+    set(VMA_DEBUG_INITIALIZE_ALLOCATIONS     ON CACHE BOOL "")
+    set(VMA_RECORDING_ENABLED                ON CACHE BOOL "")
+    add_subdirectory(dependencies/src/vma)
+endif()
 
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "")
-set(GLFW_BUILD_TESTS    OFF CACHE BOOL "")
-set(GLFW_BUILD_DOCS     OFF CACHE BOOL "")
-set(GLFW_INSTALL        OFF CACHE BOOL "")
-add_subdirectory(dependencies/src/glfw)
+if (NOT EMSCRIPTEN)
+    # Emscripten supplies its own GLFW3 emulation via -sUSE_GLFW=3; the
+    # vendored GLFW does not support Emscripten as a CMake build target.
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "")
+    set(GLFW_BUILD_TESTS    OFF CACHE BOOL "")
+    set(GLFW_BUILD_DOCS     OFF CACHE BOOL "")
+    set(GLFW_INSTALL        OFF CACHE BOOL "")
+    add_subdirectory(dependencies/src/glfw)
+endif()
 
 set(MESHOPT_BUILD_DEMO          OFF CACHE BOOL "")
 set(MESHOPT_BUILD_TOOLS         OFF CACHE BOOL "")
@@ -160,13 +236,16 @@ set(ENABLE_OPT               OFF  CACHE BOOL "")
 set(SKIP_GLSLANG_INSTALL      ON  CACHE BOOL "")
 add_subdirectory(dependencies/src/glslang)
 
-if (WIN32)
-    set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_WIN32_KHR)
-elseif(LINUX)
-    set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_XLIB_KHR)
+if (NOT EMSCRIPTEN)
+    # volk is a Vulkan loader; there is no Vulkan ICD in a browser.
+    if (WIN32)
+        set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_WIN32_KHR)
+    elseif(LINUX)
+        set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_XLIB_KHR)
+    endif()
+    # macOS: no explicit platform define needed; MoltenVK handles surface extension
+    add_subdirectory(dependencies/src/volk)
 endif()
-# macOS: no explicit platform define needed; MoltenVK handles surface extension
-add_subdirectory(dependencies/src/volk)
 
 set(SPIRV_CROSS_CLI             OFF CACHE BOOL "" FORCE)
 set(SPIRV_CROSS_ENABLE_TESTS    OFF CACHE BOOL "")
@@ -177,21 +256,27 @@ set(SPIRV_CROSS_ENABLE_REFLECT   ON CACHE BOOL "")
 set(SPIRV_CROSS_ENABLE_C_API    OFF CACHE BOOL "")
 add_subdirectory(dependencies/src/spirv-cross)
 add_subdirectory(dependencies/src/spdlog)
-# backward-cpp v1.6 uses cmake_minimum_required(VERSION 2.8) which CMake >= 3.31
-# rejects as an error. Patch the file at configure time before processing the subdirectory.
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/src/backward-cpp/CMakeLists.txt" _backward_content)
-string(REGEX REPLACE
-    "cmake_minimum_required\\(VERSION [0-9.]+\\)"
-    "cmake_minimum_required(VERSION 3.5)"
-    _backward_content "${_backward_content}")
-file(WRITE "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/src/backward-cpp/CMakeLists.txt" "${_backward_content}")
-unset(_backward_content)
-add_subdirectory(dependencies/src/backward-cpp)
+if (NOT EMSCRIPTEN)
+    # backward-cpp's stack-trace backends (libdw/libbfd/execinfo) have no
+    # Emscripten/WASM equivalent.
+    # backward-cpp v1.6 uses cmake_minimum_required(VERSION 2.8) which CMake >= 3.31
+    # rejects as an error. Patch the file at configure time before processing the subdirectory.
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/src/backward-cpp/CMakeLists.txt" _backward_content)
+    string(REGEX REPLACE
+        "cmake_minimum_required\\(VERSION [0-9.]+\\)"
+        "cmake_minimum_required(VERSION 3.5)"
+        _backward_content "${_backward_content}")
+    file(WRITE "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/src/backward-cpp/CMakeLists.txt" "${_backward_content}")
+    unset(_backward_content)
+    add_subdirectory(dependencies/src/backward-cpp)
+endif()
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
-set_property(TARGET glfw          PROPERTY FOLDER "ThirdPartyLibraries")
+if (NOT EMSCRIPTEN)
+    set_property(TARGET glfw PROPERTY FOLDER "ThirdPartyLibraries")
+    set_property(TARGET volk PROPERTY FOLDER "ThirdPartyLibraries")
+endif()
 set_property(TARGET meshoptimizer PROPERTY FOLDER "ThirdPartyLibraries")
-set_property(TARGET volk          PROPERTY FOLDER "ThirdPartyLibraries")
 set_property(TARGET glslang       PROPERTY FOLDER "ThirdPartyLibraries/glslang")
 set_property(TARGET OSDependent   PROPERTY FOLDER "ThirdPartyLibraries/glslang")
 set_property(TARGET SPIRV         PROPERTY FOLDER "ThirdPartyLibraries/glslang")
@@ -199,7 +284,10 @@ set_property(TARGET SPVRemapper   PROPERTY FOLDER "ThirdPartyLibraries/glslang")
 
 # Project modules
 add_subdirectory(src/vkm)
-add_subdirectory(tests)
+if (NOT EMSCRIPTEN)
+    # doctest/backward-cpp don't map to an in-browser runtime.
+    add_subdirectory(tests)
+endif()
 
 option(BUILD_SAMPLES "Build samples" ON)
 if (BUILD_SAMPLES)

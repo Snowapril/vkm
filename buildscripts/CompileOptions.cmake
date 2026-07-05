@@ -139,6 +139,15 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 	)
 endif ()
 
+# Emscripten's upstream clang identifies as CMAKE_CXX_COMPILER_ID "Clang", which enables
+# -Wunused-private-field above; match AppleClang and disable it (repo-wide code isn't
+# kept clean against this warning, same as on Apple platforms).
+if (EMSCRIPTEN)
+	set(DEFAULT_COMPILE_OPTIONS ${DEFAULT_COMPILE_OPTIONS}
+		-Wno-unused-private-field
+	)
+endif ()
+
 #
 # Linker options
 #

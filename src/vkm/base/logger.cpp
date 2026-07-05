@@ -5,7 +5,9 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <iostream>
 #include <chrono>
+#if !defined(VKM_PLATFORM_WASM)
 #include <backward.hpp>
+#endif // !defined(VKM_PLATFORM_WASM)
 
 namespace vkm
 {
@@ -48,13 +50,14 @@ namespace vkm
 
     void Logger::error(const char* msg)
     {
+#if !defined(VKM_PLATFORM_WASM)
         // Note(snowapril) : error log automatically generate additional stack trace
         backward::StackTrace st;
         st.load_here(32);
 
-        backward::TraceResolver tr; 
+        backward::TraceResolver tr;
         tr.load_stacktrace(st);
-        
+
         static thread_local std::ostringstream os;
         os << msg << "\n";
         for (size_t i = 0; i < st.size(); ++i)
@@ -68,6 +71,10 @@ namespace vkm
 
         _logger->error(os.str().c_str());
         os.clear();
+#else
+        // backward-cpp has no Emscripten/WASM stack-trace backend (see AGENTS.md).
+        _logger->error(msg);
+#endif // !defined(VKM_PLATFORM_WASM)
     }
 
     void Logger::flush()

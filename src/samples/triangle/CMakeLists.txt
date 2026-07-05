@@ -21,8 +21,10 @@ endif()
 # Build executable
 add_executable(${target} ${SRCS} ${BACKWARD_ENABLE})
 
-# Enable backward-cpp stack-trace for this build
-add_backward(${target})
+if (NOT EMSCRIPTEN)
+    # backward-cpp has no Emscripten/WASM stack-trace backend.
+    add_backward(${target})
+endif()
 
 # Project options
 set_target_properties(${target}
@@ -61,3 +63,8 @@ target_link_libraries(${target}
 	${DEFAULT_LIBRARIES}
     vkmcore
 )
+
+if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
+    target_compile_options(${target} PRIVATE ${VKM_EMSCRIPTEN_COMPILE_FLAGS})
+    target_link_options(${target} PRIVATE ${VKM_EMSCRIPTEN_PORT_FLAGS})
+endif()

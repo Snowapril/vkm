@@ -77,7 +77,7 @@ TOOL_COMMAND_UNZIP = "unzip"
 if platform.system() == "Windows":
     os.environ['CYGWIN'] = "nodosfilewarning"
 
-if platform.system() == "Linux":
+if platform.system() == "Linux" or platform.system() == "Darwin":
     TOOL_COMMAND_PYTHON = "python3"
 
 def log(string):

@@ -95,6 +95,27 @@ if (VKM_USE_METAL_API)
     )
 endif()
 
+if (VKM_USE_WEBGPU_API)
+    list(APPEND PUBLIC_HDRS
+        ${PUBLIC_HDR_DIR}/vkm/platform/wasm/application.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_driver.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_swapchain.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_texture.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_util.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_command_queue.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_command_buffer.h
+    )
+    list(APPEND SRCS
+        ${SRC_DIR}/vkm/platform/wasm/application.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_driver.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_swapchain.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_texture.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_util.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_command_queue.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_command_buffer.cpp
+    )
+endif()
+
 if (VKM_PLATFORM_APPLE)
     # Compile source/headers as objective-c++
     set_source_files_properties(${SRCS} PROPERTIES
@@ -104,8 +125,10 @@ endif()
 # Build library
 add_library(${target} ${SRCS} ${BACKWARD_ENABLE})
 
-# Enable backward-cpp stack-trace for this build
-add_backward(${target})
+if (NOT EMSCRIPTEN)
+    # backward-cpp has no Emscripten/WASM stack-trace backend.
+    add_backward(${target})
+endif()
 
 # Project options
 set_target_properties(${target}
@@ -141,13 +164,23 @@ target_link_libraries(${target}
     ${DEFAULT_LINKER_OPTIONS}
 	${DEFAULT_LIBRARIES}
     PRIVATE
-    glfw
-    volk
     glslang
     SPIRV
     spirv-cross-core
-    VulkanMemoryAllocator
 )
+
+if (NOT EMSCRIPTEN)
+    target_link_libraries(${target} PRIVATE glfw)
+endif()
+
+if (VKM_USE_VULKAN_API)
+    target_link_libraries(${target} PRIVATE volk VulkanMemoryAllocator)
+endif()
+
+if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
+    target_compile_options(${target} PRIVATE ${VKM_EMSCRIPTEN_COMPILE_FLAGS})
+    target_link_options(${target} PRIVATE ${VKM_EMSCRIPTEN_PORT_FLAGS})
+endif()
 
 if (VKM_USE_METAL_API)
     target_link_libraries(${target} PUBLIC "-framework Metal -framework CoreVideo -framework QuartzCore")
