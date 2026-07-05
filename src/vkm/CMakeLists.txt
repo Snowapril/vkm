@@ -191,7 +191,9 @@ if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
     target_link_options(${target} PRIVATE ${VKM_EMSCRIPTEN_PORT_FLAGS})
 endif()
 
-if (VKM_USE_METAL_API)
+if (VKM_PLATFORM_APPLE)
+    # platform/apple/application.mm references CAMetalLayer/MTLDevice directly for the
+    # windowing surface regardless of which render backend (Metal or Vulkan/MoltenVK) is active.
     target_link_libraries(${target} PUBLIC "-framework Metal -framework CoreVideo -framework QuartzCore")
     if (NOT IOS)
         target_link_libraries(${target} PUBLIC "-framework Cocoa -framework AppKit")
