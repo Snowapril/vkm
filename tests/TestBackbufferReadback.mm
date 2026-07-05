@@ -16,7 +16,7 @@
 
 static constexpr int kWidth    = 64;
 static constexpr int kHeight   = 64;
-static constexpr int kChannels = 4;
+[[maybe_unused]] static constexpr int kChannels = 4;
 
 // Renders a solid colour to a 64x64 offscreen texture via the vkm engine abstraction.
 // Returns the CPU pixel data. Readback is stubbed until VkmDriverBase::readbackTexture()
@@ -33,7 +33,9 @@ static std::vector<uint8_t> renderSolidColorAndReadback(
     texInfo._numMipLevels   = 1;
     texInfo._numArrayLayers = 1;
 
-    std::unique_ptr<vkm::VkmTexture> offscreen(driver->newTexture(texInfo));
+    // Not owned here: VkmDriverBase::newTexture() registers the texture in the driver's
+    // VkmRenderResourcePool, which owns its lifetime (destroyed along with the driver).
+    vkm::VkmTexture* offscreen = driver->newTexture(texInfo);
     REQUIRE(offscreen != nullptr);
 
     vkm::VkmFrameBufferDescriptor fbDesc{};

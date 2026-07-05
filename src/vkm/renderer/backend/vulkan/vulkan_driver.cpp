@@ -23,19 +23,22 @@
 #pragma clang diagnostic ignored "-Wunused-variable"
 #pragma clang diagnostic ignored "-Wunused-function"
 #endif
+#ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4100)  // Unreferenced formal parameter
 #pragma warning(disable : 4189)  // Local variable is initialized but not referenced
 #pragma warning(disable : 4127)  // Conditional expression is constant
 #pragma warning(disable : 4324)  // Structure was padded due to alignment specifier
 #pragma warning(disable : 4505)  // Unreferenced function with internal linkage has been removed
+#endif
 #include <vk_mem_alloc.h>
+#ifdef _MSC_VER
 #pragma warning(pop)
+#endif
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
 
-#include <vulkan/vk_enum_string_helper.h>
 #include <GLFW/glfw3.h>
 
 #include <vkm/renderer/backend/vulkan/vulkan_swapchain.h>
@@ -360,7 +363,7 @@ namespace vkm
         vkGetPhysicalDeviceQueueFamilyProperties(_physicalDevice, &queueFamilyCount, queueFamilyProperties.data());
 
         _graphicsQueueFamilyIndex = UINT32_MAX;
-        uint32_t presentQueueFamilyIndex = UINT32_MAX;
+        [[maybe_unused]] uint32_t presentQueueFamilyIndex = UINT32_MAX;
         _computeQueueFamilyIndex = UINT32_MAX;
         bool dedicatedComputeQueueFound = false;
         for (uint32_t i = 0; i < queueFamilyCount; i++)

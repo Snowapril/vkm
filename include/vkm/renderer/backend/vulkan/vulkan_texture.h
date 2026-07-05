@@ -3,7 +3,7 @@
 #pragma once
 
 #include <vkm/renderer/backend/common/texture.h>
-#include <volk/volk.h>
+#include <volk.h>
 
 namespace vkm
 {
@@ -15,6 +15,7 @@ namespace vkm
 
         virtual bool initialize(VkmResourceHandle handle, const VkmTextureInfo& info) override final;
         virtual bool overrideExternalHandle(void* externalHandle) override final;
+        virtual void setDebugName(const char* name) override final;
 
     private:
         VkImage _vkTexture;

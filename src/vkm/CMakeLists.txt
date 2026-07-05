@@ -41,9 +41,26 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/engine.cpp
 )
 
-if (VKM_USE_VULKAN_API)
+if (VKM_PLATFORM_WINDOWS)
     list(APPEND PUBLIC_HDRS
         $(PUBLIC_HDR_DIR)/vkm/platform/windows/application.h
+    )
+    list(APPEND SRCS
+        ${SRC_DIR}/vkm/platform/windows/application.cpp
+    )
+endif()
+
+if (VKM_PLATFORM_APPLE)
+    list(APPEND PUBLIC_HDRS
+        $(PUBLIC_HDR_DIR)/vkm/platform/apple/application.h
+    )
+    list(APPEND SRCS
+        ${SRC_DIR}/vkm/platform/apple/application.mm
+    )
+endif()
+
+if (VKM_USE_VULKAN_API)
+    list(APPEND PUBLIC_HDRS
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_driver.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_texture.h
@@ -52,7 +69,6 @@ if (VKM_USE_VULKAN_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.h
     )
     list(APPEND SRCS
-        ${SRC_DIR}/vkm/platform/windows/application.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_driver.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_texture.cpp
@@ -64,7 +80,6 @@ endif()
 
 if (VKM_USE_METAL_API)
     list(APPEND PUBLIC_HDRS
-        $(PUBLIC_HDR_DIR)/vkm/platform/apple/application.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_driver.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_command_buffer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_command_queue.h
@@ -72,7 +87,6 @@ if (VKM_USE_METAL_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_texture.h
     )
     list(APPEND SRCS
-        ${SRC_DIR}/vkm/platform/apple/application.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_driver.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_command_buffer.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_command_queue.mm
@@ -105,10 +119,10 @@ target_include_directories(${target}
     PUBLIC
     $<BUILD_INTERFACE:${PUBLIC_HDR_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_PREFIX}/include>
+    ${LIBRARY_DIR}/volk
     PRIVATE
     ${PUBLIC_HDR_DIR}
     ${LIBRARY_DIR}/glfw/include
-    ${LIBRARY_DIR}/volk
     ${LIBRARY_DIR}/glslang
     ${LIBRARY_DIR}/vma/src
     ${LIBRARY_DIR}

@@ -3,6 +3,8 @@
 #include <vkm/renderer/backend/vulkan/vulkan_swapchain.h>
 #include <vkm/renderer/backend/vulkan/vulkan_util.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
+#include <vkm/renderer/backend/common/render_resource_pool.hpp>
+#include <vkm/renderer/backend/common/texture.h>
 #include <vector>
 #include <GLFW/glfw3.h>
 
@@ -89,6 +91,19 @@ namespace vkm
 
     }
 
+    void VkmSwapChainVulkan::setDebugName(const char* name)
+    {
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        for (const VkmResourceHandle& handle : _backBuffers)
+        {
+            if (handle.isValid())
+            {
+                VkmTexture* texture = renderResourcePool->getResource<VkmTexture>(handle);
+                texture->setDebugName(name);
+            }
+        }
+    }
+
     bool VkmSwapChainVulkan::createSwapChain(void* windowHandle)
     {
         // TODO(snowapril) : provide vsync as option
@@ -144,7 +159,7 @@ namespace vkm
             .minImageCount    = minImageCountClamped,
             .imageFormat      = surfaceFormat2.surfaceFormat.format,
             .imageColorSpace  = surfaceFormat2.surfaceFormat.colorSpace,
-            .imageExtent      = capabilities2.surfaceCapabilities.currentExtent,
+            .imageExtent      = currentExtent,
             .imageArrayLayers = 1,
             .imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,

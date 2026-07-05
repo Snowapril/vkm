@@ -5,6 +5,8 @@
 #include <vkm/renderer/backend/metal/metal_swapchain.h>
 #include <vkm/renderer/backend/metal/metal_command_queue.h>
 
+#import <Metal/MTLDevice.h>
+
 namespace vkm
 {
     VkmDriverMetal::VkmDriverMetal(id<MTLDevice> mtlDevice)
