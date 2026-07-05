@@ -284,10 +284,7 @@ set_property(TARGET SPVRemapper   PROPERTY FOLDER "ThirdPartyLibraries/glslang")
 
 # Project modules
 add_subdirectory(src/vkm)
-if (NOT EMSCRIPTEN)
-    # doctest/backward-cpp don't map to an in-browser runtime.
-    add_subdirectory(tests)
-endif()
+add_subdirectory(tests)
 
 option(BUILD_SAMPLES "Build samples" ON)
 if (BUILD_SAMPLES)

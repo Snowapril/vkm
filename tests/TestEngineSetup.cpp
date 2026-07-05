@@ -15,6 +15,11 @@
 #include <glm/vec2.hpp>
 #endif
 
+#ifdef VKM_USE_WEBGPU_API
+#include <vkm/renderer/backend/webgpu/webgpu_driver.h>
+#include <vkm/renderer/backend/webgpu/webgpu_command_queue.h>
+#endif
+
 // ---------------------------------------------------------------------------
 // Pure-logic tests (no GPU required)
 // ---------------------------------------------------------------------------
@@ -155,3 +160,58 @@ TEST_CASE("VkmSwapChainVulkan - created and initialized with a hidden GLFW windo
 }
 
 #endif // VKM_USE_VULKAN_API
+
+// ---------------------------------------------------------------------------
+// WebGPU headless driver tests
+// ---------------------------------------------------------------------------
+
+#ifdef VKM_USE_WEBGPU_API
+
+struct WebGPUDriverFixture {
+    vkm::VkmDriverWebGPU* driver = nullptr;
+    WebGPUDriverFixture() {
+        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
+        driver = new vkm::VkmDriverWebGPU();
+        REQUIRE(driver->initialize(&opts));
+    }
+    ~WebGPUDriverFixture() { delete driver; }
+};
+
+TEST_CASE("VkmDriverWebGPU - initialization succeeds") {
+    WebGPUDriverFixture f;
+
+    SUBCASE("WGPUInstance is exposed and non-null") {
+        CHECK(f.driver->getInstance() != nullptr);
+    }
+    SUBCASE("WGPUAdapter is exposed and non-null") {
+        CHECK(f.driver->getAdapter() != nullptr);
+    }
+    SUBCASE("WGPUDevice is exposed and non-null") {
+        CHECK(f.driver->getDevice() != nullptr);
+    }
+    SUBCASE("WGPUQueue is exposed and non-null") {
+        CHECK(f.driver->getQueue() != nullptr);
+    }
+    SUBCASE("render resource pool is available") {
+        CHECK(f.driver->getRenderResourcePool() != nullptr);
+    }
+    SUBCASE("graphics command queue is created") {
+        CHECK(f.driver->getCommandQueue(vkm::VkmCommandQueueType::Graphics, 0) != nullptr);
+    }
+    SUBCASE("compute command queue is created") {
+        CHECK(f.driver->getCommandQueue(vkm::VkmCommandQueueType::Compute, 0) != nullptr);
+    }
+    SUBCASE("driver capability flags are None on WebGPU") {
+        CHECK(f.driver->getDriverCapabilityFlags() == vkm::VkmDriverCapabilityFlags::None);
+    }
+}
+
+TEST_CASE("VkmDriverWebGPU - graphics queue exposes a valid WGPUQueue") {
+    WebGPUDriverFixture f;
+    auto* queue = static_cast<vkm::VkmCommandQueueWebGPU*>(
+        f.driver->getCommandQueue(vkm::VkmCommandQueueType::Graphics, 0));
+    REQUIRE(queue != nullptr);
+    CHECK(queue->getWGPUQueue() != nullptr);
+}
+
+#endif // VKM_USE_WEBGPU_API

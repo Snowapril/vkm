@@ -2,27 +2,37 @@
 """Build and run vkm unit tests for all available graphics backends on the current platform.
 
 Platform / backend matrix
-  macOS  : metal (always), vulkan (if VULKAN_SDK env var or vulkaninfo found), webgpu (skip)
-  Windows: vulkan, webgpu (skip)
-  Linux  : vulkan, webgpu (skip)
+  macOS  : metal (always), vulkan (if VULKAN_SDK env var or vulkaninfo found),
+           webgpu (if emsdk + Chrome/Chromium found)
+  Windows: vulkan, webgpu (if emsdk + Chrome/Chromium found)
+  Linux  : vulkan, webgpu (if emsdk + Chrome/Chromium found)
 
-WebGPU has no CMake option or source implementation yet; it is skipped with an informational
-message. When it is added, append an entry to backends_for_platform() mirroring the vulkan one.
+The webgpu backend targets Emscripten/WASM. It's configured/built via emcmake using the
+emsdk toolchain bootstrap.py installs into dependencies/src/emsdk, then executed headlessly
+in Chrome (Node.js lacks navigator.gpu, so the emdawnwebgpu backend can't run there). When
+emsdk or Chrome/Chromium isn't found, it's skipped with an informational message rather
+than failing the run.
 
 Usage
 -----
   python3 scripts/run_tests.py [--build-type Debug|Release]
                                 [--build-dir <path>]
+                                [--backend <name>]
                                 [--no-bootstrap]
                                 [--jobs <n>]
 """
 
 import argparse
+import functools
+import http.server
 import os
 import platform
+import re
 import shutil
+import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 SCRIPT_DIR   = Path(__file__).parent.resolve()
@@ -46,12 +56,49 @@ def vulkan_available() -> bool:
     return shutil.which("vulkaninfo") is not None
 
 
+def _emcmake_path(emsdk_dir: Path) -> Path:
+    """emcmake lives under emsdk's upstream/emscripten checkout, not the emsdk repo root."""
+    name = "emcmake.bat" if platform.system() == "Windows" else "emcmake"
+    return emsdk_dir / "upstream" / "emscripten" / name
+
+
+def emsdk_available():
+    """Return the bootstrapped emsdk directory (Path) if usable, else None."""
+    emsdk_dir = PROJECT_ROOT / "dependencies" / "src" / "emsdk"
+    return emsdk_dir if _emcmake_path(emsdk_dir).exists() else None
+
+
+def chrome_executable():
+    """Return a path to a Chrome/Chromium binary usable for headless WebGPU testing, if found."""
+    system = platform.system()
+    if system == "Darwin":
+        candidates = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
+    elif system == "Windows":
+        candidates = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        ]
+    else:
+        candidates = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
+
+    for candidate in candidates:
+        if os.path.isabs(candidate):
+            if os.path.exists(candidate):
+                return candidate
+        else:
+            found = shutil.which(candidate)
+            if found:
+                return found
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Backend discovery
 # ---------------------------------------------------------------------------
 
-# Each entry is (backend_name, cmake_flag_dict | None).
+# Each entry is (backend_name, cmake_flag_dict | None | "WASM").
 # None means "not implemented yet" and results in a SKIP with an info message.
+# "WASM" routes through run_webgpu_backend() instead of the generic cmake flow below.
 
 def backends_for_platform(system: str) -> list:
     entries = []
@@ -69,21 +116,21 @@ def backends_for_platform(system: str) -> list:
         else:
             print("[INFO] Vulkan SDK / vulkaninfo not found on this macOS machine.")
             print("[INFO] Skipping Vulkan backend (install MoltenVK or the LunarG Vulkan SDK).")
-        entries.append(("webgpu", None))
+        entries.append(("webgpu", "WASM"))
 
     elif system == "Windows":
         entries.append(("vulkan", {
             "VKM_USE_VULKAN_API": "ON",
             "VKM_USE_METAL_API":  "OFF",
         }))
-        entries.append(("webgpu", None))
+        entries.append(("webgpu", "WASM"))
 
     else:                           # Linux / Ubuntu
         entries.append(("vulkan", {
             "VKM_USE_VULKAN_API": "ON",
             "VKM_USE_METAL_API":  "OFF",
         }))
-        entries.append(("webgpu", None))
+        entries.append(("webgpu", "WASM"))
 
     return entries
 
@@ -136,6 +183,160 @@ def execute_tests(build_dir: Path, system: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# webgpu backend (Emscripten/WASM, executed headlessly in Chrome)
+# ---------------------------------------------------------------------------
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    """doctest's console reporter colorizes output; strip escape codes before scanning it
+    for completion markers, since a code can land between two words (e.g. between
+    "[doctest] " and "Status:"), breaking a naive substring search."""
+    return _ANSI_ESCAPE_RE.sub("", text)
+
+
+def _capture_emsdk_env(emsdk_dir: Path) -> dict:
+    """Capture the environment variables emsdk_env.sh/.bat sets, once, as a plain dict —
+    faithful to the proven `source emsdk_env.sh && emcmake cmake ...` pattern (see
+    .github/workflows/wasm.yml), but captured a single time instead of re-invoked per
+    subprocess call."""
+    merged = dict(os.environ)
+
+    if platform.system() == "Windows":
+        env_script = emsdk_dir / "emsdk_env.bat"
+        result = subprocess.run(
+            ["cmd", "/c", f'call "{env_script}" >nul && set'],
+            capture_output=True, text=True,
+        )
+        for line in result.stdout.splitlines():
+            if "=" in line:
+                key, _, value = line.partition("=")
+                merged[key] = value
+    else:
+        env_script = emsdk_dir / "emsdk_env.sh"
+        result = subprocess.run(
+            ["bash", "-c", f'source "{env_script}" >/dev/null 2>&1 && env -0'],
+            capture_output=True,
+        )
+        for entry in result.stdout.split(b"\x00"):
+            if not entry:
+                continue
+            key, _, value = entry.decode(errors="replace").partition("=")
+            if key:
+                merged[key] = value
+
+    return merged
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _serve_directory(directory: Path, port: int) -> http.server.ThreadingHTTPServer:
+    handler_cls = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(directory))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler_cls)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server
+
+
+def run_webgpu_tests_headless_chrome(chrome: str, build_dir: Path, timeout_s: int = 60) -> bool:
+    html_path = build_dir / "bin" / "UnitTests.html"
+    if not html_path.exists():
+        print(f"[ERROR] {html_path} not found after build.")
+        return False
+
+    port = _free_port()
+    server = _serve_directory(build_dir / "bin", port)
+    try:
+        # Headless Chrome does not exit on its own once the page has loaded and run its
+        # script, so a real wall-clock timeout is the normal way this call ends — not an
+        # error path. --virtual-time-budget was tried and rejected: it accelerates
+        # simulated time for JS timers/rAF but does not reliably let the real WebGPU
+        # adapter/device IPC round-trip complete, causing the driver-init fixture to hang
+        # indefinitely even though it completes in under a second in real time.
+        chrome_cmd = [
+            chrome,
+            "--headless=new",
+            "--disable-gpu-sandbox",
+            "--enable-unsafe-webgpu",
+            "--enable-features=Vulkan",
+            "--use-angle=swiftshader",
+            "--enable-logging=stderr",
+            "--v=1",
+            f"http://localhost:{port}/UnitTests.html",
+        ]
+        print(f">>> {' '.join(chrome_cmd)}  (runs until {timeout_s}s timeout; this is expected)")
+        def _as_text(value) -> str:
+            if value is None:
+                return ""
+            return value if isinstance(value, str) else value.decode(errors="replace")
+
+        try:
+            result = subprocess.run(chrome_cmd, capture_output=True, text=True, timeout=timeout_s)
+            output = _as_text(result.stdout) + _as_text(result.stderr)
+        except subprocess.TimeoutExpired as exc:
+            output = _as_text(exc.stdout) + _as_text(exc.stderr)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    output = _strip_ansi(output)
+
+    if "[doctest] Status: SUCCESS!" in output:
+        return True
+    if "[doctest] Status: FAILURE!" in output:
+        print("[FAIL] doctest reported test failures:")
+        print(output[-4000:])
+        return False
+    print(f"[FAIL] doctest completion marker not found within {timeout_s}s (crash or hang?).")
+    print(output[-4000:])
+    return False
+
+
+def run_webgpu_backend(build_dir: Path, build_type: str, jobs: int) -> str:
+    """Configure, build, and headlessly test the webgpu (Emscripten/WebGPU) backend.
+    Returns 'PASS', 'FAIL', or 'SKIP'."""
+    emsdk_dir = emsdk_available()
+    if emsdk_dir is None:
+        print("[INFO] emsdk not found under dependencies/src/emsdk (run bootstrap.py first).")
+        print("[SKIP] webgpu backend requires the Emscripten SDK.")
+        return "SKIP"
+
+    chrome = chrome_executable()
+    if chrome is None:
+        print("[INFO] Chrome/Chromium not found; headless WebGPU test execution needs it.")
+        print("[SKIP] webgpu backend requires Chrome for headless test execution.")
+        return "SKIP"
+
+    env = _capture_emsdk_env(emsdk_dir)
+
+    emcmake = str(_emcmake_path(emsdk_dir))
+    configure_cmd = [
+        emcmake, "cmake",
+        "-S", str(PROJECT_ROOT),
+        "-B", str(build_dir),
+        f"-DCMAKE_BUILD_TYPE={build_type}",
+        "-DBUILD_SAMPLES=OFF",
+    ]
+    result = run_cmd(configure_cmd, env=env)
+    if result.returncode != 0:
+        print("[FAIL] CMake configuration failed for webgpu backend.")
+        return "FAIL"
+
+    build_cmd = ["cmake", "--build", str(build_dir), "--target", "UnitTests", "--parallel", str(jobs)]
+    result = run_cmd(build_cmd, env=env)
+    if result.returncode != 0:
+        print("[FAIL] Build failed for webgpu backend.")
+        return "FAIL"
+
+    return "PASS" if run_webgpu_tests_headless_chrome(chrome, build_dir) else "FAIL"
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -150,6 +351,11 @@ def main() -> None:
     parser.add_argument(
         "--build-dir", default=str(PROJECT_ROOT / "build"),
         help="Base build output directory (default: <project_root>/build)",
+    )
+    parser.add_argument(
+        "--backend", default=None,
+        help="Only run this backend (e.g. metal, vulkan, webgpu). Default: all available "
+             "for this platform.",
     )
     parser.add_argument(
         "--no-bootstrap", action="store_true",
@@ -182,6 +388,12 @@ def main() -> None:
         print()
 
     backends = backends_for_platform(system)
+    if args.backend:
+        backends = [(n, f) for n, f in backends if n == args.backend]
+        if not backends:
+            print(f"[ERROR] Unknown or unavailable backend for this platform: {args.backend}")
+            sys.exit(1)
+
     results  = {}   # backend_name -> "PASS" | "FAIL" | "SKIP"
 
     for name, cmake_flags in backends:
@@ -193,6 +405,16 @@ def main() -> None:
         if cmake_flags is None:
             print(f"[SKIP] {name} backend is not yet implemented.")
             results[name] = "SKIP"
+            continue
+
+        if cmake_flags == "WASM":
+            backend_build_dir = build_base / name
+            results[name] = run_webgpu_backend(backend_build_dir, args.build_type, args.jobs)
+            # Stable, script-parseable marker for run_tests.sh/.ps1, which delegate to this
+            # script for the webgpu backend specifically and need to read PASS/FAIL/SKIP
+            # back without relying on exit codes (argparse itself uses exit code 2 for CLI
+            # usage errors, so exit codes alone can't safely carry a third SKIP state here).
+            print(f"RESULT:{name}:{results[name]}")
             continue
 
         backend_build_dir = build_base / name
