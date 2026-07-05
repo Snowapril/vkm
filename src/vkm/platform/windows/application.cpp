@@ -42,10 +42,10 @@ namespace vkm
         return glfwWindowShouldClose(_windowHandle); 
     }
 
-    VkmApplication::VkmApplication(const char* appName)
-        : _engine( new VkmDriverVulkan() ), _appName( appName )
+    VkmApplication::VkmApplication()
+        : _engine( new VkmDriverVulkan() )
     {
-        
+
     }
 
     VkmApplication::~VkmApplication()
@@ -55,6 +55,8 @@ namespace vkm
 
     int VkmApplication::entryPoint(AppDelegate* appDelegate, int argc, char* argv[])
     {
+        _appName = appDelegate->getAppName();
+
         if ( _engine.initializeEngine( appDelegate, VkmEngine::parseEngineLaunchOptions(argc, argv)) == false )
         {
             VKM_DEBUG_ERROR("Failed to initialize engine");
