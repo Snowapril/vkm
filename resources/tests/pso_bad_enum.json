@@ -1,0 +1,7 @@
+{
+    "rasterization_state": { "cull_mode": "sideways" },
+    "color_attachments": [ { "format": "bgra8_unorm" } ],
+    "shaders": {
+        "vertex": { "filepath": "triangle.vert" }
+    }
+}

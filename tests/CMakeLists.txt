@@ -12,6 +12,7 @@ set(PUBLIC_HDRS
 set(SRCS
     ${SRC_DIR}/UnitTests.cpp
     ${SRC_DIR}/TestEngineSetup.cpp
+    ${SRC_DIR}/TestPsoConfig.cpp
 )
 
 if (VKM_USE_METAL_API)

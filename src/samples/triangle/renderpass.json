@@ -1,35 +1,20 @@
 {
-    "rendertargets": {
-        "color": {
-            "viewport_relative" : {
-                "ratio": 1.0
-            },
-            "format": "bgra8unorm"
-        }
+    "name": "triangle_pso",
+    "primitive_topology": "triangle_list",
+    "rasterization_state": {
+        "fill_mode": "solid",
+        "cull_mode": "none",
+        "front_face": "counter_clockwise"
     },
-    "inputlayout": {
-        "simple": [
-            {
-                "name": "position",
-                "format": "float3"
-            },
-            {
-                "name": "color",
-                "format": "float4"
-            }
-        ]
+    "depth_stencil_state": {
+        "depth_test_enable": false,
+        "depth_write_enable": false
     },
-    "renderpass": {
-        "name": "triangle",
-        "shaders": {
-            "vertex": "triangle.vert",
-            "fragment": "triangle.frag"
-        },
-        "inputlayout": "simple",
-        "depth_stencil": {
-            "depth_test": "lessequal",
-            "depth_write": true
-        },
-        "color_attachments": ["color"]
+    "color_attachments": [
+        { "format": "bgra8_unorm" }
+    ],
+    "shaders": {
+        "vertex": { "filepath": "triangle.vert", "entry_point": "main" },
+        "fragment": { "filepath": "triangle.frag", "entry_point": "main" }
     }
 }

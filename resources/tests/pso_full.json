@@ -1,0 +1,55 @@
+{
+    "name": "triangle_pso",
+    "primitive_topology": "triangle_list",
+    "rasterization_state": {
+        "fill_mode": "solid",
+        "cull_mode": "back",
+        "front_face": "counter_clockwise"
+    },
+    "depth_stencil_state": {
+        "depth_test_enable": true,
+        "depth_write_enable": true,
+        "depth_compare_op": "less_or_equal",
+        "depth_stencil_format": "d32_sfloat",
+        "stencil_test_enable": false,
+        "stencil_reference": 0,
+        "front": {
+            "fail_op": "keep",
+            "pass_op": "keep",
+            "depth_fail_op": "keep",
+            "compare_op": "always",
+            "compare_mask": 4294967295,
+            "write_mask": 4294967295
+        },
+        "back": {
+            "fail_op": "keep",
+            "pass_op": "keep",
+            "depth_fail_op": "keep",
+            "compare_op": "always"
+        }
+    },
+    "color_attachments": [
+        {
+            "format": "bgra8_unorm",
+            "blend_enable": false,
+            "src_color_blend_factor": "one",
+            "dst_color_blend_factor": "zero",
+            "color_blend_op": "add",
+            "src_alpha_blend_factor": "one",
+            "dst_alpha_blend_factor": "zero",
+            "alpha_blend_op": "add"
+        }
+    ],
+    "shaders": {
+        "vertex": {
+            "filepath": "triangle.vert",
+            "entry_point": "main",
+            "definitions": { "USE_VERTEX_COLOR": true, "MAX_LIGHTS": 4 }
+        },
+        "fragment": {
+            "filepath": "triangle.frag",
+            "entry_point": "main",
+            "definitions": {}
+        }
+    }
+}
