@@ -184,11 +184,11 @@ target_link_libraries(${target}
     PUBLIC
     ${DEFAULT_LINKER_OPTIONS}
 	${DEFAULT_LIBRARIES}
+    imgui
     PRIVATE
     glslang
     SPIRV
     spirv-cross-core
-    imgui
 )
 
 if (NOT EMSCRIPTEN)

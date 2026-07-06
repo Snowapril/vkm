@@ -10,9 +10,9 @@ set(IMGUI_SRCS
     ${IMGUI_DIR}/imgui_demo.cpp
 )
 
-if (NOT VKM_PLATFORM_APPLE)
-    # Apple has no GLFW window; its ImGui backend is a custom Metal4 renderer
-    # with a native NSEvent input bridge instead.
+if (VKM_USE_VULKAN_API OR VKM_USE_WEBGPU_API)
+    # The Vulkan and WebGPU backends use GLFW for windowing/input; Metal (Apple) doesn't --
+    # its ImGui backend is a custom Metal4 renderer with a native NSEvent input bridge instead.
     list(APPEND IMGUI_SRCS ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp)
 endif()
 
@@ -33,9 +33,13 @@ target_include_directories(imgui PUBLIC
 
 if (VKM_USE_VULKAN_API)
     target_link_libraries(imgui PRIVATE volk)
+    # vkm loads Vulkan entry points dynamically through volk rather than linking directly
+    # against a Vulkan loader; imgui_impl_vulkan.cpp needs to route through the same
+    # volk-loaded dispatch table instead of assuming statically-linked vk* symbols.
+    target_compile_definitions(imgui PRIVATE IMGUI_IMPL_VULKAN_USE_VOLK)
 endif()
 
-if (NOT VKM_PLATFORM_APPLE)
+if (VKM_USE_VULKAN_API OR VKM_USE_WEBGPU_API)
     target_link_libraries(imgui PRIVATE glfw)
 endif()
 

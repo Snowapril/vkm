@@ -4,6 +4,7 @@
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/command_queue.h>
 #include <vkm/renderer/engine.h>
+#include <vkm/platform/common/app_delegate.h>
 
 #include <functional>
 
@@ -173,6 +174,45 @@ TEST_CASE("VkmSwapChainVulkan - created and initialized with a hidden GLFW windo
     }
 
     driver.reset();
+    glfwDestroyWindow(window);
+    glfwTerminate();
+}
+
+namespace {
+// Per tests/CLAUDE.md: no direct graphics API calls -- this only drives the engine's own
+// AppDelegate/loopInner() surface, exactly like a real sample would.
+struct NullAppDelegate : vkm::AppDelegate {
+    void postDriverReady() override {}
+    void preShutdown() override {}
+    void update(const double) override {}
+    void render(vkm::VkmRenderGraph*, vkm::VkmResourceHandle) override {}
+    const char* getAppName() const override { return "ImGuiSmokeTest"; }
+};
+} // namespace
+
+TEST_CASE("VkmEngine - ImGui renderer initializes and survives one loopInner() tick") {
+    glfwInit();
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    GLFWwindow* window = glfwCreateWindow(256, 256, "UnitTest", nullptr, nullptr);
+    REQUIRE(window != nullptr);
+
+    vkm::VkmEngine engine(new vkm::VkmDriverVulkan());
+    REQUIRE(engine.initializeEngine(new NullAppDelegate()));
+
+    vkm::VkmInitResult initResult = engine.initializeBackendDriver();
+    if (initResult.code == vkm::VkmInitResultCode::HardwareUnsupported) {
+        MESSAGE("Skipping: " << initResult.reason);
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return;
+    }
+    REQUIRE_MESSAGE(initResult.code == vkm::VkmInitResultCode::Success, initResult.reason);
+
+    engine.addSwapChain(vkm::VkmWindowInfo{ 256, 256, "UnitTest", window });
+    CHECK_NOTHROW(engine.loopInner(0.016));
+
+    engine.destroy();
     glfwDestroyWindow(window);
     glfwTerminate();
 }
