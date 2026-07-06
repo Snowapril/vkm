@@ -198,7 +198,7 @@ TEST_CASE("VkmEngine - ImGui renderer initializes and survives one loopInner() t
     REQUIRE(window != nullptr);
 
     vkm::VkmEngine engine(new vkm::VkmDriverVulkan());
-    REQUIRE(engine.initializeEngine(new NullAppDelegate()));
+    REQUIRE(engine.initializeEngine(new NullAppDelegate(), vkm::VkmEngineLaunchOptions{ .enableValidationLayer = false }));
 
     vkm::VkmInitResult initResult = engine.initializeBackendDriver();
     if (initResult.code == vkm::VkmInitResultCode::HardwareUnsupported) {
