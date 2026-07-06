@@ -109,7 +109,7 @@ namespace vkm
     {
     public:
         VkmRenderGraph(VkmDriverBase* driver, uint32_t frameIndex)
-            : _driver(driver), _frameIndex(frameIndex) {}
+            : _driver(driver) { (void)frameIndex; }
         ~VkmRenderGraph() = default;
 
         // Method to add a subgraph to the render graph
@@ -140,7 +140,6 @@ namespace vkm
 
     private:
         VkmDriverBase* _driver; // Pointer to the driver managing this render graph
-        [[maybe_unused]] uint32_t _frameIndex; // Frame index for this render graph
         std::vector<std::unique_ptr<VkmRenderSubGraph>> _subGraphs;
         uint32_t _currentSubGraphId = 0; // Current subgraph ID for tracking
 
