@@ -81,4 +81,19 @@ target_link_libraries(${target}
 if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
     target_compile_options(${target} PRIVATE ${VKM_EMSCRIPTEN_COMPILE_FLAGS})
     target_link_options(${target} PRIVATE ${VKM_EMSCRIPTEN_PORT_FLAGS})
+
+    # VKM_EMSCRIPTEN_PORT_FLAGS sets ALLOW_MEMORY_GROWTH=1 project-wide, which makes the
+    # WASM heap's backing ArrayBuffer "resizable" (a `maximum` is specified to
+    # WebAssembly.Memory). Current Chrome/V8 rejects calling TextDecoder.decode() on a
+    # resizable ArrayBuffer, which crashes real WebGPU adapter negotiation under headless
+    # Chrome specifically in this test binary. UnitTests' heap usage is small and known
+    # ahead of time (unlike the sample/vkmcore, which may need to grow), so disable growth
+    # here and fix a generous initial size instead — with no `maximum`, the buffer is a
+    # plain non-resizable ArrayBuffer, sidestepping the V8 restriction entirely. emcc's
+    # `-s` settings take the last-specified value, so this must come after
+    # VKM_EMSCRIPTEN_PORT_FLAGS above to win.
+    target_link_options(${target} PRIVATE
+        "SHELL:-s ALLOW_MEMORY_GROWTH=0"
+        "SHELL:-s INITIAL_MEMORY=134217728"
+    )
 endif()
