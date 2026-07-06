@@ -22,8 +22,9 @@ namespace vkm
         virtual void presentInner() override final;
 
     private:
-        VkSwapchainKHR  _swapChain;
+        VkSwapchainKHR  _swapChain{VK_NULL_HANDLE};
         VkFormat        _imageFormat;
-        VkSurfaceKHR    _surface;
+        VkSurfaceKHR    _surface{VK_NULL_HANDLE};
+        VkFence         _acquireFence{VK_NULL_HANDLE};
     };
 } // namespace vkm

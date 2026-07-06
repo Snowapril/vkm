@@ -180,6 +180,7 @@ target_link_libraries(${target}
     glslang
     SPIRV
     spirv-cross-core
+    imgui
 )
 
 if (NOT EMSCRIPTEN)

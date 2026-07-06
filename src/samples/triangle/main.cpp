@@ -70,7 +70,10 @@ public:
         frameBufferDesc._colorAttachments[0] = backBuffer; // Attach the back buffer
 
         auto graphicsSubGraph = renderGraph->beginGraphicsSubGraph(frameBufferDesc);
-        (void)graphicsSubGraph;
+        graphicsSubGraph->setRenderCallback([](VkmCommandBufferBase* commandBuffer) {
+            (void)commandBuffer;
+            VKM_DEBUG_LOG("ImGui render callback invoked");
+        });
     }
 
     virtual const char* getAppName() const override final

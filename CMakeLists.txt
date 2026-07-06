@@ -279,6 +279,8 @@ if (NOT EMSCRIPTEN)
     add_subdirectory(dependencies/src/backward-cpp)
 endif()
 
+include(dependencies/imgui.cmake)
+
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 if (NOT EMSCRIPTEN)
     set_property(TARGET glfw PROPERTY FOLDER "ThirdPartyLibraries")
