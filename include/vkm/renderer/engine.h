@@ -13,6 +13,7 @@ namespace vkm
     class VkmDriverBase;
     class VkmTexture;
     class VkmSwapChainBase;
+    class VkmImGuiRendererBase;
     struct VkmInitResult;
 
     struct VkmEngineLaunchOptions
@@ -94,6 +95,8 @@ namespace vkm
         double _lastUpdateTime;
 
         VkmSwapChainBase* _mainSwapChain {nullptr}; // main swapchain. engine should have multiple swapchains but at now, only one swapchain is supported.
+
+        std::unique_ptr<VkmImGuiRendererBase> _imGuiRenderer;
 
     private:
         std::unique_ptr<AppDelegate> _appDelegate;
