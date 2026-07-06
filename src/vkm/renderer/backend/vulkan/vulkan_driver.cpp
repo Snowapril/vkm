@@ -227,6 +227,15 @@ namespace vkm
             instanceExtensions.push_back(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
         }
 
+        // Portability-only ICDs (e.g. MoltenVK) are excluded from enumeration by default on
+        // newer loaders; without this, vkCreateInstance fails with VK_ERROR_INCOMPATIBLE_DRIVER.
+        VkInstanceCreateFlags instanceCreateFlags = 0;
+        if (isExtensionSupported(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME, availableInstanceExtensions))
+        {
+            instanceExtensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+            instanceCreateFlags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+        }
+
         std::vector<const char*> instanceLayers;
         if (options->enableValidationLayer)
         {
@@ -247,6 +256,7 @@ namespace vkm
         const VkInstanceCreateInfo instanceCreateInfo{
             .sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
             .pNext                   = validationSettings.buildPNextChain(),
+            .flags                   = instanceCreateFlags,
             .pApplicationInfo        = &applicationInfo,
             .enabledLayerCount       = uint32_t(instanceLayers.size()),
             .ppEnabledLayerNames     = instanceLayers.data(),
@@ -254,10 +264,16 @@ namespace vkm
             .ppEnabledExtensionNames = instanceExtensions.data(),
         };
 
-        if (vkCreateInstance(&instanceCreateInfo, nullptr, &_instance) != VK_SUCCESS)
+        const VkResult createInstanceResult = vkCreateInstance(&instanceCreateInfo, nullptr, &_instance);
+        if (createInstanceResult == VK_ERROR_INCOMPATIBLE_DRIVER)
         {
-            return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "Failed to create Vulkan instance (no compatible Vulkan driver/ICD found on this system)."};
+            // No Vulkan-capable ICD is registered on this system at all (e.g. a CI runner
+            // with no GPU and no software rasterizer) -- same underlying condition as the
+            // "zero physical devices" check below, just surfacing one call earlier.
+            VKM_DEBUG_ERROR("No compatible Vulkan driver/ICD found");
+            return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "No compatible Vulkan driver/ICD found on this system."};
         }
+        VKM_VK_CHECK_RESULT_MSG_RETURN(createInstanceResult, "Failed to create instance");
 
         VKM_DEBUG_INFO("Vulkan instance created");
         VKM_DEBUG_INFO("Instance extension used : ");
