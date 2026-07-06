@@ -47,6 +47,14 @@
 #endif
 #ifdef __clang__
 #pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+// vk_mem_alloc.h pulls in vulkan.h, which on Linux/X11 pulls in X11/Xlib.h; Xlib.h
+// #defines Success as a plain integer macro, colliding with VkmInitResultCode::Success below.
+#ifdef Success
+#undef Success
 #endif
 
 #include <GLFW/glfw3.h>
