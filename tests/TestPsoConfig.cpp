@@ -57,6 +57,38 @@ TEST_CASE("VkmPipelineStateDescriptor - parses full JSON with all fields set") {
 
     REQUIRE(desc.fragmentShader.has_value());
     CHECK(desc.fragmentShader->filepath == "triangle.frag");
+
+    REQUIRE(desc.vertexInputLayout.perVertex.has_value());
+    const vkm::VkmVertexInputLayoutPart& perVertex = *desc.vertexInputLayout.perVertex;
+    REQUIRE(perVertex.attributes.size() == 3);
+    CHECK(perVertex.attributes[0].baseType == vkm::VkmVertexAttributeBaseType::Float);
+    CHECK(perVertex.attributes[0].componentCount == 3);
+    CHECK(perVertex.attributes[0].location == 0);
+    CHECK(perVertex.attributes[0].offset == 0);
+    CHECK(perVertex.attributes[1].componentCount == 4);
+    CHECK(perVertex.attributes[1].location == 1);
+    CHECK(perVertex.attributes[1].offset == 12);
+    CHECK(perVertex.attributes[2].componentCount == 2);
+    CHECK(perVertex.attributes[2].location == 2);
+    CHECK(perVertex.attributes[2].offset == 28);
+    CHECK(perVertex.stride == 36);
+
+    REQUIRE(desc.vertexInputLayout.perInstance.has_value());
+    const vkm::VkmVertexInputLayoutPart& perInstance = *desc.vertexInputLayout.perInstance;
+    REQUIRE(perInstance.attributes.size() == 4);
+    CHECK(perInstance.attributes[0].componentCount == 4);
+    CHECK(perInstance.attributes[0].location == 0);
+    CHECK(perInstance.attributes[0].offset == 0);
+    CHECK(perInstance.attributes[1].componentCount == 4);
+    CHECK(perInstance.attributes[1].location == 1);
+    CHECK(perInstance.attributes[1].offset == 16);
+    CHECK(perInstance.attributes[2].componentCount == 4);
+    CHECK(perInstance.attributes[2].location == 2);
+    CHECK(perInstance.attributes[2].offset == 32);
+    CHECK(perInstance.attributes[3].componentCount == 4);
+    CHECK(perInstance.attributes[3].location == 3);
+    CHECK(perInstance.attributes[3].offset == 48);
+    CHECK(perInstance.stride == 64);
 }
 
 TEST_CASE("VkmPipelineStateDescriptor - missing fields fall back to documented defaults") {
@@ -199,5 +231,72 @@ TEST_CASE("VkmPipelineStateDescriptor - shader definitions value conversion") {
 TEST_CASE("VkmPipelineStateDescriptor - nonexistent file path fails to parse") {
     std::optional<vkm::VkmPipelineStateDescriptor> result =
         vkm::parsePipelineStateFromFile("/no/such/file_that_does_not_exist_12345.json");
+    CHECK_FALSE(result.has_value());
+}
+
+TEST_CASE("VkmPipelineStateDescriptor - vertex input layout omitted defaults to no attributes") {
+    const std::string jsonText = R"({
+        "color_attachments": [ { "format": "bgra8_unorm" } ],
+        "shaders": {
+            "vertex": { "filepath": "triangle.vert" }
+        }
+    })";
+
+    std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromString(jsonText);
+    REQUIRE(result.has_value());
+    CHECK_FALSE(result->vertexInputLayout.perVertex.has_value());
+    CHECK_FALSE(result->vertexInputLayout.perInstance.has_value());
+}
+
+TEST_CASE("VkmPipelineStateDescriptor - vertex input layout with only per_vertex specified") {
+    const std::string jsonText = R"({
+        "input_layout": { "per_vertex": "float3float4" },
+        "color_attachments": [ { "format": "bgra8_unorm" } ],
+        "shaders": {
+            "vertex": { "filepath": "triangle.vert" }
+        }
+    })";
+
+    std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromString(jsonText);
+    REQUIRE(result.has_value());
+    REQUIRE(result->vertexInputLayout.perVertex.has_value());
+    CHECK(result->vertexInputLayout.perVertex->attributes.size() == 2);
+    CHECK(result->vertexInputLayout.perVertex->stride == 28);
+    CHECK_FALSE(result->vertexInputLayout.perInstance.has_value());
+}
+
+TEST_CASE("VkmPipelineStateDescriptor - invalid vertex input layout type token fails to parse") {
+#if defined(VKM_PLATFORM_WASM)
+    MESSAGE("Skipping: RESOURCES_DIR fixtures are not mounted in the Emscripten test binary's virtual filesystem.");
+    return;
+#endif
+    const std::string filepath = std::string(RESOURCES_DIR) + "tests/pso_bad_input_layout.json";
+    std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromFile(filepath);
+    CHECK_FALSE(result.has_value());
+}
+
+TEST_CASE("VkmPipelineStateDescriptor - vertex input layout rejects out-of-range component count") {
+    const std::string jsonText = R"({
+        "input_layout": { "per_vertex": "float5" },
+        "color_attachments": [ { "format": "bgra8_unorm" } ],
+        "shaders": {
+            "vertex": { "filepath": "triangle.vert" }
+        }
+    })";
+
+    std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromString(jsonText);
+    CHECK_FALSE(result.has_value());
+}
+
+TEST_CASE("VkmPipelineStateDescriptor - vertex input layout rejects type with no count") {
+    const std::string jsonText = R"({
+        "input_layout": { "per_vertex": "float" },
+        "color_attachments": [ { "format": "bgra8_unorm" } ],
+        "shaders": {
+            "vertex": { "filepath": "triangle.vert" }
+        }
+    })";
+
+    std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromString(jsonText);
     CHECK_FALSE(result.has_value());
 }

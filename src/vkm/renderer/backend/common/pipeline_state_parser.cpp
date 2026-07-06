@@ -7,6 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cctype>
 #include <fstream>
 #include <optional>
 #include <sstream>
@@ -303,6 +304,72 @@ namespace vkm
             parseUint32Field(state, obj, "write_mask", fieldPrefix + ".write_mask", out.writeMask);
         }
 
+        // Parses a compact "[type][count][type][count]..." string (e.g. "float3float4float2")
+        // into a VkmVertexInputLayoutPart. Each token is a type keyword (float/int/uint)
+        // immediately followed by 1-4 decimal digits giving that attribute's component count.
+        // Locations are assigned sequentially starting at 0; offsets/stride are computed
+        // assuming 4 bytes per component (float/int/uint are all 32-bit types).
+        bool parseVertexInputLayoutPart(ParseState& state, const std::string& compact,
+            const std::string& fieldPath, VkmVertexInputLayoutPart& out)
+        {
+            size_t pos = 0;
+            uint32_t location = 0;
+            uint32_t offset = 0;
+            while (pos < compact.size())
+            {
+                VkmVertexAttributeBaseType baseType;
+                if (compact.compare(pos, 5, "float") == 0) { baseType = VkmVertexAttributeBaseType::Float; pos += 5; }
+                else if (compact.compare(pos, 4, "uint") == 0) { baseType = VkmVertexAttributeBaseType::UInt; pos += 4; }
+                else if (compact.compare(pos, 3, "int") == 0) { baseType = VkmVertexAttributeBaseType::Int; pos += 3; }
+                else
+                {
+                    state.fail("Unrecognized type token in '" + fieldPath + "' at offset " + std::to_string(pos));
+                    return false;
+                }
+
+                const size_t digitsStart = pos;
+                while (pos < compact.size() && std::isdigit(static_cast<unsigned char>(compact[pos])))
+                {
+                    ++pos;
+                }
+                if (pos == digitsStart)
+                {
+                    state.fail("Expected component count after type in '" + fieldPath + "' at offset " + std::to_string(digitsStart));
+                    return false;
+                }
+                // A valid count is always a single digit (1-4); reject longer digit runs
+                // before calling std::stoi so an oversized run can never overflow int.
+                if (pos - digitsStart > 1)
+                {
+                    state.fail("Component count must be between 1 and 4 in '" + fieldPath + "'");
+                    return false;
+                }
+
+                const int count = std::stoi(compact.substr(digitsStart, pos - digitsStart));
+                if (count < 1 || count > 4)
+                {
+                    state.fail("Component count must be between 1 and 4 in '" + fieldPath + "'");
+                    return false;
+                }
+
+                VkmVertexAttributeDescriptor attribute{};
+                attribute.baseType = baseType;
+                attribute.componentCount = static_cast<uint32_t>(count);
+                attribute.location = location++;
+                attribute.offset = offset;
+                out.attributes.push_back(attribute);
+
+                offset += static_cast<uint32_t>(count) * 4;
+            }
+            if (out.attributes.empty())
+            {
+                state.fail("Field '" + fieldPath + "' must contain at least one attribute");
+                return false;
+            }
+            out.stride = offset;
+            return true;
+        }
+
         bool parseDescriptor(ParseState& state, const Json& root, VkmPipelineStateDescriptor& desc)
         {
             if (!root.is_object())
@@ -380,6 +447,35 @@ namespace vkm
                     }
                     desc.colorAttachments.push_back(attachmentState);
                 }
+            }
+
+            if (const Json* inputLayout = getObjectField(state, root, "input_layout", "input_layout"))
+            {
+                if (inputLayout->contains("per_vertex"))
+                {
+                    std::string compact;
+                    parseStringField(state, *inputLayout, "per_vertex", "input_layout.per_vertex", compact);
+                    VkmVertexInputLayoutPart part{};
+                    if (!state.failed() && parseVertexInputLayoutPart(state, compact, "input_layout.per_vertex", part))
+                    {
+                        desc.vertexInputLayout.perVertex = part;
+                    }
+                }
+                if (!state.failed() && inputLayout->contains("per_instance"))
+                {
+                    std::string compact;
+                    parseStringField(state, *inputLayout, "per_instance", "input_layout.per_instance", compact);
+                    VkmVertexInputLayoutPart part{};
+                    if (!state.failed() && parseVertexInputLayoutPart(state, compact, "input_layout.per_instance", part))
+                    {
+                        desc.vertexInputLayout.perInstance = part;
+                    }
+                }
+            }
+
+            if (state.failed())
+            {
+                return false;
             }
 
             if (!root.contains("shaders") || !root.at("shaders").is_object())

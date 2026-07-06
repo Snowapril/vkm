@@ -159,6 +159,36 @@ namespace vkm
         std::unordered_map<std::string, std::string> definitions;
     };
 
+    enum class VkmVertexAttributeBaseType : uint8_t
+    {
+        Float = 0,
+        Int = 1,
+        UInt = 2,
+    };
+
+    // One decoded token from a compact "[type][count]..." layout string
+    // (e.g. "float3float4float2" decodes to three of these).
+    struct VkmVertexAttributeDescriptor
+    {
+        VkmVertexAttributeBaseType baseType = VkmVertexAttributeBaseType::Float;
+        uint32_t componentCount = 1; // 1..4
+        uint32_t location = 0; // sequential within this part, starting at 0
+        uint32_t offset = 0; // byte offset within this part's stride; auto-computed (4 bytes/component)
+    };
+
+    struct VkmVertexInputLayoutPart
+    {
+        std::vector<VkmVertexAttributeDescriptor> attributes;
+        uint32_t stride = 0; // auto-computed: sum of componentCount*4 bytes across attributes
+    };
+
+    // Both parts independently optional — a pipeline may have neither, either, or both.
+    struct VkmVertexInputLayoutDescriptor
+    {
+        std::optional<VkmVertexInputLayoutPart> perVertex;
+        std::optional<VkmVertexInputLayoutPart> perInstance;
+    };
+
     // Top-level, backend-agnostic pipeline state descriptor. Fully populated by
     // the parser (see pipeline_state_parser.h) — every field has a documented
     // default that applies when the corresponding JSON field is omitted.
@@ -173,6 +203,11 @@ namespace vkm
         // One entry per color attachment, in the order given in the JSON
         // `color_attachments` array. May be empty (e.g. depth-only pipelines).
         std::vector<VkmColorBlendAttachmentState> colorAttachments;
+
+        // Vertex/instance buffer layout for this pipeline. Both perVertex and
+        // perInstance are independently optional (e.g. a fullscreen-quad shader
+        // with no vertex buffer at all would leave both unset).
+        VkmVertexInputLayoutDescriptor vertexInputLayout;
 
         // vertexShader is the only field the parser treats as required.
         std::optional<VkmShaderStageDescriptor> vertexShader;

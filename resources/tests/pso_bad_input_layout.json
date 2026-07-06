@@ -1,0 +1,9 @@
+{
+    "input_layout": {
+        "per_vertex": "double3"
+    },
+    "color_attachments": [ { "format": "bgra8_unorm" } ],
+    "shaders": {
+        "vertex": { "filepath": "triangle.vert" }
+    }
+}

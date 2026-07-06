@@ -40,6 +40,10 @@
             "alpha_blend_op": "add"
         }
     ],
+    "input_layout": {
+        "per_vertex": "float3float4float2",
+        "per_instance": "float4float4float4float4"
+    },
     "shaders": {
         "vertex": {
             "filepath": "triangle.vert",
