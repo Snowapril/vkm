@@ -3,6 +3,7 @@
 
 #include <vkm/base/common.h>
 #include <vkm/platform/common/app_delegate.h>
+#include <vkm/renderer/backend/common/pipeline_state_parser.h>
 
 #if defined(VKM_PLATFORM_WINDOWS)
 #include <vkm/platform/windows/application.h>
@@ -25,6 +26,19 @@ public:
     virtual void postDriverReady() override final
     {
         VKM_DEBUG_LOG("TriangleApplication::postDriverReady");
+
+        std::string parseError;
+        auto pipelineState = parsePipelineStateFromFile(std::string(SAMPLE_DIR) + "renderpass.json", &parseError);
+        if (pipelineState.has_value())
+        {
+            VKM_DEBUG_LOG(("Parsed PSO '" + pipelineState->name + "': " +
+                std::to_string(pipelineState->colorAttachments.size()) + " color attachment(s), vertex shader '" +
+                pipelineState->vertexShader->filepath + "'").c_str());
+        }
+        else
+        {
+            VKM_DEBUG_ERROR(("Failed to parse PSO config: " + parseError).c_str());
+        }
     }
 
     virtual void preShutdown() override final

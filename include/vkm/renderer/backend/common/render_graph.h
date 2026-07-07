@@ -117,6 +117,8 @@ namespace vkm
         void reset();
         void ensureCompleted();
 
+        uint32_t frameIndex() const { return _frameIndex; }
+
     private:
         template <typename RenderSubGraphT, typename... Arg>
         RenderSubGraphT* beginSubGraph(Arg&&... arg)

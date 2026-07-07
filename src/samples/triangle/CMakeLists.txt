@@ -53,6 +53,7 @@ target_compile_options(${target}
 target_compile_definitions(${target}
     PRIVATE
     RESOURCES_DIR="${RESOURCES_DIR}"
+    SAMPLE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/"
     ${DEFAULT_COMPILE_DEFINITIONS}
 )
 

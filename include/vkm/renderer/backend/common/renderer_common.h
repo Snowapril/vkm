@@ -46,7 +46,7 @@ namespace vkm
         }
         const bool isValid() const
         {
-            return (id != -1);
+            return (id != (uint64_t)-1);
         }
         const bool isPooledResource() const
         {
@@ -69,6 +69,8 @@ namespace vkm
         D32_SFLOAT = 9,
         D24_UNORM_S8_UINT = 10,
         D32_SFLOAT_S8_UINT = 11,
+        BGRA8_UNORM = 12,
+        BGRA8_SRGB = 13,
     };
 
     inline bool hasDepth(const VkmFormat format)

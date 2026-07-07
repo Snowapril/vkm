@@ -15,6 +15,9 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/renderer_common.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_graph.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_pass.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/enum_string_util.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/pipeline_state.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/pipeline_state_parser.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_buffer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_queue.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/driver.h
@@ -31,6 +34,7 @@ set(SRCS
     ${SRC_DIR}/vkm/base/logger.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/renderer_common.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_graph.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/pipeline_state_parser.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/command_buffer.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/command_queue.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/driver.cpp

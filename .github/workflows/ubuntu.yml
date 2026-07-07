@@ -17,26 +17,55 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Explicitly enumerated (not a `backend: [...]` axis crossed against `include:`) —
+        # GitHub Actions only cross-products `include:` entries against other matrix axes
+        # when they share a key with that axis; since these entries don't set `backend`,
+        # a separate `backend:` axis silently collapses to just the last `include` entry
+        # merged onto each backend value, dropping the other three compilers entirely.
         include:
           - name: "Ubuntu 22.04 + GCC-10"
             os: ubuntu-22.04
             compiler: gcc
             version: "10"
+            backend: vulkan
+          - name: "Ubuntu 22.04 + GCC-10"
+            os: ubuntu-22.04
+            compiler: gcc
+            version: "10"
+            backend: webgpu
           - name: "Ubuntu 22.04 + GCC-11"
             os: ubuntu-22.04
             compiler: gcc
             version: "11"
+            backend: vulkan
+          - name: "Ubuntu 22.04 + GCC-11"
+            os: ubuntu-22.04
+            compiler: gcc
+            version: "11"
+            backend: webgpu
           - name: "Ubuntu 22.04 + Clang-11"
             os: ubuntu-22.04
             compiler: clang
             version: "11"
+            backend: vulkan
+          - name: "Ubuntu 22.04 + Clang-11"
+            os: ubuntu-22.04
+            compiler: clang
+            version: "11"
+            backend: webgpu
           - name: "Ubuntu 22.04 + Clang-12"
             os: ubuntu-22.04
             compiler: clang
             version: "12"
+            backend: vulkan
+          - name: "Ubuntu 22.04 + Clang-12"
+            os: ubuntu-22.04
+            compiler: clang
+            version: "12"
+            backend: webgpu
 
     runs-on: ${{matrix.os}}
-    name: ${{matrix.name}}
+    name: ${{matrix.name}} (${{ matrix.backend }})
 
     steps:
       - uses: actions/checkout@v1
@@ -62,6 +91,7 @@ jobs:
             echo "CXX=clang++-${{ matrix.version }}" >> $GITHUB_ENV
           fi
       - name: Install Vulkan SDK
+        if: matrix.backend == 'vulkan'
         run: |
           UBUNTU_CODENAME="$(lsb_release -cs)"
           wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc \
@@ -78,5 +108,5 @@ jobs:
         shell: bash
         run: |
           python3 bootstrap.py
-      - name: Build and run unit tests (Vulkan backend)
-        run: python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}}
+      - name: Build and run unit tests (${{ matrix.backend }} backend)
+        run: python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}

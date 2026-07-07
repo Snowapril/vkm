@@ -22,6 +22,13 @@
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
 #pragma clang diagnostic ignored "-Wunused-variable"
 #pragma clang diagnostic ignored "-Wunused-function"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#endif
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #endif
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -35,11 +42,21 @@
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
 
 #include <GLFW/glfw3.h>
+
+// On Linux, GLFW pulls in <vulkan/vulkan.h>'s VK_USE_PLATFORM_XLIB_KHR path, which
+// includes <X11/Xlib.h>. Xlib.h #defines Success as a bare 0, clobbering every later
+// use of VkmInitResultCode::Success as a plain-text substitution (a syntax error).
+#ifdef Success
+#undef Success
+#endif
 
 #include <vkm/renderer/backend/vulkan/vulkan_swapchain.h>
 #include <vkm/renderer/backend/vulkan/vulkan_texture.h>
@@ -185,7 +202,10 @@ namespace vkm
 
     VkmInitResult VkmDriverVulkan::initializeInner(const VkmEngineLaunchOptions* options)
     {
-        VKM_VK_CHECK_RESULT_MSG_RETURN(volkInitialize(), "Failed to initialize volk");
+        if (volkInitialize() != VK_SUCCESS)
+        {
+            return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "Failed to initialize the Vulkan loader (no Vulkan runtime installed on this system)."};
+        }
 
         uint32_t instanceExtensionCount = 0;
         VKM_VK_CHECK_RESULT_MSG_RETURN(vkEnumerateInstanceExtensionProperties(nullptr, &instanceExtensionCount, nullptr), "Failed to get instance extension count");
@@ -234,7 +254,10 @@ namespace vkm
             .ppEnabledExtensionNames = instanceExtensions.data(),
         };
 
-        VKM_VK_CHECK_RESULT_MSG_RETURN(vkCreateInstance(&instanceCreateInfo, nullptr, &_instance), "Failed to create instance");
+        if (vkCreateInstance(&instanceCreateInfo, nullptr, &_instance) != VK_SUCCESS)
+        {
+            return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "Failed to create Vulkan instance (no compatible Vulkan driver/ICD found on this system)."};
+        }
 
         VKM_DEBUG_INFO("Vulkan instance created");
         VKM_DEBUG_INFO("Instance extension used : ");

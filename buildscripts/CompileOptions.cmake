@@ -110,9 +110,18 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang"
 		-Wno-missing-braces
 		-Wno-register			# -> disable warning: ISO c++1z does not allow 'register' storage class specifier [-wregister] (caused by pybind11)
         -Wno-error=register		# -> disable warning: ISO c++1z does not allow 'register' storage class specifier [-wregister] (caused by pybind11)
-		-Wunused-private-field	# -> disable warning: '...' is a private field of '...'
 		${WARN_AS_ERROR_FLAGS}
 		-std=c++2a
+	)
+endif ()
+
+# -Wunused-private-field is Clang-specific; GCC doesn't recognize it and hard-errors
+# ("unrecognized command-line option") instead of merely ignoring it. AppleClang and
+# Emscripten's Clang immediately override this back to -Wno-unused-private-field below
+# (last flag wins), so this only has a net effect on vanilla upstream Clang builds.
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+	set(DEFAULT_COMPILE_OPTIONS ${DEFAULT_COMPILE_OPTIONS}
+		-Wunused-private-field	# -> disable warning: '...' is a private field of '...'
 	)
 endif ()
 

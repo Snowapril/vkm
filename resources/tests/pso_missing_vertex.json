@@ -1,0 +1,6 @@
+{
+    "color_attachments": [ { "format": "bgra8_unorm" } ],
+    "shaders": {
+        "fragment": { "filepath": "triangle.frag" }
+    }
+}
