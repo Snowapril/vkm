@@ -193,7 +193,7 @@ def cmake_build(build_dir: Path, build_type: str, jobs: int) -> bool:
     return result.returncode == 0
 
 
-def execute_tests(build_dir: Path, build_type: str, system: str) -> str:
+def execute_tests(build_dir: Path, build_type: str, system: str, backend: str) -> str:
     """Runs the built UnitTests binary. Returns 'PASS', 'FAIL', or 'SKIP'.
 
     A nonzero exit is always FAIL — hardware/driver gaps are handled gracefully
@@ -201,6 +201,10 @@ def execute_tests(build_dir: Path, build_type: str, system: str) -> str:
     never produce a nonzero exit, so a real failure here means a genuine regression.
     SKIP applies when the binary exits 0 but printed at least one "Skipping: "
     message (a GPU-dependent test self-skipped due to no compatible hardware).
+
+    Metal has no runtime-togglable validation layer — it's only enabled via the
+    MTL_DEBUG_LAYER env var read at process start, so it's injected here for the
+    metal backend to keep validation always-on across all backends.
     """
     binary_name = "UnitTests.exe" if system == "Windows" else "UnitTests"
     # Multi-config generators (e.g. Visual Studio) place binaries under a per-config
@@ -212,8 +216,10 @@ def execute_tests(build_dir: Path, build_type: str, system: str) -> str:
         print(f"[ERROR] Test binary not found in any of: {', '.join(str(path) for path in candidates)}")
         return "FAIL"
 
+    env = {**os.environ, "MTL_DEBUG_LAYER": "1"} if backend == "metal" else None
+
     print(f">>> {test_bin}")
-    result = subprocess.run([str(test_bin)], capture_output=True, text=True)
+    result = subprocess.run([str(test_bin)], capture_output=True, text=True, env=env)
     print(result.stdout + result.stderr)
 
     if result.returncode != 0:
@@ -471,7 +477,7 @@ def main() -> None:
             results[name] = "FAIL"
             continue
 
-        results[name] = execute_tests(backend_build_dir, args.build_type, system)
+        results[name] = execute_tests(backend_build_dir, args.build_type, system, name)
 
     # Summary
     print()

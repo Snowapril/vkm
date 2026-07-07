@@ -100,7 +100,16 @@ vkm/
 - Add new items as one short bullet line each.
 - Do not elaborate, justify, or explain the item — only the user adds additional detail to TODO.md.
 
-## 9. Commit Policy
+## 9. Validation Layer Errors Are Must-Fix
+
+**Never ignore, suppress, or work around a Vulkan/Metal validation layer error or warning.**
+
+- Unit tests always run with `enableValidationLayer = true` / `MTL_DEBUG_LAYER=1` (see
+  `tests/*`, `scripts/run_tests.py`) specifically so these errors surface.
+- Any validation layer error/warning encountered while running tests or samples is a
+  required fix, not something to silence, skip, or filter out of logs.
+
+## 10. Commit Policy
 
 **Commit changes once a requested task is finished — don't wait to be asked each time.**
 

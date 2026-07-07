@@ -109,7 +109,7 @@ struct ReadbackFixture {
             initResult = vkm::VkmInitResult{vkm::VkmInitResultCode::HardwareUnsupported, "No Metal device available on this system."};
             return;
         }
-        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
+        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = true };
         driver = new vkm::VkmDriverMetal(device);
         initResult = driver->initialize(&opts);
     }

@@ -194,6 +194,7 @@ target_include_directories(${target}
     ${LIBRARY_DIR}/glfw/include
     ${LIBRARY_DIR}/glslang
     ${LIBRARY_DIR}/vma/src
+    ${LIBRARY_DIR}/cxxopts/include
     ${LIBRARY_DIR}
 )
 

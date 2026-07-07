@@ -77,7 +77,7 @@ struct VulkanDriverFixture {
     vkm::VkmDriverVulkan* driver = nullptr;
     VulkanDriverFixture() {
         glfwInit();
-        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
+        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = true };
         driver = new vkm::VkmDriverVulkan();
         REQUIRE(driver->initialize(&opts));
     }
@@ -101,7 +101,7 @@ struct MetalDriverFixture {
     MetalDriverFixture() {
         device = MTLCreateSystemDefaultDevice();
         REQUIRE(device != nil);
-        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
+        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = true };
         driver = new vkm::VkmDriverMetal(device);
         REQUIRE(driver->initialize(&opts));
     }
@@ -122,7 +122,7 @@ Metal, `VkmDriverWebGPU` takes no constructor argument).
 struct WebGPUDriverFixture {
     vkm::VkmDriverWebGPU* driver = nullptr;
     WebGPUDriverFixture() {
-        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
+        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = true };
         driver = new vkm::VkmDriverWebGPU();
         REQUIRE(driver->initialize(&opts));
     }
@@ -252,4 +252,4 @@ Follow these steps exactly for every invocation:
 - Descriptive `TEST_CASE` names that read as sentences: `"VkmFormat - hasDepth returns true for depth-only formats"`
 - No redundant comments explaining what doctest macros do
 - Prefer edge cases: invalid handle, boundary enum values, zero/max counts
-- `enableValidationLayer = false` in fixtures for fast test execution
+- `enableValidationLayer = true` in fixtures, always — validation-layer errors must surface in tests, never be silenced. On Metal, the driver never reads `enableValidationLayer` (Metal has no runtime-togglable validation layer), so running `UnitTests` for the Metal backend manually requires `MTL_DEBUG_LAYER=1` set in the shell environment (`scripts/run_tests.py` already does this automatically for the metal backend)
