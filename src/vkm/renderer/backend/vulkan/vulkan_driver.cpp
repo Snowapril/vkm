@@ -22,6 +22,13 @@
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
 #pragma clang diagnostic ignored "-Wunused-variable"
 #pragma clang diagnostic ignored "-Wunused-function"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#endif
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #endif
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -35,11 +42,21 @@
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
 
 #include <GLFW/glfw3.h>
+
+// On Linux, GLFW pulls in <vulkan/vulkan.h>'s VK_USE_PLATFORM_XLIB_KHR path, which
+// includes <X11/Xlib.h>. Xlib.h #defines Success as a bare 0, clobbering every later
+// use of VkmInitResultCode::Success as a plain-text substitution (a syntax error).
+#ifdef Success
+#undef Success
+#endif
 
 #include <vkm/renderer/backend/vulkan/vulkan_swapchain.h>
 #include <vkm/renderer/backend/vulkan/vulkan_texture.h>
