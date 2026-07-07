@@ -6,6 +6,11 @@
 #include <vkm/renderer/engine.h>
 
 @protocol MTLDevice;
+
+#if defined(VKM_USE_VULKAN_API)
+struct GLFWwindow;
+#endif
+
 namespace vkm
 {
     class AppDelegate;
@@ -19,8 +24,19 @@ namespace vkm
         bool create(uint32_t width, uint32_t height, const char* title);
         void destroy();
 
+#if defined(VKM_USE_VULKAN_API)
+        void update();
+        bool shouldClose() const;
+
+        inline GLFWwindow* getHandle() const { return _windowHandle; }
+#endif
+
     private:
+#if defined(VKM_USE_METAL_API)
         class VkmWindowImpl* _impl;
+#elif defined(VKM_USE_VULKAN_API)
+        GLFWwindow* _windowHandle;
+#endif
     };
 
     class VkmApplication
@@ -40,8 +56,13 @@ namespace vkm
         void destroy();
 
     private:
+#if defined(VKM_USE_METAL_API)
         class VkmApplicationImpl* _impl;
         id<MTLDevice> _mtlDevice;
+#elif defined(VKM_USE_VULKAN_API)
+        VkmWindow _window;
+        const char* _appName;
+#endif
         VkmEngine _engine;
 
     };

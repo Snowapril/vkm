@@ -233,10 +233,14 @@ if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
 endif()
 
 if (VKM_PLATFORM_APPLE)
-    # platform/apple/application.mm references CAMetalLayer/MTLDevice directly for the
-    # windowing surface regardless of which render backend (Metal or Vulkan/MoltenVK) is active.
-    target_link_libraries(${target} PUBLIC "-framework Metal -framework CoreVideo -framework QuartzCore")
+    if (VKM_USE_METAL_API)
+        # platform/apple/application.mm references CAMetalLayer/MTLDevice directly for the
+        # Metal windowing surface.
+        target_link_libraries(${target} PUBLIC "-framework Metal -framework CoreVideo -framework QuartzCore")
+    endif()
     if (NOT IOS)
+        # Needed for the Metal branch's NSApplication/NSWindow code, and for GLFW's Cocoa
+        # backend used by the Vulkan branch.
         target_link_libraries(${target} PUBLIC "-framework Cocoa -framework AppKit")
     endif()
 endif()
