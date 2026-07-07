@@ -21,6 +21,7 @@ namespace vkm
     WGPULoadOp toWGPULoadOp(VkmLoadAction loadAction);
     WGPUStoreOp toWGPUStoreOp(VkmStoreAction storeAction);
     WGPUTextureFormat toWGPUTextureFormat(VkmFormat format);
+    VkmFormat fromWGPUTextureFormat(WGPUTextureFormat format);
 
     void logWGPUUncapturedError(WGPUDevice const* device, WGPUErrorType type, WGPUStringView message, void* userdata1, void* userdata2);
 } // namespace vkm

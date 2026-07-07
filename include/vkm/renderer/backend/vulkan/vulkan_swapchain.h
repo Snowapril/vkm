@@ -15,6 +15,8 @@ namespace vkm
 
         virtual void setDebugName(const char* name) override final;
 
+        inline VkFormat getImageFormat() const { return _imageFormat; }
+
     protected:
         virtual bool createSwapChain(void* windowHandle) override final;
         virtual void destroySwapChain() override final;
@@ -22,8 +24,9 @@ namespace vkm
         virtual void presentInner() override final;
 
     private:
-        VkSwapchainKHR  _swapChain;
+        VkSwapchainKHR  _swapChain{VK_NULL_HANDLE};
         VkFormat        _imageFormat;
-        VkSurfaceKHR    _surface;
+        VkSurfaceKHR    _surface{VK_NULL_HANDLE};
+        VkFence         _acquireFence{VK_NULL_HANDLE};
     };
 } // namespace vkm

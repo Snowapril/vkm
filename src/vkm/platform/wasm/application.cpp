@@ -54,6 +54,7 @@ namespace vkm
     {
         VkmApplication* self = static_cast<VkmApplication*>(userData);
         self->_window.update();
+        self->_engine.loopInner(glfwGetTime());
         if (self->_window.shouldClose())
         {
             emscripten_cancel_main_loop();

@@ -34,6 +34,8 @@ namespace vkm
         void commit();
         void reset();
 
+        inline id<MTL4RenderCommandEncoder> getActiveRenderCommandEncoder() const { return _mtlRenderCommandEncoder; }
+
     private:
         id<MTL4CommandBuffer> _mtlCommandBuffer;
 
@@ -56,6 +58,7 @@ namespace vkm
         virtual void onEndRenderPass() override final;
 
         inline id<MTL4CommandBuffer> getMTLCommandBuffer() const { return _mtlCommandBuffer; }
+        inline id<MTL4RenderCommandEncoder> getActiveRenderCommandEncoder() const { return _commandEncoder.getActiveRenderCommandEncoder(); }
 
     private:
         id<MTL4CommandBuffer> _mtlCommandBuffer;

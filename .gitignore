@@ -1,4 +1,7 @@
 
+# ImGui runtime layout state, written to the working directory on every run
+imgui.ini
+
 # Created by https://www.toptal.com/developers/gitignore/api/visualstudio,visualstudiocode,c++,cmake
 # Edit at https://www.toptal.com/developers/gitignore?templates=visualstudio,visualstudiocode,c++,cmake
 

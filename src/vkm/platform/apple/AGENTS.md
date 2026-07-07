@@ -19,7 +19,7 @@ Also used for **macOS Vulkan** if `VKM_USE_VULKAN_API=ON` on Apple.
 #endif
 ```
 
-There is no GLFW on Apple. The window is backed by a `CAMetalLayer` which is passed directly to the Metal swapchain.
+On the Metal backend, the window is backed by a `CAMetalLayer` which is passed directly to the Metal swapchain (no GLFW). On the Vulkan backend (`VKM_USE_VULKAN_API`), the window is a GLFW window, same as Linux/Windows.
 
 ## pimpl Pattern
 

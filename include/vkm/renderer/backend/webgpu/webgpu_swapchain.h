@@ -15,6 +15,8 @@ namespace vkm
 
         virtual void setDebugName(const char* name) override final;
 
+        inline WGPUTextureFormat getSurfaceFormat() const { return _surfaceFormat; }
+
     protected:
         virtual bool createSwapChain(void* windowHandle) override final;
         virtual void destroySwapChain() override final;

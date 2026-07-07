@@ -75,7 +75,7 @@ jobs:
         run: |
           sudo add-apt-repository ppa:ubuntu-toolchain-r/test
           sudo apt-get update && sudo apt-get upgrade && sudo apt-get dist-upgrade
-          sudo apt-get install xorg-dev build-essential libgl-dev libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev libxkbcommon-dev libwayland-dev libwayland-bin wayland-protocols python3-setuptools
+          sudo apt-get install xorg-dev build-essential libgl-dev libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev libxkbcommon-dev libwayland-dev libwayland-bin wayland-protocols python3-setuptools xvfb
           if [ "${{ matrix.compiler }}" = "gcc" ]; then
             sudo apt-get install cmake gcc-${{ matrix.version }} g++-${{ matrix.version }}
           else
@@ -109,4 +109,13 @@ jobs:
         run: |
           python3 bootstrap.py
       - name: Build and run unit tests (${{ matrix.backend }} backend)
-        run: python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}
+        # The vulkan backend's tests create a real GLFW window, which needs a real X server
+        # even for an invisible window; headless runners have no display at all, so xvfb-run
+        # provides a virtual framebuffer for it. The webgpu backend runs headlessly in Chrome
+        # instead and doesn't need this.
+        run: |
+          if [ "${{ matrix.backend }}" = "vulkan" ]; then
+            xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}
+          else
+            python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}
+          fi

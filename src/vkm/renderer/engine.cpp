@@ -5,6 +5,27 @@
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <iostream>
 
+#if defined(VKM_USE_VULKAN_API)
+#include <vkm/renderer/backend/vulkan/vulkan_swapchain.h>
+#include <vkm/renderer/backend/vulkan/vulkan_util.h>
+#elif defined(VKM_USE_METAL_API)
+#include <vkm/renderer/backend/metal/metal_swapchain.h>
+#elif defined(VKM_USE_WEBGPU_API)
+#include <vkm/renderer/backend/webgpu/webgpu_swapchain.h>
+#include <vkm/renderer/backend/webgpu/webgpu_util.h>
+#endif
+
+#if defined(VKM_ENABLE_IMGUI)
+#include <vkm/renderer/imgui/imgui_renderer.h>
+#if defined(VKM_USE_VULKAN_API)
+#include <vkm/renderer/imgui/vulkan_imgui_renderer.h>
+#elif defined(VKM_USE_METAL_API)
+#include <vkm/renderer/imgui/metal_imgui_renderer.h>
+#elif defined(VKM_USE_WEBGPU_API)
+#include <vkm/renderer/imgui/webgpu_imgui_renderer.h>
+#endif
+#endif
+
 namespace vkm
 {
     VkmEngine::VkmEngine(VkmDriverBase* driver)
@@ -56,14 +77,26 @@ namespace vkm
         const double deltaTime = currentUpdateTime - _lastUpdateTime;
         _lastUpdateTime = currentUpdateTime;
 
+#if defined(VKM_ENABLE_IMGUI)
+        _imGuiRenderer->newFrame();
+#endif
+
         update( deltaTime );
         render( deltaTime );
-        
+
         _currentFrameIndex = (_currentFrameIndex + 1) % FRAME_COUNT;
     }
 
     void VkmEngine::destroy()
     {
+#if defined(VKM_ENABLE_IMGUI)
+        if (_imGuiRenderer)
+        {
+            _imGuiRenderer->shutdown();
+            _imGuiRenderer.reset();
+        }
+#endif
+
         if (_mainSwapChain != nullptr)
         {
             delete _mainSwapChain;
@@ -79,6 +112,22 @@ namespace vkm
 
         VKM_ASSERT(_mainSwapChain == nullptr, "Main swapchain already exists");
         _mainSwapChain = swapChain;
+
+#if defined(VKM_ENABLE_IMGUI)
+        VkmFormat backBufferFormat = VkmFormat::Undefined;
+#if defined(VKM_USE_VULKAN_API)
+        backBufferFormat = fromVkFormat(static_cast<VkmSwapChainVulkan*>(swapChain)->getImageFormat());
+        _imGuiRenderer = std::make_unique<VkmImGuiRendererVulkan>(_driver);
+#elif defined(VKM_USE_METAL_API)
+        backBufferFormat = static_cast<VkmSwapChainMetal*>(swapChain)->getBackBufferFormat();
+        _imGuiRenderer = std::make_unique<VkmImGuiRendererMetal>(_driver);
+#elif defined(VKM_USE_WEBGPU_API)
+        backBufferFormat = fromWGPUTextureFormat(static_cast<VkmSwapChainWebGPU*>(swapChain)->getSurfaceFormat());
+        _imGuiRenderer = std::make_unique<VkmImGuiRendererWebGPU>(_driver);
+#endif
+        const bool imGuiInitialized = _imGuiRenderer->initialize(windowInfo._windowHandle, backBufferFormat);
+        VKM_ASSERT(imGuiInitialized, "Failed to initialize ImGui renderer");
+#endif
     }
 
     void VkmEngine::update(const double deltaTime)
@@ -105,6 +154,25 @@ namespace vkm
         renderGraph->reset();
         
         _appDelegate->render(renderGraph, currentBackBuffer);
+
+#if defined(VKM_ENABLE_IMGUI)
+        // ImGui overlay: draws on top of whatever the app already recorded, loading (not
+        // clearing) the same back buffer.
+        VkmFrameBufferDescriptor imGuiFrameBufferDesc;
+        imGuiFrameBufferDesc._renderPass._colorAttachmentCount = 1;
+        imGuiFrameBufferDesc._renderPass._colorAttachments[0]._attachmentId = 0;
+        imGuiFrameBufferDesc._renderPass._colorAttachments[0]._loadAction = VkmLoadAction::Load;
+        imGuiFrameBufferDesc._renderPass._colorAttachments[0]._storeAction = VkmStoreAction::Store;
+        imGuiFrameBufferDesc._width = _mainSwapChain->getExtent().x;
+        imGuiFrameBufferDesc._height = _mainSwapChain->getExtent().y;
+        imGuiFrameBufferDesc._colorAttachments[0] = currentBackBuffer;
+
+        VkmRenderGraphicsSubGraph* imGuiSubGraph = renderGraph->beginGraphicsSubGraph(imGuiFrameBufferDesc);
+        VkmImGuiRendererBase* imGuiRenderer = _imGuiRenderer.get();
+        imGuiSubGraph->setRenderCallback([imGuiRenderer](VkmCommandBufferBase* commandBuffer) {
+            imGuiRenderer->renderDrawData(commandBuffer);
+        });
+#endif
 
         renderGraph->compile();
         

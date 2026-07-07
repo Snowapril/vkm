@@ -1,6 +1,10 @@
 #include <iostream>
 #include <cxxopts.hpp>
 
+#if defined(VKM_ENABLE_IMGUI)
+#include <imgui.h>
+#endif
+
 #include <vkm/base/common.h>
 #include <vkm/platform/common/app_delegate.h>
 #include <vkm/renderer/backend/common/pipeline_state_parser.h>
@@ -49,6 +53,12 @@ public:
     virtual void update(const double deltaTime) override final
     {
         VKM_DEBUG_LOG("TriangleApplication::update");
+
+#if defined(VKM_ENABLE_IMGUI)
+        // Demonstrates that sample/app code can call plain ImGui:: functions during
+        // update()/render() -- the engine owns NewFrame()/Render(), nothing else is needed.
+        ImGui::ShowDemoWindow();
+#endif
     }
 
     virtual void render(VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) override final
@@ -70,7 +80,8 @@ public:
         frameBufferDesc._colorAttachments[0] = backBuffer; // Attach the back buffer
 
         auto graphicsSubGraph = renderGraph->beginGraphicsSubGraph(frameBufferDesc);
-        (void)graphicsSubGraph;
+        (void)graphicsSubGraph; // The triangle itself isn't drawn yet -- no pipeline/draw-call
+                                 // support exists in the engine outside of this render callback hook.
     }
 
     virtual const char* getAppName() const override final

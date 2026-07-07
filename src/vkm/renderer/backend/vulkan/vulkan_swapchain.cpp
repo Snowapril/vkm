@@ -3,6 +3,8 @@
 #include <vkm/renderer/backend/vulkan/vulkan_swapchain.h>
 #include <vkm/renderer/backend/vulkan/vulkan_util.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
+#include <vkm/renderer/backend/vulkan/vulkan_texture.h>
+#include <vkm/renderer/backend/vulkan/vulkan_command_queue.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/texture.h>
 #include <vector>
@@ -177,24 +179,114 @@ namespace vkm
         std::vector<VkImage> swapImages(imageCount);
         vkGetSwapchainImagesKHR(device, _swapChain, &imageCount, swapImages.data());
 
-        // TODO(snowapril) : create VkmTexture with swapImages and create image view for each image
+        _backBufferCount = (uint8_t)imageCount;
+
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        for (uint32_t i = 0; i < imageCount; ++i)
+        {
+            VkmTextureVulkan* newTextureVulkan = new VkmTextureVulkan(_driver);
+
+            VkmTextureInfo textureInfo;
+            textureInfo._flags = VkmResourceCreateInfo::ExternalHandleOwner | VkmResourceCreateInfo::AllowShaderRead |
+                                  VkmResourceCreateInfo::AllowPresent | VkmResourceCreateInfo::AllowColorAttachment;
+            textureInfo._extent = glm::uvec3(currentExtent.width, currentExtent.height, 1);
+            textureInfo._format = fromVkFormat(_imageFormat);
+            textureInfo._numMipLevels = 1;
+            textureInfo._numArrayLayers = 1;
+
+            VkmResourceHandle& handle = _backBuffers[i];
+            handle = renderResourcePool->allocateTexture(newTextureVulkan);
+            if (newTextureVulkan->initialize(handle, textureInfo) == false ||
+                newTextureVulkan->overrideExternalHandle(static_cast<void*>(swapImages[i])) == false)
+            {
+                VKM_DEBUG_ERROR("Failed to create swap chain texture");
+                if (handle.isValid())
+                    renderResourcePool->releaseResource(handle);
+                else
+                    delete newTextureVulkan;
+
+                destroySwapChain();
+                return false;
+            }
+        }
+
+        const VkFenceCreateInfo fenceCreateInfo{ .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+        vkResult = vkCreateFence(device, &fenceCreateInfo, nullptr, &_acquireFence);
+        VKM_VK_ASSERT(vkResult, "Failed to create swapchain acquire fence");
 
         return true;
     }
 
     void VkmSwapChainVulkan::destroySwapChain()
     {
+        VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
 
+        // Release per-image textures (and their VkImageViews) before tearing down the
+        // swapchain/surface those images and views were created from.
         destroySwapChainCommon();
+
+        if (_acquireFence != VK_NULL_HANDLE)
+        {
+            vkDestroyFence(driverVulkan->getDevice(), _acquireFence, nullptr);
+            _acquireFence = VK_NULL_HANDLE;
+        }
+        if (_swapChain != VK_NULL_HANDLE)
+        {
+            vkDestroySwapchainKHR(driverVulkan->getDevice(), _swapChain, nullptr);
+            _swapChain = VK_NULL_HANDLE;
+        }
+        if (_surface != VK_NULL_HANDLE)
+        {
+            vkDestroySurfaceKHR(driverVulkan->getInstance(), _surface, nullptr);
+            _surface = VK_NULL_HANDLE;
+        }
     }
 
     VkmResourceHandle VkmSwapChainVulkan::acquireNextImageInner()
     {
-        return VKM_INVALID_RESOURCE_HANDLE;
+        VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
+        VkDevice device = driverVulkan->getDevice();
+
+        vkResetFences(device, 1, &_acquireFence);
+
+        uint32_t imageIndex = 0;
+        VkResult vkResult = vkAcquireNextImageKHR(device, _swapChain, UINT64_MAX, VK_NULL_HANDLE, _acquireFence, &imageIndex);
+        if (vkResult != VK_SUCCESS && vkResult != VK_SUBOPTIMAL_KHR)
+        {
+            VKM_DEBUG_ERROR("Failed to acquire next swapchain image");
+            return VKM_INVALID_RESOURCE_HANDLE;
+        }
+
+        // No semaphore is signaled by the render command buffer submission today (that would
+        // require plumbing a binary semaphore through VkmCommandQueueVulkan::submit(), which is
+        // out of scope here). Block on a fence instead so the image is guaranteed available
+        // before we hand its handle back for rendering.
+        vkWaitForFences(device, 1, &_acquireFence, VK_TRUE, UINT64_MAX);
+
+        _currentBackBufferIndex = imageIndex;
+        return _backBuffers[imageIndex];
     }
 
     void VkmSwapChainVulkan::presentInner()
     {
+        VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
+        VkmCommandQueueVulkan* presentQueueVulkan = static_cast<VkmCommandQueueVulkan*>(_presentQueue);
+        VkQueue vkQueue = presentQueueVulkan->getVkQueue();
 
+        // Same rationale as acquireNextImageInner: without a render-complete semaphore threaded
+        // through the submission path, block until all submitted GPU work has finished before
+        // presenting, so we never present a partially-rendered image. Rendering may have been
+        // submitted to a different queue than the present queue, so wait on the whole device
+        // rather than assuming they're the same queue.
+        vkDeviceWaitIdle(driverVulkan->getDevice());
+
+        const VkPresentInfoKHR presentInfo{
+            .sType          = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .swapchainCount = 1,
+            .pSwapchains    = &_swapChain,
+            .pImageIndices  = &_currentBackBufferIndex,
+        };
+        VkResult vkResult = vkQueuePresentKHR(vkQueue, &presentInfo);
+        VKM_VK_CHECK_RESULT_MSG(vkResult, "Failed to present swapchain image");
     }
 } // namespace vkm
