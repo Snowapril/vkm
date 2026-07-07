@@ -225,8 +225,12 @@ def run_native_sample(backend: str, sample: str, build_type: str,
         print(f"[ERROR] Sample binary not found: {binary}")
         return 1
 
+    # Metal has no runtime-togglable validation layer — it's only enabled via the
+    # MTL_DEBUG_LAYER env var read at process start.
+    env = {**os.environ, "MTL_DEBUG_LAYER": "1"} if backend == "metal" else None
+
     print(f"[INFO] Launching {binary} ...")
-    return run_cmd([str(binary)]).returncode
+    return run_cmd([str(binary)], env=env).returncode
 
 
 def run_webgpu_sample(sample: str, build_type: str, jobs: int) -> int:

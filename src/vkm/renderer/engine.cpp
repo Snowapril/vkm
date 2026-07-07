@@ -3,6 +3,7 @@
 #include <vkm/renderer/engine.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/swapchain.h>
+#include <cxxopts.hpp>
 #include <iostream>
 
 namespace vkm
@@ -115,7 +116,22 @@ namespace vkm
 
     VkmEngineLaunchOptions VkmEngine::parseEngineLaunchOptions(int argc, char* argv[])
     {
-        (void)argc; (void)argv;
-        return DEFAULT_ENGINE_LAUNCH_OPTIONS;
+        cxxopts::Options options("vkm", "vkm engine launch options");
+        options.allow_unrecognised_options();
+        options.add_options()
+            ("enable-validation-layer", "Enable the graphics validation layer",
+                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableValidationLayer ? "true" : "false"));
+
+        VkmEngineLaunchOptions launchOptions = DEFAULT_ENGINE_LAUNCH_OPTIONS;
+        try
+        {
+            auto result = options.parse(argc, argv);
+            launchOptions.enableValidationLayer = result["enable-validation-layer"].as<bool>();
+        }
+        catch (const std::exception& e)
+        {
+            VKM_DEBUG_ERROR(fmt::format("Failed to parse engine launch options: {}", e.what()).c_str());
+        }
+        return launchOptions;
     }
 }

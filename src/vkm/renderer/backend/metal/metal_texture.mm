@@ -1,10 +1,56 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/metal/metal_texture.h>
+#include <vkm/renderer/backend/metal/metal_driver.h>
 #include <Metal/MTLTexture.h>
+#include <Metal/MTLDevice.h>
 
 namespace vkm
 {
+    namespace
+    {
+        MTLPixelFormat getMTLPixelFormat(VkmFormat format)
+        {
+            switch (format)
+            {
+                case VkmFormat::R8G8B8A8_UNORM:      return MTLPixelFormatRGBA8Unorm;
+                case VkmFormat::R8G8B8A8_SRGB:       return MTLPixelFormatRGBA8Unorm_sRGB;
+                case VkmFormat::R8G8B8A8_UINT:       return MTLPixelFormatRGBA8Uint;
+                case VkmFormat::R8G8B8A8_SNORM:      return MTLPixelFormatRGBA8Snorm;
+                case VkmFormat::R8G8B8A8_SINT:       return MTLPixelFormatRGBA8Sint;
+                case VkmFormat::R16G16B16A16_UNORM:  return MTLPixelFormatRGBA16Unorm;
+                case VkmFormat::R16G16B16A16_SFLOAT: return MTLPixelFormatRGBA16Float;
+                case VkmFormat::R32G32B32A32_SFLOAT: return MTLPixelFormatRGBA32Float;
+                case VkmFormat::D32_SFLOAT:          return MTLPixelFormatDepth32Float;
+                case VkmFormat::D24_UNORM_S8_UINT:   return MTLPixelFormatDepth24Unorm_Stencil8;
+                case VkmFormat::D32_SFLOAT_S8_UINT:  return MTLPixelFormatDepth32Float_Stencil8;
+                case VkmFormat::BGRA8_UNORM:         return MTLPixelFormatBGRA8Unorm;
+                case VkmFormat::BGRA8_SRGB:          return MTLPixelFormatBGRA8Unorm_sRGB;
+                case VkmFormat::Undefined:
+                default:                             return MTLPixelFormatInvalid;
+            }
+        }
+
+        MTLTextureUsage getMTLTextureUsage(VkmResourceCreateInfo flags)
+        {
+            MTLTextureUsage usage = MTLTextureUsageUnknown;
+            if ((flags & VkmResourceCreateInfo::AllowShaderRead) != 0)
+            {
+                usage |= MTLTextureUsageShaderRead;
+            }
+            if ((flags & VkmResourceCreateInfo::AllowShaderWrite) != 0)
+            {
+                usage |= MTLTextureUsageShaderWrite;
+            }
+            if ((flags & VkmResourceCreateInfo::AllowColorAttachment) != 0 ||
+                (flags & VkmResourceCreateInfo::AllowDepthStencilAttachment) != 0)
+            {
+                usage |= MTLTextureUsageRenderTarget;
+            }
+            return usage;
+        }
+    }
+
     VkmTextureMetal::VkmTextureMetal(VkmDriverBase* driver)
         : VkmTexture(driver)
     {
@@ -29,9 +75,26 @@ namespace vkm
             return false;
         }
 
-        if ((info._flags & VkmResourceCreateInfo::DeferredCreation) == 0)
+        if ((info._flags & VkmResourceCreateInfo::DeferredCreation) == 0 &&
+            (info._flags & VkmResourceCreateInfo::ExternalHandleOwner) == 0)
         {
-            // TODO(snowapril) : create texture with info
+            MTLTextureDescriptor* descriptor = [[MTLTextureDescriptor alloc] init];
+            descriptor.textureType = (info._numArrayLayers > 1) ? MTLTextureType2DArray : MTLTextureType2D;
+            descriptor.pixelFormat = getMTLPixelFormat(info._format);
+            descriptor.width = info._extent.x;
+            descriptor.height = info._extent.y;
+            descriptor.mipmapLevelCount = info._numMipLevels;
+            descriptor.arrayLength = info._numArrayLayers;
+            descriptor.usage = getMTLTextureUsage(info._flags);
+            descriptor.storageMode = MTLStorageModePrivate;
+
+            id<MTLDevice> device = static_cast<VkmDriverMetal*>(_driver)->getMTLDevice();
+            _mtlTexture = [device newTextureWithDescriptor:descriptor];
+            if (_mtlTexture == nil)
+            {
+                VKM_DEBUG_ERROR("Failed to create MTLTexture");
+                return false;
+            }
         }
 
         return true;

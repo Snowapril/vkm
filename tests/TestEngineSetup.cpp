@@ -99,7 +99,7 @@ struct VulkanDriverFixture {
     vkm::VkmInitResult initResult;
     VulkanDriverFixture() {
         glfwInit();
-        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
+        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = true };
         driver = std::unique_ptr<vkm::VkmDriverVulkan>(new vkm::VkmDriverVulkan());
         initResult = driver->initialize(&opts);
     }
@@ -152,7 +152,7 @@ TEST_CASE("VkmSwapChainVulkan - created and initialized with a hidden GLFW windo
         return;
     }
 
-    vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
+    vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = true };
 
     std::unique_ptr<vkm::VkmDriverVulkan> driver(new vkm::VkmDriverVulkan());
     vkm::VkmInitResult initResult = driver->initialize(&opts);
@@ -189,7 +189,7 @@ struct WebGPUDriverFixture {
     vkm::VkmDriverWebGPU* driver = nullptr;
     vkm::VkmInitResult initResult;
     WebGPUDriverFixture() {
-        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false };
+        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = true };
         driver = new vkm::VkmDriverWebGPU();
         initResult = driver->initialize(&opts);
     }
