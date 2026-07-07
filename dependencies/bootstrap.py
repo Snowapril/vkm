@@ -679,6 +679,11 @@ def main(argv):
         if (opt_names) and (not name in opt_names):
             continue
 
+        platforms = library.get('platforms', None)
+        if platforms is not None and platform.system() not in platforms:
+            log("Skipping " + name + " (not applicable to platform " + platform.system() + ")")
+            continue
+
         lib_dir = os.path.join(SRC_DIR, name)
         lib_dir = lib_dir.replace(os.path.sep, '/')
 

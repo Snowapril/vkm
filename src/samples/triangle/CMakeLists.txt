@@ -69,3 +69,14 @@ if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
     target_compile_options(${target} PRIVATE ${VKM_EMSCRIPTEN_COMPILE_FLAGS})
     target_link_options(${target} PRIVATE ${VKM_EMSCRIPTEN_PORT_FLAGS})
 endif()
+
+# Compile this sample's HLSL through vkm-compiler at build time. This is the
+# concrete end-to-end instance that proves out the whole shader pipeline.
+vkm_add_shader_cache_target(
+    TARGET_NAME triangle_shaders
+    OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
+    PSO_JSON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/renderpass.json"
+    EXTRA_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/triangle.hlsl")
+if (TARGET triangle_shaders)
+    add_dependencies(${target} triangle_shaders)
+endif()

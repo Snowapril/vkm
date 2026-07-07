@@ -146,5 +146,44 @@
       "type": "script",
       "file": "emsdk_install.py"
     }
+  },
+  {
+    "name": "dxc-win",
+    "platforms": ["Windows"],
+    "source": {
+      "type": "archive",
+      "url": "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip",
+      "sha1": "d6c844182b06858e71b66f44cd5b969c6e4cc5f1"
+    }
+  },
+  {
+    "name": "dxc-linux",
+    "platforms": ["Linux"],
+    "source": {
+      "type": "archive",
+      "url": "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/linux_dxc_2026_05_26.x86_64.tar.gz",
+      "sha1": "283b86b09fcbafe51641d72996971a409054de83"
+    }
+  },
+  {
+    "name": "dxc-macos-src",
+    "platforms": ["Darwin"],
+    "source": {
+      "type": "git",
+      "url": "https://github.com/microsoft/DirectXShaderCompiler.git",
+      "revision": "v1.9.2602.24"
+    }
+  },
+  {
+    "name": "dawn",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/google/dawn.git",
+      "revision": "v20260624.223603"
+    },
+    "postprocess": {
+      "type": "script",
+      "file": "fetch_dawn_dependencies.py"
+    }
   }
 ]
