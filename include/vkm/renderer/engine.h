@@ -13,7 +13,9 @@ namespace vkm
     class VkmDriverBase;
     class VkmTexture;
     class VkmSwapChainBase;
+#if defined(VKM_ENABLE_IMGUI)
     class VkmImGuiRendererBase;
+#endif
     struct VkmInitResult;
 
     struct VkmEngineLaunchOptions
@@ -96,7 +98,9 @@ namespace vkm
 
         VkmSwapChainBase* _mainSwapChain {nullptr}; // main swapchain. engine should have multiple swapchains but at now, only one swapchain is supported.
 
+#if defined(VKM_ENABLE_IMGUI)
         std::unique_ptr<VkmImGuiRendererBase> _imGuiRenderer;
+#endif
 
     private:
         std::unique_ptr<AppDelegate> _appDelegate;

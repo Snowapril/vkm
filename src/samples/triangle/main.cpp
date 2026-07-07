@@ -1,6 +1,9 @@
 #include <iostream>
 #include <cxxopts.hpp>
+
+#if defined(VKM_ENABLE_IMGUI)
 #include <imgui.h>
+#endif
 
 #include <vkm/base/common.h>
 #include <vkm/platform/common/app_delegate.h>
@@ -51,9 +54,11 @@ public:
     {
         VKM_DEBUG_LOG("TriangleApplication::update");
 
+#if defined(VKM_ENABLE_IMGUI)
         // Demonstrates that sample/app code can call plain ImGui:: functions during
         // update()/render() -- the engine owns NewFrame()/Render(), nothing else is needed.
         ImGui::ShowDemoWindow();
+#endif
     }
 
     virtual void render(VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) override final

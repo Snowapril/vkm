@@ -190,6 +190,7 @@ struct NullAppDelegate : vkm::AppDelegate {
 };
 } // namespace
 
+#if defined(VKM_ENABLE_IMGUI)
 TEST_CASE("VkmEngine - ImGui renderer initializes and survives one loopInner() tick") {
     glfwInit();
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
@@ -216,6 +217,7 @@ TEST_CASE("VkmEngine - ImGui renderer initializes and survives one loopInner() t
     glfwDestroyWindow(window);
     glfwTerminate();
 }
+#endif // VKM_ENABLE_IMGUI
 
 #endif // VKM_USE_VULKAN_API
 

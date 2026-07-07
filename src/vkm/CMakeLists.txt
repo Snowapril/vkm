@@ -26,7 +26,6 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/texture.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/swapchain.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/engine.h
-    ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/imgui_renderer.h
 )
 
 # Set Sources
@@ -44,8 +43,16 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/backend/common/texture.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/swapchain.cpp
     ${SRC_DIR}/vkm/renderer/engine.cpp
-    ${SRC_DIR}/vkm/renderer/imgui/imgui_renderer.cpp
 )
+
+if (VKM_ENABLE_IMGUI)
+    list(APPEND PUBLIC_HDRS
+        ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/imgui_renderer.h
+    )
+    list(APPEND SRCS
+        ${SRC_DIR}/vkm/renderer/imgui/imgui_renderer.cpp
+    )
+endif()
 
 if (VKM_PLATFORM_WINDOWS)
     list(APPEND PUBLIC_HDRS
@@ -82,7 +89,6 @@ if (VKM_USE_VULKAN_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_util.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_command_queue.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.h
-        ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/vulkan_imgui_renderer.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_driver.cpp
@@ -91,8 +97,15 @@ if (VKM_USE_VULKAN_API)
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_util.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_queue.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.cpp
-        ${SRC_DIR}/vkm/renderer/imgui/vulkan_imgui_renderer.cpp
     )
+    if (VKM_ENABLE_IMGUI)
+        list(APPEND PUBLIC_HDRS
+            ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/vulkan_imgui_renderer.h
+        )
+        list(APPEND SRCS
+            ${SRC_DIR}/vkm/renderer/imgui/vulkan_imgui_renderer.cpp
+        )
+    endif()
 endif()
 
 if (VKM_USE_METAL_API)
@@ -102,7 +115,6 @@ if (VKM_USE_METAL_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_command_queue.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_swapchain.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_texture.h
-        ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/metal_imgui_renderer.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_driver.mm
@@ -110,8 +122,15 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_command_queue.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_swapchain.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_texture.mm
-        ${SRC_DIR}/vkm/renderer/imgui/metal_imgui_renderer.mm
     )
+    if (VKM_ENABLE_IMGUI)
+        list(APPEND PUBLIC_HDRS
+            ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/metal_imgui_renderer.h
+        )
+        list(APPEND SRCS
+            ${SRC_DIR}/vkm/renderer/imgui/metal_imgui_renderer.mm
+        )
+    endif()
 endif()
 
 if (VKM_USE_WEBGPU_API)
@@ -123,7 +142,6 @@ if (VKM_USE_WEBGPU_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_util.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_command_queue.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_command_buffer.h
-        ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/webgpu_imgui_renderer.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/wasm/application.cpp
@@ -133,8 +151,15 @@ if (VKM_USE_WEBGPU_API)
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_util.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_command_queue.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_command_buffer.cpp
-        ${SRC_DIR}/vkm/renderer/imgui/webgpu_imgui_renderer.cpp
     )
+    if (VKM_ENABLE_IMGUI)
+        list(APPEND PUBLIC_HDRS
+            ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/webgpu_imgui_renderer.h
+        )
+        list(APPEND SRCS
+            ${SRC_DIR}/vkm/renderer/imgui/webgpu_imgui_renderer.cpp
+        )
+    endif()
 endif()
 
 if (VKM_PLATFORM_APPLE)
@@ -184,12 +209,15 @@ target_link_libraries(${target}
     PUBLIC
     ${DEFAULT_LINKER_OPTIONS}
 	${DEFAULT_LIBRARIES}
-    imgui
     PRIVATE
     glslang
     SPIRV
     spirv-cross-core
 )
+
+if (VKM_ENABLE_IMGUI)
+    target_link_libraries(${target} PUBLIC imgui)
+endif()
 
 if (NOT EMSCRIPTEN)
     target_link_libraries(${target} PRIVATE glfw)
