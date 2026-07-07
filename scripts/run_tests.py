@@ -181,18 +181,19 @@ def cmake_configure(build_dir: Path, build_type: str,
     return result.returncode == 0
 
 
-def cmake_build(build_dir: Path, jobs: int) -> bool:
+def cmake_build(build_dir: Path, build_type: str, jobs: int) -> bool:
     cmd = [
         "cmake",
         "--build", str(build_dir),
         "--target", "UnitTests",
+        "--config", build_type,
         "--parallel", str(jobs),
     ]
     result = run_cmd(cmd)
     return result.returncode == 0
 
 
-def execute_tests(build_dir: Path, system: str, backend: str) -> str:
+def execute_tests(build_dir: Path, build_type: str, system: str, backend: str) -> str:
     """Runs the built UnitTests binary. Returns 'PASS', 'FAIL', or 'SKIP'.
 
     A nonzero exit is always FAIL — hardware/driver gaps are handled gracefully
@@ -206,10 +207,13 @@ def execute_tests(build_dir: Path, system: str, backend: str) -> str:
     metal backend to keep validation always-on across all backends.
     """
     binary_name = "UnitTests.exe" if system == "Windows" else "UnitTests"
-    test_bin = build_dir / "bin" / binary_name
+    # Multi-config generators (e.g. Visual Studio) place binaries under a per-config
+    # subdirectory; single-config generators (Makefiles/Ninja) place them directly in bin/.
+    candidates = [build_dir / "bin" / build_type / binary_name, build_dir / "bin" / binary_name]
+    test_bin = next((path for path in candidates if path.exists()), None)
 
-    if not test_bin.exists():
-        print(f"[ERROR] Test binary not found: {test_bin}")
+    if test_bin is None:
+        print(f"[ERROR] Test binary not found in any of: {', '.join(str(path) for path in candidates)}")
         return "FAIL"
 
     env = {**os.environ, "MTL_DEBUG_LAYER": "1"} if backend == "metal" else None
@@ -467,13 +471,13 @@ def main() -> None:
             results[name] = "FAIL"
             continue
 
-        built = cmake_build(backend_build_dir, args.jobs)
+        built = cmake_build(backend_build_dir, args.build_type, args.jobs)
         if not built:
             print(f"[FAIL] Build failed for {name} backend.")
             results[name] = "FAIL"
             continue
 
-        results[name] = execute_tests(backend_build_dir, system, name)
+        results[name] = execute_tests(backend_build_dir, args.build_type, system, name)
 
     # Summary
     print()

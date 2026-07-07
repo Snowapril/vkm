@@ -58,4 +58,44 @@ bool vkCheckResult(int result, const char* msg)
     }
     return true;
 }
+
+VkFormat toVkFormat(VkmFormat format)
+{
+    switch (format)
+    {
+        case VkmFormat::R8G8B8A8_UNORM:     return VK_FORMAT_R8G8B8A8_UNORM;
+        case VkmFormat::R8G8B8A8_SRGB:      return VK_FORMAT_R8G8B8A8_SRGB;
+        case VkmFormat::R8G8B8A8_UINT:      return VK_FORMAT_R8G8B8A8_UINT;
+        case VkmFormat::R8G8B8A8_SNORM:     return VK_FORMAT_R8G8B8A8_SNORM;
+        case VkmFormat::R8G8B8A8_SINT:      return VK_FORMAT_R8G8B8A8_SINT;
+        case VkmFormat::R16G16B16A16_UNORM: return VK_FORMAT_R16G16B16A16_UNORM;
+        case VkmFormat::R16G16B16A16_SFLOAT: return VK_FORMAT_R16G16B16A16_SFLOAT;
+        case VkmFormat::R32G32B32A32_SFLOAT: return VK_FORMAT_R32G32B32A32_SFLOAT;
+        case VkmFormat::D32_SFLOAT:         return VK_FORMAT_D32_SFLOAT;
+        case VkmFormat::D24_UNORM_S8_UINT:  return VK_FORMAT_D24_UNORM_S8_UINT;
+        case VkmFormat::D32_SFLOAT_S8_UINT: return VK_FORMAT_D32_SFLOAT_S8_UINT;
+        case VkmFormat::BGRA8_UNORM:        return VK_FORMAT_B8G8R8A8_UNORM;
+        default: VKM_ASSERT(false, "Unsupported texture format for Vulkan backend"); return VK_FORMAT_UNDEFINED;
+    }
+}
+
+VkmFormat fromVkFormat(VkFormat format)
+{
+    switch (format)
+    {
+        case VK_FORMAT_R8G8B8A8_UNORM:      return VkmFormat::R8G8B8A8_UNORM;
+        case VK_FORMAT_R8G8B8A8_SRGB:       return VkmFormat::R8G8B8A8_SRGB;
+        case VK_FORMAT_R8G8B8A8_UINT:       return VkmFormat::R8G8B8A8_UINT;
+        case VK_FORMAT_R8G8B8A8_SNORM:      return VkmFormat::R8G8B8A8_SNORM;
+        case VK_FORMAT_R8G8B8A8_SINT:       return VkmFormat::R8G8B8A8_SINT;
+        case VK_FORMAT_R16G16B16A16_UNORM:  return VkmFormat::R16G16B16A16_UNORM;
+        case VK_FORMAT_R16G16B16A16_SFLOAT: return VkmFormat::R16G16B16A16_SFLOAT;
+        case VK_FORMAT_R32G32B32A32_SFLOAT: return VkmFormat::R32G32B32A32_SFLOAT;
+        case VK_FORMAT_D32_SFLOAT:          return VkmFormat::D32_SFLOAT;
+        case VK_FORMAT_D24_UNORM_S8_UINT:   return VkmFormat::D24_UNORM_S8_UINT;
+        case VK_FORMAT_D32_SFLOAT_S8_UINT:  return VkmFormat::D32_SFLOAT_S8_UINT;
+        case VK_FORMAT_B8G8R8A8_UNORM:      return VkmFormat::BGRA8_UNORM;
+        default: VKM_ASSERT(false, "Unsupported VkFormat for Vulkan backend"); return VkmFormat::Undefined;
+    }
+}
 }

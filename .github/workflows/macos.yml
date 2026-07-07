@@ -41,11 +41,14 @@ jobs:
       - name: Install Vulkan SDK (MoltenVK + headers)
         if: matrix.backend == 'vulkan'
         run: |
-          brew install molten-vk vulkan-headers vulkan-loader vulkan-tools
+          brew install molten-vk vulkan-headers vulkan-loader vulkan-tools vulkan-validationlayers
           # volk's dlopen("libvulkan.dylib") only searches standard system paths;
           # Homebrew's non-standard prefix (e.g. /opt/homebrew on Apple Silicon)
           # needs to be added explicitly for the loader to be found at runtime.
           echo "DYLD_LIBRARY_PATH=$(brew --prefix)/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
+          # vulkan-validationlayers installs to a non-standard prefix too, so the
+          # loader needs an explicit layer manifest path to find VK_LAYER_KHRONOS_validation.
+          echo "VK_LAYER_PATH=$(brew --prefix)/share/vulkan/explicit_layer.d" >> $GITHUB_ENV
 
       - name: Execute bootstrap script
         run: python3 bootstrap.py

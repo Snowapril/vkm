@@ -164,6 +164,7 @@ option(BUILD_COVERAGE "Build code coverage" OFF)
 option(GPU_RESOURCE_DEBUG_NAME "Enable vulkan object debug name" ON)
 option(CHROME_TRACING "Enable Chrome Tracing for CPU profiling" ON)
 option(TASKFLOW_PROFILER, "Enable Taskflow Profiler" ON)
+option(VKM_ENABLE_IMGUI "Enable ImGui integration" ON)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug AND CMAKE_COMPILER_IS_GNUCXX AND BUILD_COVERAGE)
     include(CodeCoverage)
@@ -181,6 +182,10 @@ endif()
 if (TASKFLOW_PROFILER)
     # You can visualize profiled json file at https://taskflow.github.io/tfprof/ 
     add_definitions(-DTF_ENABLE_PROFILER=taskflow_profile.json)
+endif()
+
+if (VKM_ENABLE_IMGUI)
+    add_definitions(-DVKM_ENABLE_IMGUI)
 endif()
 
 # Overrides
@@ -277,6 +282,10 @@ if (NOT EMSCRIPTEN)
     file(WRITE "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/src/backward-cpp/CMakeLists.txt" "${_backward_content}")
     unset(_backward_content)
     add_subdirectory(dependencies/src/backward-cpp)
+endif()
+
+if (VKM_ENABLE_IMGUI)
+    include(dependencies/imgui.cmake)
 endif()
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)

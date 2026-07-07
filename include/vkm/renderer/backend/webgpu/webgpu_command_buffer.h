@@ -18,6 +18,8 @@ namespace vkm
         // VKM_COMMAND_BUFFER_HANDLE maps to this encoder until wgpuCommandEncoderFinish is
         // called at submit time (WebGPU has no separate pre-allocated "command buffer" step).
         inline WGPUCommandEncoder getWGPUCommandEncoder() const { return _encoder; }
+        // Valid only between onBeginRenderPass/onEndRenderPass.
+        inline WGPURenderPassEncoder getActiveRenderPassEncoder() const { return _renderPassEncoder; }
 
     protected:
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) override final;

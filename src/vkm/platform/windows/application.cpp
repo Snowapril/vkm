@@ -89,6 +89,7 @@ namespace vkm
         while (_window.shouldClose() == false)
         {
             _window.update();
+            _engine.loopInner(glfwGetTime());
         }
 
         glfwTerminate();

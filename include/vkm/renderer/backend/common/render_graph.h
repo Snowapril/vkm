@@ -7,6 +7,7 @@
 #include <vkm/renderer/backend/common/render_pass.h>
 #include <vkm/renderer/backend/common/driver_resource.h>
 #include <vkm/renderer/backend/common/command_queue.h>
+#include <functional>
 
 namespace vkm
 {
@@ -61,9 +62,15 @@ namespace vkm
         ~VkmRenderGraphicsSubGraph() override = default;
 
         void commit(VkmCommandBufferBase* commandBuffer) override final;
-        
+
+        // Callback invoked between beginRenderPass/endRenderPass during commit(), letting
+        // app/engine code (e.g. the ImGui overlay) record draw commands into this subgraph.
+        using VkmRenderCallback = std::function<void(VkmCommandBufferBase*)>;
+        void setRenderCallback(VkmRenderCallback callback) { _renderCallback = std::move(callback); }
+
     private:
         VkmFrameBufferDescriptor _frameBufferDesc; // Frame buffer descriptor for the graphics subgraph
+        VkmRenderCallback _renderCallback;
     };
     class VkmRenderComputeSubGraph : public VkmRenderSubGraph
     {
@@ -133,7 +140,7 @@ namespace vkm
 
     private:
         VkmDriverBase* _driver; // Pointer to the driver managing this render graph
-        uint32_t _frameIndex; // Frame index for this render graph
+        uint32_t _frameIndex;
         std::vector<std::unique_ptr<VkmRenderSubGraph>> _subGraphs;
         uint32_t _currentSubGraphId = 0; // Current subgraph ID for tracking
 

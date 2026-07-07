@@ -45,6 +45,15 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/engine.cpp
 )
 
+if (VKM_ENABLE_IMGUI)
+    list(APPEND PUBLIC_HDRS
+        ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/imgui_renderer.h
+    )
+    list(APPEND SRCS
+        ${SRC_DIR}/vkm/renderer/imgui/imgui_renderer.cpp
+    )
+endif()
+
 if (VKM_PLATFORM_WINDOWS)
     list(APPEND PUBLIC_HDRS
         $(PUBLIC_HDR_DIR)/vkm/platform/windows/application.h
@@ -89,6 +98,14 @@ if (VKM_USE_VULKAN_API)
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_queue.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.cpp
     )
+    if (VKM_ENABLE_IMGUI)
+        list(APPEND PUBLIC_HDRS
+            ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/vulkan_imgui_renderer.h
+        )
+        list(APPEND SRCS
+            ${SRC_DIR}/vkm/renderer/imgui/vulkan_imgui_renderer.cpp
+        )
+    endif()
 endif()
 
 if (VKM_USE_METAL_API)
@@ -106,6 +123,14 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_swapchain.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_texture.mm
     )
+    if (VKM_ENABLE_IMGUI)
+        list(APPEND PUBLIC_HDRS
+            ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/metal_imgui_renderer.h
+        )
+        list(APPEND SRCS
+            ${SRC_DIR}/vkm/renderer/imgui/metal_imgui_renderer.mm
+        )
+    endif()
 endif()
 
 if (VKM_USE_WEBGPU_API)
@@ -127,6 +152,14 @@ if (VKM_USE_WEBGPU_API)
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_command_queue.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_command_buffer.cpp
     )
+    if (VKM_ENABLE_IMGUI)
+        list(APPEND PUBLIC_HDRS
+            ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/webgpu_imgui_renderer.h
+        )
+        list(APPEND SRCS
+            ${SRC_DIR}/vkm/renderer/imgui/webgpu_imgui_renderer.cpp
+        )
+    endif()
 endif()
 
 if (VKM_PLATFORM_APPLE)
@@ -183,6 +216,10 @@ target_link_libraries(${target}
     spirv-cross-core
 )
 
+if (VKM_ENABLE_IMGUI)
+    target_link_libraries(${target} PUBLIC imgui)
+endif()
+
 if (NOT EMSCRIPTEN)
     target_link_libraries(${target} PRIVATE glfw)
 endif()
@@ -197,10 +234,14 @@ if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
 endif()
 
 if (VKM_PLATFORM_APPLE)
-    # platform/apple/application.mm references CAMetalLayer/MTLDevice directly for the
-    # windowing surface regardless of which render backend (Metal or Vulkan/MoltenVK) is active.
-    target_link_libraries(${target} PUBLIC "-framework Metal -framework CoreVideo -framework QuartzCore")
+    if (VKM_USE_METAL_API)
+        # platform/apple/application.mm references CAMetalLayer/MTLDevice directly for the
+        # Metal windowing surface.
+        target_link_libraries(${target} PUBLIC "-framework Metal -framework CoreVideo -framework QuartzCore")
+    endif()
     if (NOT IOS)
+        # Needed for the Metal branch's NSApplication/NSWindow code, and for GLFW's Cocoa
+        # backend used by the Vulkan branch.
         target_link_libraries(${target} PUBLIC "-framework Cocoa -framework AppKit")
     endif()
 endif()
