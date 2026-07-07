@@ -17,10 +17,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [vulkan, webgpu]
+        # Explicitly enumerated per backend (not a separate `backend:` axis crossed
+        # against `include:`) — see ubuntu.yml for why that doesn't reliably cross-product.
         include:
           - name: "Windows Server 2022 + Visual Studio 2022"
             os: windows-2022
+            backend: vulkan
+          - name: "Windows Server 2022 + Visual Studio 2022"
+            os: windows-2022
+            backend: webgpu
 
     runs-on: ${{matrix.os}}
     name: ${{matrix.name}} (${{ matrix.backend }})

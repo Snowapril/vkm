@@ -17,10 +17,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [metal, vulkan, webgpu]
+        # Explicitly enumerated per backend (not a separate `backend:` axis crossed
+        # against `include:`) — see ubuntu.yml for why that doesn't reliably cross-product.
         include:
           - name: "macOS 26 + AppleClang"
             os: macos-26
+            backend: metal
+          - name: "macOS 26 + AppleClang"
+            os: macos-26
+            backend: vulkan
+          - name: "macOS 26 + AppleClang"
+            os: macos-26
+            backend: webgpu
 
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.name }} (${{ matrix.backend }})
