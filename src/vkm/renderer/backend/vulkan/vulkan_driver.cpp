@@ -202,7 +202,10 @@ namespace vkm
 
     VkmInitResult VkmDriverVulkan::initializeInner(const VkmEngineLaunchOptions* options)
     {
-        VKM_VK_CHECK_RESULT_MSG_RETURN(volkInitialize(), "Failed to initialize volk");
+        if (volkInitialize() != VK_SUCCESS)
+        {
+            return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "Failed to initialize the Vulkan loader (no Vulkan runtime installed on this system)."};
+        }
 
         uint32_t instanceExtensionCount = 0;
         VKM_VK_CHECK_RESULT_MSG_RETURN(vkEnumerateInstanceExtensionProperties(nullptr, &instanceExtensionCount, nullptr), "Failed to get instance extension count");
@@ -251,7 +254,10 @@ namespace vkm
             .ppEnabledExtensionNames = instanceExtensions.data(),
         };
 
-        VKM_VK_CHECK_RESULT_MSG_RETURN(vkCreateInstance(&instanceCreateInfo, nullptr, &_instance), "Failed to create instance");
+        if (vkCreateInstance(&instanceCreateInfo, nullptr, &_instance) != VK_SUCCESS)
+        {
+            return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "Failed to create Vulkan instance (no compatible Vulkan driver/ICD found on this system)."};
+        }
 
         VKM_DEBUG_INFO("Vulkan instance created");
         VKM_DEBUG_INFO("Instance extension used : ");

@@ -192,16 +192,29 @@ def cmake_build(build_dir: Path, jobs: int) -> bool:
     return result.returncode == 0
 
 
-def execute_tests(build_dir: Path, system: str) -> bool:
+def execute_tests(build_dir: Path, system: str) -> str:
+    """Runs the built UnitTests binary. Returns 'PASS', 'FAIL', or 'SKIP'.
+
+    A nonzero exit is always FAIL — hardware/driver gaps are handled gracefully
+    inside the binary itself (see tests/UnitTestUtils.hpp's VKM_REQUIRE_DEVICE) and
+    never produce a nonzero exit, so a real failure here means a genuine regression.
+    SKIP applies when the binary exits 0 but printed at least one "Skipping: "
+    message (a GPU-dependent test self-skipped due to no compatible hardware).
+    """
     binary_name = "UnitTests.exe" if system == "Windows" else "UnitTests"
     test_bin = build_dir / "bin" / binary_name
 
     if not test_bin.exists():
         print(f"[ERROR] Test binary not found: {test_bin}")
-        return False
+        return "FAIL"
 
-    result = run_cmd([str(test_bin)])
-    return result.returncode == 0
+    print(f">>> {test_bin}")
+    result = subprocess.run([str(test_bin)], capture_output=True, text=True)
+    print(result.stdout + result.stderr)
+
+    if result.returncode != 0:
+        return "FAIL"
+    return "SKIP" if "Skipping: " in result.stdout else "PASS"
 
 
 # ---------------------------------------------------------------------------
@@ -454,8 +467,7 @@ def main() -> None:
             results[name] = "FAIL"
             continue
 
-        passed = execute_tests(backend_build_dir, system)
-        results[name] = "PASS" if passed else "FAIL"
+        results[name] = execute_tests(backend_build_dir, system)
 
     # Summary
     print()

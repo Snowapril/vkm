@@ -17,17 +17,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        backend: [vulkan, webgpu]
         include:
           - name: "Windows Server 2022 + Visual Studio 2022"
             os: windows-2022
 
     runs-on: ${{matrix.os}}
-    name: ${{matrix.name}}
+    name: ${{matrix.name}} (${{ matrix.backend }})
     steps:
     - uses: actions/checkout@v1
       with:
         submodules: true
     - name: Install Vulkan SDK
+      if: matrix.backend == 'vulkan'
       shell: pwsh
       run: |
         # GitHub-hosted windows-2022 runners don't ship winget (unlike a real Windows
@@ -48,5 +50,5 @@ jobs:
         python bootstrap.py
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.0.2
-    - name: Build and run unit tests (Vulkan backend)
-      run: python scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}}
+    - name: Build and run unit tests (${{ matrix.backend }} backend)
+      run: python scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}

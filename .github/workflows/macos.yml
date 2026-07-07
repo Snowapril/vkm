@@ -17,12 +17,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        backend: [metal, vulkan, webgpu]
         include:
           - name: "macOS 26 + AppleClang"
             os: macos-26
 
     runs-on: ${{ matrix.os }}
-    name: ${{ matrix.name }}
+    name: ${{ matrix.name }} (${{ matrix.backend }})
 
     steps:
       - uses: actions/checkout@v4
@@ -30,6 +31,7 @@ jobs:
           submodules: true
 
       - name: Install Vulkan SDK (MoltenVK + headers)
+        if: matrix.backend == 'vulkan'
         run: |
           brew install molten-vk vulkan-headers vulkan-loader vulkan-tools
           # volk's dlopen("libvulkan.dylib") only searches standard system paths;
@@ -40,5 +42,5 @@ jobs:
       - name: Execute bootstrap script
         run: python3 bootstrap.py
 
-      - name: Build and run unit tests (Metal + Vulkan backends)
-        run: python3 scripts/run_tests.py --no-bootstrap --build-type ${{ env.build_type }}
+      - name: Build and run unit tests (${{ matrix.backend }} backend)
+        run: python3 scripts/run_tests.py --no-bootstrap --build-type ${{ env.build_type }} --backend ${{ matrix.backend }}
