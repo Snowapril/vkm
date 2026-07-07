@@ -46,7 +46,7 @@ namespace vkm
         }
         const bool isValid() const
         {
-            return (id != -1);
+            return (id != (uint64_t)-1);
         }
         const bool isPooledResource() const
         {
