@@ -107,6 +107,9 @@ jobs:
       - name: Execute bootstrap script
         shell: bash
         run: |
-          python3 bootstrap.py
+          # dawn is only needed for vkm-compiler's optional WGSL output
+          # (VKM_COMPILER_ENABLE_WGSL, off by default and unused by CI); skip it
+          # to avoid an unnecessary, disk-heavy clone on every job.
+          python3 bootstrap.py --skip dawn
       - name: Build and run unit tests (${{ matrix.backend }} backend)
         run: python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}

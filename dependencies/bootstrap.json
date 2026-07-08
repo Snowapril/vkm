@@ -179,7 +179,8 @@
     "source": {
       "type": "git",
       "url": "https://github.com/google/dawn.git",
-      "revision": "v20260624.223603"
+      "revision": "v20260624.223603",
+      "submodules": false
     },
     "postprocess": {
       "type": "script",

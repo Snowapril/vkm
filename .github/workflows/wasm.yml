@@ -35,10 +35,13 @@ jobs:
       - name: Execute bootstrap script (fetches deps + installs/activates emsdk)
         shell: bash
         run: |
+          # dawn is only needed for vkm-compiler's optional WGSL output, and
+          # vkm-compiler itself is never built under Emscripten; skip it to
+          # avoid an unnecessary, disk-heavy clone.
           if [ "${{ runner.os }}" = "Windows" ]; then
-            python bootstrap.py
+            python bootstrap.py --skip dawn
           else
-            python3 bootstrap.py
+            python3 bootstrap.py --skip dawn
           fi
       - name: Configure Build
         shell: bash
