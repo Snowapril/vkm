@@ -254,6 +254,8 @@ def extractFile(filename, target_dir):
 
         tfile = tarfile.open(filename)
         extract_dir = os.path.commonprefix(tfile.getnames())
+        if extract_dir == "./":  # some archives store entries as "./bin/foo" instead of "bin/foo";
+            extract_dir = ""    # that's just as "no base directory" as a literal empty commonprefix
         extract_dir_local = ""
         if extract_dir == "":  # deal with stupid tar files that don't contain a base directory
             extract_dir, extension2 = os.path.splitext(os.path.basename(filename))

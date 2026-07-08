@@ -31,7 +31,11 @@ if executeCommandSilent("git --version") != 0:
 
 # run Tools/Bootstrap
 
-runPythonScript( os.path.join("dependencies", "bootstrap.py"), "-b dependencies" )
+params = "-b dependencies"
+if len(sys.argv) > 1:
+	params += " " + " ".join(sys.argv[1:])
+
+runPythonScript( os.path.join("dependencies", "bootstrap.py"), params )
 
 print( "" )
 print( "Bootstrapping done." )

@@ -321,7 +321,9 @@ if (NOT EMSCRIPTEN)
             INSTALL_COMMAND ""
             BUILD_BYPRODUCTS "${VKM_DXC_EXECUTABLE}")
     elseif (WIN32)
-        set(VKM_DXC_EXECUTABLE "${PROJECT_SOURCE_DIR}/dependencies/src/dxc-win/bin/dxc.exe")
+        # The Windows release archive nests the exe under an arch subdirectory
+        # (bin/x64/dxc.exe), unlike the flat bin/dxc of the Linux archive.
+        set(VKM_DXC_EXECUTABLE "${PROJECT_SOURCE_DIR}/dependencies/src/dxc-win/bin/x64/dxc.exe")
     elseif (LINUX)
         set(VKM_DXC_EXECUTABLE "${PROJECT_SOURCE_DIR}/dependencies/src/dxc-linux/bin/dxc")
     endif()
