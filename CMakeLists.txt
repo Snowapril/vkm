@@ -375,5 +375,6 @@ endif()
 
 option(BUILD_SAMPLES "Build samples" ON)
 if (BUILD_SAMPLES)
+    add_subdirectory(src/samples/empty_screen)
     add_subdirectory(src/samples/triangle)
 endif()
