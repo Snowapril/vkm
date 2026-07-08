@@ -17,7 +17,7 @@
         "per_vertex": "float3float4"
     },
     "shaders": {
-        "vertex": { "filepath": "triangle.vert", "entry_point": "main" },
-        "fragment": { "filepath": "triangle.frag", "entry_point": "main" }
+        "vertex": { "filepath": "triangle.hlsl", "entry_point": "VSMain" },
+        "fragment": { "filepath": "triangle.hlsl", "entry_point": "PSMain" }
     }
 }

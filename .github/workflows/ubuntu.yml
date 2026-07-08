@@ -107,7 +107,10 @@ jobs:
       - name: Execute bootstrap script
         shell: bash
         run: |
-          python3 bootstrap.py
+          # dawn is only needed for vkm-compiler's optional WGSL output
+          # (VKM_COMPILER_ENABLE_WGSL, off by default and unused by CI); skip it
+          # to avoid an unnecessary, disk-heavy clone on every job.
+          python3 bootstrap.py --skip dawn
       - name: Build and run unit tests (${{ matrix.backend }} backend)
         # The vulkan backend's tests create a real GLFW window, which needs a real X server
         # even for an invisible window; headless runners have no display at all, so xvfb-run

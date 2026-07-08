@@ -52,7 +52,10 @@ jobs:
         }
     - name: Execute bootstrap script
       run: |
-        python bootstrap.py
+        # dawn is only needed for vkm-compiler's optional WGSL output
+        # (VKM_COMPILER_ENABLE_WGSL, off by default and unused by CI); skip it
+        # to avoid an unnecessary, disk-heavy clone on every job.
+        python bootstrap.py --skip dawn
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.0.2
     - name: Build and run unit tests (${{ matrix.backend }} backend)

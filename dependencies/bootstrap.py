@@ -127,7 +127,7 @@ def dieIfNonZero(res):
         raise ValueError("Command returned non-zero status: " + str(res));
 
 
-def cloneRepository(type, url, target_name, revision = None, try_only_local_operations = False):
+def cloneRepository(type, url, target_name, revision = None, try_only_local_operations = False, submodules = True):
     target_dir = os.path.join(SRC_DIR, target_name)
     target_dir_exists = os.path.exists(target_dir)
     log("Cloning " + url + " to " + target_dir)
@@ -160,10 +160,12 @@ def cloneRepository(type, url, target_name, revision = None, try_only_local_oper
             if target_dir_exists:
                 dlog("Removing directory " + target_dir + " before cloning")
                 shutil.rmtree(target_dir)
-            dieIfNonZero(executeCommand(TOOL_COMMAND_GIT + " clone --recursive " + url + " " + target_dir))
+            clone_flags = " --recursive" if submodules else ""
+            dieIfNonZero(executeCommand(TOOL_COMMAND_GIT + " clone" + clone_flags + " " + url + " " + target_dir))
         elif not try_only_local_operations:
             log("Repository " + target_dir + " already exists; fetching instead of cloning")
-            dieIfNonZero(executeCommand(TOOL_COMMAND_GIT + " -C " + target_dir + " fetch --recurse-submodules"))
+            fetch_flags = " --recurse-submodules" if submodules else ""
+            dieIfNonZero(executeCommand(TOOL_COMMAND_GIT + " -C " + target_dir + " fetch" + fetch_flags))
 
         if revision is None:
             revision = "HEAD"
@@ -252,6 +254,8 @@ def extractFile(filename, target_dir):
 
         tfile = tarfile.open(filename)
         extract_dir = os.path.commonprefix(tfile.getnames())
+        if extract_dir == "./":  # some archives store entries as "./bin/foo" instead of "bin/foo";
+            extract_dir = ""    # that's just as "no base directory" as a literal empty commonprefix
         extract_dir_local = ""
         if extract_dir == "":  # deal with stupid tar files that don't contain a base directory
             extract_dir, extension2 = os.path.splitext(os.path.basename(filename))
@@ -679,6 +683,11 @@ def main(argv):
         if (opt_names) and (not name in opt_names):
             continue
 
+        platforms = library.get('platforms', None)
+        if platforms is not None and platform.system() not in platforms:
+            log("Skipping " + name + " (not applicable to platform " + platform.system() + ")")
+            continue
+
         lib_dir = os.path.join(SRC_DIR, name)
         lib_dir = lib_dir.replace(os.path.sep, '/')
 
@@ -766,6 +775,7 @@ def main(argv):
 
                 else:
                     revision = source.get('revision', None)
+                    submodules = source.get('submodules', True)
 
                     archive_name = name + ".tar.gz" # for reading or writing of snapshot archives
                     if revision is not None:
@@ -774,7 +784,7 @@ def main(argv):
                     try:
                         if force_fallback:
                             raise RuntimeError
-                        cloneRepository(src_type, src_url, name, revision)
+                        cloneRepository(src_type, src_url, name, revision, submodules = submodules)
 
                         if create_repo_snapshots:
                             log("Creating snapshot of library repository " + name)
@@ -798,7 +808,7 @@ def main(argv):
                             downloadAndExtractFile(fallback_src_url, SNAPSHOT_DIR, name, force_download = True)
 
                             # reset repository state to particular revision (only using local operations inside the function)
-                            cloneRepository(src_type, src_url, name, revision, True)
+                            cloneRepository(src_type, src_url, name, revision, True, submodules)
                         else:
                             raise
             else:

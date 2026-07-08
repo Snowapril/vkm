@@ -417,6 +417,9 @@ MigrationBackup/
 build/
 build-wasm/
 
+# Build-generated compiled shader cache (produced by vkm-compiler)
+resources/Shaders/ShaderCache/
+
 ### VisualStudioCode ###
 .vscode/*
 *.code-workspace

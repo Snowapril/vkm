@@ -38,6 +38,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE INTERNAL "")
 
 # Compile options
 include(buildscripts/CompileOptions.cmake)
+include(buildscripts/ShaderCompile.cmake)
 
 # Build type - Release by default
 message("CMake build type: " ${CMAKE_BUILD_TYPE})
@@ -263,7 +264,7 @@ endif()
 set(SPIRV_CROSS_CLI             OFF CACHE BOOL "" FORCE)
 set(SPIRV_CROSS_ENABLE_TESTS    OFF CACHE BOOL "")
 set(SPIRV_CROSS_ENABLE_HLSL     OFF CACHE BOOL "")
-set(SPIRV_CROSS_ENABLE_MSL      OFF CACHE BOOL "")
+set(SPIRV_CROSS_ENABLE_MSL       ON CACHE BOOL "")
 set(SPIRV_CROSS_ENABLE_CPP       ON CACHE BOOL "")
 set(SPIRV_CROSS_ENABLE_REFLECT   ON CACHE BOOL "")
 set(SPIRV_CROSS_ENABLE_C_API    OFF CACHE BOOL "")
@@ -301,9 +302,76 @@ foreach(_vkm_glslang_target glslang OSDependent SPIRV SPVRemapper)
 endforeach()
 unset(_vkm_glslang_target)
 
+# ---------------------------------------------------------------------------
+# vkm-compiler tool + its dxc / Tint dependencies
+#
+# vkm-compiler is a native host tool; it is never built under the Emscripten
+# toolchain (there is no superbuild here to produce a native binary as a side
+# effect of an Emscripten configure).
+# ---------------------------------------------------------------------------
+if (NOT EMSCRIPTEN)
+    # Locate (Windows/Linux: prebuilt archive) or build (Apple: from source)
+    # the dxc HLSL->SPIR-V compiler that vkm-compiler shells out to.
+    if (APPLE)
+        # DXC's CMake is a full LLVM fork with its own minimum-CMake-version and
+        # global CACHE pollution, and a 30-60+ minute build — nest it via
+        # ExternalProject (its own CMake invocation) rather than add_subdirectory.
+        include(ExternalProject)
+        set(VKM_DXC_SOURCE_DIR "${PROJECT_SOURCE_DIR}/dependencies/src/dxc-macos-src")
+        set(VKM_DXC_BUILD_DIR "${CMAKE_BINARY_DIR}/dxc-build")
+        set(VKM_DXC_EXECUTABLE "${VKM_DXC_BUILD_DIR}/bin/dxc")
+        ExternalProject_Add(dxc_build
+            SOURCE_DIR "${VKM_DXC_SOURCE_DIR}"
+            BINARY_DIR "${VKM_DXC_BUILD_DIR}"
+            CMAKE_ARGS
+                -C "${VKM_DXC_SOURCE_DIR}/cmake/caches/PredefinedParams.cmake"
+                -DCMAKE_BUILD_TYPE=Release
+            BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target dxc
+            INSTALL_COMMAND ""
+            BUILD_BYPRODUCTS "${VKM_DXC_EXECUTABLE}")
+    elseif (WIN32)
+        # The Windows release archive nests the exe under an arch subdirectory
+        # (bin/x64/dxc.exe), unlike the flat bin/dxc of the Linux archive.
+        set(VKM_DXC_EXECUTABLE "${PROJECT_SOURCE_DIR}/dependencies/src/dxc-win/bin/x64/dxc.exe")
+    elseif (LINUX)
+        set(VKM_DXC_EXECUTABLE "${PROJECT_SOURCE_DIR}/dependencies/src/dxc-linux/bin/dxc")
+    endif()
+
+    # Independent of VKM_USE_WEBGPU_API (which only ever turns ON under the
+    # Emscripten toolchain): this lets a NATIVE vkm-compiler build exercise the
+    # WGSL path directly. Requires CMake >= 3.22 (Dawn's own minimum) on the
+    # host, since the nested ExternalProject configure uses the host cmake.
+    option(VKM_COMPILER_ENABLE_WGSL "Build Tint support into vkm-compiler for WGSL output" OFF)
+    if (VKM_COMPILER_ENABLE_WGSL)
+        include(ExternalProject)
+        set(VKM_DAWN_SOURCE_DIR "${PROJECT_SOURCE_DIR}/dependencies/src/dawn")
+        set(VKM_DAWN_BUILD_DIR "${CMAKE_BINARY_DIR}/dawn-build")
+        set(VKM_TINT_EXECUTABLE "${VKM_DAWN_BUILD_DIR}/bin/tint")
+        ExternalProject_Add(dawn_tint_build
+            SOURCE_DIR "${VKM_DAWN_SOURCE_DIR}"
+            BINARY_DIR "${VKM_DAWN_BUILD_DIR}"
+            CMAKE_ARGS
+                -DCMAKE_BUILD_TYPE=Release
+                -DTINT_BUILD_SPV_READER=ON
+                -DTINT_BUILD_WGSL_WRITER=ON
+                -DDAWN_BUILD_SAMPLES=OFF
+                -DDAWN_BUILD_TESTS=OFF
+            BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target tint_cmd_tint_cmd
+            INSTALL_COMMAND ""
+            BUILD_BYPRODUCTS "${VKM_TINT_EXECUTABLE}")
+    endif()
+endif()
+
 # Project modules
 add_subdirectory(src/vkm)
 add_subdirectory(tests)
+
+# vkm-compiler links vkmcore, so it must be added after src/vkm above —
+# target_link_libraries() only resolves a plain name as a CMake target if
+# that target already exists at the time of the call.
+if (NOT EMSCRIPTEN)
+    add_subdirectory(src/tools/vkm-compiler)
+endif()
 
 option(BUILD_SAMPLES "Build samples" ON)
 if (BUILD_SAMPLES)

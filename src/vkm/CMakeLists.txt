@@ -18,6 +18,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/enum_string_util.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/pipeline_state.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/pipeline_state_parser.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/shader_cache.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_buffer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_queue.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/driver.h
@@ -253,9 +254,22 @@ target_compile_definitions(${target}
     ${DEFAULT_COMPILE_DEFINITIONS}
 )
 
+# Engine shader cache. PSO_JSON_FILES is intentionally empty for now: vkm's own
+# engine shaders (scene_object/tonemap/etc.) are still loose GLSL with no PSO
+# json, so the target has nothing to compile yet and gets populated as those
+# shaders migrate to HLSL+PSO-json. The call is a no-op (no target created)
+# until then, so guard the dependency wiring on the target actually existing.
+vkm_add_shader_cache_target(
+    TARGET_NAME vkm_engine_shaders
+    OUTPUT_DIR "${RESOURCES_DIR}/Shaders/ShaderCache"
+    PSO_JSON_FILES)
+if (TARGET vkm_engine_shaders)
+    add_dependencies(${target} vkm_engine_shaders)
+endif()
+
 # Install
-install(TARGETS  
-        ${target} 
+install(TARGETS
+        ${target}
         RUNTIME  DESTINATION bin
         LIBRARY  DESTINATION lib
         ARCHIVE  DESTINATION lib

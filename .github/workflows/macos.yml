@@ -51,7 +51,10 @@ jobs:
           echo "VK_LAYER_PATH=$(brew --prefix)/share/vulkan/explicit_layer.d" >> $GITHUB_ENV
 
       - name: Execute bootstrap script
-        run: python3 bootstrap.py
+        # dawn is only needed for vkm-compiler's optional WGSL output
+        # (VKM_COMPILER_ENABLE_WGSL, off by default and unused by CI); skip it
+        # to avoid an unnecessary, disk-heavy clone on every job.
+        run: python3 bootstrap.py --skip dawn
 
       - name: Build and run unit tests (${{ matrix.backend }} backend)
         run: python3 scripts/run_tests.py --no-bootstrap --build-type ${{ env.build_type }} --backend ${{ matrix.backend }}
