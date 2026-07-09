@@ -229,6 +229,19 @@ if (NOT EMSCRIPTEN)
 endif()
 
 if (NOT EMSCRIPTEN)
+    # mimalloc has no official Emscripten/WASM CMake target; memory.cpp falls
+    # back to plain ::operator new/delete on VKM_PLATFORM_WASM instead.
+    set(MI_BUILD_SHARED OFF CACHE BOOL "")
+    set(MI_BUILD_STATIC ON  CACHE BOOL "")
+    set(MI_BUILD_TESTS  OFF CACHE BOOL "")
+    # We provide our own explicit tracked operator new/delete override in
+    # src/vkm/base/memory.cpp; mimalloc's own malloc-interface override would
+    # bypass that tagging/tracking layer entirely.
+    set(MI_OVERRIDE     OFF CACHE BOOL "")
+    add_subdirectory(dependencies/src/mimalloc)
+endif()
+
+if (NOT EMSCRIPTEN)
     # Emscripten supplies its own GLFW3 emulation via -sUSE_GLFW=3; the
     # vendored GLFW does not support Emscripten as a CMake build target.
     set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "")
@@ -293,6 +306,7 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 if (NOT EMSCRIPTEN)
     set_property(TARGET glfw PROPERTY FOLDER "ThirdPartyLibraries")
     set_property(TARGET volk PROPERTY FOLDER "ThirdPartyLibraries")
+    set_property(TARGET mimalloc-static PROPERTY FOLDER "ThirdPartyLibraries")
 endif()
 set_property(TARGET meshoptimizer PROPERTY FOLDER "ThirdPartyLibraries")
 foreach(_vkm_glslang_target glslang OSDependent SPIRV SPVRemapper)
