@@ -22,8 +22,9 @@ namespace vkm
     struct VkmEngineLaunchOptions
     {
         bool enableValidationLayer;
+        bool enableGpuCapture = false;
     };
-    constexpr const VkmEngineLaunchOptions DEFAULT_ENGINE_LAUNCH_OPTIONS = { true };
+    constexpr const VkmEngineLaunchOptions DEFAULT_ENGINE_LAUNCH_OPTIONS = { true, false };
 
     /*
     * @brief Engine base class

@@ -348,6 +348,42 @@ TEST_CASE("VkmRenderResourcePool - tagResource tracks per-category memory usage 
     driver.destroy();
 }
 
+TEST_CASE("VkmEngineLaunchOptions - parseEngineLaunchOptions parses --enable-gpu-capture") {
+    const char* rawArgs[] = { "vkm", "--enable-gpu-capture=true" };
+    vkm::VkmEngineLaunchOptions options = vkm::VkmEngine::parseEngineLaunchOptions(2, const_cast<char**>(rawArgs));
+    CHECK(options.enableGpuCapture);
+}
+
+TEST_CASE("VkmDriverBase - isDebugNamingEnabled reflects launch options, defaults safely on null options") {
+    SUBCASE("null options -> naming disabled regardless of DEFAULT_ENGINE_LAUNCH_OPTIONS") {
+        FakeDriver driver;
+        REQUIRE(driver.initialize(nullptr).code == vkm::VkmInitResultCode::Success);
+        CHECK_FALSE(driver.isDebugNamingEnabled());
+        driver.destroy();
+    }
+    SUBCASE("both flags false -> naming disabled") {
+        FakeDriver driver;
+        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false, .enableGpuCapture = false };
+        REQUIRE(driver.initialize(&opts).code == vkm::VkmInitResultCode::Success);
+        CHECK_FALSE(driver.isDebugNamingEnabled());
+        driver.destroy();
+    }
+    SUBCASE("enableValidationLayer alone -> naming enabled") {
+        FakeDriver driver;
+        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = true, .enableGpuCapture = false };
+        REQUIRE(driver.initialize(&opts).code == vkm::VkmInitResultCode::Success);
+        CHECK(driver.isDebugNamingEnabled());
+        driver.destroy();
+    }
+    SUBCASE("enableGpuCapture alone -> naming enabled") {
+        FakeDriver driver;
+        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = false, .enableGpuCapture = true };
+        REQUIRE(driver.initialize(&opts).code == vkm::VkmInitResultCode::Success);
+        CHECK(driver.isDebugNamingEnabled());
+        driver.destroy();
+    }
+}
+
 TEST_CASE("VkmOffsetAllocator - allocate returns valid, non-overlapping ranges") {
     vkm::VkmOffsetAllocator allocator(1024);
 
@@ -533,6 +569,37 @@ TEST_CASE("VkmDriverVulkan - committed buffer allocation is tagged with real VMA
     CHECK(tag->name == "TaggedTestBuffer");
 
     f.driver->getRenderResourcePool()->releaseResource(buffer->getHandle());
+}
+
+TEST_CASE("VkmDriverVulkan - resource creation succeeds with enableGpuCapture enabled") {
+    glfwInit();
+
+    vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = true, .enableGpuCapture = true };
+    std::unique_ptr<vkm::VkmDriverVulkan> driver(new vkm::VkmDriverVulkan());
+    vkm::VkmInitResult initResult = driver->initialize(&opts);
+    if (initResult.code == vkm::VkmInitResultCode::HardwareUnsupported) {
+        MESSAGE("Skipping: " << initResult.reason);
+        glfwTerminate();
+        return;
+    }
+    REQUIRE_MESSAGE(initResult.code == vkm::VkmInitResultCode::Success, initResult.reason);
+    CHECK(driver->isDebugNamingEnabled());
+
+    // Per tests/CLAUDE.md, only non-null/functional assertions are permitted here -- actually
+    // verifying the native debug label landed requires external tooling (RenderDoc/Xcode),
+    // not in-process assertion. This proves naming-enabled resource creation doesn't crash
+    // or fail, which is the meaningful in-process guarantee.
+    vkm::VkmBufferInfo info{};
+    info._flags = vkm::VkmResourceCreateInfo::AllowShaderRead;
+    info._size = 256;
+    info._debugName = "GpuCaptureTestBuffer";
+    vkm::VkmBuffer* buffer = driver->newBuffer(info);
+    REQUIRE(buffer != nullptr);
+    CHECK(buffer->getHandle().isValid());
+    driver->getRenderResourcePool()->releaseResource(buffer->getHandle());
+
+    driver->destroy();
+    glfwTerminate();
 }
 
 TEST_CASE("VkmDriverVulkan - texture view and buffer view resolve their parent resource") {

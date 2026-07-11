@@ -169,6 +169,21 @@ tag's `allocatedSize`/`alignment`:
 - **Sampler / TextureView / BufferView** = always `0` (no independent GPU memory allocation of
   their own), via the base-class default — no override.
 
+## Debug Naming (GPU Capture)
+
+`VkmEngineLaunchOptions::enableGpuCapture` (parsed from the `--enable-gpu-capture` CLI flag,
+alongside the existing `--enable-validation-layer`) opts a run into GPU-capture tooling support.
+`VkmDriverBase::isDebugNamingEnabled()` returns `enableValidationLayer || enableGpuCapture` — but
+is always `false` when `initialize()` was called with a null options pointer (some test fixtures
+do this, having opted out of the whole launch-configuration story). It is computed once in
+`initialize()` and cached.
+
+When `isDebugNamingEnabled()` is true AND a `VkmResourceInfo::_debugName` was supplied, each of
+`driver.cpp`'s 6 orchestration methods (`newTexture`/`newBuffer`/`newStagingBuffer`/`newSampler`/
+`newTextureView`/`newBufferView`) calls the resource's `setDebugName()` right after `tagResource()`;
+`VkmCommandQueueBase::initialize()` likewise gates its `setDebugName(_queueName)` on the same flag.
+No `setDebugName()` method body itself changed — gating is entirely at these call sites.
+
 ## VkmCommandQueueType
 
 ```cpp

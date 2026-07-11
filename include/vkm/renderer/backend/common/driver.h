@@ -5,6 +5,7 @@
 #include <vkm/base/common.h>
 #include <vkm/platform/common/window.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
+#include <vkm/renderer/engine.h>
 
 #include <array>
 #include <vector>
@@ -13,7 +14,6 @@
 
 namespace vkm
 {
-    struct VkmEngineLaunchOptions;
     struct VkmPipelineStateDescriptor;
     class VkmTexture;
     class VkmBuffer;
@@ -139,6 +139,23 @@ namespace vkm
         */
         inline VkmDeferredResourceReclaimer* getDeferredReclaimer() const { return _deferredReclaimer.get(); }
 
+        /*
+        * @brief get the launch options this driver was initialized with. If initialize()
+        * was called with a null options pointer (some test fixtures do this), this returns
+        * DEFAULT_ENGINE_LAUNCH_OPTIONS -- but note isDebugNamingEnabled() is still false in
+        * that case regardless (see initialize()'s null-guard), since a null-options caller
+        * has explicitly opted out of the whole launch-configuration story.
+        */
+        inline const VkmEngineLaunchOptions& getLaunchOptions() const { return _launchOptions; }
+
+        /*
+        * @brief true if either enableValidationLayer or enableGpuCapture was requested at
+        * launch. Resources (see newTexture/newBuffer/etc. in driver.cpp) and command queues
+        * (VkmCommandQueueBase::initialize()) only push a native debug label when this is
+        * true AND a debug name was actually supplied.
+        */
+        inline bool isDebugNamingEnabled() const { return _debugNamingEnabled; }
+
     protected:
         VkmCommandQueueBase* newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
 
@@ -179,5 +196,7 @@ namespace vkm
     private:
         std::unique_ptr<VkmRenderResourcePool> _renderResourcePool;
         std::unique_ptr<VkmDeferredResourceReclaimer> _deferredReclaimer;
+        VkmEngineLaunchOptions _launchOptions{};
+        bool _debugNamingEnabled{false};
     };
 }

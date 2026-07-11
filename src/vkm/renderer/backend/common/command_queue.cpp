@@ -63,7 +63,10 @@ namespace vkm
         if (initializeInner() == false)
             return false;
 
-        setDebugName(_queueName);
+        if (_driver->isDebugNamingEnabled())
+        {
+            setDebugName(_queueName);
+        }
 
         return true;
     }

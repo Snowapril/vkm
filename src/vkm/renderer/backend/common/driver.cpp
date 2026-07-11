@@ -28,6 +28,17 @@ namespace vkm
         _renderResourcePool = std::make_unique<VkmRenderResourcePool>(this);
         _deferredReclaimer = std::make_unique<VkmDeferredResourceReclaimer>(this);
 
+        if (options != nullptr)
+        {
+            _launchOptions = *options;
+            _debugNamingEnabled = options->enableValidationLayer || options->enableGpuCapture;
+        }
+        else
+        {
+            _launchOptions = DEFAULT_ENGINE_LAUNCH_OPTIONS;
+            _debugNamingEnabled = false;
+        }
+
         VkmInitResult result = initializeInner(options);
         if (result.code != VkmInitResultCode::Success)
         {
@@ -89,6 +100,11 @@ namespace vkm
         tag.type = texture->getResourceType();
         _renderResourcePool->tagResource(handle, tag);
 
+        if (_debugNamingEnabled && info._debugName != nullptr)
+        {
+            texture->setDebugName(info._debugName);
+        }
+
         return texture;
     }
 
@@ -113,6 +129,11 @@ namespace vkm
         tag.name = info._debugName != nullptr ? info._debugName : "";
         tag.type = buffer->getResourceType();
         _renderResourcePool->tagResource(handle, tag);
+
+        if (_debugNamingEnabled && info._debugName != nullptr)
+        {
+            buffer->setDebugName(info._debugName);
+        }
 
         return buffer;
     }
@@ -139,6 +160,11 @@ namespace vkm
         tag.type = stagingBuffer->getResourceType();
         _renderResourcePool->tagResource(handle, tag);
 
+        if (_debugNamingEnabled && info._debugName != nullptr)
+        {
+            stagingBuffer->setDebugName(info._debugName);
+        }
+
         return stagingBuffer;
     }
 
@@ -163,6 +189,11 @@ namespace vkm
         tag.name = info._debugName != nullptr ? info._debugName : "";
         tag.type = sampler->getResourceType();
         _renderResourcePool->tagResource(handle, tag);
+
+        if (_debugNamingEnabled && info._debugName != nullptr)
+        {
+            sampler->setDebugName(info._debugName);
+        }
 
         return sampler;
     }
@@ -189,6 +220,11 @@ namespace vkm
         tag.type = textureView->getResourceType();
         _renderResourcePool->tagResource(handle, tag);
 
+        if (_debugNamingEnabled && info._debugName != nullptr)
+        {
+            textureView->setDebugName(info._debugName);
+        }
+
         return textureView;
     }
 
@@ -213,6 +249,11 @@ namespace vkm
         tag.name = info._debugName != nullptr ? info._debugName : "";
         tag.type = bufferView->getResourceType();
         _renderResourcePool->tagResource(handle, tag);
+
+        if (_debugNamingEnabled && info._debugName != nullptr)
+        {
+            bufferView->setDebugName(info._debugName);
+        }
 
         return bufferView;
     }
