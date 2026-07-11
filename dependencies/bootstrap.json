@@ -175,6 +175,14 @@
     }
   },
   {
+    "name": "mimalloc",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/microsoft/mimalloc.git",
+      "revision": "v3.3.2"
+    }
+  },
+  {
     "name": "dawn",
     "source": {
       "type": "git",

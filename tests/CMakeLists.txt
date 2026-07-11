@@ -13,6 +13,7 @@ set(SRCS
     ${SRC_DIR}/UnitTests.cpp
     ${SRC_DIR}/TestEngineSetup.cpp
     ${SRC_DIR}/TestPsoConfig.cpp
+    ${SRC_DIR}/TestMemoryTracker.cpp
 )
 
 if (VKM_USE_METAL_API)

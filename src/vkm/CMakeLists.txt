@@ -12,6 +12,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/base/platform.h
     ${PUBLIC_HDR_DIR}/vkm/base/common.h
     ${PUBLIC_HDR_DIR}/vkm/base/logger.h
+    ${PUBLIC_HDR_DIR}/vkm/base/memory.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/renderer_common.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_graph.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_pass.h
@@ -33,6 +34,7 @@ set(PUBLIC_HDRS
 set(SRCS
     ${SRC_DIR}/vkm/base/common.cpp
     ${SRC_DIR}/vkm/base/logger.cpp
+    ${SRC_DIR}/vkm/base/memory.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/renderer_common.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_graph.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/pipeline_state_parser.cpp
@@ -223,6 +225,12 @@ endif()
 
 if (NOT EMSCRIPTEN)
     target_link_libraries(${target} PRIVATE glfw)
+endif()
+
+if (NOT EMSCRIPTEN)
+    # mimalloc-static exports its own include/ dir via a PUBLIC target_include_directories,
+    # so linking it is sufficient - no manual include path needed.
+    target_link_libraries(${target} PRIVATE mimalloc-static)
 endif()
 
 if (VKM_USE_VULKAN_API)
