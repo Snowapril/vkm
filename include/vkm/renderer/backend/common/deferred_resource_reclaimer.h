@@ -55,6 +55,7 @@ namespace vkm
         {
             VkmResourceHandle _handle;
             std::vector<VkmGpuEventTimelineObject> _waitsOn;
+            std::vector<VkmResourceHandle> _waitsOnChildren;
         };
 
         bool isEntryReady(const PendingEntry& entry) const;

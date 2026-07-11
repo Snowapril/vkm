@@ -30,11 +30,9 @@ namespace vkm
             return false;
         }
 
-        VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
-        VkmBufferWebGPU* parentBuffer = driverWebGPU->getRenderResourcePool()->getResource<VkmBufferWebGPU>(info._buffer);
+        VkmBufferWebGPU* parentBuffer = static_cast<VkmBufferWebGPU*>(resolveParent());
         if (parentBuffer == nullptr)
         {
-            VKM_DEBUG_ERROR("VkmBufferViewInfo::_buffer does not resolve to a live buffer");
             return false;
         }
 

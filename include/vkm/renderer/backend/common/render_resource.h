@@ -27,6 +27,14 @@ namespace vkm
         virtual VkmResourceType getResourceType() const = 0;
 
         /*
+        * @brief Resources that own child resources (e.g. a texture owning its views)
+        * override this so VkmDeferredResourceReclaimer can cascade a release: a parent's
+        * deferred release blocks until every declared child is gone from the pool too.
+        * Default: no children.
+        */
+        virtual std::vector<VkmResourceHandle> getOwnedChildHandles() const { return {}; }
+
+        /*
         * @brief Record that this resource was used, tagged with the timeline value the
         * triggering submit produced. Keyed by the timeline's own identity (each
         * VkmCommandQueueBase owns exactly one VkmGpuEventTimelineBase, so this pointer already

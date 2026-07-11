@@ -34,11 +34,9 @@ namespace vkm
             return false;
         }
 
-        VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
-        VkmTextureMetal* parentTexture = driverMetal->getRenderResourcePool()->getResource<VkmTextureMetal>(info._texture);
+        VkmTextureMetal* parentTexture = static_cast<VkmTextureMetal*>(resolveParent());
         if (parentTexture == nullptr)
         {
-            VKM_DEBUG_ERROR("VkmTextureViewInfo::_texture does not resolve to a live texture");
             return false;
         }
 

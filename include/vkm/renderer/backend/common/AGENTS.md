@@ -51,13 +51,18 @@ virtual void destroyInner() = 0;
 ## VkmResourceHandle Rules
 
 ```cpp
-struct VkmResourceHandle { uint64_t id; VkmResourcePoolType poolType; VkmResourceType type; };
+struct VkmResourceHandle { uint64_t id; VkmResourcePoolType poolType; VkmResourceType type; uint32_t generation = 0; };
 ```
 
 - Allocated by `VkmRenderResourcePool` — do not construct raw handles manually.
 - `id == (uint64_t)-1` means invalid. Use `handle.isValid()`.
 - `VkmResourceType`: Texture=0, Buffer=1, StagingBuffer=2, Sampler=3, TextureView=4, BufferView=5.
 - Pooled resources: `handle.isPooledResource()` true when `poolType != Undefined`.
+- `generation` is bumped by the pool each time a slot is released; `getResource()` only
+  returns a resource when the handle's `generation` still matches the slot's, giving views a
+  weak-reference liveness check. Purely additive scaffolding — not exercised today since the
+  pool never reuses an `id`, so a released slot's generation is never compared against a fresh
+  handle in the same slot. `isValid()`/`isPooledResource()` stay id/poolType-based only.
 
 ## View Handles
 
@@ -71,22 +76,36 @@ object on Metal/WebGPU (no buffer-view concept in either API) — only Vulkan cr
 `VkBufferView`, and only when a texel format is requested; regular UBO/SSBO bindings use the
 view's `getOffset()`/`getSize()` metadata directly instead.
 
+## View Creation Ownership
+
+Views are created **only** via `texture->createView(info)` / `buffer->createView(info)`.
+`VkmDriverBase::newTextureView()` / `newBufferView()` are `protected` and friended to
+`VkmTexture` / `VkmBuffer` respectively — they are not directly callable from application or
+render-graph code. `createView()` always overwrites the parent-handle field
+(`VkmTextureViewInfo::_texture` / `VkmBufferViewInfo::_buffer`) with the creating resource's
+own handle, ignoring whatever the caller set, and records the resulting view handle so the
+parent owns it (see Deferred Destruction). This guarantees a view can never reference a parent
+other than the one it was created from, and that every view is tracked for cascading release.
+
 ## Per-Resource GPU Usage Tracking
 
-`VkmRenderResource` (`render_resource.h`) tracks the last timeline value it was used with, per
-queue, in a fixed `std::array<VkmGpuEventTimelineObject, (uint8_t)VkmCommandQueueType::Count>`:
+`VkmRenderResource` (`render_resource.h`) tracks the last timeline value it was used with, keyed
+by the timeline's own identity, in a `std::vector<VkmGpuEventTimelineObject>` (each
+`VkmCommandQueueBase` owns exactly one `VkmGpuEventTimelineBase`, so the timeline pointer already
+uniquely identifies the queue instance — no separate queue-type/index parameter is needed):
 ```cpp
-void recordUsage(VkmCommandQueueType queueType, VkmGpuEventTimelineObject timelineObject);
-VkmGpuEventTimelineObject getLastUsage(VkmCommandQueueType queueType) const;
+void recordUsage(VkmGpuEventTimelineObject timelineObject);
+VkmGpuEventTimelineObject getLastUsage(VkmGpuEventTimelineBase* queueTimeline) const;
+const std::vector<VkmGpuEventTimelineObject>& getAllUsages() const;
 bool hasAnyPendingUsage() const; // non-blocking poll via queryLastCompletedTimeline()
 ```
-Only the latest usage per queue is kept — an earlier submit on the same queue is implied
-complete once a later one is. `VkmRenderSubGraph::addReferencedResource(VkmResourceHandle)`
+Only the latest usage per queue instance is kept — an earlier submit on the same queue is
+implied complete once a later one is. `VkmRenderSubGraph::addReferencedResource(VkmResourceHandle)`
 lets descriptor-binding recording code declare which resources a subgraph touches;
 `VkmRenderGraph::execute()` calls `recordUsage()` for each after the subgraph's commands are
 submitted, tagged with that submit's `VkmGpuEventTimelineObject`. `execute()` currently only
-ever submits to the `Graphics` queue (hardcoded), so all recorded usage is tagged
-`VkmCommandQueueType::Graphics` until the render graph dispatches to multiple queue types.
+ever submits to the `Graphics` queue (hardcoded), so all recorded usage is tagged with the
+graphics queue's timeline until the render graph dispatches to multiple queue instances.
 
 ## Deferred Destruction
 
@@ -98,6 +117,14 @@ instead. `VkmDeferredResourceReclaimer` (`deferred_resource_reclaimer.h`) snapsh
 resource's per-queue recorded usage, and only calls the real `releaseResource()` once every
 one of those timelines has completed (checked via the non-blocking `queryLastCompletedTimeline()`,
 never a blocking `waitIdle()` — that would defeat the purpose).
+
+**Cascading release.** `VkmRenderResource::getOwnedChildHandles()` (default empty; overridden by
+`VkmTexture` / `VkmBuffer` to return their created views) declares child resources a parent owns.
+When a parent is `requestRelease()`d, the reclaimer first recursively requests release of every
+still-live child, then queues the parent's own entry. The parent's entry does not become ready
+until **every** declared child is gone from the pool AND the parent's own recorded GPU usage has
+completed — so a view is always reclaimed before the texture/buffer it references, and neither is
+reclaimed while GPU work is still in flight.
 
 A dedicated background thread (mutex + condition_variable, woken on new requests or a ~4ms
 periodic timeout) drives this on Vulkan/Metal/WebGPU-desktop-hypothetical platforms; it is
@@ -129,5 +156,5 @@ enum class VkmCommandQueueType : uint8_t { Graphics=0, Compute=1, Transfer=2, Co
 
 - [ ] No new pure virtual methods without implementing them in ALL existing backends (Vulkan + Metal + WebGPU)
 - [ ] `FRAME_BUFFER_COUNT` not changed
-- [ ] `VkmResourceHandle` memory layout unchanged (used in hash specialization)
+- [ ] `VkmResourceHandle` layout changes (e.g. the `generation` field added for view weak-references) must update BOTH `operator==`/`!=` AND the `std::hash` specialization together — they are not auto-derived
 - [ ] Public method signatures in base classes unchanged (breaking ABI)

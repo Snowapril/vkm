@@ -36,11 +36,9 @@ namespace vkm
             return false;
         }
 
-        VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
-        VkmTextureWebGPU* parentTexture = driverWebGPU->getRenderResourcePool()->getResource<VkmTextureWebGPU>(info._texture);
+        VkmTextureWebGPU* parentTexture = static_cast<VkmTextureWebGPU*>(resolveParent());
         if (parentTexture == nullptr)
         {
-            VKM_DEBUG_ERROR("VkmTextureViewInfo::_texture does not resolve to a live texture");
             return false;
         }
 

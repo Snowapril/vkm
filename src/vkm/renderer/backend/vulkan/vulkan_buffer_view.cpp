@@ -38,10 +38,9 @@ namespace vkm
         }
 
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
-        VkmBufferVulkan* parentBuffer = driverVulkan->getRenderResourcePool()->getResource<VkmBufferVulkan>(info._buffer);
+        VkmBufferVulkan* parentBuffer = static_cast<VkmBufferVulkan*>(resolveParent());
         if (parentBuffer == nullptr)
         {
-            VKM_DEBUG_ERROR("VkmBufferViewInfo::_buffer does not resolve to a live buffer");
             return false;
         }
 

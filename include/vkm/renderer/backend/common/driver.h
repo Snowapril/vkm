@@ -104,16 +104,6 @@ namespace vkm
         VkmSampler* newSampler(const VkmSamplerInfo& info);
 
         /*
-         * @brief Create a texture view referencing an existing (pooled) texture
-         */
-        VkmTextureView* newTextureView(const VkmTextureViewInfo& info);
-
-        /*
-         * @brief Create a buffer view referencing an existing (pooled) buffer
-         */
-        VkmBufferView* newBufferView(const VkmBufferViewInfo& info);
-
-        /*
         * @brief Create swapchain with window info
         */
         VkmSwapChainBase* newSwapChain();
@@ -151,6 +141,23 @@ namespace vkm
 
     protected:
         VkmCommandQueueBase* newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
+
+        /*
+         * @brief Create a texture view referencing an existing (pooled) texture. Protected
+         * and friended to VkmTexture only -- views must be created via
+         * VkmTexture::createView() so ownership is tracked; nothing else may call this.
+         */
+        VkmTextureView* newTextureView(const VkmTextureViewInfo& info);
+
+        /*
+         * @brief Create a buffer view referencing an existing (pooled) buffer. Protected
+         * and friended to VkmBuffer only -- views must be created via
+         * VkmBuffer::createView() so ownership is tracked; nothing else may call this.
+         */
+        VkmBufferView* newBufferView(const VkmBufferViewInfo& info);
+
+        friend class VkmTexture;
+        friend class VkmBuffer;
 
     protected:
         virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) = 0;

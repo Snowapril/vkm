@@ -9,6 +9,8 @@
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/buffer.h>
+#include <vkm/renderer/backend/common/texture.h>
+#include <vkm/renderer/backend/common/texture_view.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/engine.h>
 #include <vkm/platform/common/app_delegate.h>
@@ -72,6 +74,14 @@ TEST_CASE("VkmResourceHandle - std::hash is consistent and distinguishes distinc
     vkm::VkmResourceHandle a{1, vkm::VkmResourcePoolType::Default, vkm::VkmResourceType::Texture};
     vkm::VkmResourceHandle b{2, vkm::VkmResourcePoolType::Default, vkm::VkmResourceType::Texture};
     CHECK(hasher(a) == hasher(a));
+    CHECK(hasher(a) != hasher(b));
+}
+
+TEST_CASE("VkmResourceHandle - generation participates in equality and hash") {
+    vkm::VkmResourceHandle a{5, vkm::VkmResourcePoolType::Default, vkm::VkmResourceType::Texture, 0};
+    vkm::VkmResourceHandle b{5, vkm::VkmResourcePoolType::Default, vkm::VkmResourceType::Texture, 1};
+    CHECK(a != b);
+    std::hash<vkm::VkmResourceHandle> hasher;
     CHECK(hasher(a) != hasher(b));
 }
 
@@ -178,6 +188,21 @@ protected:
     bool initializeInner() override { return true; }
 };
 
+class MockTexture : public vkm::VkmTexture {
+public:
+    MockTexture(vkm::VkmDriverBase* driver) : vkm::VkmTexture(driver) {}
+    bool initialize(vkm::VkmResourceHandle handle, const vkm::VkmTextureInfo& info) override { return initializeTextureCommon(handle, info); }
+    bool overrideExternalHandle(void*) override { return true; }
+    void setDebugName(const char*) override {}
+};
+
+class MockTextureView : public vkm::VkmTextureView {
+public:
+    MockTextureView(vkm::VkmDriverBase* driver) : vkm::VkmTextureView(driver) {}
+    bool initialize(vkm::VkmResourceHandle handle, const vkm::VkmTextureViewInfo& info) override { return initializeTextureViewCommon(handle, info); }
+    void setDebugName(const char*) override {}
+};
+
 class FakeDriver : public vkm::VkmDriverBase {
 protected:
     vkm::VkmInitResult initializeInner(const vkm::VkmEngineLaunchOptions*) override
@@ -185,11 +210,11 @@ protected:
         return vkm::VkmInitResult{vkm::VkmInitResultCode::Success, ""};
     }
     void destroyInner() override {}
-    vkm::VkmTexture* newTextureInner() override { return nullptr; }
+    vkm::VkmTexture* newTextureInner() override { return new MockTexture(this); }
     vkm::VkmBuffer* newBufferInner() override { return nullptr; }
     vkm::VkmStagingBuffer* newStagingBufferInner() override { return nullptr; }
     vkm::VkmSampler* newSamplerInner() override { return nullptr; }
-    vkm::VkmTextureView* newTextureViewInner() override { return nullptr; }
+    vkm::VkmTextureView* newTextureViewInner() override { return new MockTextureView(this); }
     vkm::VkmBufferView* newBufferViewInner() override { return nullptr; }
     vkm::VkmSwapChainBase* newSwapChainInner() override { return nullptr; }
     vkm::VkmCommandQueueBase* newCommandQueueInner() override { return new FakeCommandQueue(this); }
@@ -228,6 +253,48 @@ TEST_CASE("VkmDeferredResourceReclaimer - pollOnce releases only once every reco
     timeline.setLastCompleted(1);
     testReclaimer.pollOnce();
     CHECK(driver.getRenderResourcePool()->getResource<vkm::VkmBuffer>(handle) == nullptr); // now released
+
+    driver.destroy();
+}
+
+TEST_CASE("VkmTexture::createView - owns its views and cascading release waits for both") {
+    FakeDriver driver;
+    REQUIRE(driver.initialize(nullptr).code == vkm::VkmInitResultCode::Success);
+
+    vkm::VkmTextureInfo textureInfo{};
+    vkm::VkmTexture* texture = driver.newTexture(textureInfo);
+    REQUIRE(texture != nullptr);
+
+    vkm::VkmTextureViewInfo viewInfo{};
+    vkm::VkmTextureView* view = texture->createView(viewInfo);
+    REQUIRE(view != nullptr);
+    CHECK(view->getTextureViewInfo()._texture == texture->getHandle());
+    CHECK(texture->getOwnedChildHandles() == std::vector<vkm::VkmResourceHandle>{view->getHandle()});
+    CHECK(view->isParentAlive());
+    CHECK(view->tryGetParent() == texture);
+
+    // A fresh, never-started() reclaimer -- driven purely via pollOnce(), mirroring the
+    // existing MockBuffer reclaimer test's pattern.
+    vkm::VkmDeferredResourceReclaimer testReclaimer(&driver);
+
+    MockGpuEventTimeline timeline;
+    auto usage = timeline.allocateGpuEventTimelineObject(); // timelineValue == 1
+    texture->recordUsage(usage);
+
+    testReclaimer.requestRelease(texture->getHandle());
+
+    // The view has no recorded usage of its own, so its own pending entry is immediately
+    // ready and gets released on the first pollOnce() -- but the parent's entry checks (in
+    // that SAME locked pass) whether the child is *already* released, which it isn't yet at
+    // that point (release happens after the lock, in the same pollOnce() call), so the
+    // parent stays pending for at least one more pollOnce().
+    testReclaimer.pollOnce();
+    CHECK(driver.getRenderResourcePool()->getResource<vkm::VkmTextureView>(view->getHandle()) == nullptr);
+    CHECK(driver.getRenderResourcePool()->getResource<vkm::VkmTexture>(texture->getHandle()) != nullptr);
+
+    timeline.setLastCompleted(1);
+    testReclaimer.pollOnce();
+    CHECK(driver.getRenderResourcePool()->getResource<vkm::VkmTexture>(texture->getHandle()) == nullptr);
 
     driver.destroy();
 }
@@ -413,7 +480,7 @@ TEST_CASE("VkmDriverVulkan - texture view and buffer view resolve their parent r
     viewInfo._texture = texture->getHandle();
     viewInfo._numMipLevels = 1;
     viewInfo._numArrayLayers = 1;
-    vkm::VkmTextureView* textureView = f.driver->newTextureView(viewInfo);
+    vkm::VkmTextureView* textureView = texture->createView(viewInfo);
     REQUIRE(textureView != nullptr);
     auto* vkTextureView = f.driver->getRenderResourcePool()->getResource<vkm::VkmTextureViewVulkan>(textureView->getHandle());
     REQUIRE(vkTextureView != nullptr);
@@ -429,7 +496,7 @@ TEST_CASE("VkmDriverVulkan - texture view and buffer view resolve their parent r
     bufferViewInfo._buffer = buffer->getHandle();
     bufferViewInfo._offset = 0;
     bufferViewInfo._size = 256;
-    vkm::VkmBufferView* bufferView = f.driver->newBufferView(bufferViewInfo);
+    vkm::VkmBufferView* bufferView = buffer->createView(bufferViewInfo);
     REQUIRE(bufferView != nullptr);
     auto* vkBufferView = f.driver->getRenderResourcePool()->getResource<vkm::VkmBufferViewVulkan>(bufferView->getHandle());
     REQUIRE(vkBufferView != nullptr);

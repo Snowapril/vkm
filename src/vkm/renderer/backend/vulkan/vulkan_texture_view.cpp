@@ -38,10 +38,9 @@ namespace vkm
         }
 
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
-        VkmTextureVulkan* parentTexture = driverVulkan->getRenderResourcePool()->getResource<VkmTextureVulkan>(info._texture);
+        VkmTextureVulkan* parentTexture = static_cast<VkmTextureVulkan*>(resolveParent());
         if (parentTexture == nullptr)
         {
-            VKM_DEBUG_ERROR("VkmTextureViewInfo::_texture does not resolve to a live texture");
             return false;
         }
 

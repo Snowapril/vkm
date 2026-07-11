@@ -30,11 +30,9 @@ namespace vkm
             return false;
         }
 
-        VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
-        VkmBufferMetal* parentBuffer = driverMetal->getRenderResourcePool()->getResource<VkmBufferMetal>(info._buffer);
+        VkmBufferMetal* parentBuffer = static_cast<VkmBufferMetal*>(resolveParent());
         if (parentBuffer == nullptr)
         {
-            VKM_DEBUG_ERROR("VkmBufferViewInfo::_buffer does not resolve to a live buffer");
             return false;
         }
 

@@ -38,14 +38,15 @@ namespace vkm
         uint64_t id;
         VkmResourcePoolType poolType;
         VkmResourceType type;
+        uint32_t generation = 0;
 
         constexpr const bool operator==(const VkmResourceHandle& other) const
         {
-            return id == other.id && poolType == other.poolType && type == other.type;
+            return id == other.id && poolType == other.poolType && type == other.type && generation == other.generation;
         }
         constexpr const bool operator!=(const VkmResourceHandle& other) const
         {
-            return id != other.id || poolType != other.poolType || type != other.type;
+            return !(*this == other);
         }
         const bool isValid() const
         {
@@ -230,6 +231,6 @@ struct std::hash<vkm::VkmResourceHandle>
 {
     std::size_t operator()(const vkm::VkmResourceHandle& handle) const noexcept
     {
-        return std::hash<uint64_t>()(handle.id) ^ std::hash<uint8_t>()(static_cast<uint8_t>(handle.poolType)) ^ std::hash<uint8_t>()(static_cast<uint8_t>(handle.type));
+        return std::hash<uint64_t>()(handle.id) ^ std::hash<uint8_t>()(static_cast<uint8_t>(handle.poolType)) ^ std::hash<uint8_t>()(static_cast<uint8_t>(handle.type)) ^ std::hash<uint32_t>()(handle.generation);
     }
 };

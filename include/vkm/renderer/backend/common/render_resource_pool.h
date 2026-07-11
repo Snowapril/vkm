@@ -8,6 +8,7 @@
 
 #include <array>
 #include <vector>
+#include <mutex>
 
 namespace vkm
 {
@@ -37,7 +38,8 @@ namespace vkm
         void releaseResource(VkmResourceHandle handle);\
 
     private:
-        VkmResourceHandle allocateResource(VkmResourceType type, VkmResourcePoolType poolType);
+        // Caller must already hold _mutex.
+        VkmResourceHandle allocateResourceLocked(VkmResourceType type, VkmResourcePoolType poolType);
 
     public:
         class VkmDriverResourceSubPool
@@ -50,11 +52,13 @@ namespace vkm
 
         private:
             std::array<std::vector<std::unique_ptr<VkmDriverResourceBase>>, (uint8_t)VkmResourceType::Count> _resources;
+            std::array<std::vector<uint32_t>, (uint8_t)VkmResourceType::Count> _generations;
             uint32_t _nextResourceId[(uint8_t)VkmResourceType::Count] = {0, };
         };
 
     private:
         VkmDriverBase* _driver;
         std::array<VkmDriverResourceSubPool, (uint8_t)VkmResourcePoolType::Count> _subPools;
+        mutable std::mutex _mutex;
     };
 }

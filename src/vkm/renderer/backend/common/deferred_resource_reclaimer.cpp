@@ -79,12 +79,29 @@ namespace vkm
             return; // already released or invalid handle
         }
 
+        std::vector<VkmResourceHandle> children = resource->getOwnedChildHandles();
+        for (VkmResourceHandle child : children)
+        {
+            if (pool->getResource<VkmRenderResource>(child) != nullptr)
+            {
+                requestRelease(child);
+            }
+        }
+
         PendingEntry entry;
         entry._handle = handle;
         entry._waitsOn = resource->getAllUsages();
+        entry._waitsOnChildren = children;
 
         {
             std::lock_guard<std::mutex> lock(_mutex);
+            for (const PendingEntry& existing : _pending)
+            {
+                if (existing._handle == handle)
+                {
+                    return; // already pending (e.g. requested directly, then again via a parent's cascade)
+                }
+            }
             _pending.push_back(entry);
         }
         _cv.notify_one();
@@ -121,6 +138,15 @@ namespace vkm
 
     bool VkmDeferredResourceReclaimer::isEntryReady(const PendingEntry& entry) const
     {
+        VkmRenderResourcePool* pool = _driver->getRenderResourcePool();
+        for (VkmResourceHandle child : entry._waitsOnChildren)
+        {
+            if (pool->getResource<VkmRenderResource>(child) != nullptr)
+            {
+                return false; // child still alive, hasn't been reclaimed yet
+            }
+        }
+
         for (const VkmGpuEventTimelineObject& usage : entry._waitsOn)
         {
             if (usage._gpuEventTimeline == nullptr)
