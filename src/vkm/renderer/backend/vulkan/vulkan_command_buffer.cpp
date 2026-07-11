@@ -2,6 +2,7 @@
 
 #include <vkm/renderer/backend/vulkan/vulkan_command_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_texture.h>
+#include <vkm/renderer/backend/vulkan/vulkan_pipeline_state.h>
 #include <vkm/renderer/backend/common/render_pass.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
@@ -130,5 +131,17 @@ namespace vkm
                 colorTextureVulkan->setCurrentLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
             }
         }
+    }
+
+    void VkmCommandBufferVulkan::onBindPipeline(VkmPipelineStateBase* pipelineState)
+    {
+        VkmPipelineStateVulkan* pipelineStateVulkan = static_cast<VkmPipelineStateVulkan*>(pipelineState);
+        const VkPipelineBindPoint bindPoint = pipelineState->isCompute() ? VK_PIPELINE_BIND_POINT_COMPUTE : VK_PIPELINE_BIND_POINT_GRAPHICS;
+        vkCmdBindPipeline(_vkCommandBuffer, bindPoint, pipelineStateVulkan->getHandle());
+    }
+
+    void VkmCommandBufferVulkan::onUnbindPipeline()
+    {
+        // Vulkan has no explicit unbind concept -- nothing to do here.
     }
 } // namespace vkm

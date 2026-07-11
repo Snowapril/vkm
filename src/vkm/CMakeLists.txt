@@ -20,6 +20,10 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/pipeline_state.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/pipeline_state_parser.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/shader_cache.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/shader_cache_util.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/shader_cache_loader.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/pipeline_state_object.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/pipeline_state_manager.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_buffer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_queue.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/driver.h
@@ -38,6 +42,10 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/backend/common/renderer_common.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_graph.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/pipeline_state_parser.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/shader_cache_util.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/shader_cache_loader.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/pipeline_state_object.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/pipeline_state_manager.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/command_buffer.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/command_queue.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/driver.cpp
@@ -92,6 +100,7 @@ if (VKM_USE_VULKAN_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_util.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_command_queue.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_pipeline_state.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_driver.cpp
@@ -100,6 +109,7 @@ if (VKM_USE_VULKAN_API)
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_util.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_queue.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_pipeline_state.cpp
     )
     if (VKM_ENABLE_IMGUI)
         list(APPEND PUBLIC_HDRS
@@ -118,6 +128,7 @@ if (VKM_USE_METAL_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_command_queue.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_swapchain.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_texture.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_pipeline_state.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_driver.mm
@@ -125,6 +136,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_command_queue.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_swapchain.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_texture.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_pipeline_state.mm
     )
     if (VKM_ENABLE_IMGUI)
         list(APPEND PUBLIC_HDRS
@@ -145,6 +157,7 @@ if (VKM_USE_WEBGPU_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_util.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_command_queue.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_command_buffer.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_pipeline_state.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/wasm/application.cpp
@@ -154,6 +167,7 @@ if (VKM_USE_WEBGPU_API)
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_util.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_command_queue.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_command_buffer.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_pipeline_state.cpp
     )
     if (VKM_ENABLE_IMGUI)
         list(APPEND PUBLIC_HDRS
@@ -262,15 +276,21 @@ target_compile_definitions(${target}
     ${DEFAULT_COMPILE_DEFINITIONS}
 )
 
-# Engine shader cache. PSO_JSON_FILES is intentionally empty for now: vkm's own
-# engine shaders (scene_object/tonemap/etc.) are still loose GLSL with no PSO
-# json, so the target has nothing to compile yet and gets populated as those
-# shaders migrate to HLSL+PSO-json. The call is a no-op (no target created)
-# until then, so guard the dependency wiring on the target actually existing.
+# Engine shader cache. Wired up to glob resources/Pipelines/Engine/*.json, but that
+# directory is still empty (vkm's own engine shaders -- scene_object/tonemap/etc. -- are
+# still loose GLSL with no PSO json), so VKM_ENGINE_PSO_JSON_FILES stays empty and the
+# target remains a no-op until real engine PSO json is authored. Guard the dependency
+# wiring on the target actually existing.
+file(GLOB VKM_ENGINE_PSO_JSON_FILES CONFIGURE_DEPENDS
+    "${RESOURCES_DIR}/Pipelines/Engine/*.json")
+file(GLOB_RECURSE VKM_ENGINE_SHADER_SOURCES CONFIGURE_DEPENDS
+    "${RESOURCES_DIR}/Shaders/*.hlsl")
+
 vkm_add_shader_cache_target(
     TARGET_NAME vkm_engine_shaders
     OUTPUT_DIR "${RESOURCES_DIR}/Shaders/ShaderCache"
-    PSO_JSON_FILES)
+    PSO_JSON_FILES ${VKM_ENGINE_PSO_JSON_FILES}
+    EXTRA_DEPENDS ${VKM_ENGINE_SHADER_SOURCES})
 if (TARGET vkm_engine_shaders)
     add_dependencies(${target} vkm_engine_shaders)
 endif()

@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/webgpu/webgpu_swapchain.h>
 #include <vkm/renderer/backend/webgpu/webgpu_texture.h>
 #include <vkm/renderer/backend/webgpu/webgpu_command_queue.h>
+#include <vkm/renderer/backend/webgpu/webgpu_pipeline_state.h>
 #include <vkm/renderer/engine.h>
 
 #include <emscripten/emscripten.h>
@@ -147,6 +148,11 @@ namespace vkm
     VkmTexture* VkmDriverWebGPU::newTextureInner()
     {
         return new VkmTextureWebGPU(this);
+    }
+
+    VkmPipelineStateBase* VkmDriverWebGPU::newPipelineStateInner()
+    {
+        return new VkmPipelineStateWebGPU(this);
     }
 
     VkmSwapChainBase* VkmDriverWebGPU::newSwapChainInner()

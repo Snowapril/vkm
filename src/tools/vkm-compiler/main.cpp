@@ -9,12 +9,18 @@
 //   - vulkan: dxc HLSL -> SPIR-V (stored as-is)
 //   - metal:  dxc HLSL -> SPIR-V -> spirv-cross -> MSL text
 //   - webgpu: dxc HLSL -> SPIR-V -> tint -> WGSL text (requires WGSL support)
+//
+// If the PSO JSON declares an "options" node, it is expanded via
+// expandPipelineStateOptions() into one variant per option; every variant's
+// present stages are compiled with that variant's merged definitions and its
+// .vfcache files are named with the option suffix (see buildShaderCacheFilename).
 
 #include <cxxopts.hpp>
 #include <spirv_msl.hpp>
 
 #include <vkm/renderer/backend/common/pipeline_state_parser.h>
 #include <vkm/renderer/backend/common/shader_cache.h>
+#include <vkm/renderer/backend/common/shader_cache_util.h>
 
 #include "subprocess.h"
 
@@ -152,8 +158,8 @@ namespace
 
     bool compileStage(const VkmShaderStageDescriptor& desc,
                       const StageInfo& info,
-                      const std::string& backendName,
                       VkmShaderCacheBackend backend,
+                      const std::string& optionName,
                       const fs::path& shaderRoot,
                       const fs::path& outputDir)
     {
@@ -243,7 +249,7 @@ namespace
         }
 
         const fs::path outPath =
-            outputDir / (baseName + "." + info.shortName + "." + backendName + ".vfcache");
+            outputDir / buildShaderCacheFilename(baseName, optionName, info.stage, backend);
         if (!writeCacheFile(outPath, backend, info, format, desc.entryPoint, content))
         {
             return false;
@@ -323,25 +329,38 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    std::string expandError;
+    std::optional<std::vector<VkmPipelineStateDescriptor>> variants =
+        expandPipelineStateOptions(*pso, &expandError);
+    if (!variants.has_value())
+    {
+        std::cerr << "vkm-compiler: failed to expand PSO options for " << psoPath
+                  << ": " << expandError << "\n";
+        return 1;
+    }
+
     const StageInfo vertexInfo{VkmShaderCacheStage::Vertex, "vert", "vs_6_0"};
     const StageInfo fragmentInfo{VkmShaderCacheStage::Fragment, "frag", "ps_6_0"};
     const StageInfo computeInfo{VkmShaderCacheStage::Compute, "comp", "cs_6_0"};
 
     bool allOk = true;
-    if (pso->vertexShader.has_value())
+    for (const VkmPipelineStateDescriptor& variant : *variants)
     {
-        allOk &= compileStage(*pso->vertexShader, vertexInfo, backendName, backend,
-                              shaderRoot, outputDir);
-    }
-    if (pso->fragmentShader.has_value())
-    {
-        allOk &= compileStage(*pso->fragmentShader, fragmentInfo, backendName, backend,
-                              shaderRoot, outputDir);
-    }
-    if (pso->computeShader.has_value())
-    {
-        allOk &= compileStage(*pso->computeShader, computeInfo, backendName, backend,
-                              shaderRoot, outputDir);
+        if (variant.vertexShader.has_value())
+        {
+            allOk &= compileStage(*variant.vertexShader, vertexInfo, backend,
+                                  variant.optionName, shaderRoot, outputDir);
+        }
+        if (variant.fragmentShader.has_value())
+        {
+            allOk &= compileStage(*variant.fragmentShader, fragmentInfo, backend,
+                                  variant.optionName, shaderRoot, outputDir);
+        }
+        if (variant.computeShader.has_value())
+        {
+            allOk &= compileStage(*variant.computeShader, computeInfo, backend,
+                                  variant.optionName, shaderRoot, outputDir);
+        }
     }
 
     return allOk ? 0 : 1;

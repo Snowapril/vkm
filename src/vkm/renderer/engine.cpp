@@ -3,6 +3,7 @@
 #include <vkm/renderer/engine.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/swapchain.h>
+#include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <cxxopts.hpp>
 #include <iostream>
 
@@ -68,7 +69,19 @@ namespace vkm
             return result;
         }
         VKM_DEBUG_INFO("Renderer backend driver initialized");
-        _appDelegate->postDriverReady();
+
+        _pipelineStateManager = std::make_unique<VkmPipelineStateManager>(_driver);
+        std::string psoError;
+        if (!_pipelineStateManager->loadPipelineStatesFromDirectory(
+                std::string(RESOURCES_DIR) + "Pipelines/Engine/",
+                std::string(RESOURCES_DIR) + "Shaders/ShaderCache/",
+                VkmPipelineStateOrigin::Engine, &psoError))
+        {
+            VKM_DEBUG_ERROR(fmt::format("Failed to load engine pipeline states: {}", psoError).c_str());
+            return VkmInitResult{VkmInitResultCode::Failed, psoError};
+        }
+
+        _appDelegate->postDriverReady(this);
 
         return result;
     }

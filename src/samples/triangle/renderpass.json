@@ -19,5 +19,12 @@
     "shaders": {
         "vertex": { "filepath": "triangle.hlsl", "entry_point": "VSMain" },
         "fragment": { "filepath": "triangle.hlsl", "entry_point": "PSMain" }
+    },
+    "options": {
+        "default": {},
+        "wireframe": {
+            "rasterization_state": { "fill_mode": "wireframe" },
+            "definitions": { "WIREFRAME": true }
+        }
     }
 }

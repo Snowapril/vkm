@@ -4,6 +4,7 @@
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
+#include <vkm/renderer/backend/metal/metal_pipeline_state.h>
 
 #import <Metal/MTL4CommandBuffer.h>
 #import <Metal/MTL4RenderCommandEncoder.h>
@@ -130,5 +131,26 @@ namespace vkm
     void VkmCommandBufferMetal::onEndRenderPass()
     {
         _commandEncoder.commit();
+    }
+
+    void VkmCommandBufferMetal::onBindPipeline(VkmPipelineStateBase* pipelineState)
+    {
+        VkmPipelineStateMetal* pipelineStateMetal = static_cast<VkmPipelineStateMetal*>(pipelineState);
+        if (pipelineStateMetal->isCompute())
+        {
+            [_commandEncoder.getActiveComputeCommandEncoder() setComputePipelineState:pipelineStateMetal->getComputePipelineState()];
+        }
+        else
+        {
+            id<MTL4RenderCommandEncoder> renderCommandEncoder = _commandEncoder.getActiveRenderCommandEncoder();
+            [renderCommandEncoder setRenderPipelineState:pipelineStateMetal->getRenderPipelineState()];
+            [renderCommandEncoder setDepthStencilState:pipelineStateMetal->getDepthStencilState()];
+        }
+    }
+
+    void VkmCommandBufferMetal::onUnbindPipeline()
+    {
+        // No explicit "unbind" concept in Metal -- the next bindPipeline() call (or the
+        // end of the render/compute pass) supersedes whatever pipeline state is set.
     }
 }

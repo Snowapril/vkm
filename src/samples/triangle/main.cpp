@@ -7,7 +7,9 @@
 
 #include <vkm/base/common.h>
 #include <vkm/platform/common/app_delegate.h>
-#include <vkm/renderer/backend/common/pipeline_state_parser.h>
+#include <vkm/renderer/backend/common/pipeline_state_manager.h>
+#include <vkm/renderer/backend/common/pipeline_state_object.h>
+#include <vkm/renderer/engine.h>
 
 #if defined(VKM_PLATFORM_WINDOWS)
 #include <vkm/platform/windows/application.h>
@@ -27,22 +29,21 @@ public:
     TriangleApplication() = default;
     virtual ~TriangleApplication() = default;
 
-    virtual void postDriverReady() override final
+    virtual void postDriverReady(VkmEngine* engine) override final
     {
         VKM_DEBUG_LOG("TriangleApplication::postDriverReady");
 
-        std::string parseError;
-        auto pipelineState = parsePipelineStateFromFile(std::string(SAMPLE_DIR) + "renderpass.json", &parseError);
-        if (pipelineState.has_value())
+        VkmPipelineStateManager* manager = engine->getPipelineStateManager();
+        std::string err;
+        if (!manager->loadPipelineStatesFromDirectory(SAMPLE_DIR, SAMPLE_SHADER_CACHE_DIR, VkmPipelineStateOrigin::User, &err))
         {
-            VKM_DEBUG_LOG(("Parsed PSO '" + pipelineState->name + "': " +
-                std::to_string(pipelineState->colorAttachments.size()) + " color attachment(s), vertex shader '" +
-                pipelineState->vertexShader->filepath + "'").c_str());
+            VKM_DEBUG_ERROR(("Failed to load sample pipeline states: " + err).c_str());
+            return;
         }
-        else
-        {
-            VKM_DEBUG_ERROR(("Failed to parse PSO config: " + parseError).c_str());
-        }
+        VkmPipelineStateBase* defaultPso = manager->getPipelineState("triangle_pso[default]", VkmPipelineStateOrigin::User);
+        VkmPipelineStateBase* wireframePso = manager->getPipelineState("triangle_pso[wireframe]", VkmPipelineStateOrigin::User);
+        VKM_ASSERT(defaultPso != nullptr && wireframePso != nullptr, "Failed to create triangle_pso variants");
+        VKM_DEBUG_LOG(("Loaded PSOs '" + defaultPso->getName() + "' and '" + wireframePso->getName() + "'").c_str());
     }
 
     virtual void preShutdown() override final

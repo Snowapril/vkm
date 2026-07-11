@@ -14,11 +14,13 @@
 namespace vkm
 {
     struct VkmEngineLaunchOptions;
+    struct VkmPipelineStateDescriptor;
     class VkmTexture;
     class VkmSwapChainBase;
     class VkmCommandQueueBase;
     class VkmCommandDispatcher;
     class VkmRenderResourcePool;
+    class VkmPipelineStateBase;
 
     enum class VkmDriverCapabilityFlags : uint32_t
     {
@@ -86,6 +88,13 @@ namespace vkm
         VkmSwapChainBase* newSwapChain();
 
         /*
+        * @brief Create a backend pipeline state object from a fully-resolved descriptor
+        * @param desc fully-resolved pipeline state descriptor (already option-expanded)
+        * @param shaderCacheDir directory containing this descriptor's .vfcache files
+        */
+        VkmPipelineStateBase* newPipelineState(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError = nullptr);
+
+        /*
         * @brief get driver capability flags
         */
         inline VkmDriverCapabilityFlags getDriverCapabilityFlags() const { return _driverCapabilityFlags; }
@@ -112,6 +121,7 @@ namespace vkm
         virtual VkmTexture* newTextureInner() = 0;
         virtual VkmSwapChainBase* newSwapChainInner() = 0;
         virtual VkmCommandQueueBase* newCommandQueueInner() = 0;
+        virtual VkmPipelineStateBase* newPipelineStateInner() = 0;
 
     protected:
         std::array<std::vector<VkmCommandQueueBase*>, (uint8_t)VkmCommandQueueType::Count> _commandQueues;

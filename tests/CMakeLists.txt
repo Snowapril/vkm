@@ -14,6 +14,8 @@ set(SRCS
     ${SRC_DIR}/TestEngineSetup.cpp
     ${SRC_DIR}/TestPsoConfig.cpp
     ${SRC_DIR}/TestMemoryTracker.cpp
+    ${SRC_DIR}/TestShaderCacheUtil.cpp
+    ${SRC_DIR}/TestPipelineStateManager.cpp
 )
 
 if (VKM_USE_METAL_API)

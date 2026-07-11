@@ -1,0 +1,9 @@
+{
+    "color_attachments": [ { "format": "bgra8_unorm" } ],
+    "shaders": {
+        "vertex": { "filepath": "triangle.vert" }
+    },
+    "options": {
+        "variant_a": { "definitions": { "FOO": true } }
+    }
+}

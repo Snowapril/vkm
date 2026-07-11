@@ -182,7 +182,7 @@ namespace {
 // Per tests/CLAUDE.md: no direct graphics API calls -- this only drives the engine's own
 // AppDelegate/loopInner() surface, exactly like a real sample would.
 struct NullAppDelegate : vkm::AppDelegate {
-    void postDriverReady() override {}
+    void postDriverReady(vkm::VkmEngine*) override {}
     void preShutdown() override {}
     void update(const double) override {}
     void render(vkm::VkmRenderGraph*, vkm::VkmResourceHandle) override {}

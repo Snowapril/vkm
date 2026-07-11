@@ -35,6 +35,7 @@ namespace vkm
         void reset();
 
         inline id<MTL4RenderCommandEncoder> getActiveRenderCommandEncoder() const { return _mtlRenderCommandEncoder; }
+        inline id<MTL4ComputeCommandEncoder> getActiveComputeCommandEncoder() const { return _mtlComputeCommandEncoder; }
 
     private:
         id<MTL4CommandBuffer> _mtlCommandBuffer;
@@ -56,9 +57,12 @@ namespace vkm
 
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) override final;
         virtual void onEndRenderPass() override final;
+        virtual void onBindPipeline(VkmPipelineStateBase* pipelineState) override final;
+        virtual void onUnbindPipeline() override final;
 
         inline id<MTL4CommandBuffer> getMTLCommandBuffer() const { return _mtlCommandBuffer; }
         inline id<MTL4RenderCommandEncoder> getActiveRenderCommandEncoder() const { return _commandEncoder.getActiveRenderCommandEncoder(); }
+        inline id<MTL4ComputeCommandEncoder> getActiveComputeCommandEncoder() const { return _commandEncoder.getActiveComputeCommandEncoder(); }
 
     private:
         id<MTL4CommandBuffer> _mtlCommandBuffer;

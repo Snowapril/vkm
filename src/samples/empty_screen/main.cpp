@@ -22,8 +22,9 @@ public:
     EmptyScreenApplication() = default;
     virtual ~EmptyScreenApplication() = default;
 
-    virtual void postDriverReady() override final
+    virtual void postDriverReady(VkmEngine* engine) override final
     {
+        (void)engine;
         VKM_DEBUG_LOG("EmptyScreenApplication::postDriverReady");
     }
 

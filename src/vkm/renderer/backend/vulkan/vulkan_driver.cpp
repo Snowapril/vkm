@@ -69,6 +69,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_swapchain.h>
 #include <vkm/renderer/backend/vulkan/vulkan_texture.h>
 #include <vkm/renderer/backend/vulkan/vulkan_command_queue.h>
+#include <vkm/renderer/backend/vulkan/vulkan_pipeline_state.h>
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                                     VkDebugUtilsMessageTypeFlagsEXT,
@@ -172,6 +173,11 @@ namespace vkm
     {
         // TODO(snowapril) : create texture via resource pool backend
         return new VkmTextureVulkan(this);
+    }
+
+    VkmPipelineStateBase* VkmDriverVulkan::newPipelineStateInner()
+    {
+        return new VkmPipelineStateVulkan(this);
     }
 
     VkmSwapChainBase* VkmDriverVulkan::newSwapChainInner()
