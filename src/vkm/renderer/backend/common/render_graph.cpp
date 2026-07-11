@@ -83,8 +83,10 @@ namespace vkm
         
         _lastSubmitInfo = commandQueue->submit(submitInfo);
 
-        // TODO(snowapril) : this always tags Graphics -- once execute() dispatches to
-        // multiple queue types, record against the queue each subgraph actually submitted on.
+        // TODO(snowapril) : execute() itself only ever submits to the Graphics queue (see
+        // getCommandQueue(Graphics, 0) above) -- once it dispatches subgraphs to multiple queue
+        // types, this loop will automatically record the correct per-instance usage regardless,
+        // since recordUsage() is now keyed by timeline identity rather than queue type.
         VkmRenderResourcePool* resourcePool = _driver->getRenderResourcePool();
         for (auto& subGraph : _subGraphs)
         {
@@ -93,7 +95,7 @@ namespace vkm
                 VkmRenderResource* resource = resourcePool->getResource<VkmRenderResource>(handle);
                 if (resource != nullptr)
                 {
-                    resource->recordUsage(VkmCommandQueueType::Graphics, _lastSubmitInfo);
+                    resource->recordUsage(_lastSubmitInfo);
                 }
             }
         }

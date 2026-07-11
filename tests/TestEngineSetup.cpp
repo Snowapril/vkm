@@ -133,8 +133,8 @@ TEST_CASE("VkmRenderResource - recordUsage/getLastUsage/hasAnyPendingUsage track
     MockGpuEventTimeline timeline;
     auto usage = timeline.allocateGpuEventTimelineObject(); // timelineValue == 1
 
-    resource.recordUsage(vkm::VkmCommandQueueType::Graphics, usage);
-    CHECK(resource.getLastUsage(vkm::VkmCommandQueueType::Graphics)._timelineValue == 1);
+    resource.recordUsage(usage);
+    CHECK(resource.getLastUsage(usage._gpuEventTimeline)._timelineValue == 1);
     CHECK(resource.hasAnyPendingUsage()); // completed cache still 0 < 1
 
     timeline.setLastCompleted(1); // simulate the GPU catching up
@@ -142,12 +142,26 @@ TEST_CASE("VkmRenderResource - recordUsage/getLastUsage/hasAnyPendingUsage track
 
     // A later usage on the same queue overwrites the earlier one -- only the latest matters.
     auto usage2 = timeline.allocateGpuEventTimelineObject(); // timelineValue == 2
-    resource.recordUsage(vkm::VkmCommandQueueType::Graphics, usage2);
-    CHECK(resource.getLastUsage(vkm::VkmCommandQueueType::Graphics)._timelineValue == 2);
+    resource.recordUsage(usage2);
+    CHECK(resource.getLastUsage(usage2._gpuEventTimeline)._timelineValue == 2);
     CHECK(resource.hasAnyPendingUsage()); // completed cache is 1 < 2
 
     timeline.setLastCompleted(2);
     CHECK_FALSE(resource.hasAnyPendingUsage());
+
+    // A second, independent timeline (simulating a second queue instance of the same
+    // type) must not clobber the first's tracked entry -- this is the actual regression
+    // test for the bug this phase fixes (previously, a fixed 3-slot array indexed only by
+    // queue TYPE could not distinguish two instances of the same type).
+    MockGpuEventTimeline timeline2;
+    auto usage3 = timeline2.allocateGpuEventTimelineObject(); // timelineValue == 1 on timeline2
+    resource.recordUsage(usage3);
+    CHECK(resource.getLastUsage(usage3._gpuEventTimeline)._timelineValue == 1);
+    CHECK(resource.getLastUsage(usage2._gpuEventTimeline)._timelineValue == 2); // first timeline's entry untouched
+    CHECK(resource.hasAnyPendingUsage()); // timeline2 not yet completed
+
+    timeline2.setLastCompleted(1);
+    CHECK_FALSE(resource.hasAnyPendingUsage()); // both timelines now complete
 }
 
 namespace {
@@ -204,7 +218,7 @@ TEST_CASE("VkmDeferredResourceReclaimer - pollOnce releases only once every reco
 
     MockGpuEventTimeline timeline;
     auto usage = timeline.allocateGpuEventTimelineObject(); // timelineValue == 1
-    driver.getRenderResourcePool()->getResource<vkm::VkmBuffer>(handle)->recordUsage(vkm::VkmCommandQueueType::Graphics, usage);
+    driver.getRenderResourcePool()->getResource<vkm::VkmBuffer>(handle)->recordUsage(usage);
 
     testReclaimer.requestRelease(handle);
 

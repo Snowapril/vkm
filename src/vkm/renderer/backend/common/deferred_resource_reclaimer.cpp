@@ -81,10 +81,7 @@ namespace vkm
 
         PendingEntry entry;
         entry._handle = handle;
-        for (uint8_t i = 0; i < (uint8_t)VkmCommandQueueType::Count; ++i)
-        {
-            entry._waitsOn[i] = resource->getLastUsage((VkmCommandQueueType)i);
-        }
+        entry._waitsOn = resource->getAllUsages();
 
         {
             std::lock_guard<std::mutex> lock(_mutex);

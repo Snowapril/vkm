@@ -13,14 +13,29 @@ namespace vkm
     {
     }
 
-    void VkmRenderResource::recordUsage(VkmCommandQueueType queueType, VkmGpuEventTimelineObject timelineObject)
+    void VkmRenderResource::recordUsage(VkmGpuEventTimelineObject timelineObject)
     {
-        _lastUsagePerQueue[(uint8_t)queueType] = timelineObject;
+        for (VkmGpuEventTimelineObject& existing : _lastUsagePerQueue)
+        {
+            if (existing._gpuEventTimeline == timelineObject._gpuEventTimeline)
+            {
+                existing._timelineValue = timelineObject._timelineValue;
+                return;
+            }
+        }
+        _lastUsagePerQueue.push_back(timelineObject);
     }
 
-    VkmGpuEventTimelineObject VkmRenderResource::getLastUsage(VkmCommandQueueType queueType) const
+    VkmGpuEventTimelineObject VkmRenderResource::getLastUsage(VkmGpuEventTimelineBase* queueTimeline) const
     {
-        return _lastUsagePerQueue[(uint8_t)queueType];
+        for (const VkmGpuEventTimelineObject& usage : _lastUsagePerQueue)
+        {
+            if (usage._gpuEventTimeline == queueTimeline)
+            {
+                return usage;
+            }
+        }
+        return VkmGpuEventTimelineObject{};
     }
 
     bool VkmRenderResource::hasAnyPendingUsage() const

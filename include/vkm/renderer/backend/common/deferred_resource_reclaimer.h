@@ -7,6 +7,7 @@
 #include <vkm/renderer/backend/common/command_queue.h>
 
 #include <array>
+#include <vector>
 #include <deque>
 #include <mutex>
 #include <condition_variable>
@@ -53,7 +54,7 @@ namespace vkm
         struct PendingEntry
         {
             VkmResourceHandle _handle;
-            std::array<VkmGpuEventTimelineObject, (uint8_t)VkmCommandQueueType::Count> _waitsOn{};
+            std::vector<VkmGpuEventTimelineObject> _waitsOn;
         };
 
         bool isEntryReady(const PendingEntry& entry) const;

@@ -7,7 +7,7 @@
 #include <vkm/renderer/backend/common/driver_resource.h>
 #include <vkm/renderer/backend/common/command_queue.h>
 
-#include <array>
+#include <vector>
 
 namespace vkm
 {
@@ -27,12 +27,16 @@ namespace vkm
         virtual VkmResourceType getResourceType() const = 0;
 
         /*
-        * @brief Record that this resource was used on the given queue, tagged with the
-        * timeline value the triggering submit produced. Only the latest usage per queue is
-        * kept -- earlier ones are implied complete once the latest one is.
+        * @brief Record that this resource was used, tagged with the timeline value the
+        * triggering submit produced. Keyed by the timeline's own identity (each
+        * VkmCommandQueueBase owns exactly one VkmGpuEventTimelineBase, so this pointer already
+        * uniquely identifies the queue instance -- no separate queue-type/index parameter is
+        * needed). Only the latest usage per queue instance is kept -- an earlier submit on the
+        * same queue is implied complete once a later one is.
         */
-        void recordUsage(VkmCommandQueueType queueType, VkmGpuEventTimelineObject timelineObject);
-        VkmGpuEventTimelineObject getLastUsage(VkmCommandQueueType queueType) const;
+        void recordUsage(VkmGpuEventTimelineObject timelineObject);
+        VkmGpuEventTimelineObject getLastUsage(VkmGpuEventTimelineBase* queueTimeline) const;
+        const std::vector<VkmGpuEventTimelineObject>& getAllUsages() const { return _lastUsagePerQueue; }
 
         /*
         * @brief Non-blocking poll: true if any recorded usage's timeline hasn't completed yet.
@@ -55,6 +59,6 @@ namespace vkm
     protected:
         VkmDriverBase* _driver;
         VkmResourceHandle _handle;
-        std::array<VkmGpuEventTimelineObject, (uint8_t)VkmCommandQueueType::Count> _lastUsagePerQueue{};
+        std::vector<VkmGpuEventTimelineObject> _lastUsagePerQueue;
     };
 } // namespace vkm
