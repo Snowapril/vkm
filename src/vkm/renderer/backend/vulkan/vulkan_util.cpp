@@ -3,6 +3,14 @@
 #include <vkm/renderer/backend/vulkan/vulkan_util.h>
 #include <vulkan/vulkan.h>
 
+// On Linux, <vulkan/vulkan.h> pulls in X11/Xlib.h's VK_USE_PLATFORM_XLIB_KHR path, which
+// #defines Always as a bare integer (the backing-store hint enum), clobbering every later
+// use of VkmCompareOp::Always as a plain-text substitution (a syntax error). Same class of
+// collision as Success in vulkan_driver.cpp.
+#ifdef Always
+#undef Always
+#endif
+
 namespace vkm
 {
 namespace

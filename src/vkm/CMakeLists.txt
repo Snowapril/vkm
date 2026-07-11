@@ -236,6 +236,18 @@ if (VKM_PLATFORM_APPLE)
         COMPILE_FLAGS "-x objective-c++")
 endif()
 
+# offsetAllocator.cpp is vendored third-party code (never modified in-place); its own
+# "conditional expression is constant" pattern trips MSVC's C4127 under /WX. Disable
+# warnings-as-errors for just this one file rather than holding vendored code to our
+# own strict warning bar.
+if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+    set(VKM_VENDORED_NO_WARN_AS_ERROR "/WX-")
+else()
+    set(VKM_VENDORED_NO_WARN_AS_ERROR "-Wno-error")
+endif()
+set_source_files_properties(${LIBRARY_DIR}/offsetAllocator/offsetAllocator.cpp PROPERTIES
+    COMPILE_OPTIONS "${VKM_VENDORED_NO_WARN_AS_ERROR}")
+
 # Build library
 add_library(${target} ${SRCS} ${BACKWARD_ENABLE})
 

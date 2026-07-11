@@ -40,7 +40,7 @@ namespace vkm
             .lodMinClamp   = info._minLod,
             .lodMaxClamp   = info._maxLod,
             .compare       = info._compareEnable ? toWGPUCompareFunction(info._compareOp) : WGPUCompareFunction_Undefined,
-            .maxAnisotropy = (info._maxAnisotropy > 1.0f) ? (uint16_t)info._maxAnisotropy : 1,
+            .maxAnisotropy = static_cast<uint16_t>((info._maxAnisotropy > 1.0f) ? info._maxAnisotropy : 1.0f),
         };
         _wgpuSampler = wgpuDeviceCreateSampler(driverWebGPU->getDevice(), &samplerDesc);
         if (_wgpuSampler == nullptr)
