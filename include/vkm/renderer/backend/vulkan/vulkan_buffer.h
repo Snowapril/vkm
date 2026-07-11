@@ -23,12 +23,17 @@ namespace vkm
         virtual bool overrideExternalHandle(void* externalHandle) override final;
         virtual void setDebugName(const char* name) override final;
 
+        uint64_t getAllocatedSize() const override { return _allocatedSize; }
+        uint32_t getMemoryAlignment() const override { return _alignment; }
+
         inline VkBuffer getBuffer() const { return _vkBuffer; }
         inline uint64_t getBufferOffset() const { return _ownerPool != nullptr ? _poolAllocation._offset : 0; }
 
     private:
         VkBuffer _vkBuffer{VK_NULL_HANDLE};
         VmaAllocation _vmaAllocation{nullptr}; // valid only for the committed path
+        uint64_t _allocatedSize{0};
+        uint32_t _alignment{0};
 
         VkmGpuBufferPoolVulkan* _ownerPool{nullptr}; // non-owning; valid only for the pooled path
         VkmGpuMemoryAllocation _poolAllocation{};

@@ -81,6 +81,14 @@ namespace vkm
             return nullptr;
         }
 
+        VkmResourceMemoryTag tag{};
+        tag.requestedSize = computeTextureByteSize(info);
+        tag.allocatedSize = texture->getAllocatedSize();
+        tag.alignment = texture->getMemoryAlignment();
+        tag.name = info._debugName != nullptr ? info._debugName : "";
+        tag.type = texture->getResourceType();
+        _renderResourcePool->tagResource(handle, tag);
+
         return texture;
     }
 
@@ -97,6 +105,14 @@ namespace vkm
                 delete buffer;
             return nullptr;
         }
+
+        VkmResourceMemoryTag tag{};
+        tag.requestedSize = info._size;
+        tag.allocatedSize = buffer->getAllocatedSize();
+        tag.alignment = buffer->getMemoryAlignment();
+        tag.name = info._debugName != nullptr ? info._debugName : "";
+        tag.type = buffer->getResourceType();
+        _renderResourcePool->tagResource(handle, tag);
 
         return buffer;
     }
@@ -115,6 +131,14 @@ namespace vkm
             return nullptr;
         }
 
+        VkmResourceMemoryTag tag{};
+        tag.requestedSize = info._size;
+        tag.allocatedSize = stagingBuffer->getAllocatedSize();
+        tag.alignment = stagingBuffer->getMemoryAlignment();
+        tag.name = info._debugName != nullptr ? info._debugName : "";
+        tag.type = stagingBuffer->getResourceType();
+        _renderResourcePool->tagResource(handle, tag);
+
         return stagingBuffer;
     }
 
@@ -131,6 +155,14 @@ namespace vkm
                 delete sampler;
             return nullptr;
         }
+
+        VkmResourceMemoryTag tag{};
+        tag.requestedSize = 0;
+        tag.allocatedSize = sampler->getAllocatedSize();
+        tag.alignment = sampler->getMemoryAlignment();
+        tag.name = info._debugName != nullptr ? info._debugName : "";
+        tag.type = sampler->getResourceType();
+        _renderResourcePool->tagResource(handle, tag);
 
         return sampler;
     }
@@ -149,6 +181,14 @@ namespace vkm
             return nullptr;
         }
 
+        VkmResourceMemoryTag tag{};
+        tag.requestedSize = 0;
+        tag.allocatedSize = textureView->getAllocatedSize();
+        tag.alignment = textureView->getMemoryAlignment();
+        tag.name = info._debugName != nullptr ? info._debugName : "";
+        tag.type = textureView->getResourceType();
+        _renderResourcePool->tagResource(handle, tag);
+
         return textureView;
     }
 
@@ -165,6 +205,14 @@ namespace vkm
                 delete bufferView;
             return nullptr;
         }
+
+        VkmResourceMemoryTag tag{};
+        tag.requestedSize = 0;
+        tag.allocatedSize = bufferView->getAllocatedSize();
+        tag.alignment = bufferView->getMemoryAlignment();
+        tag.name = info._debugName != nullptr ? info._debugName : "";
+        tag.type = bufferView->getResourceType();
+        _renderResourcePool->tagResource(handle, tag);
 
         return bufferView;
     }

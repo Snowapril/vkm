@@ -51,6 +51,15 @@ namespace vkm
         */
         bool hasAnyPendingUsage() const;
 
+        /*
+        * @brief Actual GPU-side allocated size/alignment for this resource, if known. Safe
+        * defaults (0) for types with no independent memory allocation of their own (Sampler,
+        * TextureView, BufferView) or where the backend has no introspection API for it
+        * (Metal/WebGPU report a best-effort passthrough instead, see their overrides).
+        */
+        virtual uint64_t getAllocatedSize() const { return 0; }
+        virtual uint32_t getMemoryAlignment() const { return 0; }
+
     protected:
         bool initializeCommon(VkmResourceHandle handle)
         {

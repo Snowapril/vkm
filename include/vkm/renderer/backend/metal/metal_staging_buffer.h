@@ -20,6 +20,9 @@ namespace vkm
         virtual void flush(uint64_t offset, uint64_t size) override final;
         virtual void setDebugName(const char* name) override final;
 
+        uint64_t getAllocatedSize() const override { return _stagingBufferInfo._size; }
+        uint32_t getMemoryAlignment() const override { return 256; }
+
         inline id<MTLBuffer> getBuffer() const { return _mtlBuffer; }
 
     private:

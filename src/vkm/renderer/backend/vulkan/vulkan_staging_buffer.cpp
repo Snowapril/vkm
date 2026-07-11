@@ -59,6 +59,10 @@ namespace vkm
         }
 
         _mappedPointer = vmaAllocationInfo.pMappedData;
+        _allocatedSize = vmaAllocationInfo.size;
+        VkMemoryRequirements memReqs{};
+        vkGetBufferMemoryRequirements(driverVulkan->getDevice(), _vkBuffer, &memReqs);
+        _alignment = (uint32_t)memReqs.alignment;
         return true;
     }
 

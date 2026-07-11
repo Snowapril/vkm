@@ -20,6 +20,9 @@ namespace vkm
         virtual bool overrideExternalHandle(void* externalHandle) override final;
         virtual void setDebugName(const char* name) override final;
 
+        uint64_t getAllocatedSize() const override { return _allocatedSize; }
+        uint32_t getMemoryAlignment() const override { return _alignment; }
+
         inline VkImage getImage() const { return _vkTexture; }
         inline VkImageView getImageView() const { return _vkImageView; }
         inline VkImageLayout getCurrentLayout() const { return _currentLayout; }
@@ -33,5 +36,7 @@ namespace vkm
         VkImageView _vkImageView{VK_NULL_HANDLE};
         VkImageLayout _currentLayout{VK_IMAGE_LAYOUT_UNDEFINED};
         VmaAllocation _vmaAllocation{nullptr};
+        uint64_t _allocatedSize{0};
+        uint32_t _alignment{0};
     };
 } // namespace vkm

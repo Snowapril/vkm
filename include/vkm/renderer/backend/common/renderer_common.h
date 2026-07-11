@@ -5,6 +5,8 @@
 #include <vkm/base/common.h>
 #include <glm/vec3.hpp>
 
+#include <string>
+
 namespace vkm
 {
     constexpr const uint32_t BACK_BUFFER_COUNT = 3;
@@ -113,6 +115,35 @@ namespace vkm
     {
         VkmResourceCreateInfo _flags;
         VkmResourceUsageBits _usage;
+        const char* _debugName = nullptr;
+    };
+
+    /*
+    * @brief Per-resource-allocation memory bookkeeping, mirroring vkm::MemoryTracker's
+    * CPU-side tag pattern (include/vkm/base/memory.h) but for individual GPU resource
+    * allocations rather than call-site-aggregated heap allocations.
+    */
+    struct VkmResourceMemoryTag
+    {
+        uint64_t requestedSize = 0;
+        uint64_t allocatedSize = 0;
+        uint32_t alignment = 0;
+        std::string name;
+        std::string metadata;
+        VkmResourceType type = VkmResourceType::Undefined; // Undefined marks an empty/unset tag
+    };
+
+    /*
+    * @brief Aggregated, persistent running totals for one VkmResourceType category. Unlike
+    * VkmResourceMemoryTag (which goes away when its handle is released), this decrements on
+    * release rather than resetting -- it is the meaningful historical/debugging signal,
+    * mirroring MemoryTracker's aggregate-level intent.
+    */
+    struct VkmResourceCategoryUsage
+    {
+        uint64_t totalRequestedBytes = 0;
+        uint64_t totalAllocatedBytes = 0;
+        uint32_t liveCount = 0;
     };
 
     enum class VkmMemoryPlacementHint : uint8_t
@@ -130,6 +161,17 @@ namespace vkm
         VkmFormat _format;
         VkmMemoryPlacementHint _placementHint = VkmMemoryPlacementHint::Auto;
     };
+
+    /*
+    * @brief Best-effort estimate of a texture's base-mip-level byte footprint (extent x
+    * array layers x bytes-per-texel for the format) -- does not sum the full mip chain, for
+    * the same reason the Vulkan-backend's own VMA-dedicated-allocation heuristic doesn't
+    * either (see shouldUseDedicatedTexture in vulkan_texture.cpp): a rough size estimate is
+    * all that's needed here, not an exact GPU byte count. Used as VkmResourceMemoryTag's
+    * requestedSize for textures, independent of backend (Metal/WebGPU have no format-size
+    * introspection API of their own to compute this).
+    */
+    uint64_t computeTextureByteSize(const VkmTextureInfo& info);
 
     struct VkmBufferInfo : public VkmResourceInfo
     {

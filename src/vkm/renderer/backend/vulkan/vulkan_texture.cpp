@@ -101,11 +101,17 @@ namespace vkm
         allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
         allocCreateInfo.flags = shouldUseDedicatedTexture(info) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;
 
-        const VkResult vkResult = vmaCreateImage(driverVulkan->getVmaAllocator(), &imageCreateInfo, &allocCreateInfo, &_vkTexture, &_vmaAllocation, nullptr);
+        VmaAllocationInfo vmaAllocationInfo{};
+        const VkResult vkResult = vmaCreateImage(driverVulkan->getVmaAllocator(), &imageCreateInfo, &allocCreateInfo, &_vkTexture, &_vmaAllocation, &vmaAllocationInfo);
         if (!VKM_VK_CHECK_RESULT_MSG(vkResult, "Failed to create image via VMA"))
         {
             return false;
         }
+
+        _allocatedSize = vmaAllocationInfo.size;
+        VkMemoryRequirements memReqs{};
+        vkGetImageMemoryRequirements(driverVulkan->getDevice(), _vkTexture, &memReqs);
+        _alignment = (uint32_t)memReqs.alignment;
 
         _currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         return createDefaultView();

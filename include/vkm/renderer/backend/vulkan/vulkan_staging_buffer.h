@@ -22,10 +22,15 @@ namespace vkm
         virtual void flush(uint64_t offset, uint64_t size) override final;
         virtual void setDebugName(const char* name) override final;
 
+        uint64_t getAllocatedSize() const override { return _allocatedSize; }
+        uint32_t getMemoryAlignment() const override { return _alignment; }
+
         inline VkBuffer getBuffer() const { return _vkBuffer; }
 
     private:
         VkBuffer _vkBuffer{VK_NULL_HANDLE};
         VmaAllocation _vmaAllocation{nullptr};
+        uint64_t _allocatedSize{0};
+        uint32_t _alignment{0};
     };
 } // namespace vkm

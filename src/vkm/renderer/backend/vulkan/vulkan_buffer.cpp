@@ -103,6 +103,8 @@ namespace vkm
                 _vkBuffer = poolResult.buffer;
                 _poolAllocation = poolResult.allocation;
                 _ownerPool = poolResult.ownerPool;
+                _allocatedSize = info._size; // no distinct VMA allocation to introspect for a pool sub-range
+                _alignment = alignment;
                 return true;
             }
             // Fall through to the committed path if pooling failed (e.g. size exceeds a
@@ -120,8 +122,18 @@ namespace vkm
         allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
         allocCreateInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
 
-        const VkResult vkResult = vmaCreateBuffer(driverVulkan->getVmaAllocator(), &bufferCreateInfo, &allocCreateInfo, &_vkBuffer, &_vmaAllocation, nullptr);
-        return VKM_VK_CHECK_RESULT_MSG(vkResult, "Failed to create buffer via VMA");
+        VmaAllocationInfo vmaAllocationInfo{};
+        const VkResult vkResult = vmaCreateBuffer(driverVulkan->getVmaAllocator(), &bufferCreateInfo, &allocCreateInfo, &_vkBuffer, &_vmaAllocation, &vmaAllocationInfo);
+        if (!VKM_VK_CHECK_RESULT_MSG(vkResult, "Failed to create buffer via VMA"))
+        {
+            return false;
+        }
+
+        _allocatedSize = vmaAllocationInfo.size;
+        VkMemoryRequirements memReqs{};
+        vkGetBufferMemoryRequirements(driverVulkan->getDevice(), _vkBuffer, &memReqs);
+        _alignment = (uint32_t)memReqs.alignment;
+        return true;
     }
 
     bool VkmBufferVulkan::overrideExternalHandle(void* externalHandle)

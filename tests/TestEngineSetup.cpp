@@ -299,6 +299,55 @@ TEST_CASE("VkmTexture::createView - owns its views and cascading release waits f
     driver.destroy();
 }
 
+TEST_CASE("VkmRenderResourcePool - tagResource tracks per-category memory usage and decrements on release") {
+    FakeDriver driver;
+    REQUIRE(driver.initialize(nullptr).code == vkm::VkmInitResultCode::Success);
+    vkm::VkmRenderResourcePool* pool = driver.getRenderResourcePool();
+
+    vkm::VkmResourceHandle h1 = pool->allocateBuffer(new MockBuffer(&driver));
+    vkm::VkmResourceHandle h2 = pool->allocateBuffer(new MockBuffer(&driver));
+    REQUIRE(h1.isValid());
+    REQUIRE(h2.isValid());
+
+    vkm::VkmResourceMemoryTag tag1{};
+    tag1.requestedSize = 100;
+    tag1.allocatedSize = 128;
+    tag1.alignment = 16;
+    tag1.name = "buffer1";
+    tag1.type = vkm::VkmResourceType::Buffer;
+    pool->tagResource(h1, tag1);
+
+    vkm::VkmResourceMemoryTag tag2{};
+    tag2.requestedSize = 200;
+    tag2.allocatedSize = 256;
+    tag2.type = vkm::VkmResourceType::Buffer;
+    pool->tagResource(h2, tag2);
+
+    auto usage = pool->getCategoryMemoryUsage(vkm::VkmResourceType::Buffer);
+    CHECK(usage.totalRequestedBytes == 300);
+    CHECK(usage.totalAllocatedBytes == 384);
+    CHECK(usage.liveCount == 2);
+
+    auto total = pool->getTotalMemoryUsage();
+    CHECK(total.totalRequestedBytes == 300);
+    CHECK(total.totalAllocatedBytes == 384);
+
+    auto queried = pool->getResourceMemoryTag(h1);
+    REQUIRE(queried.has_value());
+    CHECK(queried->name == "buffer1");
+
+    pool->releaseResource(h1);
+    CHECK_FALSE(pool->getResourceMemoryTag(h1).has_value());
+
+    auto usageAfterRelease = pool->getCategoryMemoryUsage(vkm::VkmResourceType::Buffer);
+    CHECK(usageAfterRelease.totalRequestedBytes == 200);
+    CHECK(usageAfterRelease.totalAllocatedBytes == 256);
+    CHECK(usageAfterRelease.liveCount == 1);
+
+    pool->releaseResource(h2);
+    driver.destroy();
+}
+
 TEST_CASE("VkmOffsetAllocator - allocate returns valid, non-overlapping ranges") {
     vkm::VkmOffsetAllocator allocator(1024);
 
@@ -461,6 +510,29 @@ TEST_CASE("VkmDriverVulkan - newBuffer/newStagingBuffer/newSampler create valid 
         CHECK(vkSampler->getSampler() != VK_NULL_HANDLE);
         f.driver->getRenderResourcePool()->releaseResource(sampler->getHandle());
     }
+}
+
+TEST_CASE("VkmDriverVulkan - committed buffer allocation is tagged with real VMA size/alignment") {
+    VulkanDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+
+    vkm::VkmBufferInfo info{};
+    info._flags = vkm::VkmResourceCreateInfo::AllowShaderRead;
+    info._size = 250; // deliberately unaligned, so VMA padding is observable
+    info._placementHint = vkm::VkmMemoryPlacementHint::ForceCommitted;
+    info._debugName = "TaggedTestBuffer";
+    vkm::VkmBuffer* buffer = f.driver->newBuffer(info);
+    REQUIRE(buffer != nullptr);
+
+    auto tag = f.driver->getRenderResourcePool()->getResourceMemoryTag(buffer->getHandle());
+    REQUIRE(tag.has_value());
+    CHECK(tag->requestedSize == 250);
+    CHECK(tag->allocatedSize >= tag->requestedSize);
+    CHECK(tag->alignment > 0);
+    CHECK((tag->alignment & (tag->alignment - 1)) == 0); // power of two
+    CHECK(tag->name == "TaggedTestBuffer");
+
+    f.driver->getRenderResourcePool()->releaseResource(buffer->getHandle());
 }
 
 TEST_CASE("VkmDriverVulkan - texture view and buffer view resolve their parent resource") {

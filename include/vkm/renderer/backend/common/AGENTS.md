@@ -136,6 +136,39 @@ is instead driven once per frame via `pollOnce()`, called unconditionally from
 `VkmRenderGraph::execute()` right after the frame's submit (a harmless redundant extra check
 on the other backends, where the real thread already does the work).
 
+## Per-Resource Memory Tagging
+
+`VkmResourceMemoryTag` / `VkmResourceCategoryUsage` (`renderer_common.h`) mirror
+`vkm::MemoryTracker`'s CPU-side tag pattern for individual GPU resource allocations:
+```cpp
+struct VkmResourceMemoryTag { uint64_t requestedSize, allocatedSize; uint32_t alignment;
+                             std::string name, metadata; VkmResourceType type; };
+struct VkmResourceCategoryUsage { uint64_t totalRequestedBytes, totalAllocatedBytes; uint32_t liveCount; };
+```
+`VkmDriverBase::newXxx()` tags each successfully-initialized resource via
+`VkmRenderResourcePool::tagResource(handle, tag)` right after `initialize()`. Query with:
+```cpp
+std::optional<VkmResourceMemoryTag> getResourceMemoryTag(VkmResourceHandle) const;
+VkmResourceCategoryUsage getCategoryMemoryUsage(VkmResourceType) const;
+VkmResourceCategoryUsage getTotalMemoryUsage() const;
+std::vector<VkmResourceMemoryTag> getAllMemoryTags() const;
+```
+**Semantics split:** a per-handle tag goes empty (`getResourceMemoryTag()` returns `nullopt`)
+the moment its handle is released; the per-category totals *persist and decrement* on release
+rather than resetting — they are the meaningful historical/debugging signal. A tag's `name`
+comes from `VkmResourceInfo::_debugName` (copied into a `std::string`; the raw pointer is never
+retained).
+
+`VkmRenderResource::getAllocatedSize()` / `getMemoryAlignment()` (`render_resource.h`) feed a
+tag's `allocatedSize`/`alignment`:
+- **Vulkan** = real numbers (`VmaAllocationInfo::size` + `vkGetBuffer/ImageMemoryRequirements`);
+  a pooled buffer sub-range reports its requested size and locally-computed alignment (no
+  distinct VMA allocation to introspect).
+- **Metal / WebGPU** = best-effort passthrough of the requested size (no allocation-introspection
+  API exists on either), with a `256`-byte conventional alignment.
+- **Sampler / TextureView / BufferView** = always `0` (no independent GPU memory allocation of
+  their own), via the base-class default — no override.
+
 ## VkmCommandQueueType
 
 ```cpp
