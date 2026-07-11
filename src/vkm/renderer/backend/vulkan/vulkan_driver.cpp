@@ -69,6 +69,17 @@
 #include <vkm/renderer/backend/vulkan/vulkan_swapchain.h>
 #include <vkm/renderer/backend/vulkan/vulkan_texture.h>
 #include <vkm/renderer/backend/vulkan/vulkan_command_queue.h>
+
+// X11/Xlib.h (see above) also #defines None and Always as bare integers, clobbering
+// VkmCullMode::None and VkmCompareOp::Always in pipeline_state.h, transitively included
+// below via vulkan_pipeline_state.h.
+#ifdef None
+#undef None
+#endif
+#ifdef Always
+#undef Always
+#endif
+
 #include <vkm/renderer/backend/vulkan/vulkan_pipeline_state.h>
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
