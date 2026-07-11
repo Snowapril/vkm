@@ -2,6 +2,11 @@
 
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/texture.h>
+#include <vkm/renderer/backend/common/buffer.h>
+#include <vkm/renderer/backend/common/staging_buffer.h>
+#include <vkm/renderer/backend/common/sampler.h>
+#include <vkm/renderer/backend/common/texture_view.h>
+#include <vkm/renderer/backend/common/buffer_view.h>
 
 namespace vkm
 {
@@ -28,6 +33,41 @@ namespace vkm
     {
         VkmResourceHandle handle = allocateResource(VkmResourceType::Texture, poolType);
         _subPools[(uint8_t)poolType]._resources[(uint8_t)VkmResourceType::Texture][handle.id].reset(texture);
+        return handle;
+    }
+
+    VkmResourceHandle VkmRenderResourcePool::allocateBuffer(VkmBuffer* buffer, VkmResourcePoolType poolType)
+    {
+        VkmResourceHandle handle = allocateResource(VkmResourceType::Buffer, poolType);
+        _subPools[(uint8_t)poolType]._resources[(uint8_t)VkmResourceType::Buffer][handle.id].reset(buffer);
+        return handle;
+    }
+
+    VkmResourceHandle VkmRenderResourcePool::allocateStagingBuffer(VkmStagingBuffer* stagingBuffer, VkmResourcePoolType poolType)
+    {
+        VkmResourceHandle handle = allocateResource(VkmResourceType::StagingBuffer, poolType);
+        _subPools[(uint8_t)poolType]._resources[(uint8_t)VkmResourceType::StagingBuffer][handle.id].reset(stagingBuffer);
+        return handle;
+    }
+
+    VkmResourceHandle VkmRenderResourcePool::allocateSampler(VkmSampler* sampler, VkmResourcePoolType poolType)
+    {
+        VkmResourceHandle handle = allocateResource(VkmResourceType::Sampler, poolType);
+        _subPools[(uint8_t)poolType]._resources[(uint8_t)VkmResourceType::Sampler][handle.id].reset(sampler);
+        return handle;
+    }
+
+    VkmResourceHandle VkmRenderResourcePool::allocateTextureView(VkmTextureView* textureView, VkmResourcePoolType poolType)
+    {
+        VkmResourceHandle handle = allocateResource(VkmResourceType::TextureView, poolType);
+        _subPools[(uint8_t)poolType]._resources[(uint8_t)VkmResourceType::TextureView][handle.id].reset(textureView);
+        return handle;
+    }
+
+    VkmResourceHandle VkmRenderResourcePool::allocateBufferView(VkmBufferView* bufferView, VkmResourcePoolType poolType)
+    {
+        VkmResourceHandle handle = allocateResource(VkmResourceType::BufferView, poolType);
+        _subPools[(uint8_t)poolType]._resources[(uint8_t)VkmResourceType::BufferView][handle.id].reset(bufferView);
         return handle;
     }
 

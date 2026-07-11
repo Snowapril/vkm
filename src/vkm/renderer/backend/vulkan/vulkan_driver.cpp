@@ -68,6 +68,12 @@
 
 #include <vkm/renderer/backend/vulkan/vulkan_swapchain.h>
 #include <vkm/renderer/backend/vulkan/vulkan_texture.h>
+#include <vkm/renderer/backend/vulkan/vulkan_buffer.h>
+#include <vkm/renderer/backend/vulkan/vulkan_staging_buffer.h>
+#include <vkm/renderer/backend/vulkan/vulkan_sampler.h>
+#include <vkm/renderer/backend/vulkan/vulkan_texture_view.h>
+#include <vkm/renderer/backend/vulkan/vulkan_buffer_view.h>
+#include <vkm/renderer/backend/vulkan/vulkan_gpu_buffer_pool.h>
 #include <vkm/renderer/backend/vulkan/vulkan_command_queue.h>
 
 // X11/Xlib.h (see above) also #defines None and Always as bare integers, clobbering
@@ -182,8 +188,32 @@ namespace vkm
 
     VkmTexture* VkmDriverVulkan::newTextureInner()
     {
-        // TODO(snowapril) : create texture via resource pool backend
         return new VkmTextureVulkan(this);
+    }
+
+    VkmBuffer* VkmDriverVulkan::newBufferInner()
+    {
+        return new VkmBufferVulkan(this);
+    }
+
+    VkmStagingBuffer* VkmDriverVulkan::newStagingBufferInner()
+    {
+        return new VkmStagingBufferVulkan(this);
+    }
+
+    VkmSampler* VkmDriverVulkan::newSamplerInner()
+    {
+        return new VkmSamplerVulkan(this);
+    }
+
+    VkmTextureView* VkmDriverVulkan::newTextureViewInner()
+    {
+        return new VkmTextureViewVulkan(this);
+    }
+
+    VkmBufferView* VkmDriverVulkan::newBufferViewInner()
+    {
+        return new VkmBufferViewVulkan(this);
     }
 
     VkmPipelineStateBase* VkmDriverVulkan::newPipelineStateInner()
@@ -495,6 +525,18 @@ namespace vkm
 
         volkLoadDevice(_device);
 
+        VmaVulkanFunctions vmaVulkanFunctions{};
+        vmaVulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+        vmaVulkanFunctions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+        const VmaAllocatorCreateInfo allocatorCreateInfo{
+            .physicalDevice   = _physicalDevice,
+            .device           = _device,
+            .pVulkanFunctions = &vmaVulkanFunctions,
+            .instance         = _instance,
+            .vulkanApiVersion = VK_API_VERSION_1_3,
+        };
+        VKM_VK_CHECK_RESULT_MSG_RETURN(vmaCreateAllocator(&allocatorCreateInfo, &_vmaAllocator), "Failed to create VMA allocator");
+
         _driverCapabilityFlags = VkmDriverCapabilityFlags::CommandBufferReusable;
 
         return VkmInitResult{VkmInitResultCode::Success, ""};
@@ -502,6 +544,57 @@ namespace vkm
 
     void VkmDriverVulkan::destroyInner()
     {
+        // _bufferPools must be torn down explicitly here (not left to the class destructor)
+        // since each pool's VMA-backed VkBuffer must be destroyed while _vmaAllocator is
+        // still valid; destroyInner() runs before ~VkmDriverVulkan()'s automatic member
+        // destruction, so this ordering is required, not incidental.
+        _bufferPools.clear();
 
+        // VMA allocations must be freed before the VmaAllocator is destroyed; this must
+        // remain the last step here as other resource teardown is added.
+        if (_vmaAllocator != VK_NULL_HANDLE)
+        {
+            vmaDestroyAllocator(_vmaAllocator);
+            _vmaAllocator = VK_NULL_HANDLE;
+        }
+    }
+
+    bool VkmDriverVulkan::allocateFromBufferPool(uint64_t sizeBytes, uint32_t alignment, PooledBufferAllocation* outResult)
+    {
+        for (auto& pool : _bufferPools)
+        {
+            VkmGpuMemoryAllocation allocation{};
+            if (pool->tryAllocate(sizeBytes, alignment, &allocation))
+            {
+                outResult->buffer = pool->getBuffer();
+                outResult->allocation = allocation;
+                outResult->ownerPool = pool.get();
+                return true;
+            }
+        }
+
+        if (sizeBytes > VkmGpuBufferPoolVulkan::POOL_BLOCK_SIZE_BYTES)
+        {
+            VKM_DEBUG_ERROR("Buffer allocation exceeds pool block size; use a committed allocation instead");
+            return false;
+        }
+
+        auto newPool = std::make_unique<VkmGpuBufferPoolVulkan>(this);
+        if (!newPool->initialize())
+        {
+            return false;
+        }
+
+        VkmGpuMemoryAllocation allocation{};
+        if (!newPool->tryAllocate(sizeBytes, alignment, &allocation))
+        {
+            return false;
+        }
+
+        outResult->buffer = newPool->getBuffer();
+        outResult->allocation = allocation;
+        outResult->ownerPool = newPool.get();
+        _bufferPools.push_back(std::move(newPool));
+        return true;
     }
 }

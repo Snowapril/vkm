@@ -13,6 +13,11 @@ namespace vkm
 {
     class VkmDriverBase;
     class VkmTexture;
+    class VkmBuffer;
+    class VkmStagingBuffer;
+    class VkmSampler;
+    class VkmTextureView;
+    class VkmBufferView;
 
     class VkmRenderResourcePool
     {
@@ -24,6 +29,11 @@ namespace vkm
         ResourceType* getResource(VkmResourceHandle handle);
 
         VkmResourceHandle allocateTexture(VkmTexture* texture, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
+        VkmResourceHandle allocateBuffer(VkmBuffer* buffer, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
+        VkmResourceHandle allocateStagingBuffer(VkmStagingBuffer* stagingBuffer, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
+        VkmResourceHandle allocateSampler(VkmSampler* sampler, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
+        VkmResourceHandle allocateTextureView(VkmTextureView* textureView, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
+        VkmResourceHandle allocateBufferView(VkmBufferView* bufferView, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
         void releaseResource(VkmResourceHandle handle);\
 
     private:

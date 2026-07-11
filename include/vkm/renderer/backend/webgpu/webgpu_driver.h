@@ -27,6 +27,11 @@ namespace vkm
         virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) override final;
         virtual void destroyInner() override final;
         virtual VkmTexture* newTextureInner() override final;
+        virtual VkmBuffer* newBufferInner() override final;
+        virtual VkmStagingBuffer* newStagingBufferInner() override final;
+        virtual VkmSampler* newSamplerInner() override final;
+        virtual VkmTextureView* newTextureViewInner() override final;
+        virtual VkmBufferView* newBufferViewInner() override final;
         virtual VkmCommandQueueBase* newCommandQueueInner() override final;
         virtual VkmPipelineStateBase* newPipelineStateInner() override final;
 

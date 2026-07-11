@@ -4,6 +4,11 @@
 #include <vkm/renderer/backend/webgpu/webgpu_util.h>
 #include <vkm/renderer/backend/webgpu/webgpu_swapchain.h>
 #include <vkm/renderer/backend/webgpu/webgpu_texture.h>
+#include <vkm/renderer/backend/webgpu/webgpu_buffer.h>
+#include <vkm/renderer/backend/webgpu/webgpu_staging_buffer.h>
+#include <vkm/renderer/backend/webgpu/webgpu_sampler.h>
+#include <vkm/renderer/backend/webgpu/webgpu_texture_view.h>
+#include <vkm/renderer/backend/webgpu/webgpu_buffer_view.h>
 #include <vkm/renderer/backend/webgpu/webgpu_command_queue.h>
 #include <vkm/renderer/backend/webgpu/webgpu_pipeline_state.h>
 #include <vkm/renderer/engine.h>
@@ -148,6 +153,31 @@ namespace vkm
     VkmTexture* VkmDriverWebGPU::newTextureInner()
     {
         return new VkmTextureWebGPU(this);
+    }
+
+    VkmBuffer* VkmDriverWebGPU::newBufferInner()
+    {
+        return new VkmBufferWebGPU(this);
+    }
+
+    VkmStagingBuffer* VkmDriverWebGPU::newStagingBufferInner()
+    {
+        return new VkmStagingBufferWebGPU(this);
+    }
+
+    VkmSampler* VkmDriverWebGPU::newSamplerInner()
+    {
+        return new VkmSamplerWebGPU(this);
+    }
+
+    VkmTextureView* VkmDriverWebGPU::newTextureViewInner()
+    {
+        return new VkmTextureViewWebGPU(this);
+    }
+
+    VkmBufferView* VkmDriverWebGPU::newBufferViewInner()
+    {
+        return new VkmBufferViewWebGPU(this);
     }
 
     VkmPipelineStateBase* VkmDriverWebGPU::newPipelineStateInner()

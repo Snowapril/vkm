@@ -5,6 +5,10 @@
 #include <vkm/renderer/backend/common/command_queue.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/driver.h>
+#include <vkm/renderer/backend/common/render_resource.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
+#include <vkm/renderer/backend/common/render_resource_pool.hpp>
+#include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 
 namespace vkm
 {
@@ -78,6 +82,27 @@ namespace vkm
         submitInfo.commandBufferCount = 1;
         
         _lastSubmitInfo = commandQueue->submit(submitInfo);
+
+        // TODO(snowapril) : this always tags Graphics -- once execute() dispatches to
+        // multiple queue types, record against the queue each subgraph actually submitted on.
+        VkmRenderResourcePool* resourcePool = _driver->getRenderResourcePool();
+        for (auto& subGraph : _subGraphs)
+        {
+            for (VkmResourceHandle handle : subGraph->getReferencedResources())
+            {
+                VkmRenderResource* resource = resourcePool->getResource<VkmRenderResource>(handle);
+                if (resource != nullptr)
+                {
+                    resource->recordUsage(VkmCommandQueueType::Graphics, _lastSubmitInfo);
+                }
+            }
+        }
+
+        // On WASM (no dedicated reclaimer thread) this is the only mechanism driving
+        // deferred destruction; on Vulkan/Metal it's a harmless redundant sweep alongside
+        // the background thread that already does the real work.
+        _driver->getDeferredReclaimer()->pollOnce();
+
         (void)options; // Suppress unused variable warning at now
     }
 

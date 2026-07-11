@@ -98,4 +98,99 @@ VkmFormat fromVkFormat(VkFormat format)
         default: VKM_ASSERT(false, "Unsupported VkFormat for Vulkan backend"); return VkmFormat::Undefined;
     }
 }
+
+VkImageUsageFlags toVkImageUsageFlags(VkmResourceCreateInfo flags)
+{
+    VkImageUsageFlags usage = 0;
+    if ((flags & VkmResourceCreateInfo::AllowTransferSrc) != 0)             usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    if ((flags & VkmResourceCreateInfo::AllowTransferDst) != 0)             usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if ((flags & VkmResourceCreateInfo::AllowShaderRead) != 0)              usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+    if ((flags & VkmResourceCreateInfo::AllowShaderWrite) != 0)             usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+    if ((flags & VkmResourceCreateInfo::AllowColorAttachment) != 0)         usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if ((flags & VkmResourceCreateInfo::AllowDepthStencilAttachment) != 0)  usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    return usage;
+}
+
+VkBufferUsageFlags toVkBufferUsageFlags(VkmResourceCreateInfo flags)
+{
+    VkBufferUsageFlags usage = 0;
+    if ((flags & VkmResourceCreateInfo::AllowTransferSrc) != 0)  usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    if ((flags & VkmResourceCreateInfo::AllowTransferDst) != 0)  usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if ((flags & VkmResourceCreateInfo::AllowShaderRead) != 0)   usage |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    if ((flags & VkmResourceCreateInfo::AllowShaderWrite) != 0)  usage |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    return usage;
+}
+
+VkFilter toVkFilter(VkmFilterMode filterMode)
+{
+    switch (filterMode)
+    {
+        case VkmFilterMode::Nearest: return VK_FILTER_NEAREST;
+        case VkmFilterMode::Linear:  return VK_FILTER_LINEAR;
+        default: VKM_ASSERT(false, "Unsupported filter mode for Vulkan backend"); return VK_FILTER_NEAREST;
+    }
+}
+
+VkSamplerMipmapMode toVkSamplerMipmapMode(VkmMipmapMode mipmapMode)
+{
+    switch (mipmapMode)
+    {
+        case VkmMipmapMode::Nearest: return VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        case VkmMipmapMode::Linear:  return VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        default: VKM_ASSERT(false, "Unsupported mipmap mode for Vulkan backend"); return VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    }
+}
+
+VkSamplerAddressMode toVkSamplerAddressMode(VkmAddressMode addressMode)
+{
+    switch (addressMode)
+    {
+        case VkmAddressMode::Repeat:         return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        case VkmAddressMode::MirroredRepeat: return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+        case VkmAddressMode::ClampToEdge:    return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        case VkmAddressMode::ClampToBorder:  return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        default: VKM_ASSERT(false, "Unsupported address mode for Vulkan backend"); return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    }
+}
+
+VkCompareOp toVkCompareOp(VkmCompareOp compareOp)
+{
+    switch (compareOp)
+    {
+        case VkmCompareOp::Never:          return VK_COMPARE_OP_NEVER;
+        case VkmCompareOp::Less:           return VK_COMPARE_OP_LESS;
+        case VkmCompareOp::Equal:          return VK_COMPARE_OP_EQUAL;
+        case VkmCompareOp::LessOrEqual:    return VK_COMPARE_OP_LESS_OR_EQUAL;
+        case VkmCompareOp::Greater:        return VK_COMPARE_OP_GREATER;
+        case VkmCompareOp::NotEqual:       return VK_COMPARE_OP_NOT_EQUAL;
+        case VkmCompareOp::GreaterOrEqual: return VK_COMPARE_OP_GREATER_OR_EQUAL;
+        case VkmCompareOp::Always:         return VK_COMPARE_OP_ALWAYS;
+        default: VKM_ASSERT(false, "Unsupported compare op for Vulkan backend"); return VK_COMPARE_OP_NEVER;
+    }
+}
+
+uint32_t vkFormatBytesPerTexel(VkmFormat format)
+{
+    switch (format)
+    {
+        case VkmFormat::R8G8B8A8_UNORM:
+        case VkmFormat::R8G8B8A8_SRGB:
+        case VkmFormat::R8G8B8A8_UINT:
+        case VkmFormat::R8G8B8A8_SNORM:
+        case VkmFormat::R8G8B8A8_SINT:
+        case VkmFormat::D32_SFLOAT:
+        case VkmFormat::D24_UNORM_S8_UINT:
+        case VkmFormat::BGRA8_UNORM:
+        case VkmFormat::BGRA8_SRGB:
+            return 4;
+        case VkmFormat::R16G16B16A16_UNORM:
+        case VkmFormat::R16G16B16A16_SFLOAT:
+        case VkmFormat::D32_SFLOAT_S8_UINT:
+            return 8;
+        case VkmFormat::R32G32B32A32_SFLOAT:
+            return 16;
+        default:
+            return 4;
+    }
+}
 }

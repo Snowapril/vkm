@@ -16,11 +16,17 @@ namespace vkm
     struct VkmEngineLaunchOptions;
     struct VkmPipelineStateDescriptor;
     class VkmTexture;
+    class VkmBuffer;
+    class VkmStagingBuffer;
+    class VkmSampler;
+    class VkmTextureView;
+    class VkmBufferView;
     class VkmSwapChainBase;
     class VkmCommandQueueBase;
     class VkmCommandDispatcher;
     class VkmRenderResourcePool;
     class VkmPipelineStateBase;
+    class VkmDeferredResourceReclaimer;
 
     enum class VkmDriverCapabilityFlags : uint32_t
     {
@@ -83,6 +89,31 @@ namespace vkm
         VkmTexture* newTexture(const VkmTextureInfo& info);
 
         /*
+         * @brief Create buffer with the given buffer info
+         */
+        VkmBuffer* newBuffer(const VkmBufferInfo& info);
+
+        /*
+         * @brief Create staging buffer with the given staging buffer info
+         */
+        VkmStagingBuffer* newStagingBuffer(const VkmStagingBufferInfo& info);
+
+        /*
+         * @brief Create sampler with the given sampler info
+         */
+        VkmSampler* newSampler(const VkmSamplerInfo& info);
+
+        /*
+         * @brief Create a texture view referencing an existing (pooled) texture
+         */
+        VkmTextureView* newTextureView(const VkmTextureViewInfo& info);
+
+        /*
+         * @brief Create a buffer view referencing an existing (pooled) buffer
+         */
+        VkmBufferView* newBufferView(const VkmBufferViewInfo& info);
+
+        /*
         * @brief Create swapchain with window info
         */
         VkmSwapChainBase* newSwapChain();
@@ -112,6 +143,12 @@ namespace vkm
         */
         inline VkmRenderResourcePool* getRenderResourcePool() const { return _renderResourcePool.get(); }
 
+        /*
+        * @brief get deferred resource reclaimer; VkmRenderGraph drives its per-frame
+        * pollOnce() fallback on WASM through this accessor.
+        */
+        inline VkmDeferredResourceReclaimer* getDeferredReclaimer() const { return _deferredReclaimer.get(); }
+
     protected:
         VkmCommandQueueBase* newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
 
@@ -119,6 +156,11 @@ namespace vkm
         virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) = 0;
         virtual void destroyInner() = 0;
         virtual VkmTexture* newTextureInner() = 0;
+        virtual VkmBuffer* newBufferInner() = 0;
+        virtual VkmStagingBuffer* newStagingBufferInner() = 0;
+        virtual VkmSampler* newSamplerInner() = 0;
+        virtual VkmTextureView* newTextureViewInner() = 0;
+        virtual VkmBufferView* newBufferViewInner() = 0;
         virtual VkmSwapChainBase* newSwapChainInner() = 0;
         virtual VkmCommandQueueBase* newCommandQueueInner() = 0;
         virtual VkmPipelineStateBase* newPipelineStateInner() = 0;
@@ -129,5 +171,6 @@ namespace vkm
 
     private:
         std::unique_ptr<VkmRenderResourcePool> _renderResourcePool;
+        std::unique_ptr<VkmDeferredResourceReclaimer> _deferredReclaimer;
     };
 }

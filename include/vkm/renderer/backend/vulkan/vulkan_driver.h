@@ -3,13 +3,20 @@
 #pragma once
 
 #include <vkm/renderer/backend/common/driver.h>
+#include <vkm/renderer/backend/common/gpu_offset_allocator.h>
 #include <volk.h>
+
+// Mirrors VMA's own VK_DEFINE_HANDLE(VmaAllocator) expansion (vk_mem_alloc.h), so this
+// lightweight header doesn't need to include the vendored VMA header.
+typedef struct VmaAllocator_T* VmaAllocator;
 
 namespace vkm
 {
+    class VkmGpuBufferPoolVulkan;
+
     /*
     * @brief renderer backend driver base class
-    * @details 
+    * @details
     */
     class VkmDriverVulkan : public VkmDriverBase
     {
@@ -25,17 +32,38 @@ namespace vkm
         inline VkDevice getDevice() const { return _device; }
         inline VkPhysicalDevice getPhysicalDevice() const { return _physicalDevice; }
         inline VkInstance getInstance() const { return _instance; }
+        inline VmaAllocator getVmaAllocator() const { return _vmaAllocator; }
 
         uint32_t getQueueFamilyIndex(VkmCommandQueueType queueType) const;
+
+        struct PooledBufferAllocation
+        {
+            VkBuffer buffer{VK_NULL_HANDLE};
+            VkmGpuMemoryAllocation allocation{};
+            VkmGpuBufferPoolVulkan* ownerPool{nullptr};
+        };
+
+        /*
+        * @brief Suballocate a sub-range from an existing (or newly grown) buffer pool block.
+        */
+        bool allocateFromBufferPool(uint64_t sizeBytes, uint32_t alignment, PooledBufferAllocation* outResult);
 
     protected:
         virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) override final;
         virtual void destroyInner() override final;
         virtual VkmTexture* newTextureInner() override final;
+        virtual VkmBuffer* newBufferInner() override final;
+        virtual VkmStagingBuffer* newStagingBufferInner() override final;
+        virtual VkmSampler* newSamplerInner() override final;
+        virtual VkmTextureView* newTextureViewInner() override final;
+        virtual VkmBufferView* newBufferViewInner() override final;
         virtual VkmCommandQueueBase* newCommandQueueInner() override final;
         virtual VkmPipelineStateBase* newPipelineStateInner() override final;
 
     private:
+        VmaAllocator _vmaAllocator{VK_NULL_HANDLE};
+        std::vector<std::unique_ptr<VkmGpuBufferPoolVulkan>> _bufferPools;
+
         uint32_t _graphicsQueueFamilyIndex{UINT32_MAX};
         uint32_t _computeQueueFamilyIndex{UINT32_MAX};
         uint32_t _transferQueueFamilyIndex{UINT32_MAX};

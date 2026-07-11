@@ -64,6 +64,14 @@
     }
   },
   {
+    "name": "offsetAllocator",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/sebbbi/OffsetAllocator.git",
+      "revision": "3610a7377088b1e8c8f1525f458c96038a4e6fc0"
+    }
+  },
+  {
     "name": "meshoptimizer",
     "source": {
       "type": "git",

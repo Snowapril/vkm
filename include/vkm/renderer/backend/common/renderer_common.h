@@ -15,7 +15,10 @@ namespace vkm
         Texture = 0,
         Buffer = 1,
         StagingBuffer = 2,
-        Count = 3,
+        Sampler = 3,
+        TextureView = 4,
+        BufferView = 5,
+        Count = 6,
         Undefined = Count,
     };
 
@@ -111,12 +114,96 @@ namespace vkm
         VkmResourceUsageBits _usage;
     };
 
+    enum class VkmMemoryPlacementHint : uint8_t
+    {
+        Auto = 0,
+        ForceCommitted = 1,
+        ForcePooled = 2,
+    };
+
     struct VkmTextureInfo : public VkmResourceInfo
     {
         glm::uvec3 _extent;
         uint32_t _numMipLevels;
         uint32_t _numArrayLayers;
         VkmFormat _format;
+        VkmMemoryPlacementHint _placementHint = VkmMemoryPlacementHint::Auto;
+    };
+
+    struct VkmBufferInfo : public VkmResourceInfo
+    {
+        uint64_t _size;
+        VkmMemoryPlacementHint _placementHint = VkmMemoryPlacementHint::Auto;
+    };
+
+    struct VkmStagingBufferInfo : public VkmResourceInfo
+    {
+        uint64_t _size;
+    };
+
+    enum class VkmFilterMode : uint8_t
+    {
+        Nearest = 0,
+        Linear = 1,
+    };
+
+    enum class VkmMipmapMode : uint8_t
+    {
+        Nearest = 0,
+        Linear = 1,
+    };
+
+    enum class VkmAddressMode : uint8_t
+    {
+        Repeat = 0,
+        MirroredRepeat = 1,
+        ClampToEdge = 2,
+        ClampToBorder = 3,
+    };
+
+    enum class VkmCompareOp : uint8_t
+    {
+        Never = 0,
+        Less = 1,
+        Equal = 2,
+        LessOrEqual = 3,
+        Greater = 4,
+        NotEqual = 5,
+        GreaterOrEqual = 6,
+        Always = 7,
+    };
+
+    struct VkmSamplerInfo : public VkmResourceInfo
+    {
+        VkmFilterMode _minFilter = VkmFilterMode::Linear;
+        VkmFilterMode _magFilter = VkmFilterMode::Linear;
+        VkmMipmapMode _mipmapMode = VkmMipmapMode::Linear;
+        VkmAddressMode _addressModeU = VkmAddressMode::ClampToEdge;
+        VkmAddressMode _addressModeV = VkmAddressMode::ClampToEdge;
+        VkmAddressMode _addressModeW = VkmAddressMode::ClampToEdge;
+        float _maxAnisotropy = 1.0f;
+        bool _compareEnable = false;
+        VkmCompareOp _compareOp = VkmCompareOp::Never;
+        float _minLod = 0.0f;
+        float _maxLod = 1000.0f;
+    };
+
+    struct VkmTextureViewInfo : public VkmResourceInfo
+    {
+        VkmResourceHandle _texture;
+        VkmFormat _format = VkmFormat::Undefined;
+        uint32_t _baseMipLevel = 0;
+        uint32_t _numMipLevels = UINT32_MAX;
+        uint32_t _baseArrayLayer = 0;
+        uint32_t _numArrayLayers = UINT32_MAX;
+    };
+
+    struct VkmBufferViewInfo : public VkmResourceInfo
+    {
+        VkmResourceHandle _buffer;
+        uint64_t _offset = 0;
+        uint64_t _size = UINT64_MAX;
+        VkmFormat _format = VkmFormat::Undefined;
     };
 
     enum class VkmCommandQueueType : uint8_t

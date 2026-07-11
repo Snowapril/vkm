@@ -3,6 +3,13 @@
 #include <vkm/base/platform.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/command_queue.h>
+#include <vkm/renderer/backend/common/gpu_offset_allocator.h>
+#include <vkm/renderer/backend/common/render_resource.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
+#include <vkm/renderer/backend/common/render_resource_pool.hpp>
+#include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
+#include <vkm/renderer/backend/common/buffer.h>
+#include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/engine.h>
 #include <vkm/platform/common/app_delegate.h>
 
@@ -11,6 +18,12 @@
 #ifdef VKM_USE_VULKAN_API
 #include <GLFW/glfw3.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
+#include <vkm/renderer/backend/vulkan/vulkan_buffer.h>
+#include <vkm/renderer/backend/vulkan/vulkan_staging_buffer.h>
+#include <vkm/renderer/backend/vulkan/vulkan_sampler.h>
+#include <vkm/renderer/backend/vulkan/vulkan_texture.h>
+#include <vkm/renderer/backend/vulkan/vulkan_texture_view.h>
+#include <vkm/renderer/backend/vulkan/vulkan_buffer_view.h>
 #include <vkm/renderer/backend/vulkan/vulkan_command_queue.h>
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <glm/vec2.hpp>
@@ -36,6 +49,22 @@ TEST_CASE("VkmResourceHandle - equality and validity") {
     CHECK(a.isPooledResource());
     CHECK_FALSE(vkm::VKM_INVALID_RESOURCE_HANDLE.isValid());
     CHECK_FALSE(vkm::VKM_INVALID_RESOURCE_HANDLE.isPooledResource());
+}
+
+TEST_CASE("VkmResourceHandle - Sampler/TextureView/BufferView are distinct valid pooled types") {
+    vkm::VkmResourceHandle sampler{1, vkm::VkmResourcePoolType::Default, vkm::VkmResourceType::Sampler};
+    vkm::VkmResourceHandle textureView{1, vkm::VkmResourcePoolType::Default, vkm::VkmResourceType::TextureView};
+    vkm::VkmResourceHandle bufferView{1, vkm::VkmResourcePoolType::Default, vkm::VkmResourceType::BufferView};
+
+    CHECK(sampler.isValid());
+    CHECK(textureView.isValid());
+    CHECK(bufferView.isValid());
+    CHECK(sampler.isPooledResource());
+    CHECK(textureView.isPooledResource());
+    CHECK(bufferView.isPooledResource());
+    CHECK(sampler != textureView);
+    CHECK(textureView != bufferView);
+    CHECK(sampler != bufferView);
 }
 
 TEST_CASE("VkmResourceHandle - std::hash is consistent and distinguishes distinct handles") {
@@ -71,6 +100,14 @@ public:
     MockGpuEventTimeline() : vkm::VkmGpuEventTimelineBase(nullptr) {}
     uint64_t queryLastCompletedTimeline() override { return _lastCompletedCachedTimeline; }
     void waitIdle(const uint64_t) override {}
+    void setLastCompleted(uint64_t value) { _lastCompletedCachedTimeline = value; }
+};
+
+class MockRenderResource : public vkm::VkmRenderResource {
+public:
+    MockRenderResource() : vkm::VkmRenderResource(nullptr) {}
+    vkm::VkmResourceType getResourceType() const override { return vkm::VkmResourceType::Buffer; }
+    void setDebugName(const char*) override {}
 };
 } // namespace
 
@@ -89,6 +126,150 @@ TEST_CASE("VkmGpuEventTimelineBase - allocateGpuEventTimelineObject increments m
     CHECK(tl.getLastAllocatedTimeline() == 2);
 }
 
+TEST_CASE("VkmRenderResource - recordUsage/getLastUsage/hasAnyPendingUsage tracks per-queue timelines") {
+    MockRenderResource resource;
+    CHECK_FALSE(resource.hasAnyPendingUsage());
+
+    MockGpuEventTimeline timeline;
+    auto usage = timeline.allocateGpuEventTimelineObject(); // timelineValue == 1
+
+    resource.recordUsage(vkm::VkmCommandQueueType::Graphics, usage);
+    CHECK(resource.getLastUsage(vkm::VkmCommandQueueType::Graphics)._timelineValue == 1);
+    CHECK(resource.hasAnyPendingUsage()); // completed cache still 0 < 1
+
+    timeline.setLastCompleted(1); // simulate the GPU catching up
+    CHECK_FALSE(resource.hasAnyPendingUsage());
+
+    // A later usage on the same queue overwrites the earlier one -- only the latest matters.
+    auto usage2 = timeline.allocateGpuEventTimelineObject(); // timelineValue == 2
+    resource.recordUsage(vkm::VkmCommandQueueType::Graphics, usage2);
+    CHECK(resource.getLastUsage(vkm::VkmCommandQueueType::Graphics)._timelineValue == 2);
+    CHECK(resource.hasAnyPendingUsage()); // completed cache is 1 < 2
+
+    timeline.setLastCompleted(2);
+    CHECK_FALSE(resource.hasAnyPendingUsage());
+}
+
+namespace {
+// Minimal VkmDriverBase/VkmCommandQueueBase/VkmBuffer stand-ins so
+// VkmDeferredResourceReclaimer can be exercised without a real GPU backend. Only the
+// initialize()/allocateBuffer() paths actually used by the test below are meaningful --
+// the rest are inert stubs required purely to satisfy pure virtuals.
+class FakeCommandQueue : public vkm::VkmCommandQueueBase {
+public:
+    FakeCommandQueue(vkm::VkmDriverBase* driver) : vkm::VkmCommandQueueBase(driver) {}
+    void setDebugName(const char*) override {}
+    vkm::VkmGpuEventTimelineObject submit(const vkm::CommandSubmitInfo&) override { return {}; }
+protected:
+    bool initializeInner() override { return true; }
+};
+
+class FakeDriver : public vkm::VkmDriverBase {
+protected:
+    vkm::VkmInitResult initializeInner(const vkm::VkmEngineLaunchOptions*) override
+    {
+        return vkm::VkmInitResult{vkm::VkmInitResultCode::Success, ""};
+    }
+    void destroyInner() override {}
+    vkm::VkmTexture* newTextureInner() override { return nullptr; }
+    vkm::VkmBuffer* newBufferInner() override { return nullptr; }
+    vkm::VkmStagingBuffer* newStagingBufferInner() override { return nullptr; }
+    vkm::VkmSampler* newSamplerInner() override { return nullptr; }
+    vkm::VkmTextureView* newTextureViewInner() override { return nullptr; }
+    vkm::VkmBufferView* newBufferViewInner() override { return nullptr; }
+    vkm::VkmSwapChainBase* newSwapChainInner() override { return nullptr; }
+    vkm::VkmCommandQueueBase* newCommandQueueInner() override { return new FakeCommandQueue(this); }
+};
+
+class MockBuffer : public vkm::VkmBuffer {
+public:
+    MockBuffer(vkm::VkmDriverBase* driver) : vkm::VkmBuffer(driver) {}
+    bool initialize(vkm::VkmResourceHandle, const vkm::VkmBufferInfo&) override { return true; }
+    bool overrideExternalHandle(void*) override { return true; }
+    void setDebugName(const char*) override {}
+};
+} // namespace
+
+TEST_CASE("VkmDeferredResourceReclaimer - pollOnce releases only once every recorded usage completes") {
+    FakeDriver driver;
+    vkm::VkmInitResult initResult = driver.initialize(nullptr);
+    REQUIRE(initResult.code == vkm::VkmInitResultCode::Success);
+
+    // A fresh, never-started() reclaimer -- driven purely via pollOnce(), never the real
+    // background thread the driver's own _deferredReclaimer already started internally.
+    vkm::VkmDeferredResourceReclaimer testReclaimer(&driver);
+
+    vkm::VkmResourceHandle handle = driver.getRenderResourcePool()->allocateBuffer(new MockBuffer(&driver));
+    REQUIRE(handle.isValid());
+
+    MockGpuEventTimeline timeline;
+    auto usage = timeline.allocateGpuEventTimelineObject(); // timelineValue == 1
+    driver.getRenderResourcePool()->getResource<vkm::VkmBuffer>(handle)->recordUsage(vkm::VkmCommandQueueType::Graphics, usage);
+
+    testReclaimer.requestRelease(handle);
+
+    testReclaimer.pollOnce();
+    CHECK(driver.getRenderResourcePool()->getResource<vkm::VkmBuffer>(handle) != nullptr); // still pending
+
+    timeline.setLastCompleted(1);
+    testReclaimer.pollOnce();
+    CHECK(driver.getRenderResourcePool()->getResource<vkm::VkmBuffer>(handle) == nullptr); // now released
+
+    driver.destroy();
+}
+
+TEST_CASE("VkmOffsetAllocator - allocate returns valid, non-overlapping ranges") {
+    vkm::VkmOffsetAllocator allocator(1024);
+
+    auto a = allocator.allocate(64, 1);
+    auto b = allocator.allocate(128, 1);
+    CHECK(a.isValid());
+    CHECK(b.isValid());
+    CHECK(a._offset != b._offset);
+
+    allocator.free(a);
+    allocator.free(b);
+}
+
+TEST_CASE("VkmOffsetAllocator - alignment padding returns correctly aligned offsets") {
+    vkm::VkmOffsetAllocator allocator(4096);
+
+    // Force an unaligned starting point, then request a 256-aligned allocation.
+    auto filler = allocator.allocate(3, 1);
+    CHECK(filler.isValid());
+
+    auto aligned = allocator.allocate(64, 256);
+    CHECK(aligned.isValid());
+    CHECK((aligned._offset % 256) == 0);
+
+    allocator.free(aligned);
+    allocator.free(filler);
+}
+
+TEST_CASE("VkmOffsetAllocator - free then reallocate reuses freed space") {
+    vkm::VkmOffsetAllocator allocator(256);
+
+    auto a = allocator.allocate(256, 1);
+    CHECK(a.isValid());
+
+    // Pool is full; a second allocation of any size must fail.
+    auto b = allocator.allocate(1, 1);
+    CHECK_FALSE(b.isValid());
+
+    allocator.free(a);
+
+    // Freed space must be reusable.
+    auto c = allocator.allocate(256, 1);
+    CHECK(c.isValid());
+    allocator.free(c);
+}
+
+TEST_CASE("VkmOffsetAllocator - allocation exceeding pool size fails") {
+    vkm::VkmOffsetAllocator allocator(128);
+    auto a = allocator.allocate(256, 1);
+    CHECK_FALSE(a.isValid());
+}
+
 // ---------------------------------------------------------------------------
 // Vulkan headless driver + swapchain tests
 // ---------------------------------------------------------------------------
@@ -105,6 +286,14 @@ struct VulkanDriverFixture {
         initResult = driver->initialize(&opts);
     }
     ~VulkanDriverFixture() {
+        // destroy() must run before the driver object is deleted: it tears down
+        // driver-owned pools (VmaAllocator, buffer pools, deferred reclaimer thread) that
+        // pooled resources' destructors depend on. Skipping it (as this fixture previously
+        // did) is safe only by accident when nothing needs ordered teardown.
+        if (driver)
+        {
+            driver->destroy();
+        }
         driver.reset();
         glfwTerminate();
     }
@@ -131,6 +320,114 @@ TEST_CASE("VkmDriverVulkan - initialization succeeds") {
     SUBCASE("CommandBufferReusable capability flag is set on Vulkan") {
         CHECK((f.driver->getDriverCapabilityFlags() & vkm::VkmDriverCapabilityFlags::CommandBufferReusable) != 0);
     }
+}
+
+TEST_CASE("VkmDriverVulkan - VmaAllocator is created on init") {
+    VulkanDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+    CHECK(f.driver->getVmaAllocator() != nullptr);
+}
+
+TEST_CASE("VkmDriverVulkan - newBuffer/newStagingBuffer/newSampler create valid resources") {
+    VulkanDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+
+    SUBCASE("committed buffer") {
+        vkm::VkmBufferInfo info{};
+        info._flags = vkm::VkmResourceCreateInfo::AllowShaderRead;
+        info._size = 256;
+        info._placementHint = vkm::VkmMemoryPlacementHint::ForceCommitted;
+        vkm::VkmBuffer* buffer = f.driver->newBuffer(info);
+        REQUIRE(buffer != nullptr);
+        CHECK(buffer->getHandle().isValid());
+        auto* vkBuffer = f.driver->getRenderResourcePool()->getResource<vkm::VkmBufferVulkan>(buffer->getHandle());
+        REQUIRE(vkBuffer != nullptr);
+        CHECK(vkBuffer->getBuffer() != VK_NULL_HANDLE);
+        // Never GPU-used (no timeline recorded), so an immediate release is correct here --
+        // requestRelease() is only needed once a resource may have been submitted.
+        f.driver->getRenderResourcePool()->releaseResource(buffer->getHandle());
+    }
+
+    SUBCASE("pooled buffer") {
+        vkm::VkmBufferInfo info{};
+        info._flags = vkm::VkmResourceCreateInfo::AllowShaderRead;
+        info._size = 256;
+        info._placementHint = vkm::VkmMemoryPlacementHint::ForcePooled;
+        vkm::VkmBuffer* buffer = f.driver->newBuffer(info);
+        REQUIRE(buffer != nullptr);
+        auto* vkBuffer = f.driver->getRenderResourcePool()->getResource<vkm::VkmBufferVulkan>(buffer->getHandle());
+        REQUIRE(vkBuffer != nullptr);
+        CHECK(vkBuffer->getBuffer() != VK_NULL_HANDLE);
+        f.driver->getRenderResourcePool()->releaseResource(buffer->getHandle());
+    }
+
+    SUBCASE("staging buffer is host-mapped") {
+        vkm::VkmStagingBufferInfo info{};
+        info._flags = vkm::VkmResourceCreateInfo::AllowTransferSrc;
+        info._size = 256;
+        vkm::VkmStagingBuffer* stagingBuffer = f.driver->newStagingBuffer(info);
+        REQUIRE(stagingBuffer != nullptr);
+        CHECK(stagingBuffer->map() != nullptr);
+        f.driver->getRenderResourcePool()->releaseResource(stagingBuffer->getHandle());
+    }
+
+    SUBCASE("sampler") {
+        vkm::VkmSamplerInfo info{};
+        vkm::VkmSampler* sampler = f.driver->newSampler(info);
+        REQUIRE(sampler != nullptr);
+        auto* vkSampler = f.driver->getRenderResourcePool()->getResource<vkm::VkmSamplerVulkan>(sampler->getHandle());
+        REQUIRE(vkSampler != nullptr);
+        CHECK(vkSampler->getSampler() != VK_NULL_HANDLE);
+        f.driver->getRenderResourcePool()->releaseResource(sampler->getHandle());
+    }
+}
+
+TEST_CASE("VkmDriverVulkan - texture view and buffer view resolve their parent resource") {
+    VulkanDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+
+    vkm::VkmTextureInfo textureInfo{};
+    textureInfo._flags = vkm::VkmResourceCreateInfo::AllowShaderRead;
+    textureInfo._extent = {4, 4, 1};
+    textureInfo._numMipLevels = 1;
+    textureInfo._numArrayLayers = 1;
+    textureInfo._format = vkm::VkmFormat::R8G8B8A8_UNORM;
+    vkm::VkmTexture* texture = f.driver->newTexture(textureInfo);
+    REQUIRE(texture != nullptr);
+
+    vkm::VkmTextureViewInfo viewInfo{};
+    viewInfo._texture = texture->getHandle();
+    viewInfo._numMipLevels = 1;
+    viewInfo._numArrayLayers = 1;
+    vkm::VkmTextureView* textureView = f.driver->newTextureView(viewInfo);
+    REQUIRE(textureView != nullptr);
+    auto* vkTextureView = f.driver->getRenderResourcePool()->getResource<vkm::VkmTextureViewVulkan>(textureView->getHandle());
+    REQUIRE(vkTextureView != nullptr);
+    CHECK(vkTextureView->getImageView() != VK_NULL_HANDLE);
+
+    vkm::VkmBufferInfo bufferInfo{};
+    bufferInfo._flags = vkm::VkmResourceCreateInfo::AllowShaderRead;
+    bufferInfo._size = 256;
+    vkm::VkmBuffer* buffer = f.driver->newBuffer(bufferInfo);
+    REQUIRE(buffer != nullptr);
+
+    vkm::VkmBufferViewInfo bufferViewInfo{};
+    bufferViewInfo._buffer = buffer->getHandle();
+    bufferViewInfo._offset = 0;
+    bufferViewInfo._size = 256;
+    vkm::VkmBufferView* bufferView = f.driver->newBufferView(bufferViewInfo);
+    REQUIRE(bufferView != nullptr);
+    auto* vkBufferView = f.driver->getRenderResourcePool()->getResource<vkm::VkmBufferViewVulkan>(bufferView->getHandle());
+    REQUIRE(vkBufferView != nullptr);
+    CHECK(vkBufferView->getOffset() == 0);
+    CHECK(vkBufferView->getSize() == 256);
+
+    // Release views before their parent resources -- a view must not outlive what it views.
+    vkm::VkmRenderResourcePool* pool = f.driver->getRenderResourcePool();
+    pool->releaseResource(bufferView->getHandle());
+    pool->releaseResource(buffer->getHandle());
+    pool->releaseResource(textureView->getHandle());
+    pool->releaseResource(texture->getHandle());
 }
 
 TEST_CASE("VkmDriverVulkan - graphics queue exposes a valid VkQueue handle") {
@@ -173,6 +470,7 @@ TEST_CASE("VkmSwapChainVulkan - created and initialized with a hidden GLFW windo
         CHECK(sc->getExtent() == glm::uvec2(256u, 256u));
     }
 
+    driver->destroy();
     driver.reset();
     glfwDestroyWindow(window);
     glfwTerminate();

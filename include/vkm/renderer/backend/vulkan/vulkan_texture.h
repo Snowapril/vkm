@@ -5,6 +5,9 @@
 #include <vkm/renderer/backend/common/texture.h>
 #include <volk.h>
 
+typedef struct VmaAllocator_T* VmaAllocator;
+typedef struct VmaAllocation_T* VmaAllocation;
+
 namespace vkm
 {
     class VkmTextureVulkan : public VkmTexture
@@ -23,8 +26,12 @@ namespace vkm
         inline void setCurrentLayout(VkImageLayout layout) { _currentLayout = layout; }
 
     private:
+        bool createDefaultView();
+
+    private:
         VkImage _vkTexture;
         VkImageView _vkImageView{VK_NULL_HANDLE};
         VkImageLayout _currentLayout{VK_IMAGE_LAYOUT_UNDEFINED};
+        VmaAllocation _vmaAllocation{nullptr};
     };
 } // namespace vkm
