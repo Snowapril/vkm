@@ -14,6 +14,55 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Why: <the edge case that forced it>
 ```
 
+### 2026-07-13 — VKM_NEW_TAGGED: no escape hatch added
+- Planned: harden the macro against non-literal labels, keeping `allocate()`/`trackedNew()`
+  as an escape hatch for legitimate non-literal static-duration call sites.
+- Did instead: fixed the single existing non-literal call site (a test passing a
+  `constexpr const char*` for DRY) to pass the literal directly; no escape hatch added.
+- Why: the only non-literal use was incidental, so an unused escape-hatch mechanism
+  would have been speculative surface area.
+
+### 2026-07-13 — origin-isolation test rewritten for collision-error policy
+- Planned: add a test for the new Engine/User pipeline-name-collision error.
+- Did instead: also rewrote the pre-existing "Engine and User origins are isolated"
+  test to use two distinct names plus cross-origin lookup assertions.
+- Why: that test loaded the same name into both origins and asserted both succeeded,
+  which directly contradicts the newly agreed collision-is-an-error policy.
+
+### 2026-07-13 — WebGPU compute pass tied to pipeline bind/unbind
+- Planned: mirror Metal's beginComputePass lifecycle for the WebGPU compute pass encoder.
+- Did instead: begin the compute pass lazily in `onBindPipeline` and end it in
+  `onUnbindPipeline`.
+- Why: the common command-buffer interface exposes no begin/end-compute hooks and
+  Metal's own `beginComputePass` is never invoked anywhere (dead scaffolding); adding
+  new common-interface entry points would have been invasive plumbing beyond scope.
+
+### 2026-07-13 — MTL4 depth/stencil check stayed documentation-only
+- Planned: encoder-time validation that the render pass depth/stencil format matches
+  the PSO's declared format.
+- Did instead: tightened the explanatory NOTE in `metal_pipeline_state.mm` only.
+- Why: `beginRenderPass` runs before any pipeline is bound and the encoder does not
+  retain the chosen format, so the comparison is unreachable without new plumbing —
+  the plan's explicit conservative fallback.
+
+### 2026-07-13 — macOS Vulkan sample: runtime loader fix instead of link fix
+- Planned: capture and fix a linker error in the Vulkan sample build on macOS.
+- Did instead: the sample already built and linked cleanly; fixed the actual failure —
+  `glfwVulkanSupported()` returning false at runtime — by calling `volkInitialize()` +
+  `glfwInitVulkanLoader(vkGetInstanceProcAddr)` before the check (with volk headers
+  reordered ahead of glfw3.h so the declaration is visible).
+- Why: the TODO line described a stale symptom; modern macOS `dlopen` no longer
+  searches `/usr/local/lib`, so GLFW could not find the Vulkan loader that volk finds
+  via its absolute-path fallback.
+
+### 2026-07-13 — swapchain semaphore debug names held in locals
+- Planned: debug-name the new semaphores following existing patterns (string passed
+  directly).
+- Did instead: store each generated name in a `const std::string` local before
+  assigning `pObjectName`.
+- Why: inline `fmt::format(...).c_str()` produced a dangling temporary rejected by
+  `-Werror,-Wdangling-gsl`.
+
 ### 2026-07-12 — session-report marker rewound to df1d9bb
 - Planned: after publishing the first session report, write current `HEAD` into
   `.claude/.session-report-marker`.
