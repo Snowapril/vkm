@@ -44,10 +44,16 @@ namespace vkm
     }
 
     VkmRenderResourcePoolMetal::VkmRenderResourcePoolMetal(VkmDriverBase* driver)
-        : VkmRenderResourcePool(driver)
+        : VkmRenderResourcePool(driver), _driverMetal(static_cast<VkmDriverMetal*>(driver))
     {
-        VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(driver);
-        id<MTLDevice> device = driverMetal->getMTLDevice();
+    }
+
+    bool VkmRenderResourcePoolMetal::initialize()
+    {
+        // Runs after VkmDriverMetal::initializeInner() validated the device/OS -- calling
+        // residency-set APIs on an unvalidated device hangs inside the Metal framework on
+        // unsupported (e.g. paravirtualized CI) GPUs instead of returning nil.
+        id<MTLDevice> device = _driverMetal->getMTLDevice();
 
         for (uint8_t poolType = 0; poolType < (uint8_t)VkmResourcePoolType::Count; ++poolType)
         {
@@ -59,8 +65,10 @@ namespace vkm
             if (_residencySets[poolType] == nil)
             {
                 VKM_DEBUG_ERROR("Failed to create MTLResidencySet");
+                return false;
             }
         }
+        return true;
     }
 
     VkmRenderResourcePoolMetal::~VkmRenderResourcePoolMetal()

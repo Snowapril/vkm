@@ -48,6 +48,11 @@ namespace vkm
             return result;
         }
 
+        if (_renderResourcePool->initialize() == false)
+        {
+            return VkmInitResult{VkmInitResultCode::Failed, "Failed to initialize render resource pool"};
+        }
+
         if (setUpPredefinedCommandQueues() == false)
         {
             return VkmInitResult{VkmInitResultCode::Failed, "Failed to set up predefined command queues"};
