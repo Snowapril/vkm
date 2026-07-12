@@ -13,6 +13,8 @@ typedef struct VmaAllocator_T* VmaAllocator;
 namespace vkm
 {
     class VkmGpuBufferPoolVulkan;
+    class VkmBindlessResourceManagerVulkan;
+    class VkmGpuTimerVulkan;
 
     /*
     * @brief renderer backend driver base class
@@ -33,6 +35,8 @@ namespace vkm
         inline VkPhysicalDevice getPhysicalDevice() const { return _physicalDevice; }
         inline VkInstance getInstance() const { return _instance; }
         inline VmaAllocator getVmaAllocator() const { return _vmaAllocator; }
+        inline VkmBindlessResourceManagerVulkan* getBindlessResourceManager() const { return _bindlessResourceManager.get(); }
+        inline VkmGpuTimerVulkan* getGpuTimer() const { return _gpuTimer.get(); }
 
         uint32_t getQueueFamilyIndex(VkmCommandQueueType queueType) const;
 
@@ -64,6 +68,8 @@ namespace vkm
     private:
         VmaAllocator _vmaAllocator{VK_NULL_HANDLE};
         std::vector<std::unique_ptr<VkmGpuBufferPoolVulkan>> _bufferPools;
+        std::unique_ptr<VkmBindlessResourceManagerVulkan> _bindlessResourceManager;
+        std::unique_ptr<VkmGpuTimerVulkan> _gpuTimer;
 
         uint32_t _graphicsQueueFamilyIndex{UINT32_MAX};
         uint32_t _computeQueueFamilyIndex{UINT32_MAX};

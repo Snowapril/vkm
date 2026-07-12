@@ -1,7 +1,5 @@
 # CLAUDE.md
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
-
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
 ## 1. Think Before Coding
@@ -60,10 +58,6 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
----
-
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
-
 ## 5. Language Policy
 
 **Conversation may be in Korean or English. Code and documentation must always be in English.**
@@ -115,3 +109,15 @@ vkm/
 
 - After completing each user request that changes files, create a commit for it.
 - Still follow standard git safety rules (no force-push, no history rewriting, no `--no-verify`) unless explicitly requested.
+
+## 11. Implementation Notes & Deviation Logging
+
+**Keep `implementation-notes.md` (repo root) updated while implementing a plan.**
+
+- If an edge case forces a deviation from the agreed plan, pick the conservative option
+  (the one least likely to change behavior or break invariants outside the task's scope),
+  log it under the `## Deviations` section of `implementation-notes.md`, and keep going
+  instead of stopping to ask — unless the conservative option itself is ambiguous.
+- Each deviation entry: what was planned, what was done instead, and why.
+- Run `/session-report` to generate a readable HTML summary (with a comprehension quiz)
+  of a session's changes, including any logged deviations.

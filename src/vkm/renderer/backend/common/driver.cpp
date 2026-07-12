@@ -9,9 +9,12 @@
 #include <vkm/renderer/backend/common/buffer_view.h>
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/command_queue.h>
+#include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
+#include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
+#include <cstring>
 
 namespace vkm
 {
@@ -169,6 +172,43 @@ namespace vkm
         }
 
         return stagingBuffer;
+    }
+
+    bool VkmDriverBase::uploadToBuffer(VkmResourceHandle dstBuffer, const void* data, uint64_t size, uint64_t dstOffset)
+    {
+        VkmStagingBufferInfo stagingInfo{};
+        stagingInfo._flags = VkmResourceCreateInfo::AllowTransferSrc;
+        stagingInfo._size = size;
+        stagingInfo._debugName = "UploadToBufferStaging";
+        VkmStagingBuffer* stagingBuffer = newStagingBuffer(stagingInfo);
+        if (stagingBuffer == nullptr)
+        {
+            VKM_DEBUG_ERROR("uploadToBuffer: failed to create staging buffer");
+            return false;
+        }
+
+        void* mapped = stagingBuffer->map();
+        std::memcpy(mapped, data, size);
+        stagingBuffer->unmap();
+        stagingBuffer->flush(0, size);
+
+        VkmCommandQueueBase* commandQueue = getCommandQueue(VkmCommandQueueType::Graphics, 0);
+        VkmCommandBufferBase* commandBuffer = commandQueue->getCommandBufferPool()->allocate();
+        commandBuffer->beginCommandBuffer();
+        commandBuffer->copyBuffer(stagingBuffer->getHandle(), dstBuffer, 0, dstOffset, size);
+        commandBuffer->endCommandBuffer();
+
+        CommandSubmitInfo submitInfo;
+        submitInfo.commandBuffers[0] = commandBuffer;
+        submitInfo.commandBufferCount = 1;
+        VkmGpuEventTimelineObject submitResult = commandQueue->submit(submitInfo);
+        if (submitResult._gpuEventTimeline != nullptr)
+        {
+            submitResult._gpuEventTimeline->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
+        }
+
+        _renderResourcePool->releaseResource(stagingBuffer->getHandle());
+        return true;
     }
 
     VkmSampler* VkmDriverBase::newSampler(const VkmSamplerInfo& info)

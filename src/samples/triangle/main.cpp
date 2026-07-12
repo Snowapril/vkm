@@ -1,4 +1,5 @@
 #include <iostream>
+#include <array>
 #include <cxxopts.hpp>
 
 #if defined(VKM_ENABLE_IMGUI)
@@ -9,7 +10,15 @@
 #include <vkm/platform/common/app_delegate.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
+#include <vkm/renderer/backend/common/driver.h>
+#include <vkm/renderer/backend/common/buffer.h>
+#include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/engine.h>
+
+#if defined(VKM_USE_VULKAN_API)
+#include <vkm/renderer/backend/vulkan/vulkan_driver.h>
+#include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
+#endif
 
 #if defined(VKM_PLATFORM_WINDOWS)
 #include <vkm/platform/windows/application.h>
@@ -22,6 +31,19 @@
 #endif // defined(VKM_PLATFORM_WINDOWS)
 
 using namespace vkm;
+
+namespace
+{
+    // Matches triangle.hlsl's VertexData struct, padded to match DXC's default (std430-like)
+    // storage-buffer layout for -spirv targets: a float3 is 16-byte aligned, so the
+    // following float4 must start at offset 16, not 12.
+    struct TriangleVertex
+    {
+        float position[3];
+        float _pad0;
+        float color[4];
+    };
+}
 
 class TriangleApplication : public AppDelegate
 {
@@ -44,6 +66,48 @@ public:
         VkmPipelineStateBase* wireframePso = manager->getPipelineState("triangle_pso[wireframe]", VkmPipelineStateOrigin::User);
         VKM_ASSERT(defaultPso != nullptr && wireframePso != nullptr, "Failed to create triangle_pso variants");
         VKM_DEBUG_LOG(("Loaded PSOs '" + defaultPso->getName() + "' and '" + wireframePso->getName() + "'").c_str());
+        _pso = defaultPso;
+
+#if defined(VKM_USE_VULKAN_API)
+        // Draw-call recording and the bindless resource-binding set are Vulkan-only for now
+        // (see TODO.md) -- Metal/WebGPU builds load the PSOs above but don't draw yet.
+        const std::array<TriangleVertex, 3> vertices{
+            TriangleVertex{{ 0.0f, -0.5f, 0.0f}, 0.0f, {1.0f, 0.0f, 0.0f, 1.0f}}, // top, red
+            TriangleVertex{{ 0.5f,  0.5f, 0.0f}, 0.0f, {0.0f, 1.0f, 0.0f, 1.0f}}, // bottom-right, green
+            TriangleVertex{{-0.5f,  0.5f, 0.0f}, 0.0f, {0.0f, 0.0f, 1.0f, 1.0f}}, // bottom-left, blue
+        };
+        const std::array<uint32_t, 3> indices{0, 1, 2};
+
+        VkmDriverBase* driver = engine->getDriver();
+
+        // AllowShaderWrite maps to VK_BUFFER_USAGE_STORAGE_BUFFER_BIT (see
+        // toVkBufferUsageFlags) -- used here even though these buffers are shader-read-only,
+        // since AllowShaderRead maps to UNIFORM_BUFFER_BIT, which can't back an
+        // unbounded/bindless storage-buffer array element.
+        VkmBufferInfo vertexBufferInfo{};
+        vertexBufferInfo._flags = VkmResourceCreateInfo::AllowShaderWrite | VkmResourceCreateInfo::AllowTransferDst;
+        vertexBufferInfo._size = sizeof(vertices);
+        vertexBufferInfo._placementHint = VkmMemoryPlacementHint::ForceCommitted; // dedicated VkBuffer, offset always 0
+        vertexBufferInfo._debugName = "TriangleVertexBuffer";
+        VkmBuffer* vertexBuffer = driver->newBuffer(vertexBufferInfo);
+        VKM_ASSERT(vertexBuffer != nullptr, "Failed to create triangle vertex buffer");
+        driver->uploadToBuffer(vertexBuffer->getHandle(), vertices.data(), sizeof(vertices));
+
+        VkmBufferInfo indexBufferInfo{};
+        indexBufferInfo._flags = VkmResourceCreateInfo::AllowShaderWrite | VkmResourceCreateInfo::AllowTransferDst;
+        indexBufferInfo._size = sizeof(indices);
+        indexBufferInfo._placementHint = VkmMemoryPlacementHint::ForceCommitted;
+        indexBufferInfo._debugName = "TriangleIndexBuffer";
+        VkmBuffer* indexBuffer = driver->newBuffer(indexBufferInfo);
+        VKM_ASSERT(indexBuffer != nullptr, "Failed to create triangle index buffer");
+        driver->uploadToBuffer(indexBuffer->getHandle(), indices.data(), sizeof(indices));
+
+        VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(driver);
+        VkmBindlessResourceManagerVulkan* bindlessManager = driverVulkan->getBindlessResourceManager();
+        _vertexBufferSlot = bindlessManager->registerBuffer(vertexBuffer->getHandle(), VkmBindlessArrayType::Buffer);
+        _indexBufferSlot = bindlessManager->registerBuffer(indexBuffer->getHandle(), VkmBindlessArrayType::IndexBuffer);
+        VKM_ASSERT(_vertexBufferSlot != UINT32_MAX && _indexBufferSlot != UINT32_MAX, "Failed to register triangle buffers into the bindless set");
+#endif
     }
 
     virtual void preShutdown() override final
@@ -81,8 +145,18 @@ public:
         frameBufferDesc._colorAttachments[0] = backBuffer; // Attach the back buffer
 
         auto graphicsSubGraph = renderGraph->beginGraphicsSubGraph(frameBufferDesc);
-        (void)graphicsSubGraph; // The triangle itself isn't drawn yet -- no pipeline/draw-call
-                                 // support exists in the engine outside of this render callback hook.
+
+#if defined(VKM_USE_VULKAN_API)
+        VkmPipelineStateBase* pso = _pso;
+        const uint32_t pushConstants[2] = {_vertexBufferSlot, _indexBufferSlot};
+        graphicsSubGraph->setRenderCallback([pso, pushConstants](VkmCommandBufferBase* commandBuffer) {
+            commandBuffer->bindPipeline(pso);
+            commandBuffer->setPushConstants(pushConstants, sizeof(pushConstants));
+            commandBuffer->draw(3, 1, 0, 0);
+        });
+#else
+        (void)graphicsSubGraph; // Draw-call recording is Vulkan-only for now -- see TODO.md.
+#endif
     }
 
     virtual const char* getAppName() const override final
@@ -91,12 +165,17 @@ public:
     }
 
 private:
+    VkmPipelineStateBase* _pso{nullptr};
+#if defined(VKM_USE_VULKAN_API)
+    uint32_t _vertexBufferSlot{UINT32_MAX};
+    uint32_t _indexBufferSlot{UINT32_MAX};
+#endif
 };
 
 int main(int argc, char* argv[])
 {
     VkmApplication app;
-    
+
     int ret = app.entryPoint(new TriangleApplication(), argc, argv);
     app.destroy();
 

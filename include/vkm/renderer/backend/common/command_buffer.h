@@ -41,6 +41,20 @@ namespace vkm
         void bindPipeline(VkmPipelineStateBase* pipelineState);
         void unbindPipeline();
 
+        // Buffer-to-buffer copy (e.g. staging -> device-local). Must be recorded while
+        // recording but outside a render pass.
+        void copyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size);
+
+        // Draw related -- indices, if any, are fetched manually in-shader via a bindless
+        // index buffer rather than a bound VkBuffer, so there is no separate "indexed" draw.
+        void draw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex = 0, uint32_t firstInstance = 0);
+        void setPushConstants(const void* data, uint32_t size, uint32_t offset = 0);
+
+        // GPU frame-time profiling hooks for the engine debug overlay. Only Vulkan overrides
+        // these with real behavior; Metal/WebGPU keep the empty default (reports 0).
+        virtual void writeGpuTimestampBegin() {}
+        virtual void writeGpuTimestampEnd() {}
+
         inline const VkmGpuEventTimelineObject& getGpuEventTimelineObject() const { return _gpuEventTimelineObject; }
 
     protected:
@@ -48,6 +62,9 @@ namespace vkm
         virtual void onEndRenderPass() = 0;
         virtual void onBindPipeline(VkmPipelineStateBase* pipelineState) = 0;
         virtual void onUnbindPipeline() = 0;
+        virtual void onCopyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size) = 0;
+        virtual void onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) = 0;
+        virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) = 0;
 
     protected:
         VkmDriverBase* _driver;

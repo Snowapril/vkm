@@ -18,6 +18,7 @@ namespace vkm
         ~VkmPipelineStateVulkan();
 
         inline VkPipeline getHandle() const { return _pipeline; }
+        inline VkPipelineLayout getPipelineLayout() const { return _pipelineLayout; }
 
     protected:
         virtual bool createInner(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError) override final;
@@ -26,9 +27,10 @@ namespace vkm
     private:
         VkPipeline _pipeline{VK_NULL_HANDLE};
 
-        // Resource-binding (descriptor sets / push constants) is a deliberately deferred
-        // follow-up (out of scope for this plan) -- this layout is empty, created purely
-        // so pipeline creation succeeds.
+        // Every Vulkan pipeline shares the engine-global bindless set 0 (see
+        // VkmBindlessResourceManagerVulkan) plus a small push-constant range carrying the
+        // current draw's bindless slot indices. Sets 1-3 ("engine managed", per TODO.md)
+        // remain unreserved/deferred follow-up work.
         VkPipelineLayout _pipelineLayout{VK_NULL_HANDLE};
     };
 } // namespace vkm

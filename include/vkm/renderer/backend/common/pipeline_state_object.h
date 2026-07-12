@@ -13,8 +13,9 @@ namespace vkm
     // A single backend pipeline object built from one fully-resolved
     // VkmPipelineStateDescriptor (already expanded via expandPipelineStateOptions() if it
     // came from a JSON node with "options" -- this class itself knows nothing about option
-    // expansion). Resource-binding (descriptor sets / bind groups) is a deliberately
-    // deferred follow-up -- this class only owns fixed-function state + shader stages.
+    // expansion). On Vulkan, every pipeline shares the engine-global bindless set 0 (see
+    // VkmBindlessResourceManagerVulkan); descriptor sets 1-3 and any Metal/WebGPU
+    // resource-binding equivalent remain a deferred follow-up.
     class VkmPipelineStateBase
     {
     public:

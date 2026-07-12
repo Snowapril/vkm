@@ -92,4 +92,22 @@ namespace vkm
         // WebGPU has no explicit "unbind pipeline" call -- pipeline state is simply replaced by
         // the next bind or discarded at pass end. Nothing to do here.
     }
+
+    void VkmCommandBufferWebGPU::onCopyBuffer(VkmResourceHandle, VkmResourceHandle, uint64_t, uint64_t, uint64_t)
+    {
+        // Not implemented yet on WebGPU -- bindless resource upload is Vulkan-only for now.
+        VKM_DEBUG_ERROR("VkmCommandBufferWebGPU::onCopyBuffer is not implemented");
+    }
+
+    void VkmCommandBufferWebGPU::onDraw(uint32_t, uint32_t, uint32_t, uint32_t)
+    {
+        // Not implemented yet on WebGPU -- bindless draw-call recording is Vulkan-only for now.
+        VKM_DEBUG_ERROR("VkmCommandBufferWebGPU::onDraw is not implemented");
+    }
+
+    void VkmCommandBufferWebGPU::onSetPushConstants(const void*, uint32_t, uint32_t)
+    {
+        // Not implemented yet on WebGPU -- bindless push constants are Vulkan-only for now.
+        VKM_DEBUG_ERROR("VkmCommandBufferWebGPU::onSetPushConstants is not implemented");
+    }
 } // namespace vkm

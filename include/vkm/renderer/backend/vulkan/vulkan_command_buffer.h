@@ -17,13 +17,23 @@ namespace vkm
 
         inline VkCommandBuffer getVkCommandBuffer() const { return _vkCommandBuffer; }
 
+        virtual void writeGpuTimestampBegin() override final;
+        virtual void writeGpuTimestampEnd() override final;
+
     protected:
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) override final;
         virtual void onEndRenderPass() override final;
         virtual void onBindPipeline(VkmPipelineStateBase* pipelineState) override final;
         virtual void onUnbindPipeline() override final;
+        virtual void onCopyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size) override final;
+        virtual void onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) override final;
+        virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) override final;
 
     private:
         VkCommandBuffer _vkCommandBuffer{VK_NULL_HANDLE};
+
+        // Set in onBindPipeline(); onSetPushConstants() needs the bound pipeline's layout,
+        // but VkmCommandBufferBase::_boundPipelineState is private to the base class.
+        VkPipelineLayout _boundPipelineLayout{VK_NULL_HANDLE};
     };
 } // namespace vkm

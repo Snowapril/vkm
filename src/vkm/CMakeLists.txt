@@ -9,6 +9,7 @@ set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../)
 set(PUBLIC_HDRS
     $(PUBLIC_HDR_DIR)/vkm/platform/common/app_delegate.h
     $(PUBLIC_HDR_DIR)/vkm/platform/common/window.h
+    ${PUBLIC_HDR_DIR}/vkm/platform/common/process_stats.h
     ${PUBLIC_HDR_DIR}/vkm/base/platform.h
     ${PUBLIC_HDR_DIR}/vkm/base/common.h
     ${PUBLIC_HDR_DIR}/vkm/base/logger.h
@@ -86,6 +87,7 @@ if (VKM_PLATFORM_WINDOWS)
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/windows/application.cpp
+        ${SRC_DIR}/vkm/platform/windows/process_stats.cpp
     )
 endif()
 
@@ -95,6 +97,7 @@ if (VKM_PLATFORM_LINUX)
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/linux/application.cpp
+        ${SRC_DIR}/vkm/platform/linux/process_stats.cpp
     )
 endif()
 
@@ -104,6 +107,7 @@ if (VKM_PLATFORM_APPLE)
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/apple/application.mm
+        ${SRC_DIR}/vkm/platform/apple/process_stats.cpp
     )
 endif()
 
@@ -122,6 +126,8 @@ if (VKM_USE_VULKAN_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_command_queue.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_pipeline_state.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_timer.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_driver.cpp
@@ -137,6 +143,8 @@ if (VKM_USE_VULKAN_API)
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_queue.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_pipeline_state.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_timer.cpp
     )
     if (VKM_ENABLE_IMGUI)
         list(APPEND PUBLIC_HDRS
@@ -209,6 +217,7 @@ if (VKM_USE_WEBGPU_API)
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/wasm/application.cpp
+        ${SRC_DIR}/vkm/platform/wasm/process_stats.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_driver.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_swapchain.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_texture.cpp

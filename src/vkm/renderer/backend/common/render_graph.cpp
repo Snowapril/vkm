@@ -64,17 +64,19 @@ namespace vkm
 
         VkmCommandBufferBase* commandBuffer = commandBufferPool->allocate();
         commandBuffer->beginCommandBuffer();
+        commandBuffer->writeGpuTimestampBegin();
 
         for (auto& subGraph : _subGraphs)
         {
             // Execute each subgraph's commands
             if (subGraph->getSubGraphType() == VkmRenderSubGraphType::Graphics)
             {
-                
+
             }
             subGraph->commit(commandBuffer);
         }
 
+        commandBuffer->writeGpuTimestampEnd();
         commandBuffer->endCommandBuffer();
         
         CommandSubmitInfo submitInfo;
