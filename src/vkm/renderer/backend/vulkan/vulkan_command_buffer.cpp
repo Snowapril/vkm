@@ -224,4 +224,42 @@ namespace vkm
     {
         static_cast<VkmDriverVulkan*>(_driver)->getGpuTimer()->writeEndTimestamp(_vkCommandBuffer);
     }
+
+    void VkmCommandBufferVulkan::onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset)
+    {
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        VkBuffer vkMarkerBuffer = static_cast<VkmStagingBufferVulkan*>(renderResourcePool->getResource<VkmStagingBuffer>(markerBuffer))->getBuffer();
+        VkBuffer vkOneBuffer = static_cast<VkmStagingBufferVulkan*>(renderResourcePool->getResource<VkmStagingBuffer>(oneBuffer))->getBuffer();
+
+        // Legal outside a render pass -- dynamic rendering has already ended by the time a
+        // subgraph's commit() returns, which is the only place this is called from.
+        const VkBufferCopy region{
+            .srcOffset = 0,
+            .dstOffset = offset,
+            .size      = sizeof(uint32_t),
+        };
+        vkCmdCopyBuffer(_vkCommandBuffer, vkOneBuffer, vkMarkerBuffer, 1, &region);
+    }
+
+    void VkmCommandBufferVulkan::onSetDebugName(const char* name)
+    {
+#ifdef VKM_DEBUG_NAME_ENABLED
+        VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
+        const VkDebugUtilsObjectNameInfoEXT nameInfo{
+            .sType        = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+            .objectType   = VK_OBJECT_TYPE_COMMAND_BUFFER,
+            .objectHandle = reinterpret_cast<uint64_t>(_vkCommandBuffer),
+            .pObjectName  = name,
+        };
+        vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo);
+#else
+        (void)name;
+#endif
+    }
+
+    void VkmCommandBufferVulkan::onEndCommandBuffer()
+    {
+        // No-op: onWriteCompletionMarker() already records its vkCmdCopyBuffer immediately,
+        // no batching needed outside a render pass.
+    }
 } // namespace vkm

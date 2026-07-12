@@ -51,11 +51,14 @@ namespace vkm
 
         VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
 
-        uint64_t usage = WGPUBufferUsage_CopySrc | WGPUBufferUsage_MapWrite;
-        if ((info._flags & VkmResourceCreateInfo::AllowTransferDst) != 0)
-        {
-            usage |= WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
-        }
+        // WebGPU buffer usage is map-mode-exclusive: MapRead may only combine with CopyDst,
+        // MapWrite may only combine with CopySrc -- a buffer can never be both CPU-write- and
+        // CPU-read-mappable. AllowTransferDst therefore selects a read-back buffer (GPU/CPU
+        // writes it via copy/wgpuQueueWriteBuffer, CPU reads it back); otherwise this is the
+        // default upload buffer (CPU writes it via map, GPU reads it).
+        const uint64_t usage = (info._flags & VkmResourceCreateInfo::AllowTransferDst) != 0
+            ? (WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead)
+            : (WGPUBufferUsage_CopySrc | WGPUBufferUsage_MapWrite);
 
         const WGPUBufferDescriptor bufferDesc{
             .label            = toWGPUStringView("VkmStagingBufferWebGPU"),
@@ -83,13 +86,18 @@ namespace vkm
             return _mappedPointer;
         }
 
+        // The map mode must match whichever single mode this buffer's usage was created with
+        // (see initialize()) -- WebGPU buffers are map-mode-exclusive, there is no "either" mode.
+        const WGPUMapMode mapMode = (_stagingBufferInfo._flags & VkmResourceCreateInfo::AllowTransferDst) != 0
+            ? WGPUMapMode_Read : WGPUMapMode_Write;
+
         MapAsyncResult result;
         const WGPUBufferMapCallbackInfo callbackInfo{
             .mode      = WGPUCallbackMode_AllowSpontaneous,
             .callback  = onBufferMapped,
             .userdata1 = &result,
         };
-        wgpuBufferMapAsync(_wgpuBuffer, WGPUMapMode_Write, 0, _stagingBufferInfo._size, callbackInfo);
+        wgpuBufferMapAsync(_wgpuBuffer, mapMode, 0, _stagingBufferInfo._size, callbackInfo);
         while (result.done == false)
         {
             emscripten_sleep(1);
@@ -116,6 +124,16 @@ namespace vkm
     {
         // No-op: writes to a mapped range become visible on unmap()/submit, no explicit
         // flush step exists in the WebGPU API.
+    }
+
+    void VkmStagingBufferWebGPU::writeDirect(uint64_t offset, const void* data, uint64_t size)
+    {
+        // Unlike map()+memcpy(), this works regardless of the buffer's current map state --
+        // required for a buffer a GPU command stream also writes into (map()/unmap() would
+        // otherwise be needed around every write, each a real async round trip on this
+        // backend). Per spec, the write takes effect before the next wgpuQueueSubmit().
+        VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
+        wgpuQueueWriteBuffer(driverWebGPU->getQueue(), _wgpuBuffer, offset, data, size);
     }
 
     void VkmStagingBufferWebGPU::setDebugName(const char* name)

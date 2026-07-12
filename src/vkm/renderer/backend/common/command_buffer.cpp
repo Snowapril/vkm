@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/common/command_buffer.h>
+#include <vkm/renderer/backend/common/driver.h>
 
 namespace vkm
 {
@@ -20,6 +21,9 @@ namespace vkm
         _isInRenderPass = false;
         // Reset the current frame buffer descriptor
         _currentFrameBufferDesc = {};
+        // Command buffers are pooled/reused across frames -- discard any subgraph IDs recorded
+        // during a previous use before this one starts recording.
+        _recordedSubgraphIds.clear();
 
         VkmGpuEventTimelineBase* gpuEventTimeline = _commandQueue->getGpuEventTimeline();
         _gpuEventTimelineObject = gpuEventTimeline->allocateGpuEventTimelineObject();
@@ -27,6 +31,7 @@ namespace vkm
     
     void VkmCommandBufferBase::endCommandBuffer()
     {
+        onEndCommandBuffer();
         _isRecording = false;
         _isInRenderPass = false;
     }
@@ -103,5 +108,21 @@ namespace vkm
             return;
         }
         onSetPushConstants(data, size, offset);
+    }
+
+    void VkmCommandBufferBase::writeCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t subGraphId, uint32_t offset)
+    {
+        _recordedSubgraphIds.push_back(subGraphId);
+        onWriteCompletionMarker(markerBuffer, oneBuffer, offset);
+    }
+
+    void VkmCommandBufferBase::setDebugName(const char* name)
+    {
+        _debugName = name != nullptr ? name : "";
+
+        if (_driver->isDebugNamingEnabled() && name != nullptr)
+        {
+            onSetDebugName(name);
+        }
     }
 }

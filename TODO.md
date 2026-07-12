@@ -32,3 +32,5 @@
 - Metal `releaseResource` stages `removeAllocation:` for swapchain backbuffers that were never added to the residency set.
 - `VkmGpuCrashHandler` breadcrumbs are per-submission only; `VK_NV_device_diagnostic_checkpoints` (per-draw-call attribution on NVIDIA) was deliberately not implemented.
 - `VkmCommandBufferBase::setDebugName()` is never called by the render graph today, so crash-handler breadcrumbs always fall back to their auto-generated `"<queueName>#<index>"` name.
+- Sporadic `MTL4CommandQueueErrorTimeout` feedback errors observed on the Metal4 triangle sample even without the crash-dump flag; frequency environment-dependent, root cause not yet investigated.
+- `VkmGpuCrashHandler::clearFrameMarkers()` blocks on the graphics queue's `waitIdle()` every frame while `--enable-gpu-crash-dump` is set, since no per-frame-slot completion wait exists in the live render loop.

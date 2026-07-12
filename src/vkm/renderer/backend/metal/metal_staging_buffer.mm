@@ -5,6 +5,8 @@
 
 #import <Metal/Metal.h>
 
+#include <cstring>
+
 namespace vkm
 {
     VkmStagingBufferMetal::VkmStagingBufferMetal(VkmDriverBase* driver)
@@ -53,6 +55,11 @@ namespace vkm
     void VkmStagingBufferMetal::flush(uint64_t, uint64_t)
     {
         // No-op: MTLStorageModeShared is coherent between CPU and GPU.
+    }
+
+    void VkmStagingBufferMetal::writeDirect(uint64_t offset, const void* data, uint64_t size)
+    {
+        std::memcpy(static_cast<uint8_t*>(_mappedPointer) + offset, data, size);
     }
 
     void VkmStagingBufferMetal::setDebugName(const char* name)

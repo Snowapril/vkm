@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/metal/metal_pipeline_state.h>
+#include <vkm/renderer/backend/metal/metal_staging_buffer.h>
 
 #import <Metal/MTL4CommandBuffer.h>
 #import <Metal/MTL4RenderCommandEncoder.h>
@@ -121,6 +122,8 @@ namespace vkm
     {
         _mtlCommandBuffer = (__bridge id<MTL4CommandBuffer>)handle;
         _commandEncoder.setMTLCommandBuffer(_mtlCommandBuffer);
+        // Command buffers are pooled/reused -- discard any writes queued during a previous use.
+        _pendingMarkerWrites.clear();
     }
 
     void VkmCommandBufferMetal::onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc)
@@ -170,5 +173,46 @@ namespace vkm
     {
         // Not implemented yet on Metal -- bindless push constants are Vulkan-only for now.
         VKM_DEBUG_ERROR("VkmCommandBufferMetal::onSetPushConstants is not implemented");
+    }
+
+    void VkmCommandBufferMetal::onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset)
+    {
+        // Queued, not recorded immediately -- see onEndCommandBuffer() and its doc comment in
+        // command_buffer.h for why opening/closing a compute encoder per call is avoided here.
+        _pendingMarkerWrites.push_back(PendingMarkerWrite{markerBuffer, oneBuffer, offset});
+    }
+
+    void VkmCommandBufferMetal::onSetDebugName(const char* name)
+    {
+        _mtlCommandBuffer.label = [NSString stringWithUTF8String:name];
+    }
+
+    void VkmCommandBufferMetal::onEndCommandBuffer()
+    {
+        if (_pendingMarkerWrites.empty())
+        {
+            return;
+        }
+
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+
+        // Metal4 has no blit encoder at all -- buffer copies live on the compute encoder.
+        // Batches every writeCompletionMarker() call from this command buffer's recording into
+        // a single compute pass, opened/closed once here rather than once per call.
+        _commandEncoder.beginComputePass();
+        id<MTL4ComputeCommandEncoder> computeEncoder = _commandEncoder.getActiveComputeCommandEncoder();
+        for (const PendingMarkerWrite& write : _pendingMarkerWrites)
+        {
+            id<MTLBuffer> mtlMarkerBuffer = static_cast<VkmStagingBufferMetal*>(renderResourcePool->getResource<VkmStagingBuffer>(write.markerBuffer))->getBuffer();
+            id<MTLBuffer> mtlOneBuffer = static_cast<VkmStagingBufferMetal*>(renderResourcePool->getResource<VkmStagingBuffer>(write.oneBuffer))->getBuffer();
+            [computeEncoder copyFromBuffer:mtlOneBuffer
+                               sourceOffset:0
+                                   toBuffer:mtlMarkerBuffer
+                          destinationOffset:write.offset
+                                       size:sizeof(uint32_t)];
+        }
+        _commandEncoder.commit();
+
+        _pendingMarkerWrites.clear();
     }
 }

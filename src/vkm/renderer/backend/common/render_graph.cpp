@@ -9,6 +9,7 @@
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
+#include <vkm/renderer/backend/common/gpu_crash_handler.h>
 
 namespace vkm
 {
@@ -59,6 +60,15 @@ namespace vkm
 
     void VkmRenderGraph::execute(const VkmRenderGraphCommitOptions& options)
     {
+        VkmGpuCrashHandler* gpuCrashHandler = _driver->getGpuCrashHandler();
+        const bool gpuCrashDumpEnabled = _driver->isGpuCrashDumpEnabled();
+        if (gpuCrashDumpEnabled)
+        {
+            // Must happen before this frame slot's subgraphs record any completion markers --
+            // see VkmGpuCrashHandler::clearFrameMarkers() for why this itself needs to block.
+            gpuCrashHandler->clearFrameMarkers(_frameIndex);
+        }
+
         VkmCommandQueueBase* commandQueue = _driver->getCommandQueue(VkmCommandQueueType::Graphics, 0);
         VkmCommandBufferPoolBase* commandBufferPool = commandQueue->getCommandBufferPool();
 
@@ -74,15 +84,26 @@ namespace vkm
 
             }
             subGraph->commit(commandBuffer);
+
+            if (gpuCrashDumpEnabled)
+            {
+                const uint32_t subGraphId = subGraph->getSubGraphId();
+                const uint32_t offset = gpuCrashHandler->getMarkerOffset(_frameIndex, subGraphId);
+                if (offset != INVALID_VALUE32)
+                {
+                    commandBuffer->writeCompletionMarker(gpuCrashHandler->getOrCreateMarkerBuffer(), gpuCrashHandler->getOrCreateOneBuffer(), subGraphId, offset);
+                }
+            }
         }
 
         commandBuffer->writeGpuTimestampEnd();
         commandBuffer->endCommandBuffer();
-        
+
         CommandSubmitInfo submitInfo;
         submitInfo.commandBuffers[0] = commandBuffer;
         submitInfo.commandBufferCount = 1;
-        
+        submitInfo.frameIndex = _frameIndex;
+
         _lastSubmitInfo = commandQueue->submit(submitInfo);
 
         // TODO(snowapril) : execute() itself only ever submits to the Graphics queue (see

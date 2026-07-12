@@ -105,10 +105,16 @@ namespace vkm
         _driver->getGpuCrashHandler()->recordSubmission(this, submitInfos, timelineObject);
 
         // MTL4's per-submission error reporting: register a feedback handler on this commit's
-        // options. Metal invokes it asynchronously (on the queue's feedbackQueue, an internal
-        // dispatch queue by default) once the committed work completes; commitFeedback.error is
-        // non-nil when the GPU encountered an issue running it (see MTL4CommandQueueError,
-        // which includes MTL4CommandQueueErrorDeviceRemoved). The captured driver pointer must
+        // options. Metal invokes it on the queue's feedbackQueue -- an internal *serial*
+        // dispatch queue by default -- once the committed work completes; commitFeedback.error
+        // is non-nil when the GPU encountered an issue running it (see MTL4CommandQueueError,
+        // which includes MTL4CommandQueueErrorDeviceRemoved). reportCrash() does real work
+        // (mutex lock, string formatting, and VKM_DEBUG_ERROR's live stack-unwind), so it must
+        // never run synchronously on that serial queue: doing so was observed to block/delay
+        // delivery of later commits' feedback long enough to itself trigger
+        // MTL4CommandQueueErrorTimeout on otherwise-healthy frames, turning one real error into
+        // a cascade. Dispatching it to a separate queue keeps the feedback handler itself fast
+        // regardless of how expensive crash reporting is. The captured driver pointer must
         // outlive the async callback -- true under normal shutdown, where GPU work is drained
         // before the driver is torn down.
         VkmDriverBase* driver = _driver;
@@ -119,7 +125,9 @@ namespace vkm
             {
                 const std::string errorCode = fmt::format("{}({})", error.domain.UTF8String, static_cast<long>(error.code));
                 const std::string reason = error.localizedDescription != nil ? error.localizedDescription.UTF8String : "";
-                driver->getGpuCrashHandler()->reportCrash("Metal", errorCode, reason);
+                dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                    driver->getGpuCrashHandler()->reportCrash("Metal", errorCode, reason);
+                });
             }
         }];
 

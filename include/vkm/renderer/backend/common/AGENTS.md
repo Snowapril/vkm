@@ -34,12 +34,24 @@ virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) 
 virtual void onEndRenderPass() = 0;
 virtual void onBindPipeline(VkmPipelineStateBase* pipelineState) = 0;
 virtual void onUnbindPipeline() = 0;
+virtual void onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset) = 0;
+virtual void onSetDebugName(const char* name) = 0;
+virtual void onEndCommandBuffer() = 0;
 ```
 
 ### VkmPipelineStateBase (`pipeline_state_object.h`)
 ```cpp
 virtual bool createInner(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError) = 0;
 virtual void destroyInner() = 0;
+```
+
+### VkmStagingBuffer (`staging_buffer.h`)
+```cpp
+virtual bool initialize(VkmResourceHandle handle, const VkmStagingBufferInfo& info) = 0;
+virtual void* map() = 0;
+virtual void unmap() = 0;
+virtual void flush(uint64_t offset, uint64_t size) = 0;
+virtual void writeDirect(uint64_t offset, const void* data, uint64_t size) = 0;
 ```
 
 ## Constants
@@ -215,6 +227,65 @@ flag, then walks any recorded breadcrumbs newest-first, classifying each as `COM
 timeline value was already reached, via a non-blocking `queryLastCompletedTimeline()` poll) or
 `SUSPECT` (not yet completed -- may be the faulting submission, or simply still in flight).
 
+## Per-Subgraph GPU Completion Markers
+
+Whole-submission `COMPLETED`/`SUSPECT` (above) can't tell which of the (possibly many)
+subgraphs recorded into one frame's single command buffer actually ran before a crash.
+`VkmGpuCrashHandler` additionally owns a persistent marker buffer
+(`FRAME_COUNT * MAX_SUBGRAPHS_PER_FRAME` `uint32_t` slots, `MAX_SUBGRAPHS_PER_FRAME = 128`) and
+a small constant-`1` buffer, both lazily created via `ensureMarkerBuffersCreated()` the first
+time `isGpuCrashDumpEnabled()` is true and a marker/one-buffer handle is requested.
+
+`VkmCommandBufferBase::writeCompletionMarker(markerBuffer, oneBuffer, subGraphId, offset)`
+copies 4 bytes from `oneBuffer` to `markerBuffer` at `offset` (`onWriteCompletionMarker()`,
+backend-specific -- see below) and records `subGraphId` into
+`getRecordedSubGraphIds()`. `VkmRenderGraph::execute()` calls it right after each
+`subGraph->commit(commandBuffer)` returns, using `VkmGpuCrashHandler::getMarkerOffset(frameIndex,
+subGraphId)` for the offset -- safe to call there since no backend ever leaves a render/compute
+encoder open across a subgraph's `commit()` boundary. Before a frame's subgraphs are recorded,
+`execute()` calls `VkmGpuCrashHandler::clearFrameMarkers(frameIndex)`, which blocks (there is no
+other reliable "this frame slot's prior GPU work is done" signal in the live render loop --
+`VkmEngine::prepareRender()` is dead code and `VkmRenderGraphCommitOptions::waitForCompletion` is
+currently a no-op) then zeroes that frame's slice. `recordSubmission()` copies
+`getRecordedSubGraphIds()` plus the submission's `CommandSubmitInfo::frameIndex` into the
+breadcrumb; `reportCrash()` reads the marker buffer for each breadcrumb's frame index and prints
+`COMPLETED`/`NOT COMPLETED` per recorded subgraph.
+
+**Why "copy from a constant-1 buffer" instead of a native fill command, on every backend:**
+Metal4 has no blit encoder at all (`MTL4CommandBuffer` only exposes
+`renderCommandEncoderWithDescriptor:`/`computeCommandEncoder`/`machineLearningCommandEncoder`);
+buffer copy/fill lives on `MTL4ComputeCommandEncoder`, and its `fillBuffer:range:value:` only
+repeats a single **byte** across the range (byte `1` repeated = `0x01010101`, not an exact
+`0x00000001`). A `copyFromBuffer:` from a pre-populated constant buffer is the only way to get
+an exact `1`, so all three backends use the same "copy 4 bytes" strategy for consistency
+(Vulkan: `vkCmdCopyBuffer`; Metal: `copyFromBuffer:` on a compute encoder; WebGPU:
+`wgpuCommandEncoderCopyBufferToBuffer`).
+
+**Metal batches its marker writes.** Unlike Vulkan/WebGPU (whose `onWriteCompletionMarker()`
+records its copy immediately -- no dedicated encoder needed), Metal's
+`onWriteCompletionMarker()` only queues `(markerBuffer, oneBuffer, offset)` into
+`_pendingMarkerWrites`; `onEndCommandBuffer()` (a pure virtual called from
+`VkmCommandBufferBase::endCommandBuffer()`, no-op on Vulkan/WebGPU) flushes all of a command
+buffer's queued writes as a *single* compute pass. Opening/closing a separate compute encoder
+per subgraph was observed, under real interactive use, to cause progressively worsening
+`MTL4CommandQueueErrorTimeout` and an eventual command-queue stall -- batching into one pass
+per command buffer resolved it.
+
+**WebGPU-specific buffer-mapping constraint.** A WebGPU buffer's usage flags fix which map mode
+it may *ever* use (`MapRead` only combines with `CopyDst`; `MapWrite` only with `CopySrc`) --
+a single buffer can never be both CPU-write-mappable and CPU-read-mappable, unlike Vulkan/Metal
+where the marker/one buffers are simple persistently-mapped host-coherent memory. Both buffers
+are therefore created `MapRead | CopyDst` (or `AllowTransferSrc`'s equivalent for the one
+buffer) and kept **unmapped** during normal frame recording -- a WebGPU buffer must be unmapped
+for the GPU to access it at all. `VkmStagingBuffer::writeDirect(offset, data, size)` (a new pure
+virtual) lets the CPU update a buffer without requiring it to be mapped:
+Vulkan/Metal implement it as `memcpy` into the always-mapped pointer (+ `flush()` on Vulkan);
+WebGPU implements it via `wgpuQueueWriteBuffer()`, which per spec takes effect before the next
+`wgpuQueueSubmit()` regardless of the buffer's current map state. `clearFrameMarkers()` uses
+`writeDirect()` for this reason; `reportCrash()`'s one-time crash-time readback uses `map()`
+instead (cheap/synchronous on Vulkan/Metal; a real async `wgpuBufferMapAsync(Read)` round trip
+on WebGPU, best-effort since the device may already be unusable by then).
+
 ## VkmCommandQueueType
 
 ```cpp
@@ -226,7 +297,7 @@ enum class VkmCommandQueueType : uint8_t { Graphics=0, Compute=1, Transfer=2, Co
 
 1. Derive `VkmDriver<Name>` from `VkmDriverBase`, override all 6 pure virtuals.
 2. Derive `VkmSwapChain<Name>` from `VkmSwapChainBase`, override all 4 pure virtuals.
-3. Derive `VkmCommandBuffer<Name>` from `VkmCommandBufferBase`, override all 5 pure virtuals.
+3. Derive `VkmCommandBuffer<Name>` from `VkmCommandBufferBase`, override all 8 pure virtuals.
 4. Derive `VkmPipelineState<Name>` from `VkmPipelineStateBase`, override both pure virtuals (`createInner`/`destroyInner`), and return it from `VkmDriver<Name>::newPipelineStateInner()`.
 5. Add CMake flag `VKM_USE_<NAME>_API` and guard source inclusion in `src/vkm/CMakeLists.txt`.
 6. Do not modify any existing method signatures in this directory.

@@ -4,6 +4,7 @@
 #include <vkm/renderer/backend/webgpu/webgpu_texture.h>
 #include <vkm/renderer/backend/webgpu/webgpu_util.h>
 #include <vkm/renderer/backend/webgpu/webgpu_pipeline_state.h>
+#include <vkm/renderer/backend/webgpu/webgpu_staging_buffer.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/render_pass.h>
@@ -109,5 +110,25 @@ namespace vkm
     {
         // Not implemented yet on WebGPU -- bindless push constants are Vulkan-only for now.
         VKM_DEBUG_ERROR("VkmCommandBufferWebGPU::onSetPushConstants is not implemented");
+    }
+
+    void VkmCommandBufferWebGPU::onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset)
+    {
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        WGPUBuffer wgpuMarkerBuffer = static_cast<VkmStagingBufferWebGPU*>(renderResourcePool->getResource<VkmStagingBuffer>(markerBuffer))->getBuffer();
+        WGPUBuffer wgpuOneBuffer = static_cast<VkmStagingBufferWebGPU*>(renderResourcePool->getResource<VkmStagingBuffer>(oneBuffer))->getBuffer();
+
+        wgpuCommandEncoderCopyBufferToBuffer(_encoder, wgpuOneBuffer, 0, wgpuMarkerBuffer, offset, sizeof(uint32_t));
+    }
+
+    void VkmCommandBufferWebGPU::onSetDebugName(const char* name)
+    {
+        wgpuCommandEncoderSetLabel(_encoder, toWGPUStringView(name));
+    }
+
+    void VkmCommandBufferWebGPU::onEndCommandBuffer()
+    {
+        // No-op: onWriteCompletionMarker() already records its copyBufferToBuffer immediately
+        // on _encoder, no batching needed.
     }
 } // namespace vkm
