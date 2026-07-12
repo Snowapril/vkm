@@ -67,9 +67,8 @@ namespace vkm
         }
 
         std::lock_guard<std::mutex> lock(_residencyMutex);
-        id<MTLResidencySet> residencySet = _residencySets[(uint8_t)handle.poolType];
-        [residencySet addAllocation:allocation];
-        [residencySet commit];
+        [_residencySets[(uint8_t)handle.poolType] addAllocation:allocation];
+        _residencyDirty = true;
     }
 
     void VkmRenderResourcePoolMetal::releaseResource(VkmResourceHandle handle)
@@ -78,12 +77,31 @@ namespace vkm
         id<MTLAllocation> allocation = fetchAllocation(this, handle);
         if (allocation != nil)
         {
+            // The residency set retains staged allocations, so deferring the commit only
+            // delays the Metal object's release until the next flush -- never a dangle.
             std::lock_guard<std::mutex> lock(_residencyMutex);
-            id<MTLResidencySet> residencySet = _residencySets[(uint8_t)handle.poolType];
-            [residencySet removeAllocation:allocation];
-            [residencySet commit];
+            [_residencySets[(uint8_t)handle.poolType] removeAllocation:allocation];
+            _residencyDirty = true;
         }
 
         VkmRenderResourcePool::releaseResource(handle);
+    }
+
+    void VkmRenderResourcePoolMetal::commitPendingResidencyChanges()
+    {
+        std::lock_guard<std::mutex> lock(_residencyMutex);
+        if (!_residencyDirty)
+        {
+            return;
+        }
+
+        for (id<MTLResidencySet> residencySet : _residencySets)
+        {
+            if (residencySet != nil)
+            {
+                [residencySet commit];
+            }
+        }
+        _residencyDirty = false;
     }
 } // namespace vkm

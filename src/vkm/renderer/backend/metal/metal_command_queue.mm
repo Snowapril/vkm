@@ -96,6 +96,9 @@ namespace vkm
             mtlCommandBuffers[i] = mtlCommandBuffer;
         }
 
+        VkmRenderResourcePoolMetal* renderResourcePoolMetal = static_cast<VkmRenderResourcePoolMetal*>(_driver->getRenderResourcePool());
+        renderResourcePoolMetal->commitPendingResidencyChanges();
+
         [_mtlCommandQueue commit:mtlCommandBuffers count:count];
         [_mtlCommandQueue signalEvent:mtlSharedEvent value:lastSubmittedTimelineValue];
 

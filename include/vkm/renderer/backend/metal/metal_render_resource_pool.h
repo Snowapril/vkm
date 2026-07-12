@@ -19,6 +19,13 @@ namespace vkm
 
         inline id<MTLResidencySet> getResidencySet(VkmResourcePoolType poolType) const { return _residencySets[(uint8_t)poolType]; }
 
+        /*
+        * @brief Flush staged addAllocation/removeAllocation changes with a single commit per
+        * set. Called by VkmCommandQueueMetal::submit() right before command buffers are
+        * committed; no-op when nothing was staged since the last flush.
+        */
+        void commitPendingResidencyChanges();
+
     protected:
         virtual void onResourceInitialized(VkmResourceHandle handle) override final;
         virtual void releaseResource(VkmResourceHandle handle) override final;
@@ -26,5 +33,6 @@ namespace vkm
     private:
         std::array<id<MTLResidencySet>, (uint8_t)VkmResourcePoolType::Count> _residencySets{};
         std::mutex _residencyMutex;
+        bool _residencyDirty{false}; // guarded by _residencyMutex
     };
 } // namespace vkm
