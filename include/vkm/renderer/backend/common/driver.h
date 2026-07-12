@@ -99,6 +99,15 @@ namespace vkm
         VkmStagingBuffer* newStagingBuffer(const VkmStagingBufferInfo& info);
 
         /*
+         * @brief Synchronously upload `size` bytes from `data` into `dstBuffer` at
+         * `dstOffset`, via a transient staging buffer and a one-off command buffer
+         * submitted to the Graphics queue (this engine has no dedicated Transfer queue).
+         * Blocks until the GPU copy completes -- intended for setup-time uploads (e.g.
+         * postDriverReady), not per-frame streaming.
+         */
+        bool uploadToBuffer(VkmResourceHandle dstBuffer, const void* data, uint64_t size, uint64_t dstOffset = 0);
+
+        /*
          * @brief Create sampler with the given sampler info
          */
         VkmSampler* newSampler(const VkmSamplerInfo& info);

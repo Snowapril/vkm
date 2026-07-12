@@ -15,13 +15,14 @@
 - Global `operator new`/`delete` overrides in `memory.cpp` duplicate the same body across six functions.
 - `MemoryTracker::~MemoryTracker()` is dead code since `singleton()` never destructs the instance.
 - `MemoryTracker::getMimallocStats()` declares unused locals instead of passing `nullptr` to `mi_process_info`.
-- Design and implement the 8-set engine/user resource-binding (descriptor set) convention on top of `VkmPipelineStateBase`.
-- Implement draw-call recording (vertex buffer binding, dynamic viewport/scissor, draw calls) — pipeline objects can now be created but nothing draws yet.
+- Design and implement descriptor sets 1-3 of the engine/user resource-binding convention (set 0 bindless is implemented, Vulkan-only).
 - `VkmCommandBufferWebGPU::onBindPipeline` no-ops with a logged error for compute pipelines since no compute pass encoder is tracked yet.
 - `MTL4RenderPipelineDescriptor` has no depth/stencil attachment format properties in Metal4; `VkmPipelineStateMetal` can't validate/set depth-stencil format at pipeline-creation time, only at render-pass/encoder time.
 - Migrate vkm's own engine shaders (scene_object/tonemap/etc.) from loose GLSL to HLSL+PSO json so `resources/Pipelines/Engine/` and the `vkm_engine_shaders` CMake target actually have something to compile.
 - `VkmPipelineStateManager::getPipelineState(name)`'s Engine-wins-on-collision precedence over User origin is an unrevisited default, not a deliberate policy.
 - `metal_pipeline_state.mm`'s `getMTLPixelFormat` duplicates `metal_texture.mm`'s anonymous-namespace version instead of sharing a common conversion helper.
-- Vulkan `vkCreateDevice` on macOS/MoltenVK logs a validation error (`VUID-VkDeviceCreateInfo-pProperties-04451`) for not enabling `VK_KHR_portability_subset`, which the physical device reports as supported.
 - Metal/WebGPU resources report `getAllocatedSize()`/`getMemoryAlignment()` as a best-effort passthrough of the requested size, not a real backend-reported number (only Vulkan's VMA path gives a real one).
 - `VkmResourceHandle::generation` is unexercised scaffolding: `VkmRenderResourcePool` never recycles resource IDs, so a generation mismatch can never actually occur today.
+- PSO JSON has no push-constant/descriptor-set representation; the bindless set 0 layout and push-constant range are hardcoded in `VkmPipelineStateVulkan::createInner` instead.
+- `VkmCommandBufferMetal`/`VkmCommandBufferWebGPU`'s `onCopyBuffer`/`onDraw`/`onSetPushConstants` are stub-only (log an error, no-op); bindless draw-call recording is Vulkan-only.
+- `getProcessCpuUsagePercent()` is only implemented on macOS; Windows/Linux/wasm return 0.

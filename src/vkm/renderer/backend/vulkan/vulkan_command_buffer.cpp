@@ -2,7 +2,12 @@
 
 #include <vkm/renderer/backend/vulkan/vulkan_command_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_texture.h>
+#include <vkm/renderer/backend/vulkan/vulkan_buffer.h>
+#include <vkm/renderer/backend/vulkan/vulkan_staging_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_pipeline_state.h>
+#include <vkm/renderer/backend/vulkan/vulkan_driver.h>
+#include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
+#include <vkm/renderer/backend/vulkan/vulkan_gpu_timer.h>
 #include <vkm/renderer/backend/common/render_pass.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
@@ -56,6 +61,24 @@ namespace vkm
             .pImageMemoryBarriers    = &barrier,
         };
         vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+    }
+
+    // copyBuffer() is a generic buffer-to-buffer copy usable for either a Buffer or a
+    // StagingBuffer resource on either side (e.g. VkmDriverBase::uploadToBuffer() copies
+    // staging -> device-local) -- these are unrelated classes (VkmStagingBuffer doesn't
+    // derive from VkmBuffer), so resolve via the handle's own recorded type rather than
+    // assuming one.
+    static VkBuffer resolveVkBufferAndOffset(VkmRenderResourcePool* renderResourcePool, VkmResourceHandle handle, uint64_t* outOffset)
+    {
+        if (handle.type == VkmResourceType::StagingBuffer)
+        {
+            VkmStagingBufferVulkan* stagingBufferVulkan = static_cast<VkmStagingBufferVulkan*>(renderResourcePool->getResource<VkmStagingBuffer>(handle));
+            *outOffset = 0; // staging buffers are always dedicated allocations, never pooled
+            return stagingBufferVulkan->getBuffer();
+        }
+        VkmBufferVulkan* bufferVulkan = static_cast<VkmBufferVulkan*>(renderResourcePool->getResource<VkmBuffer>(handle));
+        *outOffset = bufferVulkan->getBufferOffset();
+        return bufferVulkan->getBuffer();
     }
 
     VkmCommandBufferVulkan::VkmCommandBufferVulkan(VkmDriverBase* driver, VkmCommandQueueBase* commandQueue, VkmCommandBufferPoolBase* commandBufferPool)
@@ -112,6 +135,18 @@ namespace vkm
             .pColorAttachments    = colorAttachments.data(),
         };
         vkCmdBeginRendering(_vkCommandBuffer, &renderingInfo);
+
+        // Every pipeline created by VkmPipelineStateVulkan marks viewport/scissor as
+        // dynamic state (extents aren't known at pipeline-creation time), so they must be
+        // set here every render pass or drawing has undefined viewport/scissor state.
+        const VkViewport viewport{
+            .x = 0.0f, .y = 0.0f,
+            .width = static_cast<float>(frameBufferDesc._width), .height = static_cast<float>(frameBufferDesc._height),
+            .minDepth = 0.0f, .maxDepth = 1.0f,
+        };
+        const VkRect2D scissor{ {0, 0}, {frameBufferDesc._width, frameBufferDesc._height} };
+        vkCmdSetViewport(_vkCommandBuffer, 0, 1, &viewport);
+        vkCmdSetScissor(_vkCommandBuffer, 0, 1, &scissor);
     }
 
     void VkmCommandBufferVulkan::onEndRenderPass()
@@ -138,10 +173,55 @@ namespace vkm
         VkmPipelineStateVulkan* pipelineStateVulkan = static_cast<VkmPipelineStateVulkan*>(pipelineState);
         const VkPipelineBindPoint bindPoint = pipelineState->isCompute() ? VK_PIPELINE_BIND_POINT_COMPUTE : VK_PIPELINE_BIND_POINT_GRAPHICS;
         vkCmdBindPipeline(_vkCommandBuffer, bindPoint, pipelineStateVulkan->getHandle());
+
+        _boundPipelineLayout = pipelineStateVulkan->getPipelineLayout();
+
+        // Set 0 is the same engine-global bindless set for every pipeline in this
+        // convention (see VkmPipelineStateVulkan::createInner), so bind it here rather than
+        // asking every draw call site to do so explicitly.
+        VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
+        VkDescriptorSet bindlessSet = driverVulkan->getBindlessResourceManager()->getDescriptorSet();
+        vkCmdBindDescriptorSets(_vkCommandBuffer, bindPoint, _boundPipelineLayout, 0, 1, &bindlessSet, 0, nullptr);
     }
 
     void VkmCommandBufferVulkan::onUnbindPipeline()
     {
         // Vulkan has no explicit unbind concept -- nothing to do here.
+        _boundPipelineLayout = VK_NULL_HANDLE;
+    }
+
+    void VkmCommandBufferVulkan::onCopyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size)
+    {
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        uint64_t srcBaseOffset = 0, dstBaseOffset = 0;
+        VkBuffer srcVkBuffer = resolveVkBufferAndOffset(renderResourcePool, srcBuffer, &srcBaseOffset);
+        VkBuffer dstVkBuffer = resolveVkBufferAndOffset(renderResourcePool, dstBuffer, &dstBaseOffset);
+
+        const VkBufferCopy copyRegion{
+            .srcOffset = srcOffset + srcBaseOffset,
+            .dstOffset = dstOffset + dstBaseOffset,
+            .size      = size,
+        };
+        vkCmdCopyBuffer(_vkCommandBuffer, srcVkBuffer, dstVkBuffer, 1, &copyRegion);
+    }
+
+    void VkmCommandBufferVulkan::onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
+    {
+        vkCmdDraw(_vkCommandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
+    }
+
+    void VkmCommandBufferVulkan::onSetPushConstants(const void* data, uint32_t size, uint32_t offset)
+    {
+        vkCmdPushConstants(_vkCommandBuffer, _boundPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, offset, size, data);
+    }
+
+    void VkmCommandBufferVulkan::writeGpuTimestampBegin()
+    {
+        static_cast<VkmDriverVulkan*>(_driver)->getGpuTimer()->writeBeginTimestamp(_vkCommandBuffer);
+    }
+
+    void VkmCommandBufferVulkan::writeGpuTimestampEnd()
+    {
+        static_cast<VkmDriverVulkan*>(_driver)->getGpuTimer()->writeEndTimestamp(_vkCommandBuffer);
     }
 } // namespace vkm

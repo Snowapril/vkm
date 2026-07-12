@@ -75,6 +75,8 @@
 #include <vkm/renderer/backend/vulkan/vulkan_buffer_view.h>
 #include <vkm/renderer/backend/vulkan/vulkan_gpu_buffer_pool.h>
 #include <vkm/renderer/backend/vulkan/vulkan_command_queue.h>
+#include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
+#include <vkm/renderer/backend/vulkan/vulkan_gpu_timer.h>
 
 // X11/Xlib.h (see above) also #defines None and Always as bare integers, clobbering
 // VkmCullMode::None and VkmCompareOp::Always in pipeline_state.h, transitively included
@@ -438,6 +440,12 @@ namespace vkm
             pNextChainPushFront(&_features11, &_swapchainFeatures);
             deviceExtensions.push_back(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
         }
+        // Required by the Vulkan spec (VUID-VkDeviceCreateInfo-pProperties-04451) whenever the
+        // physical device exposes it, e.g. MoltenVK on macOS.
+        if(isExtensionSupported("VK_KHR_portability_subset", availableDeviceExtensions))
+        {
+            deviceExtensions.push_back("VK_KHR_portability_subset");
+        }
 
         // Requesting all supported features, which will then be activated in the device
         // By requesting, it turns on all feature that it is supported, but the user could request specific features instead
@@ -450,6 +458,23 @@ namespace vkm
         {
             VKM_DEBUG_ERROR("Required Vulkan 1.3 features are not supported");
             return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "This GPU/driver does not support required Vulkan 1.3 features (dynamicRendering, maintenance4)."};
+        }
+
+        // The engine-global bindless resource-binding set (VkmBindlessResourceManagerVulkan)
+        // relies on descriptor indexing with update-after-bind semantics -- core Vulkan 1.2
+        // fields, so no extension string is needed, but the driver must actually support them.
+        // The set has both a sampled-image binding (texture array) and storage-buffer
+        // bindings (vertex/index arrays), so both per-type update-after-bind bits are required.
+        if ( _features12.descriptorIndexing == false ||
+             _features12.shaderSampledImageArrayNonUniformIndexing == false ||
+             _features12.shaderStorageBufferArrayNonUniformIndexing == false ||
+             _features12.descriptorBindingSampledImageUpdateAfterBind == false ||
+             _features12.descriptorBindingStorageBufferUpdateAfterBind == false ||
+             _features12.descriptorBindingPartiallyBound == false ||
+             _features12.runtimeDescriptorArray == false )
+        {
+            VKM_DEBUG_ERROR("Required Vulkan 1.2 descriptor-indexing features are not supported");
+            return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "This GPU/driver does not support required descriptor-indexing features (see VkPhysicalDeviceVulkan12Features)."};
         }
 
         // Query queue families
@@ -539,11 +564,37 @@ namespace vkm
 
         _driverCapabilityFlags = VkmDriverCapabilityFlags::CommandBufferReusable;
 
+        // Must exist before VkmEngine::initializeBackendDriver() loads engine PSOs, since
+        // pipeline-layout creation (VkmPipelineStateVulkan::createInner) needs the bindless
+        // set 0 layout.
+        _bindlessResourceManager = std::make_unique<VkmBindlessResourceManagerVulkan>(this);
+        if (!_bindlessResourceManager->initialize())
+        {
+            return VkmInitResult{VkmInitResultCode::Failed, "Failed to initialize bindless resource manager"};
+        }
+
+        _gpuTimer = std::make_unique<VkmGpuTimerVulkan>(this);
+        if (!_gpuTimer->initialize())
+        {
+            return VkmInitResult{VkmInitResultCode::Failed, "Failed to initialize GPU timer"};
+        }
+
         return VkmInitResult{VkmInitResultCode::Success, ""};
     }
 
     void VkmDriverVulkan::destroyInner()
     {
+        if (_gpuTimer)
+        {
+            _gpuTimer->destroy();
+            _gpuTimer.reset();
+        }
+        if (_bindlessResourceManager)
+        {
+            _bindlessResourceManager->destroy();
+            _bindlessResourceManager.reset();
+        }
+
         // _bufferPools must be torn down explicitly here (not left to the class destructor)
         // since each pool's VMA-backed VkBuffer must be destroyed while _vmaAllocator is
         // still valid; destroyInner() runs before ~VkmDriverVulkan()'s automatic member

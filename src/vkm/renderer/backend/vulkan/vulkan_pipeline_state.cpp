@@ -3,6 +3,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_pipeline_state.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_util.h>
+#include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/shader_cache_loader.h>
 #include <vkm/renderer/backend/common/shader_cache_util.h>
 
@@ -214,11 +215,21 @@ namespace vkm
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
         VkDevice device = driverVulkan->getDevice();
 
-        // Empty pipeline layout: descriptor sets / push constants are a deliberately
-        // deferred follow-up (resource-binding is out of scope for this plan). Created
-        // purely so pipeline creation succeeds.
+        // Every pipeline shares the engine-global bindless set 0 (VkmBindlessResourceManagerVulkan)
+        // plus a push-constant range carrying the current draw's bindless slot indices
+        // (vertexBufferIndex, indexBufferIndex). Sets 1-3 remain unreserved/deferred.
+        VkDescriptorSetLayout bindlessSetLayout = driverVulkan->getBindlessResourceManager()->getSetLayout();
+        const VkPushConstantRange pushConstantRange{
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            .offset     = 0,
+            .size       = sizeof(uint32_t) * 2,
+        };
         const VkPipelineLayoutCreateInfo layoutCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount         = 1,
+            .pSetLayouts            = &bindlessSetLayout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges    = &pushConstantRange,
         };
         VkResult vkResult = vkCreatePipelineLayout(device, &layoutCreateInfo, nullptr, &_pipelineLayout);
         if (!VKM_VK_CHECK_RESULT_MSG(vkResult, "Failed to create pipeline layout"))

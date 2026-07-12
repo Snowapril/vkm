@@ -153,4 +153,22 @@ namespace vkm
         // No explicit "unbind" concept in Metal -- the next bindPipeline() call (or the
         // end of the render/compute pass) supersedes whatever pipeline state is set.
     }
+
+    void VkmCommandBufferMetal::onCopyBuffer(VkmResourceHandle, VkmResourceHandle, uint64_t, uint64_t, uint64_t)
+    {
+        // Not implemented yet on Metal -- bindless resource upload is Vulkan-only for now.
+        VKM_DEBUG_ERROR("VkmCommandBufferMetal::onCopyBuffer is not implemented");
+    }
+
+    void VkmCommandBufferMetal::onDraw(uint32_t, uint32_t, uint32_t, uint32_t)
+    {
+        // Not implemented yet on Metal -- bindless draw-call recording is Vulkan-only for now.
+        VKM_DEBUG_ERROR("VkmCommandBufferMetal::onDraw is not implemented");
+    }
+
+    void VkmCommandBufferMetal::onSetPushConstants(const void*, uint32_t, uint32_t)
+    {
+        // Not implemented yet on Metal -- bindless push constants are Vulkan-only for now.
+        VKM_DEBUG_ERROR("VkmCommandBufferMetal::onSetPushConstants is not implemented");
+    }
 }

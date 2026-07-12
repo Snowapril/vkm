@@ -21,11 +21,15 @@
 #include <vkm/renderer/imgui/imgui_renderer.h>
 #if defined(VKM_USE_VULKAN_API)
 #include <vkm/renderer/imgui/vulkan_imgui_renderer.h>
+#include <vkm/renderer/backend/vulkan/vulkan_driver.h>
+#include <vkm/renderer/backend/vulkan/vulkan_gpu_timer.h>
 #elif defined(VKM_USE_METAL_API)
 #include <vkm/renderer/imgui/metal_imgui_renderer.h>
 #elif defined(VKM_USE_WEBGPU_API)
 #include <vkm/renderer/imgui/webgpu_imgui_renderer.h>
 #endif
+#include <vkm/platform/common/process_stats.h>
+#include <imgui.h>
 #endif
 
 namespace vkm
@@ -146,8 +150,37 @@ namespace vkm
 
     void VkmEngine::update(const double deltaTime)
     {
+#if defined(VKM_ENABLE_IMGUI)
+        // Must run before the frame's first ImGui::Render() call (triggered lazily by
+        // VkmImGuiRendererBase::renderDrawData() in render() below) -- ImGui::Begin/End
+        // calls made after that point in the same frame would be dropped.
+        renderDebugOverlay(deltaTime);
+#endif
         _appDelegate->update(deltaTime);
     }
+
+#if defined(VKM_ENABLE_IMGUI)
+    void VkmEngine::renderDebugOverlay(const double deltaTime)
+    {
+        const double fps = (deltaTime > 0.0) ? (1.0 / deltaTime) : 0.0;
+        _fpsSmoothed = _fpsSmoothed * 0.9 + fps * 0.1;
+
+        ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.5f);
+        ImGui::Begin("Debug Overlay", nullptr,
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing);
+        ImGui::Text("FPS: %.1f", _fpsSmoothed);
+        ImGui::Text("CPU: %.1f%%", getProcessCpuUsagePercent());
+#if defined(VKM_USE_VULKAN_API)
+        ImGui::Text("GPU: %.2f ms", static_cast<VkmDriverVulkan*>(_driver)->getGpuTimer()->getLastGpuFrameTimeMs());
+#else
+        ImGui::Text("GPU: n/a");
+#endif
+        ImGui::Text("Frame: %u", _currentFrameIndex);
+        ImGui::End();
+    }
+#endif
 
     void VkmEngine::prepareRender()
     {

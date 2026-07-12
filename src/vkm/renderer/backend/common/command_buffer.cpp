@@ -74,4 +74,34 @@ namespace vkm
         onUnbindPipeline();
         _boundPipelineState = nullptr;
     }
+
+    void VkmCommandBufferBase::copyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size)
+    {
+        if (!_isRecording || _isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("copyBuffer must be called while recording and outside a render pass");
+            return;
+        }
+        onCopyBuffer(srcBuffer, dstBuffer, srcOffset, dstOffset, size);
+    }
+
+    void VkmCommandBufferBase::draw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
+    {
+        if (!_isRecording || !_isInRenderPass || _boundPipelineState == nullptr)
+        {
+            VKM_DEBUG_ERROR("draw requires an active render pass with a bound pipeline");
+            return;
+        }
+        onDraw(vertexCount, instanceCount, firstVertex, firstInstance);
+    }
+
+    void VkmCommandBufferBase::setPushConstants(const void* data, uint32_t size, uint32_t offset)
+    {
+        if (!_isRecording || !_isInRenderPass || _boundPipelineState == nullptr)
+        {
+            VKM_DEBUG_ERROR("setPushConstants requires an active render pass with a bound pipeline");
+            return;
+        }
+        onSetPushConstants(data, size, offset);
+    }
 }

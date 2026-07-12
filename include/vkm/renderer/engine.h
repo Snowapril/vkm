@@ -69,12 +69,22 @@ namespace vkm
          
          */
         void update(const double deltaTime);
-        
+
         /*
-         
+
          */
         void render(const double deltaTime);
         void prepareRender();
+
+#if defined(VKM_ENABLE_IMGUI)
+        /*
+        * @brief Draws the engine-wide debug overlay (FPS, CPU usage, GPU frame time, frame
+        * index), pinned top-left. Called from update() -- before the frame's first
+        * ImGui::Render() call inside the ImGui renderer -- so it applies uniformly to every
+        * sample with zero per-sample code and coexists with a sample's own ImGui widgets.
+        */
+        void renderDebugOverlay(const double deltaTime);
+#endif
         
     public:
         /*
@@ -91,6 +101,11 @@ namespace vkm
         * @brief returns engine's pipeline state manager
         */
         inline VkmPipelineStateManager* getPipelineStateManager() const { return _pipelineStateManager.get(); }
+
+        /*
+        * @brief returns engine's renderer backend driver
+        */
+        inline VkmDriverBase* getDriver() const { return _driver; }
 
     public:
 
@@ -117,5 +132,9 @@ namespace vkm
 
         std::array<std::unique_ptr<VkmRenderGraph>, FRAME_COUNT> _frameRenderGraphs;
         uint32_t _currentFrameIndex {0}; // current frame index for render graph
+
+#if defined(VKM_ENABLE_IMGUI)
+        double _fpsSmoothed {0.0}; // exponential moving average, used by renderDebugOverlay()
+#endif
     };
 }
