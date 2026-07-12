@@ -210,9 +210,42 @@ namespace vkm
             }
         }
 
-        const VkFenceCreateInfo fenceCreateInfo{ .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-        vkResult = vkCreateFence(device, &fenceCreateInfo, nullptr, &_acquireFence);
-        VKM_VK_ASSERT(vkResult, "Failed to create swapchain acquire fence");
+        const VkSemaphoreCreateInfo semaphoreCreateInfo{ .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+        for (uint32_t i = 0; i < FRAME_COUNT; ++i)
+        {
+            vkResult = vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &_imageAvailableSemaphores[i]);
+            VKM_VK_ASSERT(vkResult, "Failed to create swapchain image-available semaphore");
+        }
+        for (uint32_t i = 0; i < imageCount; ++i)
+        {
+            vkResult = vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &_renderFinishedSemaphores[i]);
+            VKM_VK_ASSERT(vkResult, "Failed to create swapchain render-finished semaphore");
+        }
+
+#ifdef VKM_DEBUG_NAME_ENABLED
+        for (uint32_t i = 0; i < FRAME_COUNT; ++i)
+        {
+            const std::string semaphoreName = fmt::format("SwapChainImageAvailableSemaphore_{}", i);
+            const VkDebugUtilsObjectNameInfoEXT nameInfo{
+                .sType        = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+                .objectType   = VK_OBJECT_TYPE_SEMAPHORE,
+                .objectHandle = reinterpret_cast<uint64_t>(_imageAvailableSemaphores[i]),
+                .pObjectName  = semaphoreName.c_str(),
+            };
+            vkSetDebugUtilsObjectNameEXT(device, &nameInfo);
+        }
+        for (uint32_t i = 0; i < imageCount; ++i)
+        {
+            const std::string semaphoreName = fmt::format("SwapChainRenderFinishedSemaphore_{}", i);
+            const VkDebugUtilsObjectNameInfoEXT nameInfo{
+                .sType        = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+                .objectType   = VK_OBJECT_TYPE_SEMAPHORE,
+                .objectHandle = reinterpret_cast<uint64_t>(_renderFinishedSemaphores[i]),
+                .pObjectName  = semaphoreName.c_str(),
+            };
+            vkSetDebugUtilsObjectNameEXT(device, &nameInfo);
+        }
+#endif
 
         return true;
     }
@@ -220,16 +253,35 @@ namespace vkm
     void VkmSwapChainVulkan::destroySwapChain()
     {
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
+        VkDevice device = driverVulkan->getDevice();
+
+        // Teardown-only: ensure no submit/present is still referencing the semaphores or images
+        // before we destroy them.
+        vkDeviceWaitIdle(device);
 
         // Release per-image textures (and their VkImageViews) before tearing down the
         // swapchain/surface those images and views were created from.
         destroySwapChainCommon();
 
-        if (_acquireFence != VK_NULL_HANDLE)
+        for (VkSemaphore& semaphore : _imageAvailableSemaphores)
         {
-            vkDestroyFence(driverVulkan->getDevice(), _acquireFence, nullptr);
-            _acquireFence = VK_NULL_HANDLE;
+            if (semaphore != VK_NULL_HANDLE)
+            {
+                vkDestroySemaphore(device, semaphore, nullptr);
+                semaphore = VK_NULL_HANDLE;
+            }
         }
+        for (VkSemaphore& semaphore : _renderFinishedSemaphores)
+        {
+            if (semaphore != VK_NULL_HANDLE)
+            {
+                vkDestroySemaphore(device, semaphore, nullptr);
+                semaphore = VK_NULL_HANDLE;
+            }
+        }
+        _pendingAcquireSemaphore = VK_NULL_HANDLE;
+        _renderFinishedPending = false;
+
         if (_swapChain != VK_NULL_HANDLE)
         {
             vkDestroySwapchainKHR(driverVulkan->getDevice(), _swapChain, nullptr);
@@ -247,46 +299,66 @@ namespace vkm
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
         VkDevice device = driverVulkan->getDevice();
 
-        vkResetFences(device, 1, &_acquireFence);
+        // One submit must consume the previous acquire before another one is issued.
+        VKM_ASSERT(_pendingAcquireSemaphore == VK_NULL_HANDLE,
+            "Acquired a swapchain image while a previous acquire is still pending (one submit per acquire)");
+
+        VkSemaphore imageAvailableSemaphore = _imageAvailableSemaphores[_frameRingIndex];
 
         uint32_t imageIndex = 0;
-        VkResult vkResult = vkAcquireNextImageKHR(device, _swapChain, UINT64_MAX, VK_NULL_HANDLE, _acquireFence, &imageIndex);
+        VkResult vkResult = vkAcquireNextImageKHR(device, _swapChain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
         if (vkResult != VK_SUCCESS && vkResult != VK_SUBOPTIMAL_KHR)
         {
+            // Do not advance the ring or set pending state: the semaphore was not signaled.
             VKM_DEBUG_ERROR("Failed to acquire next swapchain image");
             return VKM_INVALID_RESOURCE_HANDLE;
         }
 
-        // No semaphore is signaled by the render command buffer submission today (that would
-        // require plumbing a binary semaphore through VkmCommandQueueVulkan::submit(), which is
-        // out of scope here). Block on a fence instead so the image is guaranteed available
-        // before we hand its handle back for rendering.
-        vkWaitForFences(device, 1, &_acquireFence, VK_TRUE, UINT64_MAX);
-
+        _pendingAcquireSemaphore = imageAvailableSemaphore;
+        _frameRingIndex = (_frameRingIndex + 1) % FRAME_COUNT;
         _currentBackBufferIndex = imageIndex;
         return _backBuffers[imageIndex];
     }
 
     void VkmSwapChainVulkan::presentInner()
     {
-        VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
         VkmCommandQueueVulkan* presentQueueVulkan = static_cast<VkmCommandQueueVulkan*>(_presentQueue);
         VkQueue vkQueue = presentQueueVulkan->getVkQueue();
 
-        // Same rationale as acquireNextImageInner: without a render-complete semaphore threaded
-        // through the submission path, block until all submitted GPU work has finished before
-        // presenting, so we never present a partially-rendered image. Rendering may have been
-        // submitted to a different queue than the present queue, so wait on the whole device
-        // rather than assuming they're the same queue.
-        vkDeviceWaitIdle(driverVulkan->getDevice());
+        // Presenting without the render-finished wait semaphore would race the GPU against the
+        // display engine, which the validation layer flags. Require a completed submit to have
+        // taken the signal semaphore for this image.
+        if (_currentBackBufferIndex == INVALID_VALUE32 || !_renderFinishedPending)
+        {
+            VKM_DEBUG_ERROR("Presenting swapchain image without a render-finished semaphore");
+            return;
+        }
+
+        const VkSemaphore waitSemaphore = _renderFinishedSemaphores[_currentBackBufferIndex];
+        _renderFinishedPending = false;
 
         const VkPresentInfoKHR presentInfo{
-            .sType          = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-            .swapchainCount = 1,
-            .pSwapchains    = &_swapChain,
-            .pImageIndices  = &_currentBackBufferIndex,
+            .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores    = &waitSemaphore,
+            .swapchainCount     = 1,
+            .pSwapchains        = &_swapChain,
+            .pImageIndices      = &_currentBackBufferIndex,
         };
         VkResult vkResult = vkQueuePresentKHR(vkQueue, &presentInfo);
         VKM_VK_CHECK_RESULT_MSG(vkResult, "Failed to present swapchain image");
+    }
+
+    VkSemaphore VkmSwapChainVulkan::takePendingAcquireSemaphore()
+    {
+        VkSemaphore semaphore = _pendingAcquireSemaphore;
+        _pendingAcquireSemaphore = VK_NULL_HANDLE;
+        return semaphore;
+    }
+
+    VkSemaphore VkmSwapChainVulkan::takeRenderFinishedSemaphoreForSignal()
+    {
+        _renderFinishedPending = true;
+        return _renderFinishedSemaphores[_currentBackBufferIndex];
     }
 } // namespace vkm
