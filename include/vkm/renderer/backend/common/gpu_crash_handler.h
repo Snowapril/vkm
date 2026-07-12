@@ -116,9 +116,7 @@ namespace vkm
 #endif // VKM_ENABLE_GPU_BREAD_CRUMBS
 
     private:
-        // maybe_unused: without VKM_ENABLE_GPU_BREAD_CRUMBS only the constructor touches this
-        // field, which Clang's -Wunused-private-field rejects under -Werror.
-        [[maybe_unused]] VkmDriverBase* _driver;
+        VkmDriverBase* _driver;
 
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         void ensureMarkerBuffersCreated();

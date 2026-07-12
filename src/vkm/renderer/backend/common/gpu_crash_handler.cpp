@@ -13,6 +13,13 @@ namespace vkm
     VkmGpuCrashHandler::VkmGpuCrashHandler(VkmDriverBase* driver)
         : _driver(driver)
     {
+#if !defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
+        // Only the breadcrumb paths read _driver. This reference keeps Clang's
+        // -Wunused-private-field quiet in breadcrumb-disabled builds; [[maybe_unused]] on the
+        // field is not an option since GCC < 12 rejects it on data members under
+        // -Werror=attributes.
+        (void)_driver;
+#endif
     }
 
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
