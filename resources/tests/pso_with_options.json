@@ -1,0 +1,16 @@
+{
+    "name": "triangle_pso",
+    "rasterization_state": { "fill_mode": "solid", "cull_mode": "back", "front_face": "counter_clockwise" },
+    "color_attachments": [ { "format": "bgra8_unorm" } ],
+    "shaders": {
+        "vertex":   { "filepath": "triangle.vert", "definitions": { "USE_VERTEX_COLOR": true } },
+        "fragment": { "filepath": "triangle.frag" }
+    },
+    "options": {
+        "default": {},
+        "wireframe": {
+            "rasterization_state": { "fill_mode": "wireframe" },
+            "definitions": { "WIREFRAME": true }
+        }
+    }
+}

@@ -189,6 +189,54 @@ namespace vkm
         std::optional<VkmVertexInputLayoutPart> perInstance;
     };
 
+    // Field-level partial overrides -- unset optional = inherit from the base descriptor.
+    struct VkmRasterizationStateOverlay
+    {
+        std::optional<VkmFillMode> fillMode;
+        std::optional<VkmCullMode> cullMode;
+        std::optional<VkmFrontFace> frontFace;
+    };
+
+    struct VkmStencilOpStateOverlay
+    {
+        std::optional<VkmStencilOp> failOp;
+        std::optional<VkmStencilOp> passOp;
+        std::optional<VkmStencilOp> depthFailOp;
+        std::optional<VkmCompareOp> compareOp;
+        std::optional<uint32_t> compareMask;
+        std::optional<uint32_t> writeMask;
+    };
+
+    struct VkmDepthStencilStateOverlay
+    {
+        std::optional<bool> depthTestEnable;
+        std::optional<bool> depthWriteEnable;
+        std::optional<VkmCompareOp> depthCompareOp;
+        std::optional<VkmFormat> depthStencilFormat;
+        std::optional<bool> stencilTestEnable;
+        std::optional<VkmStencilOpStateOverlay> front; // whole-struct replace when present
+        std::optional<VkmStencilOpStateOverlay> back;
+        std::optional<uint32_t> stencilReference;
+    };
+
+    // One named variant overlay parsed from a pipeline JSON node's "options" object.
+    // Applying this to a copy of the owning (base) VkmPipelineStateDescriptor and merging
+    // shader-stage definitions produces one fully-resolved variant -- see
+    // expandPipelineStateOptions() in pipeline_state_parser.h.
+    struct VkmPipelineStateOptionOverlay
+    {
+        std::optional<VkmPrimitiveTopology> primitiveTopology;
+        std::optional<VkmRasterizationStateOverlay> rasterizationState;
+        std::optional<VkmDepthStencilStateOverlay> depthStencilState;
+        std::optional<std::vector<VkmColorBlendAttachmentState>> colorAttachments; // whole-array replace
+        std::optional<VkmVertexInputLayoutDescriptor> vertexInputLayout;           // whole-struct replace
+
+        std::unordered_map<std::string, std::string> definitions;         // merged into every present stage
+        std::unordered_map<std::string, std::string> vertexDefinitions;   // merged after `definitions`, vertex only
+        std::unordered_map<std::string, std::string> fragmentDefinitions;
+        std::unordered_map<std::string, std::string> computeDefinitions;
+    };
+
     // Top-level, backend-agnostic pipeline state descriptor. Fully populated by
     // the parser (see pipeline_state_parser.h) — every field has a documented
     // default that applies when the corresponding JSON field is omitted.
@@ -213,5 +261,17 @@ namespace vkm
         std::optional<VkmShaderStageDescriptor> vertexShader;
         std::optional<VkmShaderStageDescriptor> fragmentShader;
         std::optional<VkmShaderStageDescriptor> computeShader;
+
+        // "" for a descriptor with no "options" node, or for the base/unsuffixed descriptor.
+        // Set to the option's name (e.g. "wireframe") on descriptors produced by
+        // expandPipelineStateOptions(). Shader-cache filenames incorporate this (see
+        // shader_cache_util.h) so variants sharing one HLSL source/stage/backend don't collide.
+        std::string optionName;
+
+        // Parsed straight from the JSON "options" object; empty if absent. Only ever populated
+        // on the descriptor returned directly by parsePipelineStateFromFile/FromString -- always
+        // empty on the per-variant descriptors returned by expandPipelineStateOptions(), since
+        // expansion fully resolves and clears this.
+        std::unordered_map<std::string, VkmPipelineStateOptionOverlay> options;
     };
 } // namespace vkm

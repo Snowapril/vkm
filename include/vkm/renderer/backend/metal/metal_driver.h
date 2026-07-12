@@ -28,6 +28,7 @@ namespace vkm
         virtual VkmSwapChainBase* newSwapChainInner() override final;
         virtual VkmTexture* newTextureInner() override final;
         virtual VkmCommandQueueBase* newCommandQueueInner() override final;
+        virtual VkmPipelineStateBase* newPipelineStateInner() override final;
 
     private:
         id<MTLDevice> _mtlDevice;

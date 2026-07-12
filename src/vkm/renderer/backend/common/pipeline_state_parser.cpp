@@ -134,9 +134,12 @@ namespace vkm
             std::string _error;
         };
 
-        template <typename EnumT>
+        // `out` is generic so the same call populates either a plain enum field (base parse)
+        // or an overlay's std::optional<EnumT> field (option-overlay parse); `out = *result`
+        // compiles for both.
+        template <typename EnumT, typename OutT>
         void parseEnumField(ParseState& state, const Json& obj, const char* key,
-            const std::string& fieldPath, const std::unordered_map<std::string_view, EnumT>& table, EnumT& out)
+            const std::string& fieldPath, const std::unordered_map<std::string_view, EnumT>& table, OutT& out)
         {
             if (state.failed() || !obj.contains(key))
             {
@@ -158,7 +161,10 @@ namespace vkm
             out = *result;
         }
 
-        void parseBoolField(ParseState& state, const Json& obj, const char* key, const std::string& fieldPath, bool& out)
+        // `out` is generic so the same call populates either a plain bool field or an
+        // overlay's std::optional<bool> field.
+        template <typename OutT>
+        void parseBoolField(ParseState& state, const Json& obj, const char* key, const std::string& fieldPath, OutT& out)
         {
             if (state.failed() || !obj.contains(key))
             {
@@ -173,7 +179,10 @@ namespace vkm
             out = value.get<bool>();
         }
 
-        void parseUint32Field(ParseState& state, const Json& obj, const char* key, const std::string& fieldPath, uint32_t& out)
+        // `out` is generic so the same call populates either a plain uint32_t field or an
+        // overlay's std::optional<uint32_t> field.
+        template <typename OutT>
+        void parseUint32Field(ParseState& state, const Json& obj, const char* key, const std::string& fieldPath, OutT& out)
         {
             if (state.failed() || !obj.contains(key))
             {
@@ -254,6 +263,33 @@ namespace vkm
             return "";
         }
 
+        // Parses a JSON "definitions" object (if present under `key`) into `out`, converting
+        // each value via parseDefinitionValue. Shared by shader-stage parsing and the
+        // "options" overlay parse.
+        void parseDefinitionsMap(ParseState& state, const Json& obj, const char* key,
+            const std::string& fieldPath, std::unordered_map<std::string, std::string>& out)
+        {
+            if (state.failed() || !obj.contains(key))
+            {
+                return;
+            }
+            const Json& definitions = obj.at(key);
+            if (!definitions.is_object())
+            {
+                state.fail("Field '" + fieldPath + "' must be an object");
+                return;
+            }
+            for (const auto& item : definitions.items())
+            {
+                const std::string converted = parseDefinitionValue(state, item.key(), item.value());
+                if (state.failed())
+                {
+                    return;
+                }
+                out[item.key()] = converted;
+            }
+        }
+
         void parseShaderStage(ParseState& state, const Json& obj, const std::string& fieldPrefix, VkmShaderStageDescriptor& out)
         {
             if (state.failed())
@@ -274,27 +310,14 @@ namespace vkm
                 return;
             }
 
-            if (obj.contains("definitions"))
-            {
-                const Json& definitions = obj.at("definitions");
-                if (!definitions.is_object())
-                {
-                    state.fail("Field '" + fieldPrefix + ".definitions' must be an object");
-                    return;
-                }
-                for (const auto& item : definitions.items())
-                {
-                    const std::string converted = parseDefinitionValue(state, item.key(), item.value());
-                    if (state.failed())
-                    {
-                        return;
-                    }
-                    out.definitions[item.key()] = converted;
-                }
-            }
+            parseDefinitionsMap(state, obj, "definitions", fieldPrefix + ".definitions", out.definitions);
         }
 
-        void parseStencilOpState(ParseState& state, const Json& obj, const std::string& fieldPrefix, VkmStencilOpState& out)
+        // Templated over the output struct so a single body populates either a plain
+        // VkmStencilOpState (base parse) or a VkmStencilOpStateOverlay (option parse) --
+        // parseEnumField/parseUint32Field's generic `out` handles both plain and optional fields.
+        template <typename StencilOut>
+        void parseStencilOpStateFields(ParseState& state, const Json& obj, const std::string& fieldPrefix, StencilOut& out)
         {
             parseEnumField(state, obj, "fail_op", fieldPrefix + ".fail_op", kStencilOpTable, out.failOp);
             parseEnumField(state, obj, "pass_op", fieldPrefix + ".pass_op", kStencilOpTable, out.passOp);
@@ -302,6 +325,70 @@ namespace vkm
             parseEnumField(state, obj, "compare_op", fieldPrefix + ".compare_op", kCompareOpTable, out.compareOp);
             parseUint32Field(state, obj, "compare_mask", fieldPrefix + ".compare_mask", out.compareMask);
             parseUint32Field(state, obj, "write_mask", fieldPrefix + ".write_mask", out.writeMask);
+        }
+
+        // Rasterization / depth-stencil-scalar field groups, templated over the output struct
+        // so the same body serves both base (plain fields) and option-overlay (optional fields).
+        template <typename RasterOut>
+        void parseRasterizationStateFields(ParseState& state, const Json& obj, const std::string& fieldPrefix, RasterOut& out)
+        {
+            parseEnumField(state, obj, "fill_mode", fieldPrefix + ".fill_mode", kFillModeTable, out.fillMode);
+            parseEnumField(state, obj, "cull_mode", fieldPrefix + ".cull_mode", kCullModeTable, out.cullMode);
+            parseEnumField(state, obj, "front_face", fieldPrefix + ".front_face", kFrontFaceTable, out.frontFace);
+        }
+
+        // Scalar depth-stencil fields only; front/back stencil op state is handled by callers
+        // (its plain-vs-optional wrapping differs between base and overlay).
+        template <typename DepthStencilOut>
+        void parseDepthStencilScalarFields(ParseState& state, const Json& obj, const std::string& fieldPrefix, DepthStencilOut& out)
+        {
+            parseBoolField(state, obj, "depth_test_enable", fieldPrefix + ".depth_test_enable", out.depthTestEnable);
+            parseBoolField(state, obj, "depth_write_enable", fieldPrefix + ".depth_write_enable", out.depthWriteEnable);
+            parseEnumField(state, obj, "depth_compare_op", fieldPrefix + ".depth_compare_op", kCompareOpTable, out.depthCompareOp);
+            parseEnumField(state, obj, "depth_stencil_format", fieldPrefix + ".depth_stencil_format", kFormatTable, out.depthStencilFormat);
+            parseBoolField(state, obj, "stencil_test_enable", fieldPrefix + ".stencil_test_enable", out.stencilTestEnable);
+            parseUint32Field(state, obj, "stencil_reference", fieldPrefix + ".stencil_reference", out.stencilReference);
+        }
+
+        // Parses a "color_attachments" JSON array into `out` (whole-array replace). Shared by
+        // the base parse and the option-overlay parse.
+        bool parseColorAttachmentsArray(ParseState& state, const Json& colorAttachments,
+            const std::string& fieldNamePrefix, std::vector<VkmColorBlendAttachmentState>& out)
+        {
+            if (!colorAttachments.is_array())
+            {
+                state.fail("Field '" + fieldNamePrefix + "' must be an array");
+                return false;
+            }
+            out.clear();
+            for (size_t i = 0; i < colorAttachments.size(); ++i)
+            {
+                const Json& attachment = colorAttachments.at(i);
+                const std::string fieldPrefix = fieldNamePrefix + "[" + std::to_string(i) + "]";
+
+                if (!attachment.is_object() || !attachment.contains("format"))
+                {
+                    state.fail("Missing required field '" + fieldPrefix + ".format'");
+                    return false;
+                }
+
+                VkmColorBlendAttachmentState attachmentState{};
+                parseEnumField(state, attachment, "format", fieldPrefix + ".format", kFormatTable, attachmentState.format);
+                parseBoolField(state, attachment, "blend_enable", fieldPrefix + ".blend_enable", attachmentState.blendEnable);
+                parseEnumField(state, attachment, "src_color_blend_factor", fieldPrefix + ".src_color_blend_factor", kBlendFactorTable, attachmentState.srcColorBlendFactor);
+                parseEnumField(state, attachment, "dst_color_blend_factor", fieldPrefix + ".dst_color_blend_factor", kBlendFactorTable, attachmentState.dstColorBlendFactor);
+                parseEnumField(state, attachment, "src_alpha_blend_factor", fieldPrefix + ".src_alpha_blend_factor", kBlendFactorTable, attachmentState.srcAlphaBlendFactor);
+                parseEnumField(state, attachment, "dst_alpha_blend_factor", fieldPrefix + ".dst_alpha_blend_factor", kBlendFactorTable, attachmentState.dstAlphaBlendFactor);
+                parseEnumField(state, attachment, "color_blend_op", fieldPrefix + ".color_blend_op", kBlendOpTable, attachmentState.colorBlendOp);
+                parseEnumField(state, attachment, "alpha_blend_op", fieldPrefix + ".alpha_blend_op", kBlendOpTable, attachmentState.alphaBlendOp);
+
+                if (state.failed())
+                {
+                    return false;
+                }
+                out.push_back(attachmentState);
+            }
+            return true;
         }
 
         // Parses a compact "[type][count][type][count]..." string (e.g. "float3float4float2")
@@ -370,6 +457,116 @@ namespace vkm
             return true;
         }
 
+        // Parses an "input_layout" JSON object's per_vertex/per_instance compact strings into
+        // `out` (whole-struct replace). Shared by the base parse and the option-overlay parse.
+        void parseInputLayout(ParseState& state, const Json& inputLayout, const std::string& fieldPrefix,
+            VkmVertexInputLayoutDescriptor& out)
+        {
+            if (inputLayout.contains("per_vertex"))
+            {
+                std::string compact;
+                parseStringField(state, inputLayout, "per_vertex", fieldPrefix + ".per_vertex", compact);
+                VkmVertexInputLayoutPart part{};
+                if (!state.failed() && parseVertexInputLayoutPart(state, compact, fieldPrefix + ".per_vertex", part))
+                {
+                    out.perVertex = part;
+                }
+            }
+            if (!state.failed() && inputLayout.contains("per_instance"))
+            {
+                std::string compact;
+                parseStringField(state, inputLayout, "per_instance", fieldPrefix + ".per_instance", compact);
+                VkmVertexInputLayoutPart part{};
+                if (!state.failed() && parseVertexInputLayoutPart(state, compact, fieldPrefix + ".per_instance", part))
+                {
+                    out.perInstance = part;
+                }
+            }
+        }
+
+        // Parses a single "options" entry's body into an overlay. Reuses the same field-group
+        // helpers as the base parse, targeting the Overlay struct types (optional fields).
+        void parseOptionOverlay(ParseState& state, const Json& obj, const std::string& fieldPrefix,
+            VkmPipelineStateOptionOverlay& overlay)
+        {
+            parseEnumField(state, obj, "primitive_topology", fieldPrefix + ".primitive_topology", kPrimitiveTopologyTable, overlay.primitiveTopology);
+
+            if (const Json* rasterizationState = getObjectField(state, obj, "rasterization_state", fieldPrefix + ".rasterization_state"))
+            {
+                VkmRasterizationStateOverlay raster{};
+                parseRasterizationStateFields(state, *rasterizationState, fieldPrefix + ".rasterization_state", raster);
+                overlay.rasterizationState = raster;
+            }
+
+            if (const Json* depthStencilState = getObjectField(state, obj, "depth_stencil_state", fieldPrefix + ".depth_stencil_state"))
+            {
+                VkmDepthStencilStateOverlay depthStencil{};
+                parseDepthStencilScalarFields(state, *depthStencilState, fieldPrefix + ".depth_stencil_state", depthStencil);
+
+                if (const Json* front = getObjectField(state, *depthStencilState, "front", fieldPrefix + ".depth_stencil_state.front"))
+                {
+                    VkmStencilOpStateOverlay stencil{};
+                    parseStencilOpStateFields(state, *front, fieldPrefix + ".depth_stencil_state.front", stencil);
+                    depthStencil.front = stencil;
+                }
+                if (const Json* back = getObjectField(state, *depthStencilState, "back", fieldPrefix + ".depth_stencil_state.back"))
+                {
+                    VkmStencilOpStateOverlay stencil{};
+                    parseStencilOpStateFields(state, *back, fieldPrefix + ".depth_stencil_state.back", stencil);
+                    depthStencil.back = stencil;
+                }
+                overlay.depthStencilState = depthStencil;
+            }
+
+            if (state.failed())
+            {
+                return;
+            }
+
+            if (obj.contains("color_attachments"))
+            {
+                std::vector<VkmColorBlendAttachmentState> attachments;
+                if (!parseColorAttachmentsArray(state, obj.at("color_attachments"), fieldPrefix + ".color_attachments", attachments))
+                {
+                    return;
+                }
+                overlay.colorAttachments = std::move(attachments);
+            }
+
+            if (const Json* inputLayout = getObjectField(state, obj, "input_layout", fieldPrefix + ".input_layout"))
+            {
+                VkmVertexInputLayoutDescriptor layout{};
+                parseInputLayout(state, *inputLayout, fieldPrefix + ".input_layout", layout);
+                if (state.failed())
+                {
+                    return;
+                }
+                overlay.vertexInputLayout = layout;
+            }
+
+            parseDefinitionsMap(state, obj, "definitions", fieldPrefix + ".definitions", overlay.definitions);
+            if (state.failed())
+            {
+                return;
+            }
+
+            if (const Json* shaders = getObjectField(state, obj, "shaders", fieldPrefix + ".shaders"))
+            {
+                if (const Json* vertex = getObjectField(state, *shaders, "vertex", fieldPrefix + ".shaders.vertex"))
+                {
+                    parseDefinitionsMap(state, *vertex, "definitions", fieldPrefix + ".shaders.vertex.definitions", overlay.vertexDefinitions);
+                }
+                if (const Json* fragment = getObjectField(state, *shaders, "fragment", fieldPrefix + ".shaders.fragment"))
+                {
+                    parseDefinitionsMap(state, *fragment, "definitions", fieldPrefix + ".shaders.fragment.definitions", overlay.fragmentDefinitions);
+                }
+                if (const Json* compute = getObjectField(state, *shaders, "compute", fieldPrefix + ".shaders.compute"))
+                {
+                    parseDefinitionsMap(state, *compute, "definitions", fieldPrefix + ".shaders.compute.definitions", overlay.computeDefinitions);
+                }
+            }
+        }
+
         bool parseDescriptor(ParseState& state, const Json& root, VkmPipelineStateDescriptor& desc)
         {
             if (!root.is_object())
@@ -383,27 +580,20 @@ namespace vkm
 
             if (const Json* rasterizationState = getObjectField(state, root, "rasterization_state", "rasterization_state"))
             {
-                parseEnumField(state, *rasterizationState, "fill_mode", "rasterization_state.fill_mode", kFillModeTable, desc.rasterizationState.fillMode);
-                parseEnumField(state, *rasterizationState, "cull_mode", "rasterization_state.cull_mode", kCullModeTable, desc.rasterizationState.cullMode);
-                parseEnumField(state, *rasterizationState, "front_face", "rasterization_state.front_face", kFrontFaceTable, desc.rasterizationState.frontFace);
+                parseRasterizationStateFields(state, *rasterizationState, "rasterization_state", desc.rasterizationState);
             }
 
             if (const Json* depthStencilState = getObjectField(state, root, "depth_stencil_state", "depth_stencil_state"))
             {
-                parseBoolField(state, *depthStencilState, "depth_test_enable", "depth_stencil_state.depth_test_enable", desc.depthStencilState.depthTestEnable);
-                parseBoolField(state, *depthStencilState, "depth_write_enable", "depth_stencil_state.depth_write_enable", desc.depthStencilState.depthWriteEnable);
-                parseEnumField(state, *depthStencilState, "depth_compare_op", "depth_stencil_state.depth_compare_op", kCompareOpTable, desc.depthStencilState.depthCompareOp);
-                parseEnumField(state, *depthStencilState, "depth_stencil_format", "depth_stencil_state.depth_stencil_format", kFormatTable, desc.depthStencilState.depthStencilFormat);
-                parseBoolField(state, *depthStencilState, "stencil_test_enable", "depth_stencil_state.stencil_test_enable", desc.depthStencilState.stencilTestEnable);
-                parseUint32Field(state, *depthStencilState, "stencil_reference", "depth_stencil_state.stencil_reference", desc.depthStencilState.stencilReference);
+                parseDepthStencilScalarFields(state, *depthStencilState, "depth_stencil_state", desc.depthStencilState);
 
                 if (const Json* front = getObjectField(state, *depthStencilState, "front", "depth_stencil_state.front"))
                 {
-                    parseStencilOpState(state, *front, "depth_stencil_state.front", desc.depthStencilState.front);
+                    parseStencilOpStateFields(state, *front, "depth_stencil_state.front", desc.depthStencilState.front);
                 }
                 if (const Json* back = getObjectField(state, *depthStencilState, "back", "depth_stencil_state.back"))
                 {
-                    parseStencilOpState(state, *back, "depth_stencil_state.back", desc.depthStencilState.back);
+                    parseStencilOpStateFields(state, *back, "depth_stencil_state.back", desc.depthStencilState.back);
                 }
             }
 
@@ -414,63 +604,16 @@ namespace vkm
 
             if (root.contains("color_attachments"))
             {
-                const Json& colorAttachments = root.at("color_attachments");
-                if (!colorAttachments.is_array())
+                desc.colorAttachments.clear();
+                if (!parseColorAttachmentsArray(state, root.at("color_attachments"), "color_attachments", desc.colorAttachments))
                 {
-                    state.fail("Field 'color_attachments' must be an array");
                     return false;
-                }
-                for (size_t i = 0; i < colorAttachments.size(); ++i)
-                {
-                    const Json& attachment = colorAttachments.at(i);
-                    const std::string fieldPrefix = "color_attachments[" + std::to_string(i) + "]";
-
-                    if (!attachment.is_object() || !attachment.contains("format"))
-                    {
-                        state.fail("Missing required field '" + fieldPrefix + ".format'");
-                        return false;
-                    }
-
-                    VkmColorBlendAttachmentState attachmentState{};
-                    parseEnumField(state, attachment, "format", fieldPrefix + ".format", kFormatTable, attachmentState.format);
-                    parseBoolField(state, attachment, "blend_enable", fieldPrefix + ".blend_enable", attachmentState.blendEnable);
-                    parseEnumField(state, attachment, "src_color_blend_factor", fieldPrefix + ".src_color_blend_factor", kBlendFactorTable, attachmentState.srcColorBlendFactor);
-                    parseEnumField(state, attachment, "dst_color_blend_factor", fieldPrefix + ".dst_color_blend_factor", kBlendFactorTable, attachmentState.dstColorBlendFactor);
-                    parseEnumField(state, attachment, "src_alpha_blend_factor", fieldPrefix + ".src_alpha_blend_factor", kBlendFactorTable, attachmentState.srcAlphaBlendFactor);
-                    parseEnumField(state, attachment, "dst_alpha_blend_factor", fieldPrefix + ".dst_alpha_blend_factor", kBlendFactorTable, attachmentState.dstAlphaBlendFactor);
-                    parseEnumField(state, attachment, "color_blend_op", fieldPrefix + ".color_blend_op", kBlendOpTable, attachmentState.colorBlendOp);
-                    parseEnumField(state, attachment, "alpha_blend_op", fieldPrefix + ".alpha_blend_op", kBlendOpTable, attachmentState.alphaBlendOp);
-
-                    if (state.failed())
-                    {
-                        return false;
-                    }
-                    desc.colorAttachments.push_back(attachmentState);
                 }
             }
 
             if (const Json* inputLayout = getObjectField(state, root, "input_layout", "input_layout"))
             {
-                if (inputLayout->contains("per_vertex"))
-                {
-                    std::string compact;
-                    parseStringField(state, *inputLayout, "per_vertex", "input_layout.per_vertex", compact);
-                    VkmVertexInputLayoutPart part{};
-                    if (!state.failed() && parseVertexInputLayoutPart(state, compact, "input_layout.per_vertex", part))
-                    {
-                        desc.vertexInputLayout.perVertex = part;
-                    }
-                }
-                if (!state.failed() && inputLayout->contains("per_instance"))
-                {
-                    std::string compact;
-                    parseStringField(state, *inputLayout, "per_instance", "input_layout.per_instance", compact);
-                    VkmVertexInputLayoutPart part{};
-                    if (!state.failed() && parseVertexInputLayoutPart(state, compact, "input_layout.per_instance", part))
-                    {
-                        desc.vertexInputLayout.perInstance = part;
-                    }
-                }
+                parseInputLayout(state, *inputLayout, "input_layout", desc.vertexInputLayout);
             }
 
             if (state.failed())
@@ -520,7 +663,65 @@ namespace vkm
                 desc.computeShader = computeShader;
             }
 
+            if (root.contains("options"))
+            {
+                const Json& options = root.at("options");
+                if (!options.is_object())
+                {
+                    state.fail("Field 'options' must be an object");
+                    return false;
+                }
+                for (const auto& item : options.items())
+                {
+                    const std::string& optionName = item.key();
+                    const Json& optionBody = item.value();
+                    const std::string fieldPrefix = "options." + optionName;
+                    if (!optionBody.is_object())
+                    {
+                        state.fail("Field '" + fieldPrefix + "' must be an object");
+                        return false;
+                    }
+                    VkmPipelineStateOptionOverlay overlay{};
+                    parseOptionOverlay(state, optionBody, fieldPrefix, overlay);
+                    if (state.failed())
+                    {
+                        return false;
+                    }
+                    desc.options[optionName] = std::move(overlay);
+                }
+            }
+
             return true;
+        }
+
+        void applyStencilOverlay(const VkmStencilOpStateOverlay& overlay, VkmStencilOpState& out)
+        {
+            if (overlay.failOp.has_value()) out.failOp = *overlay.failOp;
+            if (overlay.passOp.has_value()) out.passOp = *overlay.passOp;
+            if (overlay.depthFailOp.has_value()) out.depthFailOp = *overlay.depthFailOp;
+            if (overlay.compareOp.has_value()) out.compareOp = *overlay.compareOp;
+            if (overlay.compareMask.has_value()) out.compareMask = *overlay.compareMask;
+            if (overlay.writeMask.has_value()) out.writeMask = *overlay.writeMask;
+        }
+
+        // Merges pipeline-wide then per-stage definitions into `stage` if it is present.
+        // Per-stage entries win on key collision (applied last).
+        void mergeStageDefinitions(std::optional<VkmShaderStageDescriptor>& stage,
+            const std::unordered_map<std::string, std::string>& pipelineWide,
+            const std::unordered_map<std::string, std::string>& perStage)
+        {
+            if (!stage.has_value())
+            {
+                return;
+            }
+            for (const auto& [key, value] : pipelineWide)
+            {
+                stage->definitions.insert_or_assign(key, value);
+            }
+            for (const auto& [key, value] : perStage)
+            {
+                stage->definitions.insert_or_assign(key, value);
+            }
         }
     } // namespace
 
@@ -571,5 +772,96 @@ namespace vkm
         buffer << file.rdbuf();
 
         return parsePipelineStateFromString(buffer.str(), outError);
+    }
+
+    std::optional<std::vector<VkmPipelineStateDescriptor>> expandPipelineStateOptions(
+        const VkmPipelineStateDescriptor& base, std::string* outError)
+    {
+        std::vector<VkmPipelineStateDescriptor> variants;
+
+        if (base.options.empty())
+        {
+            VkmPipelineStateDescriptor single = base;
+            single.options.clear();
+            variants.push_back(std::move(single));
+        }
+        else
+        {
+            if (base.name.empty())
+            {
+                const std::string message = "Pipeline state with a non-empty 'options' object must have a non-empty 'name'";
+                if (outError != nullptr)
+                {
+                    *outError = message;
+                }
+                VKM_DEBUG_ERROR(message.c_str());
+                return std::nullopt;
+            }
+
+            variants.reserve(base.options.size());
+            for (const auto& [optionName, overlay] : base.options)
+            {
+                VkmPipelineStateDescriptor variant = base;
+                variant.options.clear();
+                variant.optionName = optionName;
+                variant.name = base.name + "[" + optionName + "]";
+
+                if (overlay.primitiveTopology.has_value())
+                {
+                    variant.primitiveTopology = *overlay.primitiveTopology;
+                }
+                if (overlay.rasterizationState.has_value())
+                {
+                    const VkmRasterizationStateOverlay& raster = *overlay.rasterizationState;
+                    if (raster.fillMode.has_value()) variant.rasterizationState.fillMode = *raster.fillMode;
+                    if (raster.cullMode.has_value()) variant.rasterizationState.cullMode = *raster.cullMode;
+                    if (raster.frontFace.has_value()) variant.rasterizationState.frontFace = *raster.frontFace;
+                }
+                if (overlay.depthStencilState.has_value())
+                {
+                    const VkmDepthStencilStateOverlay& depthStencil = *overlay.depthStencilState;
+                    if (depthStencil.depthTestEnable.has_value()) variant.depthStencilState.depthTestEnable = *depthStencil.depthTestEnable;
+                    if (depthStencil.depthWriteEnable.has_value()) variant.depthStencilState.depthWriteEnable = *depthStencil.depthWriteEnable;
+                    if (depthStencil.depthCompareOp.has_value()) variant.depthStencilState.depthCompareOp = *depthStencil.depthCompareOp;
+                    if (depthStencil.depthStencilFormat.has_value()) variant.depthStencilState.depthStencilFormat = *depthStencil.depthStencilFormat;
+                    if (depthStencil.stencilTestEnable.has_value()) variant.depthStencilState.stencilTestEnable = *depthStencil.stencilTestEnable;
+                    if (depthStencil.stencilReference.has_value()) variant.depthStencilState.stencilReference = *depthStencil.stencilReference;
+                    if (depthStencil.front.has_value()) applyStencilOverlay(*depthStencil.front, variant.depthStencilState.front);
+                    if (depthStencil.back.has_value()) applyStencilOverlay(*depthStencil.back, variant.depthStencilState.back);
+                }
+                if (overlay.colorAttachments.has_value())
+                {
+                    variant.colorAttachments = *overlay.colorAttachments;
+                }
+                if (overlay.vertexInputLayout.has_value())
+                {
+                    variant.vertexInputLayout = *overlay.vertexInputLayout;
+                }
+
+                mergeStageDefinitions(variant.vertexShader, overlay.definitions, overlay.vertexDefinitions);
+                mergeStageDefinitions(variant.fragmentShader, overlay.definitions, overlay.fragmentDefinitions);
+                mergeStageDefinitions(variant.computeShader, overlay.definitions, overlay.computeDefinitions);
+
+                variants.push_back(std::move(variant));
+            }
+        }
+
+        for (const VkmPipelineStateDescriptor& variant : variants)
+        {
+            if (variant.computeShader.has_value() &&
+                (variant.vertexShader.has_value() || variant.fragmentShader.has_value()))
+            {
+                const std::string message = "Pipeline state variant '" + variant.name +
+                    "' has both a compute shader and a graphics (vertex/fragment) shader set";
+                if (outError != nullptr)
+                {
+                    *outError = message;
+                }
+                VKM_DEBUG_ERROR(message.c_str());
+                return std::nullopt;
+            }
+        }
+
+        return variants;
     }
 } // namespace vkm

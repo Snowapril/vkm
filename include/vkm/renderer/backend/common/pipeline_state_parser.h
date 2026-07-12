@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace vkm
 {
@@ -29,4 +30,14 @@ namespace vkm
     std::optional<VkmPipelineStateDescriptor> parsePipelineStateFromString(
         const std::string& jsonText,
         std::string* outError = nullptr);
+
+    // Expands `base` into one fully-resolved VkmPipelineStateDescriptor per entry in
+    // `base.options`, each renamed to "<base.name>[<option_name>]" with fixed-function
+    // fields and shader-stage definitions overridden per the documented precedence (see
+    // pipeline_state.h). If `base.options` is empty, returns a single-element vector
+    // containing an unmodified copy of `base`. Returns std::nullopt (+ *outError) if
+    // `base.options` is non-empty but `base.name` is empty, or if a resolved variant ends up
+    // with both a compute and a graphics stage set.
+    std::optional<std::vector<VkmPipelineStateDescriptor>> expandPipelineStateOptions(
+        const VkmPipelineStateDescriptor& base, std::string* outError = nullptr);
 } // namespace vkm

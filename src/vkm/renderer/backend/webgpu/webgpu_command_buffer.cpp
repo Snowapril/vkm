@@ -3,6 +3,7 @@
 #include <vkm/renderer/backend/webgpu/webgpu_command_buffer.h>
 #include <vkm/renderer/backend/webgpu/webgpu_texture.h>
 #include <vkm/renderer/backend/webgpu/webgpu_util.h>
+#include <vkm/renderer/backend/webgpu/webgpu_pipeline_state.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/render_pass.h>
@@ -68,5 +69,27 @@ namespace vkm
         wgpuRenderPassEncoderEnd(_renderPassEncoder);
         wgpuRenderPassEncoderRelease(_renderPassEncoder);
         _renderPassEncoder = nullptr;
+    }
+
+    void VkmCommandBufferWebGPU::onBindPipeline(VkmPipelineStateBase* pipelineState)
+    {
+        VkmPipelineStateWebGPU* pipelineStateWebGPU = static_cast<VkmPipelineStateWebGPU*>(pipelineState);
+        if (pipelineStateWebGPU->isCompute())
+        {
+            // No compute pass encoder is tracked by this command buffer yet (only render passes
+            // are wired up so far, see onBeginRenderPass above) -- compute dispatch recording
+            // remains out of scope for this phase.
+            VKM_DEBUG_ERROR("Binding a compute pipeline requires a compute pass encoder, which VkmCommandBufferWebGPU does not track yet");
+            return;
+        }
+
+        VKM_ASSERT(_renderPassEncoder != nullptr, "onBindPipeline called for a graphics pipeline outside an active render pass");
+        wgpuRenderPassEncoderSetPipeline(_renderPassEncoder, pipelineStateWebGPU->getRenderPipeline());
+    }
+
+    void VkmCommandBufferWebGPU::onUnbindPipeline()
+    {
+        // WebGPU has no explicit "unbind pipeline" call -- pipeline state is simply replaced by
+        // the next bind or discarded at pass end. Nothing to do here.
     }
 } // namespace vkm

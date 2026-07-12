@@ -63,11 +63,15 @@ namespace vkm
         onEndRenderPass();
     }
     
-    void VkmCommandBufferBase::bindPipeline()
+    void VkmCommandBufferBase::bindPipeline(VkmPipelineStateBase* pipelineState)
     {
+        _boundPipelineState = pipelineState;
+        onBindPipeline(pipelineState);
     }
 
     void VkmCommandBufferBase::unbindPipeline()
     {
+        onUnbindPipeline();
+        _boundPipelineState = nullptr;
     }
 }

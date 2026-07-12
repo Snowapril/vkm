@@ -5,7 +5,6 @@
 - Vulkan sample builds fail to link on macOS (`application.mm` hard-codes Metal driver/swapchain types).
 - PSO JSON file-based unit tests skip under Emscripten (no RESOURCES_DIR fixture access in the wasm virtual filesystem).
 - Vulkan `UnitTests` fail at runtime in GitHub Actions CI on all platforms (`vkCreateInstance` fails: no working Vulkan-capable GPU/driver on the hosted runners); passes locally with a real GPU. Needs a software Vulkan ICD (e.g. lavapipe/SwiftShader) installed in CI to actually exercise this backend there.
-- Implement backend pipeline object creation (Vulkan/Metal/WebGPU) consuming `VkmPipelineStateDescriptor`; parsing only exists today.
 - Metal4 ImGui backend has no keyboard or scroll-wheel input yet, only polled mouse position/buttons.
 - Vulkan swapchain present/acquire uses a fence + vkDeviceWaitIdle instead of per-frame semaphores (correct but not pipelined).
 - `MemoryTracker::allocate()` doesn't null-check mimalloc/std::malloc, causing a null-pointer write on OOM instead of throwing `std::bad_alloc`.
@@ -16,3 +15,10 @@
 - Global `operator new`/`delete` overrides in `memory.cpp` duplicate the same body across six functions.
 - `MemoryTracker::~MemoryTracker()` is dead code since `singleton()` never destructs the instance.
 - `MemoryTracker::getMimallocStats()` declares unused locals instead of passing `nullptr` to `mi_process_info`.
+- Design and implement the 8-set engine/user resource-binding (descriptor set) convention on top of `VkmPipelineStateBase`.
+- Implement draw-call recording (vertex buffer binding, dynamic viewport/scissor, draw calls) — pipeline objects can now be created but nothing draws yet.
+- `VkmCommandBufferWebGPU::onBindPipeline` no-ops with a logged error for compute pipelines since no compute pass encoder is tracked yet.
+- `MTL4RenderPipelineDescriptor` has no depth/stencil attachment format properties in Metal4; `VkmPipelineStateMetal` can't validate/set depth-stencil format at pipeline-creation time, only at render-pass/encoder time.
+- Migrate vkm's own engine shaders (scene_object/tonemap/etc.) from loose GLSL to HLSL+PSO json so `resources/Pipelines/Engine/` and the `vkm_engine_shaders` CMake target actually have something to compile.
+- `VkmPipelineStateManager::getPipelineState(name)`'s Engine-wins-on-collision precedence over User origin is an unrevisited default, not a deliberate policy.
+- `metal_pipeline_state.mm`'s `getMTLPixelFormat` duplicates `metal_texture.mm`'s anonymous-namespace version instead of sharing a common conversion helper.

@@ -20,6 +20,8 @@ namespace vkm
     protected:
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) override final;
         virtual void onEndRenderPass() override final;
+        virtual void onBindPipeline(VkmPipelineStateBase* pipelineState) override final;
+        virtual void onUnbindPipeline() override final;
 
     private:
         VkCommandBuffer _vkCommandBuffer{VK_NULL_HANDLE};

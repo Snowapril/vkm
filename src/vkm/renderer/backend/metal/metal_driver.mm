@@ -4,6 +4,7 @@
 #include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/metal/metal_swapchain.h>
 #include <vkm/renderer/backend/metal/metal_command_queue.h>
+#include <vkm/renderer/backend/metal/metal_pipeline_state.h>
 
 #import <Metal/MTLDevice.h>
 
@@ -55,6 +56,11 @@ namespace vkm
     {
         // TODO(snowapril) : create texture via resource pool backend
         return new VkmTextureMetal(this);
+    }
+
+    VkmPipelineStateBase* VkmDriverMetal::newPipelineStateInner()
+    {
+        return new VkmPipelineStateMetal(this);
     }
     
     VkmSwapChainBase* VkmDriverMetal::newSwapChainInner()

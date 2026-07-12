@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/command_queue.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
+#include <vkm/renderer/backend/common/pipeline_state_object.h>
 
 namespace vkm
 {
@@ -78,6 +79,19 @@ namespace vkm
         // TODO(snowapril) : pick appropriate queue instead of first one hard coded
         swapChain->setPresentQueue(_commandQueues[(uint8_t)VkmCommandQueueType::Graphics][0]);
         return swapChain;
+    }
+
+    VkmPipelineStateBase* VkmDriverBase::newPipelineState(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError)
+    {
+        VkmPipelineStateBase* pipelineState = newPipelineStateInner();
+        if (pipelineState->initialize(desc, shaderCacheDir, outError) == false)
+        {
+            VKM_DEBUG_ERROR("Failed to initialize pipeline state");
+            delete pipelineState;
+            return nullptr;
+        }
+
+        return pipelineState;
     }
 
     VkmCommandQueueBase* VkmDriverBase::newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name)

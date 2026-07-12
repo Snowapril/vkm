@@ -14,6 +14,7 @@ namespace vkm
     class VkmCommandQueueBase;
     class VkmCommandBufferPoolBase;
     class VkmGpuEventTimelineBase;
+    class VkmPipelineStateBase;
     struct VkmGpuEventTimelineObject;
 
     /*
@@ -37,7 +38,7 @@ namespace vkm
         void endRenderPass();
 
         // Pipeline related
-        void bindPipeline();
+        void bindPipeline(VkmPipelineStateBase* pipelineState);
         void unbindPipeline();
 
         inline const VkmGpuEventTimelineObject& getGpuEventTimelineObject() const { return _gpuEventTimelineObject; }
@@ -45,6 +46,8 @@ namespace vkm
     protected:
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) = 0;
         virtual void onEndRenderPass() = 0;
+        virtual void onBindPipeline(VkmPipelineStateBase* pipelineState) = 0;
+        virtual void onUnbindPipeline() = 0;
 
     protected:
         VkmDriverBase* _driver;
@@ -58,5 +61,8 @@ namespace vkm
         bool _isInRenderPass; // Flag to indicate if the command buffer is currently in a render pass
 
         VkmFrameBufferDescriptor _currentFrameBufferDesc;
+
+    private:
+        VkmPipelineStateBase* _boundPipelineState = nullptr;
     };
 }

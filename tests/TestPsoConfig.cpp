@@ -6,6 +6,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -299,4 +300,167 @@ TEST_CASE("VkmPipelineStateDescriptor - vertex input layout rejects type with no
 
     std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromString(jsonText);
     CHECK_FALSE(result.has_value());
+}
+
+namespace
+{
+const vkm::VkmPipelineStateDescriptor* findVariantByName(
+    const std::vector<vkm::VkmPipelineStateDescriptor>& variants, const std::string& name)
+{
+    for (const vkm::VkmPipelineStateDescriptor& variant : variants)
+    {
+        if (variant.name == name)
+        {
+            return &variant;
+        }
+    }
+    return nullptr;
+}
+} // namespace
+
+TEST_CASE("VkmPipelineStateDescriptor - parses 'options' into raw unresolved overlays") {
+#if defined(VKM_PLATFORM_WASM)
+    MESSAGE("Skipping: RESOURCES_DIR fixtures are not mounted in the Emscripten test binary's virtual filesystem.");
+    return;
+#endif
+    const std::string filepath = std::string(RESOURCES_DIR) + "tests/pso_with_options.json";
+    std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromFile(filepath);
+    REQUIRE(result.has_value());
+
+    const vkm::VkmPipelineStateDescriptor& desc = *result;
+    CHECK(desc.name == "triangle_pso");
+    CHECK(desc.optionName.empty());
+    REQUIRE(desc.options.size() == 2);
+    REQUIRE(desc.options.count("default") == 1);
+    REQUIRE(desc.options.count("wireframe") == 1);
+
+    const vkm::VkmPipelineStateOptionOverlay& defaultOverlay = desc.options.at("default");
+    CHECK_FALSE(defaultOverlay.rasterizationState.has_value());
+    CHECK_FALSE(defaultOverlay.primitiveTopology.has_value());
+    CHECK(defaultOverlay.definitions.empty());
+
+    const vkm::VkmPipelineStateOptionOverlay& wireframeOverlay = desc.options.at("wireframe");
+    REQUIRE(wireframeOverlay.rasterizationState.has_value());
+    REQUIRE(wireframeOverlay.rasterizationState->fillMode.has_value());
+    CHECK(*wireframeOverlay.rasterizationState->fillMode == vkm::VkmFillMode::Wireframe);
+    CHECK_FALSE(wireframeOverlay.rasterizationState->cullMode.has_value());
+    CHECK_FALSE(wireframeOverlay.rasterizationState->frontFace.has_value());
+    REQUIRE(wireframeOverlay.definitions.count("WIREFRAME") == 1);
+    CHECK(wireframeOverlay.definitions.at("WIREFRAME") == "");
+}
+
+TEST_CASE("VkmPipelineStateDescriptor - existing fixtures parse with empty 'options'") {
+#if defined(VKM_PLATFORM_WASM)
+    MESSAGE("Skipping: RESOURCES_DIR fixtures are not mounted in the Emscripten test binary's virtual filesystem.");
+    return;
+#endif
+    for (const char* name : { "tests/pso_full.json", "tests/pso_minimal.json" })
+    {
+        const std::string filepath = std::string(RESOURCES_DIR) + name;
+        std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromFile(filepath);
+        REQUIRE(result.has_value());
+        CHECK(result->options.empty());
+        CHECK(result->optionName.empty());
+    }
+}
+
+TEST_CASE("expandPipelineStateOptions - no options returns a single unchanged descriptor") {
+    const std::string jsonText = R"({
+        "name": "solo_pso",
+        "color_attachments": [ { "format": "bgra8_unorm" } ],
+        "shaders": {
+            "vertex": { "filepath": "triangle.vert" }
+        }
+    })";
+
+    std::optional<vkm::VkmPipelineStateDescriptor> parsed = vkm::parsePipelineStateFromString(jsonText);
+    REQUIRE(parsed.has_value());
+
+    std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> expanded = vkm::expandPipelineStateOptions(*parsed);
+    REQUIRE(expanded.has_value());
+    REQUIRE(expanded->size() == 1);
+    CHECK((*expanded)[0].name == "solo_pso");
+    CHECK((*expanded)[0].optionName.empty());
+    CHECK((*expanded)[0].options.empty());
+}
+
+TEST_CASE("expandPipelineStateOptions - two options resolve with merged state and definitions") {
+#if defined(VKM_PLATFORM_WASM)
+    MESSAGE("Skipping: RESOURCES_DIR fixtures are not mounted in the Emscripten test binary's virtual filesystem.");
+    return;
+#endif
+    const std::string filepath = std::string(RESOURCES_DIR) + "tests/pso_with_options.json";
+    std::optional<vkm::VkmPipelineStateDescriptor> parsed = vkm::parsePipelineStateFromFile(filepath);
+    REQUIRE(parsed.has_value());
+
+    std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> expanded = vkm::expandPipelineStateOptions(*parsed);
+    REQUIRE(expanded.has_value());
+    REQUIRE(expanded->size() == 2);
+
+    const vkm::VkmPipelineStateDescriptor* defaultVariant = findVariantByName(*expanded, "triangle_pso[default]");
+    const vkm::VkmPipelineStateDescriptor* wireframeVariant = findVariantByName(*expanded, "triangle_pso[wireframe]");
+    REQUIRE(defaultVariant != nullptr);
+    REQUIRE(wireframeVariant != nullptr);
+
+    // Every produced variant clears the raw options / sets optionName.
+    CHECK(defaultVariant->options.empty());
+    CHECK(defaultVariant->optionName == "default");
+    CHECK(wireframeVariant->optionName == "wireframe");
+
+    // default: identical fixed-function state to the base (empty overlay).
+    CHECK(defaultVariant->rasterizationState.fillMode == vkm::VkmFillMode::Solid);
+    CHECK(defaultVariant->rasterizationState.cullMode == vkm::VkmCullMode::Back);
+    CHECK(defaultVariant->rasterizationState.frontFace == vkm::VkmFrontFace::CounterClockwise);
+
+    // wireframe: fill_mode overridden, cull_mode/front_face inherited from base.
+    CHECK(wireframeVariant->rasterizationState.fillMode == vkm::VkmFillMode::Wireframe);
+    CHECK(wireframeVariant->rasterizationState.cullMode == vkm::VkmCullMode::Back);
+    CHECK(wireframeVariant->rasterizationState.frontFace == vkm::VkmFrontFace::CounterClockwise);
+
+    // Shader definitions: base vertex keeps USE_VERTEX_COLOR everywhere.
+    REQUIRE(defaultVariant->vertexShader.has_value());
+    CHECK(defaultVariant->vertexShader->definitions.count("USE_VERTEX_COLOR") == 1);
+    CHECK(defaultVariant->vertexShader->definitions.count("WIREFRAME") == 0);
+    REQUIRE(defaultVariant->fragmentShader.has_value());
+    CHECK(defaultVariant->fragmentShader->definitions.count("WIREFRAME") == 0);
+
+    // wireframe: pipeline-wide WIREFRAME definition merges into every present stage.
+    REQUIRE(wireframeVariant->vertexShader.has_value());
+    CHECK(wireframeVariant->vertexShader->definitions.count("USE_VERTEX_COLOR") == 1);
+    CHECK(wireframeVariant->vertexShader->definitions.count("WIREFRAME") == 1);
+    REQUIRE(wireframeVariant->fragmentShader.has_value());
+    CHECK(wireframeVariant->fragmentShader->definitions.count("WIREFRAME") == 1);
+}
+
+TEST_CASE("expandPipelineStateOptions - fails on empty name with non-empty options") {
+#if defined(VKM_PLATFORM_WASM)
+    MESSAGE("Skipping: RESOURCES_DIR fixtures are not mounted in the Emscripten test binary's virtual filesystem.");
+    return;
+#endif
+    const std::string filepath = std::string(RESOURCES_DIR) + "tests/pso_options_empty_name.json";
+    std::optional<vkm::VkmPipelineStateDescriptor> parsed = vkm::parsePipelineStateFromFile(filepath);
+    REQUIRE(parsed.has_value());
+    CHECK(parsed->name.empty());
+    REQUIRE_FALSE(parsed->options.empty());
+
+    std::string outError;
+    std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> expanded =
+        vkm::expandPipelineStateOptions(*parsed, &outError);
+    CHECK_FALSE(expanded.has_value());
+    CHECK(outError.find("name") != std::string::npos);
+}
+
+TEST_CASE("expandPipelineStateOptions - fails when a variant has both compute and graphics stages") {
+    vkm::VkmPipelineStateDescriptor desc{};
+    desc.name = "mixed_pso";
+    desc.vertexShader = vkm::VkmShaderStageDescriptor{};
+    desc.vertexShader->filepath = "triangle.vert";
+    desc.computeShader = vkm::VkmShaderStageDescriptor{};
+    desc.computeShader->filepath = "triangle.comp";
+
+    std::string outError;
+    std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> expanded =
+        vkm::expandPipelineStateOptions(desc, &outError);
+    CHECK_FALSE(expanded.has_value());
+    CHECK(outError.find("compute") != std::string::npos);
 }

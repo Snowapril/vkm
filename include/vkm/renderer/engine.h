@@ -13,6 +13,7 @@ namespace vkm
     class VkmDriverBase;
     class VkmTexture;
     class VkmSwapChainBase;
+    class VkmPipelineStateManager;
 #if defined(VKM_ENABLE_IMGUI)
     class VkmImGuiRendererBase;
 #endif
@@ -84,7 +85,12 @@ namespace vkm
         * @brief returns engine's launch options
         */
         inline const VkmEngineLaunchOptions& getEngineOptions() const { return _engineOptions; }
-        
+
+        /*
+        * @brief returns engine's pipeline state manager
+        */
+        inline VkmPipelineStateManager* getPipelineStateManager() const { return _pipelineStateManager.get(); }
+
     public:
 
         /*
@@ -97,6 +103,8 @@ namespace vkm
         double _lastUpdateTime;
 
         VkmSwapChainBase* _mainSwapChain {nullptr}; // main swapchain. engine should have multiple swapchains but at now, only one swapchain is supported.
+
+        std::unique_ptr<VkmPipelineStateManager> _pipelineStateManager;
 
 #if defined(VKM_ENABLE_IMGUI)
         std::unique_ptr<VkmImGuiRendererBase> _imGuiRenderer;

@@ -9,6 +9,7 @@ namespace vkm
 {
     class VkmRenderGraph;
     class VkmDriverBase;
+    class VkmEngine;
     class AppDelegate
     {
     public:
@@ -16,7 +17,7 @@ namespace vkm
         virtual ~AppDelegate() = default;
 
     public:
-        virtual void postDriverReady() = 0;
+        virtual void postDriverReady(VkmEngine* engine) = 0;
         virtual void preShutdown() = 0;
         virtual void update(const double deltaTime) = 0;
         virtual void render(VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) = 0;

@@ -33,6 +33,7 @@ namespace vkm
         virtual void destroyInner() override final;
         virtual VkmTexture* newTextureInner() override final;
         virtual VkmCommandQueueBase* newCommandQueueInner() override final;
+        virtual VkmPipelineStateBase* newPipelineStateInner() override final;
 
     private:
         uint32_t _graphicsQueueFamilyIndex{UINT32_MAX};
