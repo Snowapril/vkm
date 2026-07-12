@@ -17,6 +17,7 @@
 #import <Metal/MTL4RenderCommandEncoder.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <AppKit/AppKit.h>
+#import <Carbon/Carbon.h>
 
 #include <cstring>
 
@@ -134,6 +135,149 @@ namespace vkm
             [buffer release];
             return [device newBufferWithLength:requiredSize options:MTLResourceStorageModeShared];
         }
+
+        // macOS virtual-keycode -> ImGuiKey table, mirroring Dear ImGui's official
+        // imgui_impl_osx.mm backend (ImGui_ImplOSX_KeyCodeToImGuiKey), since this renderer
+        // bridges input via its own NSEvent local monitor instead of that backend.
+        ImGuiKey keyCodeToImGuiKey(int keyCode)
+        {
+            switch (keyCode)
+            {
+                case kVK_ANSI_A: return ImGuiKey_A;
+                case kVK_ANSI_S: return ImGuiKey_S;
+                case kVK_ANSI_D: return ImGuiKey_D;
+                case kVK_ANSI_F: return ImGuiKey_F;
+                case kVK_ANSI_H: return ImGuiKey_H;
+                case kVK_ANSI_G: return ImGuiKey_G;
+                case kVK_ANSI_Z: return ImGuiKey_Z;
+                case kVK_ANSI_X: return ImGuiKey_X;
+                case kVK_ANSI_C: return ImGuiKey_C;
+                case kVK_ANSI_V: return ImGuiKey_V;
+                case kVK_ANSI_B: return ImGuiKey_B;
+                case kVK_ANSI_Q: return ImGuiKey_Q;
+                case kVK_ANSI_W: return ImGuiKey_W;
+                case kVK_ANSI_E: return ImGuiKey_E;
+                case kVK_ANSI_R: return ImGuiKey_R;
+                case kVK_ANSI_Y: return ImGuiKey_Y;
+                case kVK_ANSI_T: return ImGuiKey_T;
+                case kVK_ANSI_1: return ImGuiKey_1;
+                case kVK_ANSI_2: return ImGuiKey_2;
+                case kVK_ANSI_3: return ImGuiKey_3;
+                case kVK_ANSI_4: return ImGuiKey_4;
+                case kVK_ANSI_6: return ImGuiKey_6;
+                case kVK_ANSI_5: return ImGuiKey_5;
+                case kVK_ANSI_Equal: return ImGuiKey_Equal;
+                case kVK_ANSI_9: return ImGuiKey_9;
+                case kVK_ANSI_7: return ImGuiKey_7;
+                case kVK_ANSI_Minus: return ImGuiKey_Minus;
+                case kVK_ANSI_8: return ImGuiKey_8;
+                case kVK_ANSI_0: return ImGuiKey_0;
+                case kVK_ANSI_RightBracket: return ImGuiKey_RightBracket;
+                case kVK_ANSI_O: return ImGuiKey_O;
+                case kVK_ANSI_U: return ImGuiKey_U;
+                case kVK_ANSI_LeftBracket: return ImGuiKey_LeftBracket;
+                case kVK_ANSI_I: return ImGuiKey_I;
+                case kVK_ANSI_P: return ImGuiKey_P;
+                case kVK_ANSI_L: return ImGuiKey_L;
+                case kVK_ANSI_J: return ImGuiKey_J;
+                case kVK_ANSI_Quote: return ImGuiKey_Apostrophe;
+                case kVK_ANSI_K: return ImGuiKey_K;
+                case kVK_ANSI_Semicolon: return ImGuiKey_Semicolon;
+                case kVK_ANSI_Backslash: return ImGuiKey_Backslash;
+                case kVK_ANSI_Comma: return ImGuiKey_Comma;
+                case kVK_ANSI_Slash: return ImGuiKey_Slash;
+                case kVK_ANSI_N: return ImGuiKey_N;
+                case kVK_ANSI_M: return ImGuiKey_M;
+                case kVK_ANSI_Period: return ImGuiKey_Period;
+                case kVK_ANSI_Grave: return ImGuiKey_GraveAccent;
+                case kVK_ANSI_KeypadDecimal: return ImGuiKey_KeypadDecimal;
+                case kVK_ANSI_KeypadMultiply: return ImGuiKey_KeypadMultiply;
+                case kVK_ANSI_KeypadPlus: return ImGuiKey_KeypadAdd;
+                case kVK_ANSI_KeypadClear: return ImGuiKey_NumLock;
+                case kVK_ANSI_KeypadDivide: return ImGuiKey_KeypadDivide;
+                case kVK_ANSI_KeypadEnter: return ImGuiKey_KeypadEnter;
+                case kVK_ANSI_KeypadMinus: return ImGuiKey_KeypadSubtract;
+                case kVK_ANSI_KeypadEquals: return ImGuiKey_KeypadEqual;
+                case kVK_ANSI_Keypad0: return ImGuiKey_Keypad0;
+                case kVK_ANSI_Keypad1: return ImGuiKey_Keypad1;
+                case kVK_ANSI_Keypad2: return ImGuiKey_Keypad2;
+                case kVK_ANSI_Keypad3: return ImGuiKey_Keypad3;
+                case kVK_ANSI_Keypad4: return ImGuiKey_Keypad4;
+                case kVK_ANSI_Keypad5: return ImGuiKey_Keypad5;
+                case kVK_ANSI_Keypad6: return ImGuiKey_Keypad6;
+                case kVK_ANSI_Keypad7: return ImGuiKey_Keypad7;
+                case kVK_ANSI_Keypad8: return ImGuiKey_Keypad8;
+                case kVK_ANSI_Keypad9: return ImGuiKey_Keypad9;
+                case kVK_Return: return ImGuiKey_Enter;
+                case kVK_Tab: return ImGuiKey_Tab;
+                case kVK_Space: return ImGuiKey_Space;
+                case kVK_Delete: return ImGuiKey_Backspace;
+                case kVK_Escape: return ImGuiKey_Escape;
+                case kVK_CapsLock: return ImGuiKey_CapsLock;
+                case kVK_Control: return ImGuiKey_LeftCtrl;
+                case kVK_Shift: return ImGuiKey_LeftShift;
+                case kVK_Option: return ImGuiKey_LeftAlt;
+                case kVK_Command: return ImGuiKey_LeftSuper;
+                case kVK_RightControl: return ImGuiKey_RightCtrl;
+                case kVK_RightShift: return ImGuiKey_RightShift;
+                case kVK_RightOption: return ImGuiKey_RightAlt;
+                case kVK_RightCommand: return ImGuiKey_RightSuper;
+                case kVK_F1: return ImGuiKey_F1;
+                case kVK_F2: return ImGuiKey_F2;
+                case kVK_F3: return ImGuiKey_F3;
+                case kVK_F4: return ImGuiKey_F4;
+                case kVK_F5: return ImGuiKey_F5;
+                case kVK_F6: return ImGuiKey_F6;
+                case kVK_F7: return ImGuiKey_F7;
+                case kVK_F8: return ImGuiKey_F8;
+                case kVK_F9: return ImGuiKey_F9;
+                case kVK_F10: return ImGuiKey_F10;
+                case kVK_F11: return ImGuiKey_F11;
+                case kVK_F12: return ImGuiKey_F12;
+                case kVK_F13: return ImGuiKey_F13;
+                case kVK_F14: return ImGuiKey_F14;
+                case kVK_F15: return ImGuiKey_F15;
+                case kVK_F16: return ImGuiKey_F16;
+                case kVK_F17: return ImGuiKey_F17;
+                case kVK_F18: return ImGuiKey_F18;
+                case kVK_F19: return ImGuiKey_F19;
+                case kVK_F20: return ImGuiKey_F20;
+                case kVK_ContextualMenu: return ImGuiKey_Menu;
+                case kVK_Help: return ImGuiKey_Insert;
+                case kVK_Home: return ImGuiKey_Home;
+                case kVK_PageUp: return ImGuiKey_PageUp;
+                case kVK_ForwardDelete: return ImGuiKey_Delete;
+                case kVK_End: return ImGuiKey_End;
+                case kVK_PageDown: return ImGuiKey_PageDown;
+                case kVK_LeftArrow: return ImGuiKey_LeftArrow;
+                case kVK_RightArrow: return ImGuiKey_RightArrow;
+                case kVK_DownArrow: return ImGuiKey_DownArrow;
+                case kVK_UpArrow: return ImGuiKey_UpArrow;
+                default: return ImGuiKey_None;
+            }
+        }
+
+        // Filters out ASCII control characters, Delete, and the 0xF700-0xF8FF private-use range
+        // macOS uses for arrow/function/page keys before forwarding text to
+        // io.AddInputCharactersUTF8(), mirroring the character filtering historically applied by
+        // Dear ImGui's official imgui_impl_osx backend.
+        void addFilteredInputCharacters(ImGuiIO& io, NSString* characters)
+        {
+            NSMutableString* filtered = [NSMutableString stringWithCapacity:characters.length];
+            for (NSUInteger i = 0; i < characters.length; ++i)
+            {
+                const unichar c = [characters characterAtIndex:i];
+                if (c < 0x20 || c == 0x7F || (c >= 0xF700 && c <= 0xF8FF))
+                {
+                    continue;
+                }
+                [filtered appendFormat:@"%C", c];
+            }
+            if (filtered.length > 0)
+            {
+                io.AddInputCharactersUTF8(filtered.UTF8String);
+            }
+        }
     } // namespace
 
     class VkmImGuiRendererMetal::Impl
@@ -144,6 +288,7 @@ namespace vkm
         id<MTL4ArgumentTable> argumentTable = nil;
         id<MTLSamplerState> sampler = nil;
         CAMetalLayer* metalLayer = nil;
+        id keyEventMonitor = nil; // NSEvent local monitor for keyboard + scroll-wheel input.
 
         struct FrameResources
         {
@@ -253,6 +398,73 @@ namespace vkm
         [samplerDesc release];
         [_impl->argumentTable setSamplerState:_impl->sampler.gpuResourceID atIndex:0];
 
+        const NSEventMask keyEventMask = NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskFlagsChanged | NSEventMaskScrollWheel;
+        _impl->keyEventMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:keyEventMask handler:^NSEvent* _Nullable(NSEvent* event) {
+            ImGuiIO& imguiIO = ImGui::GetIO();
+            switch (event.type)
+            {
+                case NSEventTypeKeyDown:
+                {
+                    if (![event isARepeat])
+                    {
+                        imguiIO.AddKeyEvent(keyCodeToImGuiKey((int)event.keyCode), true);
+                    }
+                    addFilteredInputCharacters(imguiIO, event.characters);
+                    return imguiIO.WantCaptureKeyboard ? nil : event;
+                }
+                case NSEventTypeKeyUp:
+                {
+                    imguiIO.AddKeyEvent(keyCodeToImGuiKey((int)event.keyCode), false);
+                    return imguiIO.WantCaptureKeyboard ? nil : event;
+                }
+                case NSEventTypeFlagsChanged:
+                {
+                    const NSEventModifierFlags modifierFlags = event.modifierFlags;
+                    imguiIO.AddKeyEvent(ImGuiMod_Shift, (modifierFlags & NSEventModifierFlagShift) != 0);
+                    imguiIO.AddKeyEvent(ImGuiMod_Ctrl, (modifierFlags & NSEventModifierFlagControl) != 0);
+                    imguiIO.AddKeyEvent(ImGuiMod_Alt, (modifierFlags & NSEventModifierFlagOption) != 0);
+                    imguiIO.AddKeyEvent(ImGuiMod_Super, (modifierFlags & NSEventModifierFlagCommand) != 0);
+
+                    // macOS does not generate down/up events for individual modifier keys, so the
+                    // per-key (as opposed to per-mod) state is derived from hardware-dependent masks,
+                    // mirroring the official imgui_impl_osx backend.
+                    const ImGuiKey modifierKey = keyCodeToImGuiKey((int)event.keyCode);
+                    NSEventModifierFlags hardwareMask = 0;
+                    switch (modifierKey)
+                    {
+                        case ImGuiKey_LeftCtrl:   hardwareMask = 0x0001; break;
+                        case ImGuiKey_RightCtrl:  hardwareMask = 0x2000; break;
+                        case ImGuiKey_LeftShift:  hardwareMask = 0x0002; break;
+                        case ImGuiKey_RightShift: hardwareMask = 0x0004; break;
+                        case ImGuiKey_LeftSuper:  hardwareMask = 0x0008; break;
+                        case ImGuiKey_RightSuper: hardwareMask = 0x0010; break;
+                        case ImGuiKey_LeftAlt:    hardwareMask = 0x0020; break;
+                        case ImGuiKey_RightAlt:   hardwareMask = 0x0040; break;
+                        default:                  return imguiIO.WantCaptureKeyboard ? nil : event;
+                    }
+                    imguiIO.AddKeyEvent(modifierKey, (modifierFlags & hardwareMask) != 0);
+                    return imguiIO.WantCaptureKeyboard ? nil : event;
+                }
+                case NSEventTypeScrollWheel:
+                {
+                    double wheelDeltaX = event.scrollingDeltaX;
+                    double wheelDeltaY = event.scrollingDeltaY;
+                    if (!event.hasPreciseScrollingDeltas)
+                    {
+                        wheelDeltaX *= 0.1;
+                        wheelDeltaY *= 0.1;
+                    }
+                    if (wheelDeltaX != 0.0 || wheelDeltaY != 0.0)
+                    {
+                        imguiIO.AddMouseWheelEvent((float)wheelDeltaX, (float)wheelDeltaY);
+                    }
+                    return imguiIO.WantCaptureMouse ? nil : event;
+                }
+                default:
+                    return event;
+            }
+        }];
+
         return true;
     }
 
@@ -264,9 +476,9 @@ namespace vkm
         io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
         io.DeltaTime = io.DeltaTime > 0.0f ? io.DeltaTime : (1.0f / 60.0f);
 
-        // Minimal input bridge: mouse position + buttons polled from the key window each frame.
-        // Keyboard input and scroll-wheel are not wired up yet (TODO(snowapril): needs an
-        // event-driven bridge -- e.g. NSEvent local monitors -- rather than per-frame polling).
+        // Mouse position + buttons are polled from the key window each frame. Keyboard input
+        // and scroll-wheel are event-driven instead, bridged via the NSEvent local monitor
+        // installed in initializeInner() (see keyEventMonitor).
         NSWindow* keyWindow = [NSApp keyWindow];
         if (keyWindow != nil)
         {
@@ -398,6 +610,12 @@ namespace vkm
 
     void VkmImGuiRendererMetal::shutdownInner()
     {
+        if (_impl->keyEventMonitor != nil)
+        {
+            [NSEvent removeMonitor:_impl->keyEventMonitor];
+            _impl->keyEventMonitor = nil;
+        }
+
         for (Impl::FrameResources& frame : _impl->frames)
         {
             [frame.vertexBuffer release];
