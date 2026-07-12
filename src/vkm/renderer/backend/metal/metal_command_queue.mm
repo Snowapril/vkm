@@ -117,7 +117,15 @@ namespace vkm
         _mtlCommandQueue = [driverMetal->getMTLDevice() newMTL4CommandQueue];
 
         VkmRenderResourcePoolMetal* renderResourcePoolMetal = static_cast<VkmRenderResourcePoolMetal*>(driverMetal->getRenderResourcePool());
-        [_mtlCommandQueue addResidencySet:renderResourcePoolMetal->getResidencySet(VkmResourcePoolType::Default)];
+        id<MTLResidencySet> residencySet = renderResourcePoolMetal->getResidencySet(VkmResourcePoolType::Default);
+        if (residencySet == nil)
+        {
+            // Without a residency set no resource is ever made resident on this queue --
+            // fail loudly at init instead of faulting at first GPU use.
+            VKM_DEBUG_ERROR("Residency set unavailable; cannot initialize Metal command queue");
+            return false;
+        }
+        [_mtlCommandQueue addResidencySet:residencySet];
 
         _commandBufferPool.reset(new VkmCommandBufferPoolMetal(_driver, this));
         _gpuEventTimeline.reset(new VkmGpuEventTimelineMetal(_driver));

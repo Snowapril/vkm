@@ -8,6 +8,7 @@
 #include <mutex>
 
 @protocol MTLResidencySet;
+@protocol MTLAllocation;
 
 namespace vkm
 {
@@ -25,6 +26,14 @@ namespace vkm
         * committed; no-op when nothing was staged since the last flush.
         */
         void commitPendingResidencyChanges();
+
+        /*
+        * @brief Stage residency for an allocation that lives outside the resource pool's
+        * handle tracking -- e.g. an MTLHeap pool block, whose placed sub-allocations may
+        * not make the backing heap resident on their own. Never removed: heap blocks live
+        * until driver teardown.
+        */
+        void registerExternalAllocation(id<MTLAllocation> allocation, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
 
     protected:
         virtual void onResourceInitialized(VkmResourceHandle handle) override final;

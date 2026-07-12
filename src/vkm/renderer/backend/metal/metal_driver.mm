@@ -14,6 +14,7 @@
 #include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
 
 #import <Metal/MTLDevice.h>
+#import <Metal/MTLHeap.h>
 
 namespace vkm
 {
@@ -112,6 +113,11 @@ namespace vkm
         {
             return nil;
         }
+
+        // Placed sub-allocations may not make the backing heap resident on their own;
+        // register the whole heap block so every buffer placed in it is covered.
+        VkmRenderResourcePoolMetal* renderResourcePoolMetal = static_cast<VkmRenderResourcePoolMetal*>(getRenderResourcePool());
+        renderResourcePoolMetal->registerExternalAllocation(newPool->getHeap());
 
         id<MTLBuffer> buffer = newPool->tryAllocateBuffer(sizeBytes, alignment, options);
         _heapPools.push_back(std::move(newPool));

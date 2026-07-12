@@ -16,16 +16,27 @@ namespace vkm
     {
         // Only Buffer/Texture/StagingBuffer own a distinct MTLAllocation-conforming native
         // object; samplers, texture views and buffer views have no separate allocation.
+        // getResource() returns nullptr for stale/generation-mismatched handles (the base
+        // releaseResource is a safe no-op for those), so null-check before dereferencing.
         id<MTLAllocation> fetchAllocation(VkmRenderResourcePoolMetal* pool, VkmResourceHandle handle)
         {
             switch (handle.type)
             {
             case VkmResourceType::Buffer:
-                return pool->getResource<VkmBufferMetal>(handle)->getBuffer();
+            {
+                VkmBufferMetal* buffer = pool->getResource<VkmBufferMetal>(handle);
+                return buffer != nullptr ? buffer->getBuffer() : nil;
+            }
             case VkmResourceType::Texture:
-                return pool->getResource<VkmTextureMetal>(handle)->getInternalHandle();
+            {
+                VkmTextureMetal* texture = pool->getResource<VkmTextureMetal>(handle);
+                return texture != nullptr ? texture->getInternalHandle() : nil;
+            }
             case VkmResourceType::StagingBuffer:
-                return pool->getResource<VkmStagingBufferMetal>(handle)->getBuffer();
+            {
+                VkmStagingBufferMetal* stagingBuffer = pool->getResource<VkmStagingBufferMetal>(handle);
+                return stagingBuffer != nullptr ? stagingBuffer->getBuffer() : nil;
+            }
             default:
                 return nil;
             }
@@ -41,7 +52,7 @@ namespace vkm
         for (uint8_t poolType = 0; poolType < (uint8_t)VkmResourcePoolType::Count; ++poolType)
         {
             MTLResidencySetDescriptor* descriptor = [[MTLResidencySetDescriptor alloc] init];
-            descriptor.label = @"VkmResidencySet.Default";
+            descriptor.label = [NSString stringWithFormat:@"VkmResidencySet.PoolType%u", poolType];
 
             NSError* error = nil;
             _residencySets[poolType] = [device newResidencySetWithDescriptor:descriptor error:&error];
@@ -85,6 +96,18 @@ namespace vkm
         }
 
         VkmRenderResourcePool::releaseResource(handle);
+    }
+
+    void VkmRenderResourcePoolMetal::registerExternalAllocation(id<MTLAllocation> allocation, VkmResourcePoolType poolType)
+    {
+        if (allocation == nil)
+        {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(_residencyMutex);
+        [_residencySets[(uint8_t)poolType] addAllocation:allocation];
+        _residencyDirty = true;
     }
 
     void VkmRenderResourcePoolMetal::commitPendingResidencyChanges()

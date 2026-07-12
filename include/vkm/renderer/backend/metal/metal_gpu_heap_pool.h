@@ -32,6 +32,8 @@ namespace vkm
         // doesn't need to import Metal's resource-options header.
         id<MTLBuffer> tryAllocateBuffer(uint64_t sizeBytes, uint64_t alignment, uint64_t options);
 
+        inline id<MTLHeap> getHeap() const { return _mtlHeap; }
+
     private:
         VkmDriverMetal* _driver;
         id<MTLHeap> _mtlHeap{nullptr};
