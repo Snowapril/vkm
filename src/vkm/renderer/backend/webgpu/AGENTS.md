@@ -32,11 +32,30 @@ WebGPU has no pre-allocated "command buffer" step the way Vulkan/Metal do. `VKM_
 
 ## Class Override Map
 
-- `VkmDriverWebGPU` — `initializeInner` (instance/adapter/device/queue via Asyncify), `destroyInner` (reverse-order release), `newTextureInner` → `VkmTextureWebGPU`, `newSwapChainInner` → `VkmSwapChainWebGPU`, `newCommandQueueInner` → `VkmCommandQueueWebGPU`
+- `VkmDriverWebGPU` — `initializeInner` (instance/adapter/device/queue via Asyncify), `destroyInner` (reverse-order release), `newTextureInner` → `VkmTextureWebGPU`, `newBufferInner` → `VkmBufferWebGPU`, `newStagingBufferInner` → `VkmStagingBufferWebGPU`, `newSamplerInner` → `VkmSamplerWebGPU`, `newTextureViewInner` → `VkmTextureViewWebGPU`, `newBufferViewInner` → `VkmBufferViewWebGPU` (metadata-only; WebGPU has no buffer-view object), `newSwapChainInner` → `VkmSwapChainWebGPU`, `newCommandQueueInner` → `VkmCommandQueueWebGPU`
 - `VkmSwapChainWebGPU` — `createSwapChain` obtains a `WGPUSurface` from the canvas via `WGPUEmscriptenSurfaceSourceCanvasHTMLSelector` (selector must match the actual canvas element id — see `platform/wasm/AGENTS.md`), queries `wgpuSurfaceGetCapabilities` for the preferred format (do not hardcode a format), `acquireNextImageInner` calls `wgpuSurfaceGetCurrentTexture` and overrides a rotating backbuffer slot (mirrors Metal's `overrideCurrentDrawable` pattern), `presentInner` calls `wgpuSurfacePresent`
 - `VkmTextureWebGPU` — `overrideExternalHandle` takes ownership-free of swapchain-provided `WGPUTexture`s (tracked via an `_externallyOwned` flag so the destructor skips `wgpuTextureRelease`)
 - `VkmCommandQueueWebGPU` / `VkmCommandBufferPoolWebGPU` / `VkmGpuEventTimelineWebGPU` — see below
 - `VkmCommandBufferWebGPU` — `onBeginRenderPass` builds `WGPURenderPassColorAttachment`s from texture views created just for the call and released immediately after `wgpuCommandEncoderBeginRenderPass` returns; `onEndRenderPass` calls `wgpuRenderPassEncoderEnd` + release
+
+## Memory Placement — Always Committed
+
+`VkmBuffer`/`VkmTexture`/`VkmSampler`/`VkmStagingBuffer` are always committed on this backend,
+unconditionally — Dawn/emdawnwebgpu exposes no placement/suballocation API at all. A
+`VkmMemoryPlacementHint::ForcePooled` hint on `VkmBufferInfo`/`VkmTextureInfo` is accepted
+(so the same info struct works unmodified across all three backends) but silently downgraded
+to committed, with a `VKM_DEBUG_WARN` logged each time it's requested. `VkmSamplerWebGPU` has
+no memory backing at all (mirrors Vulkan's `VkSampler`/Metal's `MTLSamplerState`).
+
+## StagingBuffer Mapping — the One Non-Trivial Backend
+
+`VkmStagingBufferWebGPU` is created with `mappedAtCreation = true`, which gives a mapped
+pointer valid only until the *first* `wgpuBufferUnmap()`. Re-mapping after that requires the
+async `wgpuBufferMapAsync`, bridged with the same Asyncify `emscripten_sleep`-spin pattern
+`VkmDriverWebGPU::initializeInner` uses for adapter/device requests (see `map()` in
+`webgpu_staging_buffer.cpp`). `unmap()` invalidates the previously-returned pointer — callers
+must not cache it across an `unmap()` call. `flush()` is a no-op: writes to a mapped range
+become visible on unmap()/submit, with no explicit flush step in the WebGPU API.
 
 ## GPU Timeline Without a Native Fence
 

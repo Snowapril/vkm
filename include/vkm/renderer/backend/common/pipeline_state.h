@@ -49,17 +49,8 @@ namespace vkm
         Clockwise = 1,
     };
 
-    enum class VkmCompareOp : uint8_t
-    {
-        Never = 0,
-        Less = 1,
-        Equal = 2,
-        LessOrEqual = 3,
-        Greater = 4,
-        NotEqual = 5,
-        GreaterOrEqual = 6,
-        Always = 7,
-    };
+    // VkmCompareOp is defined in renderer_common.h (already included above) --
+    // shared between pipeline depth/stencil state and sampler compare-op.
 
     enum class VkmStencilOp : uint8_t
     {

@@ -45,12 +45,19 @@ namespace vkm
             _dependentSubGraphIds.insert(_dependentSubGraphIds.end(), subGraphIds.begin(), subGraphIds.end());
         }
 
+        // Resources this subgraph reads/writes, populated by descriptor-binding recording
+        // code; VkmRenderGraph::execute() tags each with the submit's timeline value once
+        // committed.
+        void addReferencedResource(VkmResourceHandle handle) { _referencedResources.push_back(handle); }
+        const std::vector<VkmResourceHandle>& getReferencedResources() const { return _referencedResources; }
+
     private:
         VkmRenderSubGraphType _subGraphType; // Type of the subgraph (Graphics, Compute, Transfer)
         uint32_t _subGraphId; // Unique identifier for the subgraph
 
         // List of command buffers associated with this subgraph
         std::vector<uint32_t> _dependentSubGraphIds; // IDs of subgraphs that this subgraph depends on
+        std::vector<VkmResourceHandle> _referencedResources;
     };
 
     class VkmRenderGraphicsSubGraph : public VkmRenderSubGraph

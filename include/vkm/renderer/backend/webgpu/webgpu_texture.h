@@ -17,6 +17,12 @@ namespace vkm
         virtual bool overrideExternalHandle(void* externalHandle) override final;
         virtual void setDebugName(const char* name) override final;
 
+        // WebGPU/Dawn exposes no allocation-introspection API -- best-effort passthrough of
+        // the requested size; 256 is an arbitrary but conventional alignment (matches the
+        // Metal backend's own choice for the same "unknown" reason, kept consistent).
+        uint64_t getAllocatedSize() const override { return computeTextureByteSize(_textureInfo); }
+        uint32_t getMemoryAlignment() const override { return 256; }
+
         inline WGPUTexture getWGPUTexture() const { return _wgpuTexture; }
 
     private:

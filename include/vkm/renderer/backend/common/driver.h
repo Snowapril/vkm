@@ -5,6 +5,7 @@
 #include <vkm/base/common.h>
 #include <vkm/platform/common/window.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
+#include <vkm/renderer/engine.h>
 
 #include <array>
 #include <vector>
@@ -13,14 +14,19 @@
 
 namespace vkm
 {
-    struct VkmEngineLaunchOptions;
     struct VkmPipelineStateDescriptor;
     class VkmTexture;
+    class VkmBuffer;
+    class VkmStagingBuffer;
+    class VkmSampler;
+    class VkmTextureView;
+    class VkmBufferView;
     class VkmSwapChainBase;
     class VkmCommandQueueBase;
     class VkmCommandDispatcher;
     class VkmRenderResourcePool;
     class VkmPipelineStateBase;
+    class VkmDeferredResourceReclaimer;
 
     enum class VkmDriverCapabilityFlags : uint32_t
     {
@@ -83,6 +89,21 @@ namespace vkm
         VkmTexture* newTexture(const VkmTextureInfo& info);
 
         /*
+         * @brief Create buffer with the given buffer info
+         */
+        VkmBuffer* newBuffer(const VkmBufferInfo& info);
+
+        /*
+         * @brief Create staging buffer with the given staging buffer info
+         */
+        VkmStagingBuffer* newStagingBuffer(const VkmStagingBufferInfo& info);
+
+        /*
+         * @brief Create sampler with the given sampler info
+         */
+        VkmSampler* newSampler(const VkmSamplerInfo& info);
+
+        /*
         * @brief Create swapchain with window info
         */
         VkmSwapChainBase* newSwapChain();
@@ -112,13 +133,58 @@ namespace vkm
         */
         inline VkmRenderResourcePool* getRenderResourcePool() const { return _renderResourcePool.get(); }
 
+        /*
+        * @brief get deferred resource reclaimer; VkmRenderGraph drives its per-frame
+        * pollOnce() fallback on WASM through this accessor.
+        */
+        inline VkmDeferredResourceReclaimer* getDeferredReclaimer() const { return _deferredReclaimer.get(); }
+
+        /*
+        * @brief get the launch options this driver was initialized with. If initialize()
+        * was called with a null options pointer (some test fixtures do this), this returns
+        * DEFAULT_ENGINE_LAUNCH_OPTIONS -- but note isDebugNamingEnabled() is still false in
+        * that case regardless (see initialize()'s null-guard), since a null-options caller
+        * has explicitly opted out of the whole launch-configuration story.
+        */
+        inline const VkmEngineLaunchOptions& getLaunchOptions() const { return _launchOptions; }
+
+        /*
+        * @brief true if either enableValidationLayer or enableGpuCapture was requested at
+        * launch. Resources (see newTexture/newBuffer/etc. in driver.cpp) and command queues
+        * (VkmCommandQueueBase::initialize()) only push a native debug label when this is
+        * true AND a debug name was actually supplied.
+        */
+        inline bool isDebugNamingEnabled() const { return _debugNamingEnabled; }
+
     protected:
         VkmCommandQueueBase* newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
+
+        /*
+         * @brief Create a texture view referencing an existing (pooled) texture. Protected
+         * and friended to VkmTexture only -- views must be created via
+         * VkmTexture::createView() so ownership is tracked; nothing else may call this.
+         */
+        VkmTextureView* newTextureView(const VkmTextureViewInfo& info);
+
+        /*
+         * @brief Create a buffer view referencing an existing (pooled) buffer. Protected
+         * and friended to VkmBuffer only -- views must be created via
+         * VkmBuffer::createView() so ownership is tracked; nothing else may call this.
+         */
+        VkmBufferView* newBufferView(const VkmBufferViewInfo& info);
+
+        friend class VkmTexture;
+        friend class VkmBuffer;
 
     protected:
         virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) = 0;
         virtual void destroyInner() = 0;
         virtual VkmTexture* newTextureInner() = 0;
+        virtual VkmBuffer* newBufferInner() = 0;
+        virtual VkmStagingBuffer* newStagingBufferInner() = 0;
+        virtual VkmSampler* newSamplerInner() = 0;
+        virtual VkmTextureView* newTextureViewInner() = 0;
+        virtual VkmBufferView* newBufferViewInner() = 0;
         virtual VkmSwapChainBase* newSwapChainInner() = 0;
         virtual VkmCommandQueueBase* newCommandQueueInner() = 0;
         virtual VkmPipelineStateBase* newPipelineStateInner() = 0;
@@ -129,5 +195,8 @@ namespace vkm
 
     private:
         std::unique_ptr<VkmRenderResourcePool> _renderResourcePool;
+        std::unique_ptr<VkmDeferredResourceReclaimer> _deferredReclaimer;
+        VkmEngineLaunchOptions _launchOptions{};
+        bool _debugNamingEnabled{false};
     };
 }

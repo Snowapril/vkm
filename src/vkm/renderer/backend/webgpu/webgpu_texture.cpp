@@ -48,6 +48,12 @@ namespace vkm
         if ((info._flags & VkmResourceCreateInfo::DeferredCreation) == 0 &&
             (info._flags & VkmResourceCreateInfo::ExternalHandleOwner) == 0)
         {
+            if (info._placementHint == VkmMemoryPlacementHint::ForcePooled)
+            {
+                // Dawn/emdawnwebgpu exposes no placement/suballocation API -- always committed.
+                VKM_DEBUG_WARN("VkmMemoryPlacementHint::ForcePooled is not supported by WebGPU; texture will be committed");
+            }
+
             VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
 
             const WGPUTextureDescriptor textureDesc{

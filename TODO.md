@@ -22,3 +22,6 @@
 - Migrate vkm's own engine shaders (scene_object/tonemap/etc.) from loose GLSL to HLSL+PSO json so `resources/Pipelines/Engine/` and the `vkm_engine_shaders` CMake target actually have something to compile.
 - `VkmPipelineStateManager::getPipelineState(name)`'s Engine-wins-on-collision precedence over User origin is an unrevisited default, not a deliberate policy.
 - `metal_pipeline_state.mm`'s `getMTLPixelFormat` duplicates `metal_texture.mm`'s anonymous-namespace version instead of sharing a common conversion helper.
+- Vulkan `vkCreateDevice` on macOS/MoltenVK logs a validation error (`VUID-VkDeviceCreateInfo-pProperties-04451`) for not enabling `VK_KHR_portability_subset`, which the physical device reports as supported.
+- Metal/WebGPU resources report `getAllocatedSize()`/`getMemoryAlignment()` as a best-effort passthrough of the requested size, not a real backend-reported number (only Vulkan's VMA path gives a real one).
+- `VkmResourceHandle::generation` is unexercised scaffolding: `VkmRenderResourcePool` never recycles resource IDs, so a generation mismatch can never actually occur today.

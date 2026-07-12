@@ -28,20 +28,46 @@ These are linked in `src/vkm/CMakeLists.txt` for `VKM_USE_METAL_API`. Do not add
 // In .h (C++ header)
 @protocol MTLDevice;
 class VkmDriverMetal : public VkmDriverBase {
-    id<MTLDevice> _mtlDevice;  // ARC-managed
+    id<MTLDevice> _mtlDevice{nullptr};  // ARC-managed
 };
 
 // In .mm (implementation)
 #import <Metal/Metal.h>
 ```
 
+**Default-initialize `id<Protocol>` members with `nullptr`, not `nil`, in `.h` files.** `nil` is
+a macro defined by the Objective-C runtime headers, which a pure forward-declaring header does
+not import — `id<MTLBuffer> _mtlBuffer{nil};` fails to compile with "use of undeclared identifier
+'nil'" outside a `.mm` file. `nullptr` is a real C++ keyword and works identically here.
+
+## Memory Allocation
+
+Committed vs. pooled placement mirrors the Vulkan side's thresholds/flags (see
+`vulkan/AGENTS.md`), decided per-resource inside each concrete class's own `initialize()`.
+Committed = today's direct `[device newBufferWithLength:options:]` /
+`newTextureWithDescriptor:]` path. Pooled buffers come from `VkmGpuHeapPoolMetal`, one
+`MTLHeapTypeAutomatic` heap per 64 MiB block, owned by `VkmDriverMetal`. Unlike Vulkan's
+manual `VkmOffsetAllocator`-based pool, **freeing a pooled Metal buffer needs no explicit
+release call** — dropping the ARC-managed `id<MTLBuffer>` reference lets the heap reclaim
+that space internally. `MTLHeapTypePlacement` (manual caller-managed offsets) is deliberately
+not used — `MTLHeapTypeAutomatic` already does the placement work `VkmGpuHeapPoolMetal` would
+otherwise have to hand-roll, and this project has no need for the additional control
+`MTLHeapTypePlacement` offers. `VkmSamplerMetal` has no memory backing at all (mirrors Vulkan's
+`VkSampler`). `VkmStagingBufferMetal` is always committed + `MTLStorageModeShared` (persistently
+host-visible; no explicit map/unmap step exists in the Metal API at all).
+
 ## Class Override Map
 
 ### VkmDriverMetal
-Overrides all 5 `VkmDriverBase` pure virtuals:
+Overrides all 7 `VkmDriverBase` pure virtuals:
 - `initializeInner` — MTLCreateSystemDefaultDevice, store `_mtlDevice`
 - `destroyInner` — release Metal resources
 - `newTextureInner` → `new VkmTextureMetal`
+- `newBufferInner` → `new VkmBufferMetal`
+- `newStagingBufferInner` → `new VkmStagingBufferMetal`
+- `newSamplerInner` → `new VkmSamplerMetal`
+- `newTextureViewInner` → `new VkmTextureViewMetal`
+- `newBufferViewInner` → `new VkmBufferViewMetal` (metadata-only; Metal has no buffer-view object)
 - `newSwapChainInner` → `new VkmSwapChainMetal`
 - `newCommandQueueInner` → `new VkmCommandQueueMetal` (via `VkmCommandBufferPoolMetal`)
 
@@ -95,6 +121,7 @@ Metal encoders are single-use. The pattern in `VkmCommandBufferMetal`:
 
 - [ ] All `.mm` files import `<Metal/Metal.h>` (not in headers)
 - [ ] No Metal types in `.h` files exposed to pure C++ (use `@protocol` forward declarations)
+- [ ] `id<Protocol>` members default-initialized with `nullptr` in headers, never `nil`
 - [ ] Encoder ended (`endEncoding`) before committing command buffer
 - [ ] `TARGET_OS_IPHONE` / `TARGET_OS_OSX` used for platform branching (not `IOS` macro)
 - [ ] Shared event signaled after command buffer commit in `VkmCommandQueueMetal::submit`

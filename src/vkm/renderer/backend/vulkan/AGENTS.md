@@ -22,8 +22,23 @@ volk provides dynamic function loading; direct Vulkan header bypasses it.
 Use VMA for all GPU memory. Never call `vkAllocateMemory` directly:
 ```cpp
 #include <vk_mem_alloc.h>
-// VmaAllocator is owned by VkmDriverVulkan
+// VmaAllocator is owned by VkmDriverVulkan, created in initializeInner(), destroyed
+// last in destroyInner() (after all buffer/texture/pool teardown).
 ```
+Texture/Buffer placement (committed vs. pooled) is decided per-resource inside each
+concrete class's own `initialize()` (see `shouldUseDedicatedTexture`/`shouldUseCommittedBuffer`
+in `vulkan_texture.cpp`/`vulkan_buffer.cpp`): an explicit `VkmMemoryPlacementHint` always
+wins; `Auto` forces committed for large/attachment/read-write/externally-owned resources
+and otherwise pools. Sampler has no memory backing at all (`vkCreateSampler` involves no
+VMA/`VkDeviceMemory`). StagingBuffer is always committed + persistently host-mapped
+(`VMA_ALLOCATION_CREATE_MAPPED_BIT`), never pooled.
+
+Pooled buffers are suballocated from `VkmGpuBufferPoolVulkan` (one shared 64 MiB `VkBuffer`
++ dedicated VMA allocation per block, carved up via the vendored `VkmOffsetAllocator`
+wrapper around OffsetAllocator — see `common/gpu_offset_allocator.h`). `VkmDriverVulkan`
+owns the growable list of pool blocks and creates a new one on exhaustion. Pooled textures
+are placed by VMA's own internal suballocator (plain `vmaCreateImage` without the dedicated
+bit) — no custom allocator involved for textures, since VMA already does this.
 
 ## Device Feature Chain Pattern
 
@@ -40,9 +55,14 @@ Do not query features before calling `vkGetPhysicalDeviceFeatures2`.
 ## Class Override Map
 
 `VkmDriverVulkan` overrides:
-- `initializeInner` — VkInstance, VkPhysicalDevice, VkDevice creation
-- `destroyInner` — cleanup in reverse order
+- `initializeInner` — VkInstance, VkPhysicalDevice, VkDevice creation, VmaAllocator creation
+- `destroyInner` — cleanup in reverse order, VmaAllocator destruction last
 - `newTextureInner` — returns `new VkmTextureVulkan`
+- `newBufferInner` — returns `new VkmBufferVulkan`
+- `newStagingBufferInner` — returns `new VkmStagingBufferVulkan`
+- `newSamplerInner` — returns `new VkmSamplerVulkan`
+- `newTextureViewInner` — returns `new VkmTextureViewVulkan`
+- `newBufferViewInner` — returns `new VkmBufferViewVulkan`
 - `newSwapChainInner` — returns `new VkmSwapChainVulkan`
 - `newCommandQueueInner` → returns `new VkmCommandQueueVulkan(this)` (see `vulkan_command_queue.h`)
 

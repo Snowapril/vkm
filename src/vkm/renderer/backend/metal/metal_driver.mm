@@ -2,6 +2,12 @@
 
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
+#include <vkm/renderer/backend/metal/metal_buffer.h>
+#include <vkm/renderer/backend/metal/metal_staging_buffer.h>
+#include <vkm/renderer/backend/metal/metal_sampler.h>
+#include <vkm/renderer/backend/metal/metal_texture_view.h>
+#include <vkm/renderer/backend/metal/metal_buffer_view.h>
+#include <vkm/renderer/backend/metal/metal_gpu_heap_pool.h>
 #include <vkm/renderer/backend/metal/metal_swapchain.h>
 #include <vkm/renderer/backend/metal/metal_command_queue.h>
 #include <vkm/renderer/backend/metal/metal_pipeline_state.h>
@@ -58,11 +64,64 @@ namespace vkm
         return new VkmTextureMetal(this);
     }
 
+    VkmBuffer* VkmDriverMetal::newBufferInner()
+    {
+        return new VkmBufferMetal(this);
+    }
+
+    VkmStagingBuffer* VkmDriverMetal::newStagingBufferInner()
+    {
+        return new VkmStagingBufferMetal(this);
+    }
+
+    VkmSampler* VkmDriverMetal::newSamplerInner()
+    {
+        return new VkmSamplerMetal(this);
+    }
+
+    VkmTextureView* VkmDriverMetal::newTextureViewInner()
+    {
+        return new VkmTextureViewMetal(this);
+    }
+
+    VkmBufferView* VkmDriverMetal::newBufferViewInner()
+    {
+        return new VkmBufferViewMetal(this);
+    }
+
+    id<MTLBuffer> VkmDriverMetal::allocateFromHeapPool(uint64_t sizeBytes, uint64_t alignment, uint64_t options)
+    {
+        for (auto& pool : _heapPools)
+        {
+            id<MTLBuffer> buffer = pool->tryAllocateBuffer(sizeBytes, alignment, options);
+            if (buffer != nil)
+            {
+                return buffer;
+            }
+        }
+
+        if (sizeBytes > VkmGpuHeapPoolMetal::POOL_BLOCK_SIZE_BYTES)
+        {
+            VKM_DEBUG_ERROR("Buffer allocation exceeds heap pool block size; use a committed allocation instead");
+            return nil;
+        }
+
+        auto newPool = std::make_unique<VkmGpuHeapPoolMetal>(this);
+        if (!newPool->initialize())
+        {
+            return nil;
+        }
+
+        id<MTLBuffer> buffer = newPool->tryAllocateBuffer(sizeBytes, alignment, options);
+        _heapPools.push_back(std::move(newPool));
+        return buffer;
+    }
+
     VkmPipelineStateBase* VkmDriverMetal::newPipelineStateInner()
     {
         return new VkmPipelineStateMetal(this);
     }
-    
+
     VkmSwapChainBase* VkmDriverMetal::newSwapChainInner()
     {
         return new VkmSwapChainMetal(this);

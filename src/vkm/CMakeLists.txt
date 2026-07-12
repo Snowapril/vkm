@@ -30,6 +30,13 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_resource_pool.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_resource.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/texture.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/buffer.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/staging_buffer.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/sampler.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/texture_view.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/buffer_view.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/gpu_offset_allocator.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/deferred_resource_reclaimer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/swapchain.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/engine.h
 )
@@ -52,6 +59,14 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/backend/common/render_resource_pool.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_resource.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/texture.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/buffer.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/staging_buffer.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/sampler.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/texture_view.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/buffer_view.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/gpu_offset_allocator.cpp
+    ${LIBRARY_DIR}/offsetAllocator/offsetAllocator.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/deferred_resource_reclaimer.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/swapchain.cpp
     ${SRC_DIR}/vkm/renderer/engine.cpp
 )
@@ -97,6 +112,12 @@ if (VKM_USE_VULKAN_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_driver.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_texture.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_buffer.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_staging_buffer.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_sampler.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_texture_view.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_buffer_view.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_buffer_pool.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_util.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_command_queue.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.h
@@ -106,6 +127,12 @@ if (VKM_USE_VULKAN_API)
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_driver.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_texture.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_buffer.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_staging_buffer.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_sampler.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_texture_view.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_buffer_view.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_buffer_pool.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_util.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_queue.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.cpp
@@ -129,6 +156,13 @@ if (VKM_USE_METAL_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_swapchain.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_texture.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_pipeline_state.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_util.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_buffer.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_staging_buffer.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_sampler.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_texture_view.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_buffer_view.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_driver.mm
@@ -137,6 +171,13 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_swapchain.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_texture.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_pipeline_state.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_util.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_buffer.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_staging_buffer.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_sampler.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_texture_view.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_buffer_view.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.mm
     )
     if (VKM_ENABLE_IMGUI)
         list(APPEND PUBLIC_HDRS
@@ -154,6 +195,11 @@ if (VKM_USE_WEBGPU_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_driver.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_swapchain.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_texture.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_buffer.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_staging_buffer.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_sampler.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_texture_view.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_buffer_view.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_util.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_command_queue.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_command_buffer.h
@@ -164,6 +210,11 @@ if (VKM_USE_WEBGPU_API)
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_driver.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_swapchain.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_texture.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_buffer.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_staging_buffer.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_sampler.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_texture_view.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_buffer_view.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_util.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_command_queue.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_command_buffer.cpp
@@ -184,6 +235,18 @@ if (VKM_PLATFORM_APPLE)
     set_source_files_properties(${SRCS} PROPERTIES
         COMPILE_FLAGS "-x objective-c++")
 endif()
+
+# offsetAllocator.cpp is vendored third-party code (never modified in-place); its own
+# "conditional expression is constant" pattern trips MSVC's C4127 under /WX. Disable
+# warnings-as-errors for just this one file rather than holding vendored code to our
+# own strict warning bar.
+if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+    set(VKM_VENDORED_NO_WARN_AS_ERROR "/WX-")
+else()
+    set(VKM_VENDORED_NO_WARN_AS_ERROR "-Wno-error")
+endif()
+set_source_files_properties(${LIBRARY_DIR}/offsetAllocator/offsetAllocator.cpp PROPERTIES
+    COMPILE_OPTIONS "${VKM_VENDORED_NO_WARN_AS_ERROR}")
 
 # Build library
 add_library(${target} ${SRCS} ${BACKWARD_ENABLE})

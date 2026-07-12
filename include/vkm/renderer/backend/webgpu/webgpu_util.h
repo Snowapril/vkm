@@ -23,5 +23,11 @@ namespace vkm
     WGPUTextureFormat toWGPUTextureFormat(VkmFormat format);
     VkmFormat fromWGPUTextureFormat(WGPUTextureFormat format);
 
+    WGPUBufferUsage toWGPUBufferUsage(VkmResourceCreateInfo flags);
+    WGPUAddressMode toWGPUAddressMode(VkmAddressMode addressMode);
+    WGPUFilterMode toWGPUFilterMode(VkmFilterMode filterMode);
+    WGPUMipmapFilterMode toWGPUMipmapFilterMode(VkmMipmapMode mipmapMode);
+    WGPUCompareFunction toWGPUCompareFunction(VkmCompareOp compareOp);
+
     void logWGPUUncapturedError(WGPUDevice const* device, WGPUErrorType type, WGPUStringView message, void* userdata1, void* userdata2);
 } // namespace vkm

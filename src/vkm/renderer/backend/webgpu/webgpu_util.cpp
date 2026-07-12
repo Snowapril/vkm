@@ -74,6 +74,68 @@ namespace vkm
         }
     }
 
+    WGPUBufferUsage toWGPUBufferUsage(VkmResourceCreateInfo flags)
+    {
+        uint64_t usage = WGPUBufferUsage_None;
+        if ((flags & VkmResourceCreateInfo::AllowTransferSrc) != 0) usage |= WGPUBufferUsage_CopySrc;
+        if ((flags & VkmResourceCreateInfo::AllowTransferDst) != 0) usage |= WGPUBufferUsage_CopyDst;
+        if ((flags & VkmResourceCreateInfo::AllowShaderRead) != 0) usage |= WGPUBufferUsage_Uniform;
+        if ((flags & VkmResourceCreateInfo::AllowShaderWrite) != 0) usage |= WGPUBufferUsage_Storage;
+        return static_cast<WGPUBufferUsage>(usage);
+    }
+
+    WGPUAddressMode toWGPUAddressMode(VkmAddressMode addressMode)
+    {
+        switch (addressMode)
+        {
+            case VkmAddressMode::Repeat:         return WGPUAddressMode_Repeat;
+            case VkmAddressMode::MirroredRepeat: return WGPUAddressMode_MirrorRepeat;
+            case VkmAddressMode::ClampToEdge:    return WGPUAddressMode_ClampToEdge;
+            case VkmAddressMode::ClampToBorder:
+                // WebGPU has no border-color address mode; ClampToEdge is the closest
+                // supported approximation.
+                VKM_DEBUG_WARN("VkmAddressMode::ClampToBorder is not supported by WebGPU; using ClampToEdge instead");
+                return WGPUAddressMode_ClampToEdge;
+            default: VKM_ASSERT(false, "Invalid address mode"); return WGPUAddressMode_ClampToEdge;
+        }
+    }
+
+    WGPUFilterMode toWGPUFilterMode(VkmFilterMode filterMode)
+    {
+        switch (filterMode)
+        {
+            case VkmFilterMode::Nearest: return WGPUFilterMode_Nearest;
+            case VkmFilterMode::Linear:  return WGPUFilterMode_Linear;
+            default: VKM_ASSERT(false, "Invalid filter mode"); return WGPUFilterMode_Nearest;
+        }
+    }
+
+    WGPUMipmapFilterMode toWGPUMipmapFilterMode(VkmMipmapMode mipmapMode)
+    {
+        switch (mipmapMode)
+        {
+            case VkmMipmapMode::Nearest: return WGPUMipmapFilterMode_Nearest;
+            case VkmMipmapMode::Linear:  return WGPUMipmapFilterMode_Linear;
+            default: VKM_ASSERT(false, "Invalid mipmap mode"); return WGPUMipmapFilterMode_Nearest;
+        }
+    }
+
+    WGPUCompareFunction toWGPUCompareFunction(VkmCompareOp compareOp)
+    {
+        switch (compareOp)
+        {
+            case VkmCompareOp::Never:          return WGPUCompareFunction_Never;
+            case VkmCompareOp::Less:           return WGPUCompareFunction_Less;
+            case VkmCompareOp::Equal:          return WGPUCompareFunction_Equal;
+            case VkmCompareOp::LessOrEqual:    return WGPUCompareFunction_LessEqual;
+            case VkmCompareOp::Greater:        return WGPUCompareFunction_Greater;
+            case VkmCompareOp::NotEqual:       return WGPUCompareFunction_NotEqual;
+            case VkmCompareOp::GreaterOrEqual: return WGPUCompareFunction_GreaterEqual;
+            case VkmCompareOp::Always:         return WGPUCompareFunction_Always;
+            default: VKM_ASSERT(false, "Invalid compare op"); return WGPUCompareFunction_Never;
+        }
+    }
+
     void logWGPUUncapturedError(WGPUDevice const*, WGPUErrorType type, WGPUStringView message, void*, void*)
     {
         if (type == WGPUErrorType_NoError)

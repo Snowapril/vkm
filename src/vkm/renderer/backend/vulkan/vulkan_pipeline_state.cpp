@@ -67,22 +67,6 @@ namespace vkm
             return VK_FRONT_FACE_COUNTER_CLOCKWISE;
         }
 
-        VkCompareOp toVkCompareOp(VkmCompareOp compareOp)
-        {
-            switch (compareOp)
-            {
-                case VkmCompareOp::Never:          return VK_COMPARE_OP_NEVER;
-                case VkmCompareOp::Less:           return VK_COMPARE_OP_LESS;
-                case VkmCompareOp::Equal:          return VK_COMPARE_OP_EQUAL;
-                case VkmCompareOp::LessOrEqual:    return VK_COMPARE_OP_LESS_OR_EQUAL;
-                case VkmCompareOp::Greater:        return VK_COMPARE_OP_GREATER;
-                case VkmCompareOp::NotEqual:       return VK_COMPARE_OP_NOT_EQUAL;
-                case VkmCompareOp::GreaterOrEqual: return VK_COMPARE_OP_GREATER_OR_EQUAL;
-                case VkmCompareOp::Always:         return VK_COMPARE_OP_ALWAYS;
-            }
-            return VK_COMPARE_OP_ALWAYS;
-        }
-
         VkStencilOp toVkStencilOp(VkmStencilOp stencilOp)
         {
             switch (stencilOp)
