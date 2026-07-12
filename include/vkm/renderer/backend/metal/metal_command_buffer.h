@@ -64,9 +64,11 @@ namespace vkm
         virtual void onCopyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size) override final;
         virtual void onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) override final;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) override final;
-        virtual void onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset) override final;
         virtual void onSetDebugName(const char* name) override final;
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
+        virtual void onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset) override final;
         virtual void onEndCommandBuffer() override final;
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
 
         inline id<MTL4CommandBuffer> getMTLCommandBuffer() const { return _mtlCommandBuffer; }
         inline id<MTL4RenderCommandEncoder> getActiveRenderCommandEncoder() const { return _commandEncoder.getActiveRenderCommandEncoder(); }
@@ -76,6 +78,7 @@ namespace vkm
         id<MTL4CommandBuffer> _mtlCommandBuffer;
         VkmCommandEncoderMetal _commandEncoder;
 
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         // onWriteCompletionMarker() queues here instead of opening/closing its own compute
         // encoder immediately; onEndCommandBuffer() flushes all of them as one batched compute
         // pass. See onEndCommandBuffer()'s doc comment in command_buffer.h for why.
@@ -86,5 +89,6 @@ namespace vkm
             uint32_t offset;
         };
         std::vector<PendingMarkerWrite> _pendingMarkerWrites;
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
     };
 }

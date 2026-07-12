@@ -10,15 +10,16 @@
 
 namespace vkm
 {
+    VkmGpuCrashHandler::VkmGpuCrashHandler(VkmDriverBase* driver)
+        : _driver(driver)
+    {
+    }
+
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
     namespace
     {
         constexpr const char* MARKER_BUFFER_DEBUG_NAME = "VkmGpuCrashHandler_MarkerBuffer";
         constexpr const char* ONE_BUFFER_DEBUG_NAME = "VkmGpuCrashHandler_OneBuffer";
-    }
-
-    VkmGpuCrashHandler::VkmGpuCrashHandler(VkmDriverBase* driver)
-        : _driver(driver)
-    {
     }
 
     void VkmGpuCrashHandler::ensureMarkerBuffersCreated()
@@ -143,11 +144,15 @@ namespace vkm
             _breadcrumbs.pop_front();
         }
     }
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
 
     void VkmGpuCrashHandler::reportCrash(const char* backendName, const std::string& errorCode, const std::string& reason)
     {
         VKM_DEBUG_ERROR(fmt::format("[GPU CRASH][{}] error={} reason={}", backendName, errorCode, reason).c_str());
 
+#if !defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
+        VKM_DEBUG_ERROR("[GPU CRASH] Submission breadcrumbs compiled out (build with GPU_BREAD_CRUMBS=ON / VKM_ENABLE_GPU_BREAD_CRUMBS to capture submission history).");
+#else
         std::deque<VkmGpuSubmissionBreadcrumb> snapshot;
         const uint32_t* markers = nullptr;
         {
@@ -204,5 +209,6 @@ namespace vkm
                     subGraphId, breadcrumb.frameIndex, subGraphCompleted ? "COMPLETED" : "NOT COMPLETED").c_str());
             }
         }
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
     }
 }

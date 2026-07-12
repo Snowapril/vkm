@@ -60,6 +60,7 @@ namespace vkm
 
     void VkmRenderGraph::execute(const VkmRenderGraphCommitOptions& options)
     {
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         VkmGpuCrashHandler* gpuCrashHandler = _driver->getGpuCrashHandler();
         const bool gpuCrashDumpEnabled = _driver->isGpuCrashDumpEnabled();
         if (gpuCrashDumpEnabled)
@@ -68,6 +69,7 @@ namespace vkm
             // see VkmGpuCrashHandler::clearFrameMarkers() for why this itself needs to block.
             gpuCrashHandler->clearFrameMarkers(_frameIndex);
         }
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
 
         VkmCommandQueueBase* commandQueue = _driver->getCommandQueue(VkmCommandQueueType::Graphics, 0);
         VkmCommandBufferPoolBase* commandBufferPool = commandQueue->getCommandBufferPool();
@@ -85,6 +87,7 @@ namespace vkm
             }
             subGraph->commit(commandBuffer);
 
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
             if (gpuCrashDumpEnabled)
             {
                 const uint32_t subGraphId = subGraph->getSubGraphId();
@@ -94,6 +97,7 @@ namespace vkm
                     commandBuffer->writeCompletionMarker(gpuCrashHandler->getOrCreateMarkerBuffer(), gpuCrashHandler->getOrCreateOneBuffer(), subGraphId, offset);
                 }
             }
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
         }
 
         commandBuffer->writeGpuTimestampEnd();

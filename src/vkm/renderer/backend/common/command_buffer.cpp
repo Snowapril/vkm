@@ -21,9 +21,11 @@ namespace vkm
         _isInRenderPass = false;
         // Reset the current frame buffer descriptor
         _currentFrameBufferDesc = {};
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         // Command buffers are pooled/reused across frames -- discard any subgraph IDs recorded
         // during a previous use before this one starts recording.
         _recordedSubgraphIds.clear();
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
 
         VkmGpuEventTimelineBase* gpuEventTimeline = _commandQueue->getGpuEventTimeline();
         _gpuEventTimelineObject = gpuEventTimeline->allocateGpuEventTimelineObject();
@@ -31,7 +33,9 @@ namespace vkm
     
     void VkmCommandBufferBase::endCommandBuffer()
     {
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         onEndCommandBuffer();
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
         _isRecording = false;
         _isInRenderPass = false;
     }
@@ -110,11 +114,13 @@ namespace vkm
         onSetPushConstants(data, size, offset);
     }
 
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
     void VkmCommandBufferBase::writeCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t subGraphId, uint32_t offset)
     {
         _recordedSubgraphIds.push_back(subGraphId);
         onWriteCompletionMarker(markerBuffer, oneBuffer, offset);
     }
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
 
     void VkmCommandBufferBase::setDebugName(const char* name)
     {

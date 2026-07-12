@@ -122,8 +122,10 @@ namespace vkm
     {
         _mtlCommandBuffer = (__bridge id<MTL4CommandBuffer>)handle;
         _commandEncoder.setMTLCommandBuffer(_mtlCommandBuffer);
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         // Command buffers are pooled/reused -- discard any writes queued during a previous use.
         _pendingMarkerWrites.clear();
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
     }
 
     void VkmCommandBufferMetal::onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc)
@@ -175,16 +177,17 @@ namespace vkm
         VKM_DEBUG_ERROR("VkmCommandBufferMetal::onSetPushConstants is not implemented");
     }
 
+    void VkmCommandBufferMetal::onSetDebugName(const char* name)
+    {
+        _mtlCommandBuffer.label = [NSString stringWithUTF8String:name];
+    }
+
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
     void VkmCommandBufferMetal::onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset)
     {
         // Queued, not recorded immediately -- see onEndCommandBuffer() and its doc comment in
         // command_buffer.h for why opening/closing a compute encoder per call is avoided here.
         _pendingMarkerWrites.push_back(PendingMarkerWrite{markerBuffer, oneBuffer, offset});
-    }
-
-    void VkmCommandBufferMetal::onSetDebugName(const char* name)
-    {
-        _mtlCommandBuffer.label = [NSString stringWithUTF8String:name];
     }
 
     void VkmCommandBufferMetal::onEndCommandBuffer()
@@ -215,4 +218,5 @@ namespace vkm
 
         _pendingMarkerWrites.clear();
     }
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
 }

@@ -124,7 +124,9 @@ namespace vkm
         VkmGpuEventTimelineObject timelineObject = _gpuEventTimeline->allocateGpuEventTimelineObject();
         VkmGpuEventTimelineWebGPU* timeline = static_cast<VkmGpuEventTimelineWebGPU*>(_gpuEventTimeline.get());
 
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         _driver->getGpuCrashHandler()->recordSubmission(this, submitInfos, timelineObject);
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
 
         std::vector<WGPUCommandBuffer> wgpuCommandBuffers;
         wgpuCommandBuffers.reserve(submitInfos.commandBufferCount);

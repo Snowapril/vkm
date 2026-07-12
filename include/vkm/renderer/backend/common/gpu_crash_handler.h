@@ -21,6 +21,7 @@ namespace vkm
     struct CommandSubmitInfo;
     struct VkmGpuEventTimelineObject;
 
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
     // Fixed cap on subgraphs tracked per frame for completion-marker purposes; subgraph count
     // (VkmRenderGraph::_currentSubGraphId) is otherwise unbounded. Subgraphs at or beyond this
     // index are skipped for marker-writing (a logged warning, not an assert/resize).
@@ -41,6 +42,7 @@ namespace vkm
         uint32_t frameIndex = 0;
         std::vector<uint32_t> subGraphIds; // subgraphs recorded (see VkmCommandBufferBase::writeCompletionMarker) into this submission's command buffer(s)
     };
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
 
     /*
     * @brief Backend-agnostic GPU crash/device-lost reporter, owned one-per-driver by
@@ -48,13 +50,16 @@ namespace vkm
     * override, and reportCrash() once it has detected a device-lost/GPU-error condition
     * (Vulkan VK_ERROR_DEVICE_LOST, Metal4 MTL4CommitFeedback.error, WebGPU device-lost callback).
     *
-    * Also owns the per-subgraph GPU completion-marker buffer: a small persistent buffer of
+    * When compiled with VKM_ENABLE_GPU_BREAD_CRUMBS (a CMake GPU_BREAD_CRUMBS option, ON by
+    * default except in Release builds), it additionally owns the breadcrumb ring and the
+    * per-subgraph GPU completion-marker buffer: a small persistent buffer of
     * FRAME_COUNT * MAX_SUBGRAPHS_PER_FRAME uint32_t slots. VkmRenderGraph::execute() writes a
     * literal `1` into a subgraph's slot as the last GPU command of that subgraph (see
     * VkmCommandBufferBase::writeCompletionMarker); reportCrash() reads the buffer back to tell,
     * per subgraph, whether its GPU commands actually finished by crash time (unlike the
     * whole-submission SUSPECT verdict above, which can't distinguish "never started" from
-    * "started but never finished").
+    * "started but never finished"). Without the macro, only detection/logging remains -- a
+    * crash is always reported, just without submission history.
     */
     class VkmGpuCrashHandler
     {
@@ -62,22 +67,24 @@ namespace vkm
         explicit VkmGpuCrashHandler(VkmDriverBase* driver);
 
         /*
+        * @brief Log a GPU crash report: backend name, error code, and reason are always
+        * logged regardless of enableGpuCrashDump or VKM_ENABLE_GPU_BREAD_CRUMBS. With the
+        * macro defined and breadcrumbs recorded, walks them newest-first, classifying each
+        * as COMPLETED (its timeline value was already reached) or SUSPECT (not yet
+        * completed -- may be the faulting submission, or simply still in flight), then --
+        * if the marker buffer is readable -- each of its recorded subgraphs as COMPLETED or
+        * NOT COMPLETED per the marker buffer's contents.
+        */
+        void reportCrash(const char* backendName, const std::string& errorCode, const std::string& reason);
+
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
+        /*
         * @brief Record a submission's queue name, command-buffer debug names, frame index, and
         * recorded subgraph IDs into the bounded breadcrumb ring. No-op unless the driver was
         * launched with enableGpuCrashDump; the ring is capped at MAX_BREADCRUMB_ENTRIES (oldest
         * evicted first).
         */
         void recordSubmission(VkmCommandQueueBase* queue, const CommandSubmitInfo& submitInfo, VkmGpuEventTimelineObject timelineObject);
-
-        /*
-        * @brief Log a GPU crash report: backend name, error code, and reason are always
-        * logged regardless of enableGpuCrashDump. If any breadcrumbs were recorded, walks
-        * them newest-first, classifying each as COMPLETED (its timeline value was already
-        * reached) or SUSPECT (not yet completed -- may be the faulting submission, or simply
-        * still in flight), then -- if the marker buffer is readable -- each of its recorded
-        * subgraphs as COMPLETED or NOT COMPLETED per the marker buffer's contents.
-        */
-        void reportCrash(const char* backendName, const std::string& errorCode, const std::string& reason);
 
         /*
         * @brief Handle to the persistent completion-marker buffer (lazily created on first use).
@@ -106,11 +113,14 @@ namespace vkm
         * before a frame's subgraphs are (re)recorded.
         */
         void clearFrameMarkers(uint32_t frameIndex);
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
 
     private:
+        VkmDriverBase* _driver;
+
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         void ensureMarkerBuffersCreated();
 
-        VkmDriverBase* _driver;
         std::mutex _mutex;
         std::deque<VkmGpuSubmissionBreadcrumb> _breadcrumbs;
 
@@ -118,5 +128,6 @@ namespace vkm
         VkmStagingBuffer* _oneBuffer = nullptr;
 
         static constexpr size_t MAX_BREADCRUMB_ENTRIES = 64;
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
     };
 }

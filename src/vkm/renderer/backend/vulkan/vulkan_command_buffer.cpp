@@ -225,6 +225,7 @@ namespace vkm
         static_cast<VkmDriverVulkan*>(_driver)->getGpuTimer()->writeEndTimestamp(_vkCommandBuffer);
     }
 
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
     void VkmCommandBufferVulkan::onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset)
     {
         VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
@@ -241,6 +242,13 @@ namespace vkm
         vkCmdCopyBuffer(_vkCommandBuffer, vkOneBuffer, vkMarkerBuffer, 1, &region);
     }
 
+    void VkmCommandBufferVulkan::onEndCommandBuffer()
+    {
+        // No-op: onWriteCompletionMarker() already records its vkCmdCopyBuffer immediately,
+        // no batching needed outside a render pass.
+    }
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
+
     void VkmCommandBufferVulkan::onSetDebugName(const char* name)
     {
 #ifdef VKM_DEBUG_NAME_ENABLED
@@ -255,11 +263,5 @@ namespace vkm
 #else
         (void)name;
 #endif
-    }
-
-    void VkmCommandBufferVulkan::onEndCommandBuffer()
-    {
-        // No-op: onWriteCompletionMarker() already records its vkCmdCopyBuffer immediately,
-        // no batching needed outside a render pass.
     }
 } // namespace vkm

@@ -102,7 +102,9 @@ namespace vkm
         renderResourcePoolMetal->commitPendingResidencyChanges();
 
         const VkmGpuEventTimelineObject timelineObject(gpuEventTimelineMetal, lastSubmittedTimelineValue);
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         _driver->getGpuCrashHandler()->recordSubmission(this, submitInfos, timelineObject);
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
 
         // MTL4's per-submission error reporting: register a feedback handler on this commit's
         // options. Metal invokes it on the queue's feedbackQueue -- an internal *serial*

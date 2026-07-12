@@ -112,6 +112,12 @@ namespace vkm
         VKM_DEBUG_ERROR("VkmCommandBufferWebGPU::onSetPushConstants is not implemented");
     }
 
+    void VkmCommandBufferWebGPU::onSetDebugName(const char* name)
+    {
+        wgpuCommandEncoderSetLabel(_encoder, toWGPUStringView(name));
+    }
+
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
     void VkmCommandBufferWebGPU::onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset)
     {
         VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
@@ -121,14 +127,10 @@ namespace vkm
         wgpuCommandEncoderCopyBufferToBuffer(_encoder, wgpuOneBuffer, 0, wgpuMarkerBuffer, offset, sizeof(uint32_t));
     }
 
-    void VkmCommandBufferWebGPU::onSetDebugName(const char* name)
-    {
-        wgpuCommandEncoderSetLabel(_encoder, toWGPUStringView(name));
-    }
-
     void VkmCommandBufferWebGPU::onEndCommandBuffer()
     {
         // No-op: onWriteCompletionMarker() already records its copyBufferToBuffer immediately
         // on _encoder, no batching needed.
     }
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
 } // namespace vkm
