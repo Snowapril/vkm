@@ -21,12 +21,14 @@ namespace vkm
         virtual void writeDirect(uint64_t offset, const void* data, uint64_t size) override final;
         virtual void setDebugName(const char* name) override final;
 
-        uint64_t getAllocatedSize() const override { return _stagingBufferInfo._size; }
-        uint32_t getMemoryAlignment() const override { return 256; }
+        uint64_t getAllocatedSize() const override { return _allocatedSize; }
+        uint32_t getMemoryAlignment() const override { return _memoryAlignment; }
 
         inline id<MTLBuffer> getBuffer() const { return _mtlBuffer; }
 
     private:
         id<MTLBuffer> _mtlBuffer{nullptr};
+        uint64_t _allocatedSize{0};
+        uint32_t _memoryAlignment{256}; // sane default; overwritten with a real value at creation time
     };
 } // namespace vkm

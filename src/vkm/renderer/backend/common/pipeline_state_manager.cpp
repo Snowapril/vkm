@@ -32,9 +32,22 @@ namespace vkm
 
         std::unordered_map<std::string, std::unique_ptr<VkmPipelineStateBase>>& target =
             (origin == VkmPipelineStateOrigin::Engine) ? _enginePipelineStates : _userPipelineStates;
+        const std::unordered_map<std::string, std::unique_ptr<VkmPipelineStateBase>>& other =
+            (origin == VkmPipelineStateOrigin::Engine) ? _userPipelineStates : _enginePipelineStates;
 
         for (const VkmPipelineStateDescriptor& variant : *variants)
         {
+            if (other.find(variant.name) != other.end())
+            {
+                const std::string message = "Pipeline state '" + variant.name + "' already exists under the other origin (Engine/User collision)";
+                if (outError != nullptr)
+                {
+                    *outError = message;
+                }
+                VKM_DEBUG_ERROR(message.c_str());
+                return false;
+            }
+
             VkmPipelineStateBase* pipelineState = _driver->newPipelineState(variant, shaderCacheDir, outError);
             if (pipelineState == nullptr)
             {

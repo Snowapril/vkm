@@ -65,25 +65,29 @@ namespace vkm
         }
 
         VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
+        id<MTLDevice> device = driverMetal->getMTLDevice();
+        MTLSizeAndAlign sizeAndAlign = [device heapBufferSizeAndAlignWithLength:info._size options:MTLResourceStorageModePrivate];
+        _memoryAlignment = (uint32_t)sizeAndAlign.align;
 
         if (!shouldUseCommittedBuffer(info))
         {
             _mtlBuffer = driverMetal->allocateFromHeapPool(info._size, 256, MTLResourceStorageModePrivate);
             if (_mtlBuffer != nil)
             {
+                _allocatedSize = [_mtlBuffer allocatedSize];
                 return true;
             }
             // Fall through to the committed path if pooling failed (e.g. size exceeds a
             // single pool block).
         }
 
-        id<MTLDevice> device = driverMetal->getMTLDevice();
         _mtlBuffer = [device newBufferWithLength:info._size options:MTLResourceStorageModePrivate];
         if (_mtlBuffer == nil)
         {
             VKM_DEBUG_ERROR("Failed to create MTLBuffer");
             return false;
         }
+        _allocatedSize = [_mtlBuffer allocatedSize];
         return true;
     }
 

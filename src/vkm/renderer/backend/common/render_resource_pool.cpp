@@ -38,6 +38,7 @@ namespace vkm
             }
             subPool._resources[(uint8_t)handle.type][handle.id].reset();
             subPool._generations[(uint8_t)handle.type][handle.id]++;
+            subPool._freeIds[(uint8_t)handle.type].push_back(handle.id);
         }
     }
 
@@ -174,12 +175,23 @@ namespace vkm
     {
         // Caller must already hold _mutex.
         VkmDriverResourceSubPool& subPool = _subPools[(uint8_t)poolType];
-        uint32_t next_id = subPool._nextResourceId[(uint8_t)type]++;
-        if (next_id >= subPool._resources[(uint8_t)type].size())
+        std::vector<uint32_t>& freeIds = subPool._freeIds[(uint8_t)type];
+
+        uint32_t next_id;
+        if (!freeIds.empty())
         {
-            subPool._resources[(uint8_t)type].resize(next_id + VkmDriverResourceSubPool::POOL_GRANURARITY);
-            subPool._generations[(uint8_t)type].resize(next_id + VkmDriverResourceSubPool::POOL_GRANURARITY, 0);
-            subPool._memoryTags[(uint8_t)type].resize(next_id + VkmDriverResourceSubPool::POOL_GRANURARITY);
+            next_id = freeIds.back();
+            freeIds.pop_back();
+        }
+        else
+        {
+            next_id = subPool._nextResourceId[(uint8_t)type]++;
+            if (next_id >= subPool._resources[(uint8_t)type].size())
+            {
+                subPool._resources[(uint8_t)type].resize(next_id + VkmDriverResourceSubPool::POOL_GRANURARITY);
+                subPool._generations[(uint8_t)type].resize(next_id + VkmDriverResourceSubPool::POOL_GRANURARITY, 0);
+                subPool._memoryTags[(uint8_t)type].resize(next_id + VkmDriverResourceSubPool::POOL_GRANURARITY);
+            }
         }
         uint32_t generation = subPool._generations[(uint8_t)type][next_id];
         return VkmResourceHandle{ next_id, poolType, type, generation };

@@ -68,12 +68,16 @@ namespace vkm
             descriptor.storageMode = MTLStorageModePrivate;
 
             id<MTLDevice> device = static_cast<VkmDriverMetal*>(_driver)->getMTLDevice();
+            MTLSizeAndAlign sizeAndAlign = [device heapTextureSizeAndAlignWithDescriptor:descriptor];
+            _memoryAlignment = (uint32_t)sizeAndAlign.align;
+
             _mtlTexture = [device newTextureWithDescriptor:descriptor];
             if (_mtlTexture == nil)
             {
                 VKM_DEBUG_ERROR("Failed to create MTLTexture");
                 return false;
             }
+            _allocatedSize = [_mtlTexture allocatedSize];
         }
 
         return true;

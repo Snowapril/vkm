@@ -17,6 +17,7 @@ namespace vkm
         virtual bool overrideExternalHandle(void* externalHandle) override final;
         virtual void setDebugName(const char* name) override final;
 
+        // WebGPU exposes no allocation-introspection API -- best-effort passthrough.
         uint64_t getAllocatedSize() const override { return _bufferInfo._size; }
         uint32_t getMemoryAlignment() const override { return 256; }
 
