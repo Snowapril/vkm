@@ -11,6 +11,7 @@
 #include <vkm/renderer/backend/metal/metal_swapchain.h>
 #include <vkm/renderer/backend/metal/metal_command_queue.h>
 #include <vkm/renderer/backend/metal/metal_pipeline_state.h>
+#include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
 
 #import <Metal/MTLDevice.h>
 
@@ -130,5 +131,10 @@ namespace vkm
     VkmCommandQueueBase* VkmDriverMetal::newCommandQueueInner()
     {
         return new VkmCommandQueueMetal(this);
+    }
+
+    VkmRenderResourcePool* VkmDriverMetal::newRenderResourcePoolInner()
+    {
+        return new VkmRenderResourcePoolMetal(this);
     }
 }

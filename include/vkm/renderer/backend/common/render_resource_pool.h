@@ -25,7 +25,7 @@ namespace vkm
     {
     public:
         VkmRenderResourcePool(VkmDriverBase* driver);
-        ~VkmRenderResourcePool();
+        virtual ~VkmRenderResourcePool();
 
         template <typename ResourceType>
         ResourceType* getResource(VkmResourceHandle handle);
@@ -36,7 +36,8 @@ namespace vkm
         VkmResourceHandle allocateSampler(VkmSampler* sampler, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
         VkmResourceHandle allocateTextureView(VkmTextureView* textureView, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
         VkmResourceHandle allocateBufferView(VkmBufferView* bufferView, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
-        void releaseResource(VkmResourceHandle handle);\
+        virtual void onResourceInitialized(VkmResourceHandle handle) {}
+        virtual void releaseResource(VkmResourceHandle handle);
 
         /*
         * @brief Attach memory bookkeeping to an already-allocated handle. Must be called at

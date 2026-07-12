@@ -3,6 +3,7 @@
 #include <vkm/renderer/backend/metal/metal_command_queue.h>
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
+#include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
 
 #import <Metal/MTL4CommandQueue.h>
 #import <Metal/MTL4CommandBuffer.h>
@@ -111,6 +112,9 @@ namespace vkm
     {
         VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
         _mtlCommandQueue = [driverMetal->getMTLDevice() newMTL4CommandQueue];
+
+        VkmRenderResourcePoolMetal* renderResourcePoolMetal = static_cast<VkmRenderResourcePoolMetal*>(driverMetal->getRenderResourcePool());
+        [_mtlCommandQueue addResidencySet:renderResourcePoolMetal->getResidencySet(VkmResourcePoolType::Default)];
 
         _commandBufferPool.reset(new VkmCommandBufferPoolMetal(_driver, this));
         _gpuEventTimeline.reset(new VkmGpuEventTimelineMetal(_driver));

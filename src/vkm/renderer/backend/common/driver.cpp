@@ -25,7 +25,7 @@ namespace vkm
 
     VkmInitResult VkmDriverBase::initialize(const VkmEngineLaunchOptions* options)
     {
-        _renderResourcePool = std::make_unique<VkmRenderResourcePool>(this);
+        _renderResourcePool.reset(newRenderResourcePoolInner());
         _deferredReclaimer = std::make_unique<VkmDeferredResourceReclaimer>(this);
 
         if (options != nullptr)
@@ -99,6 +99,7 @@ namespace vkm
         tag.name = info._debugName != nullptr ? info._debugName : "";
         tag.type = texture->getResourceType();
         _renderResourcePool->tagResource(handle, tag);
+        _renderResourcePool->onResourceInitialized(handle);
 
         if (_debugNamingEnabled && info._debugName != nullptr)
         {
@@ -129,6 +130,7 @@ namespace vkm
         tag.name = info._debugName != nullptr ? info._debugName : "";
         tag.type = buffer->getResourceType();
         _renderResourcePool->tagResource(handle, tag);
+        _renderResourcePool->onResourceInitialized(handle);
 
         if (_debugNamingEnabled && info._debugName != nullptr)
         {
@@ -159,6 +161,7 @@ namespace vkm
         tag.name = info._debugName != nullptr ? info._debugName : "";
         tag.type = stagingBuffer->getResourceType();
         _renderResourcePool->tagResource(handle, tag);
+        _renderResourcePool->onResourceInitialized(handle);
 
         if (_debugNamingEnabled && info._debugName != nullptr)
         {
@@ -189,6 +192,7 @@ namespace vkm
         tag.name = info._debugName != nullptr ? info._debugName : "";
         tag.type = sampler->getResourceType();
         _renderResourcePool->tagResource(handle, tag);
+        _renderResourcePool->onResourceInitialized(handle);
 
         if (_debugNamingEnabled && info._debugName != nullptr)
         {
@@ -219,6 +223,7 @@ namespace vkm
         tag.name = info._debugName != nullptr ? info._debugName : "";
         tag.type = textureView->getResourceType();
         _renderResourcePool->tagResource(handle, tag);
+        _renderResourcePool->onResourceInitialized(handle);
 
         if (_debugNamingEnabled && info._debugName != nullptr)
         {
@@ -249,6 +254,7 @@ namespace vkm
         tag.name = info._debugName != nullptr ? info._debugName : "";
         tag.type = bufferView->getResourceType();
         _renderResourcePool->tagResource(handle, tag);
+        _renderResourcePool->onResourceInitialized(handle);
 
         if (_debugNamingEnabled && info._debugName != nullptr)
         {

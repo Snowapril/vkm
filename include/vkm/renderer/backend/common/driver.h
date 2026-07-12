@@ -188,6 +188,7 @@ namespace vkm
         virtual VkmSwapChainBase* newSwapChainInner() = 0;
         virtual VkmCommandQueueBase* newCommandQueueInner() = 0;
         virtual VkmPipelineStateBase* newPipelineStateInner() = 0;
+        virtual VkmRenderResourcePool* newRenderResourcePoolInner() = 0;
 
     protected:
         std::array<std::vector<VkmCommandQueueBase*>, (uint8_t)VkmCommandQueueType::Count> _commandQueues;
