@@ -37,7 +37,10 @@ std::optional<vkm::TaggedAllocationSummary> findEntry(const std::vector<vkm::Tag
 TEST_CASE("MemoryTracker - VKM_NEW_TAGGED records and clears a manual tag") {
     constexpr const char* kLabel = "MemoryTrackerUnitTest_TaggedLifecycle";
 
-    Probe* probe = VKM_NEW_TAGGED(Probe, kLabel, 42);
+    // VKM_NEW_TAGGED now enforces at compile time that its label is a string literal, so the
+    // literal is passed directly here rather than through the `kLabel` pointer variable;
+    // `kLabel` is kept for the findEntry() comparisons below.
+    Probe* probe = VKM_NEW_TAGGED(Probe, "MemoryTrackerUnitTest_TaggedLifecycle", 42);
     REQUIRE(probe != nullptr);
     CHECK(probe->value == 42);
 

@@ -31,6 +31,63 @@ namespace
                   "AllocationHeader must preserve max_align_t alignment for the user pointer that follows it");
 
     constexpr const char* kUntaggedLabel = "Untagged";
+
+    // Raw (untracked) allocation primitives, isolating the mimalloc-vs-WASM branching to a
+    // single place. Used both by RawMimallocResource (the scratch allocator backing
+    // MemoryTracker's own bookkeeping map) and by allocate()/deallocate() (the tracked
+    // global operator new/delete path).
+    void* rawAlloc(size_t bytes)
+    {
+#if !defined(VKM_PLATFORM_WASM)
+        return mi_malloc(bytes);
+#else
+        return std::malloc(bytes);
+#endif
+    }
+
+    void rawFree(void* ptr)
+    {
+#if !defined(VKM_PLATFORM_WASM)
+        mi_free(ptr);
+#else
+        std::free(ptr);
+#endif
+    }
+
+    // Number of bytes usable by the caller beyond `headerSize` for a block at `raw` whose
+    // caller-requested size (excluding the header) is `requestedSize`. On non-WASM platforms
+    // this reflects mimalloc's actual usable size for the whole block, which is always >=
+    // requested since mimalloc rounds up to size-class boundaries. WASM has no mimalloc
+    // equivalent query, so this returns `requestedSize` unchanged - usableBytes ==
+    // requestedBytes is the intentional semantics on WASM documented on
+    // TaggedAllocationSummary::usableBytes in memory.h.
+    size_t usableSize(void* raw, size_t headerSize, size_t requestedSize)
+    {
+#if !defined(VKM_PLATFORM_WASM)
+        (void)requestedSize;
+        return mi_usable_size(raw) - headerSize;
+#else
+        (void)raw;
+        (void)headerSize;
+        return requestedSize;
+#endif
+    }
+
+    // Queries mimalloc's own process-wide statistics; returns a zeroed MemoryStats on WASM,
+    // where mimalloc is not used (see MemoryStats's doc comment in memory.h). Passes nullptr
+    // for mi_process_info's elapsed/user/system-time outputs since MemoryStats doesn't
+    // surface them.
+    vkm::MemoryStats rawProcessStats()
+    {
+        vkm::MemoryStats stats{};
+#if !defined(VKM_PLATFORM_WASM)
+        mi_process_info(nullptr, nullptr, nullptr,
+                         &stats.currentRssBytes, &stats.peakRssBytes,
+                         &stats.currentCommittedBytes, &stats.peakCommittedBytes,
+                         &stats.pageFaults);
+#endif
+        return stats;
+    }
 }
 
 namespace vkm
@@ -56,20 +113,12 @@ namespace vkm
 
     void* MemoryTracker::RawMimallocResource::do_allocate(size_t bytes, size_t /*alignment*/)
     {
-#if !defined(VKM_PLATFORM_WASM)
-        return mi_malloc(bytes);
-#else
-        return std::malloc(bytes);
-#endif
+        return rawAlloc(bytes);
     }
 
     void MemoryTracker::RawMimallocResource::do_deallocate(void* ptr, size_t /*bytes*/, size_t /*alignment*/)
     {
-#if !defined(VKM_PLATFORM_WASM)
-        mi_free(ptr);
-#else
-        std::free(ptr);
-#endif
+        rawFree(ptr);
     }
 
     bool MemoryTracker::RawMimallocResource::do_is_equal(const std::pmr::memory_resource& other) const noexcept
@@ -81,8 +130,6 @@ namespace vkm
         : _tagStats(&_rawResource)
     {
     }
-
-    MemoryTracker::~MemoryTracker() = default;
 
     MemoryTracker& MemoryTracker::singleton()
     {
@@ -112,13 +159,12 @@ namespace vkm
         const TagKey key = label != nullptr ? TagKey{ nullptr, 0, label } : TagKey{ file, line, nullptr };
         const size_t totalSize = sizeof(AllocationHeader) + size;
 
-#if !defined(VKM_PLATFORM_WASM)
-        void* raw = mi_malloc(totalSize);
-        const size_t usable = mi_usable_size(raw) - sizeof(AllocationHeader);
-#else
-        void* raw = std::malloc(totalSize);
-        const size_t usable = size;
-#endif
+        void* raw = rawAlloc(totalSize);
+        if (raw == nullptr)
+        {
+            throw std::bad_alloc();
+        }
+        const size_t usable = usableSize(raw, sizeof(AllocationHeader), size);
 
         auto* header = static_cast<AllocationHeader*>(raw);
         header->file = key.file;
@@ -161,28 +207,12 @@ namespace vkm
             }
         }
 
-#if !defined(VKM_PLATFORM_WASM)
-        mi_free(header);
-#else
-        std::free(header);
-#endif
+        rawFree(header);
     }
 
     MemoryStats MemoryTracker::getMimallocStats() const
     {
-        MemoryStats stats{};
-#if !defined(VKM_PLATFORM_WASM)
-        size_t elapsedMsecs = 0, userMsecs = 0, systemMsecs = 0;
-        size_t currentRss = 0, peakRss = 0, currentCommit = 0, peakCommit = 0, pageFaults = 0;
-        mi_process_info(&elapsedMsecs, &userMsecs, &systemMsecs,
-                         &currentRss, &peakRss, &currentCommit, &peakCommit, &pageFaults);
-        stats.currentCommittedBytes = currentCommit;
-        stats.peakCommittedBytes = peakCommit;
-        stats.currentRssBytes = currentRss;
-        stats.peakRssBytes = peakRss;
-        stats.pageFaults = pageFaults;
-#endif
-        return stats;
+        return rawProcessStats();
     }
 
     std::vector<TaggedAllocationSummary> MemoryTracker::getTaggedAllocations() const
@@ -206,6 +236,19 @@ namespace vkm
     }
 }
 
+namespace
+{
+    void* trackedGlobalNew(std::size_t size)
+    {
+        return vkm::MemoryTracker::singleton().allocate(size, nullptr, 0, kUntaggedLabel);
+    }
+
+    void trackedGlobalDelete(void* ptr) noexcept
+    {
+        vkm::MemoryTracker::singleton().deallocate(ptr);
+    }
+}
+
 // Global operator new/delete overrides: every allocation in the process routes through
 // vkm::MemoryTracker (and therefore mimalloc), tagged "Untagged" unless it went through
 // VKM_NEW/VKM_NEW_TAGGED. operator new(std::nothrow_t) is intentionally not overridden -
@@ -214,30 +257,30 @@ namespace vkm
 // below with no functional loss, and nothing in this codebase uses new(std::nothrow).
 void* operator new(std::size_t size)
 {
-    return vkm::MemoryTracker::singleton().allocate(size, nullptr, 0, kUntaggedLabel);
+    return trackedGlobalNew(size);
 }
 
 void* operator new[](std::size_t size)
 {
-    return vkm::MemoryTracker::singleton().allocate(size, nullptr, 0, kUntaggedLabel);
+    return trackedGlobalNew(size);
 }
 
 void operator delete(void* ptr) noexcept
 {
-    vkm::MemoryTracker::singleton().deallocate(ptr);
+    trackedGlobalDelete(ptr);
 }
 
 void operator delete[](void* ptr) noexcept
 {
-    vkm::MemoryTracker::singleton().deallocate(ptr);
+    trackedGlobalDelete(ptr);
 }
 
 void operator delete(void* ptr, std::size_t) noexcept
 {
-    vkm::MemoryTracker::singleton().deallocate(ptr);
+    trackedGlobalDelete(ptr);
 }
 
 void operator delete[](void* ptr, std::size_t) noexcept
 {
-    vkm::MemoryTracker::singleton().deallocate(ptr);
+    trackedGlobalDelete(ptr);
 }
