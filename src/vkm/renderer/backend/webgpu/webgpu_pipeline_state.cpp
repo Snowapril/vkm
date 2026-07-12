@@ -106,22 +106,6 @@ namespace vkm
             }
         }
 
-        WGPUCompareFunction toWGPUCompareFunction(VkmCompareOp op)
-        {
-            switch (op)
-            {
-                case VkmCompareOp::Never: return WGPUCompareFunction_Never;
-                case VkmCompareOp::Less: return WGPUCompareFunction_Less;
-                case VkmCompareOp::Equal: return WGPUCompareFunction_Equal;
-                case VkmCompareOp::LessOrEqual: return WGPUCompareFunction_LessEqual;
-                case VkmCompareOp::Greater: return WGPUCompareFunction_Greater;
-                case VkmCompareOp::NotEqual: return WGPUCompareFunction_NotEqual;
-                case VkmCompareOp::GreaterOrEqual: return WGPUCompareFunction_GreaterEqual;
-                case VkmCompareOp::Always: return WGPUCompareFunction_Always;
-                default: VKM_ASSERT(false, "Invalid compare op"); return WGPUCompareFunction_Always;
-            }
-        }
-
         WGPUStencilOperation toWGPUStencilOp(VkmStencilOp op)
         {
             switch (op)
