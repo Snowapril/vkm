@@ -20,10 +20,6 @@ std::string readFileToString(const std::string& filepath)
 } // namespace
 
 TEST_CASE("VkmPipelineStateDescriptor - parses full JSON with all fields set") {
-#if defined(VKM_PLATFORM_WASM)
-    MESSAGE("Skipping: RESOURCES_DIR fixtures are not mounted in the Emscripten test binary's virtual filesystem.");
-    return;
-#endif
     const std::string filepath = std::string(RESOURCES_DIR) + "tests/pso_full.json";
     std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromFile(filepath);
     REQUIRE(result.has_value());
@@ -93,10 +89,6 @@ TEST_CASE("VkmPipelineStateDescriptor - parses full JSON with all fields set") {
 }
 
 TEST_CASE("VkmPipelineStateDescriptor - missing fields fall back to documented defaults") {
-#if defined(VKM_PLATFORM_WASM)
-    MESSAGE("Skipping: RESOURCES_DIR fixtures are not mounted in the Emscripten test binary's virtual filesystem.");
-    return;
-#endif
     const std::string filepath = std::string(RESOURCES_DIR) + "tests/pso_minimal.json";
     std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromFile(filepath);
     REQUIRE(result.has_value());
@@ -120,10 +112,6 @@ TEST_CASE("VkmPipelineStateDescriptor - missing fields fall back to documented d
 }
 
 TEST_CASE("VkmPipelineStateDescriptor - unknown enum string fails to parse") {
-#if defined(VKM_PLATFORM_WASM)
-    MESSAGE("Skipping: RESOURCES_DIR fixtures are not mounted in the Emscripten test binary's virtual filesystem.");
-    return;
-#endif
     const std::string filepath = std::string(RESOURCES_DIR) + "tests/pso_bad_enum.json";
     std::string outError;
     std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromFile(filepath, &outError);
@@ -132,10 +120,6 @@ TEST_CASE("VkmPipelineStateDescriptor - unknown enum string fails to parse") {
 }
 
 TEST_CASE("VkmPipelineStateDescriptor - missing required vertex shader fails to parse") {
-#if defined(VKM_PLATFORM_WASM)
-    MESSAGE("Skipping: RESOURCES_DIR fixtures are not mounted in the Emscripten test binary's virtual filesystem.");
-    return;
-#endif
     const std::string filepath = std::string(RESOURCES_DIR) + "tests/pso_missing_vertex.json";
     std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromFile(filepath);
     CHECK_FALSE(result.has_value());
@@ -147,10 +131,6 @@ TEST_CASE("VkmPipelineStateDescriptor - malformed JSON text fails to parse") {
 }
 
 TEST_CASE("VkmPipelineStateDescriptor - raw-string input mode matches file input mode") {
-#if defined(VKM_PLATFORM_WASM)
-    MESSAGE("Skipping: RESOURCES_DIR fixtures are not mounted in the Emscripten test binary's virtual filesystem.");
-    return;
-#endif
     const std::string filepath = std::string(RESOURCES_DIR) + "tests/pso_full.json";
     const std::string jsonText = readFileToString(filepath);
 
@@ -267,10 +247,6 @@ TEST_CASE("VkmPipelineStateDescriptor - vertex input layout with only per_vertex
 }
 
 TEST_CASE("VkmPipelineStateDescriptor - invalid vertex input layout type token fails to parse") {
-#if defined(VKM_PLATFORM_WASM)
-    MESSAGE("Skipping: RESOURCES_DIR fixtures are not mounted in the Emscripten test binary's virtual filesystem.");
-    return;
-#endif
     const std::string filepath = std::string(RESOURCES_DIR) + "tests/pso_bad_input_layout.json";
     std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromFile(filepath);
     CHECK_FALSE(result.has_value());
@@ -319,10 +295,6 @@ const vkm::VkmPipelineStateDescriptor* findVariantByName(
 } // namespace
 
 TEST_CASE("VkmPipelineStateDescriptor - parses 'options' into raw unresolved overlays") {
-#if defined(VKM_PLATFORM_WASM)
-    MESSAGE("Skipping: RESOURCES_DIR fixtures are not mounted in the Emscripten test binary's virtual filesystem.");
-    return;
-#endif
     const std::string filepath = std::string(RESOURCES_DIR) + "tests/pso_with_options.json";
     std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromFile(filepath);
     REQUIRE(result.has_value());
@@ -350,10 +322,6 @@ TEST_CASE("VkmPipelineStateDescriptor - parses 'options' into raw unresolved ove
 }
 
 TEST_CASE("VkmPipelineStateDescriptor - existing fixtures parse with empty 'options'") {
-#if defined(VKM_PLATFORM_WASM)
-    MESSAGE("Skipping: RESOURCES_DIR fixtures are not mounted in the Emscripten test binary's virtual filesystem.");
-    return;
-#endif
     for (const char* name : { "tests/pso_full.json", "tests/pso_minimal.json" })
     {
         const std::string filepath = std::string(RESOURCES_DIR) + name;
@@ -385,10 +353,6 @@ TEST_CASE("expandPipelineStateOptions - no options returns a single unchanged de
 }
 
 TEST_CASE("expandPipelineStateOptions - two options resolve with merged state and definitions") {
-#if defined(VKM_PLATFORM_WASM)
-    MESSAGE("Skipping: RESOURCES_DIR fixtures are not mounted in the Emscripten test binary's virtual filesystem.");
-    return;
-#endif
     const std::string filepath = std::string(RESOURCES_DIR) + "tests/pso_with_options.json";
     std::optional<vkm::VkmPipelineStateDescriptor> parsed = vkm::parsePipelineStateFromFile(filepath);
     REQUIRE(parsed.has_value());
@@ -433,10 +397,6 @@ TEST_CASE("expandPipelineStateOptions - two options resolve with merged state an
 }
 
 TEST_CASE("expandPipelineStateOptions - fails on empty name with non-empty options") {
-#if defined(VKM_PLATFORM_WASM)
-    MESSAGE("Skipping: RESOURCES_DIR fixtures are not mounted in the Emscripten test binary's virtual filesystem.");
-    return;
-#endif
     const std::string filepath = std::string(RESOURCES_DIR) + "tests/pso_options_empty_name.json";
     std::optional<vkm::VkmPipelineStateDescriptor> parsed = vkm::parsePipelineStateFromFile(filepath);
     REQUIRE(parsed.has_value());

@@ -67,9 +67,18 @@ target_compile_options(${target}
 )
 
 # Compile definitions
+if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
+    # resources/ is preloaded into the Emscripten test binary's MEMFS virtual filesystem
+    # (see the --preload-file link option below) under /resources/, not the real on-disk
+    # RESOURCES_DIR path, which doesn't exist inside the WASM sandbox.
+    set(TEST_RESOURCES_DIR "/resources/")
+else()
+    set(TEST_RESOURCES_DIR "${RESOURCES_DIR}")
+endif()
+
 target_compile_definitions(${target}
     PRIVATE
-    RESOURCES_DIR="${RESOURCES_DIR}"
+    RESOURCES_DIR="${TEST_RESOURCES_DIR}"
     ${DEFAULT_COMPILE_DEFINITIONS}
 )
 
@@ -98,5 +107,13 @@ if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
     target_link_options(${target} PRIVATE
         "SHELL:-s ALLOW_MEMORY_GROWTH=0"
         "SHELL:-s INITIAL_MEMORY=134217728"
+    )
+
+    # Mounts resources/ into the test binary's MEMFS virtual filesystem at /resources/ so
+    # fixture-reading tests (e.g. TestPsoConfig.cpp, TestPipelineStateManager.cpp) can find
+    # their JSON files under RESOURCES_DIR (see TEST_RESOURCES_DIR above). resources/ is
+    # small (tens of KB), so preloading the whole directory is simpler than curating a subset.
+    target_link_options(${target} PRIVATE
+        "SHELL:--preload-file ${ROOT_DIR}/resources@/resources"
     )
 endif()
