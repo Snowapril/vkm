@@ -278,7 +278,7 @@ endif()
 set(SPIRV_CROSS_CLI             OFF CACHE BOOL "" FORCE)
 set(SPIRV_CROSS_ENABLE_TESTS    OFF CACHE BOOL "")
 set(SPIRV_CROSS_ENABLE_HLSL     OFF CACHE BOOL "")
-set(SPIRV_CROSS_ENABLE_MSL       ON CACHE BOOL "")
+set(SPIRV_CROSS_ENABLE_MSL       ON CACHE BOOL "" FORCE)
 set(SPIRV_CROSS_ENABLE_CPP       ON CACHE BOOL "")
 set(SPIRV_CROSS_ENABLE_REFLECT   ON CACHE BOOL "")
 set(SPIRV_CROSS_ENABLE_C_API    OFF CACHE BOOL "")
@@ -338,9 +338,19 @@ if (NOT EMSCRIPTEN)
         ExternalProject_Add(dxc_build
             SOURCE_DIR "${VKM_DXC_SOURCE_DIR}"
             BINARY_DIR "${VKM_DXC_BUILD_DIR}"
+            # DXC's SPIRV-Tools dependency attaches one custom command to two
+            # targets, which Xcode's "new build system" (the only one left as
+            # of Xcode 26) rejects. Pin this nested build to Makefiles so it
+            # still works when the outer project is configured with -G Xcode.
+            CMAKE_GENERATOR "Unix Makefiles"
             CMAKE_ARGS
                 -C "${VKM_DXC_SOURCE_DIR}/cmake/caches/PredefinedParams.cmake"
                 -DCMAKE_BUILD_TYPE=Release
+                # Force clang-format "not found" so DXC's generated-header
+                # verification step is skipped: the Xcode toolchain's
+                # clang-format formats differently than this vendored fork
+                # expects, which otherwise fails the build spuriously.
+                -DCLANG_FORMAT_EXE=CLANG_FORMAT_EXE-NOTFOUND
             BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target dxc
             INSTALL_COMMAND ""
             BUILD_BYPRODUCTS "${VKM_DXC_EXECUTABLE}")
