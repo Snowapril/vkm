@@ -28,6 +28,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_buffer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_queue.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/driver.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/gpu_crash_handler.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_resource_pool.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_resource.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/texture.h
@@ -57,6 +58,7 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/backend/common/command_buffer.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/command_queue.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/driver.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/gpu_crash_handler.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_resource_pool.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_resource.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/texture.cpp

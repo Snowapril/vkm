@@ -30,4 +30,13 @@ namespace vkm
     WGPUCompareFunction toWGPUCompareFunction(VkmCompareOp compareOp);
 
     void logWGPUUncapturedError(WGPUDevice const* device, WGPUErrorType type, WGPUStringView message, void* userdata1, void* userdata2);
+
+    /*
+    * @brief Routes a real GPU crash/error to VkmGpuCrashHandler::reportCrash(). Ignores
+    * WGPUDeviceLostReason_Destroyed -- that reason also fires on the engine's own ordinary
+    * device teardown (VkmDriverWebGPU::destroyInner()), which is not a crash.
+    * userdata1 must be the owning VkmDriverWebGPU*, set when registering
+    * WGPUDeviceDescriptor::deviceLostCallbackInfo.
+    */
+    void onWGPUDeviceLost(WGPUDevice const* device, WGPUDeviceLostReason reason, WGPUStringView message, void* userdata1, void* userdata2);
 } // namespace vkm

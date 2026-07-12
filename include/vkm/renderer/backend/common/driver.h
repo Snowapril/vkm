@@ -27,6 +27,7 @@ namespace vkm
     class VkmRenderResourcePool;
     class VkmPipelineStateBase;
     class VkmDeferredResourceReclaimer;
+    class VkmGpuCrashHandler;
 
     enum class VkmDriverCapabilityFlags : uint32_t
     {
@@ -165,6 +166,20 @@ namespace vkm
         */
         inline bool isDebugNamingEnabled() const { return _debugNamingEnabled; }
 
+        /*
+        * @brief true if --enable-gpu-crash-dump was requested at launch. Gates
+        * VkmGpuCrashHandler::recordSubmission()'s breadcrumb bookkeeping and (on Vulkan)
+        * VK_EXT_device_fault extension enablement. Device-lost/error detection itself stays
+        * always-on regardless of this flag -- see gpu_crash_handler.h.
+        */
+        inline bool isGpuCrashDumpEnabled() const { return _gpuCrashDumpEnabled; }
+
+        /*
+        * @brief get the GPU crash handler shared by every backend's VkmCommandQueueBase::submit()
+        * override and device-lost/error detection path.
+        */
+        inline VkmGpuCrashHandler* getGpuCrashHandler() const { return _gpuCrashHandler.get(); }
+
     protected:
         VkmCommandQueueBase* newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
 
@@ -206,7 +221,9 @@ namespace vkm
     private:
         std::unique_ptr<VkmRenderResourcePool> _renderResourcePool;
         std::unique_ptr<VkmDeferredResourceReclaimer> _deferredReclaimer;
+        std::unique_ptr<VkmGpuCrashHandler> _gpuCrashHandler;
         VkmEngineLaunchOptions _launchOptions{};
         bool _debugNamingEnabled{false};
+        bool _gpuCrashDumpEnabled{false};
     };
 }

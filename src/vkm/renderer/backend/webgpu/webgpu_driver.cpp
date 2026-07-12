@@ -96,10 +96,16 @@ namespace vkm
         }
 
         bool deviceRequestDone = false;
+        const WGPUDeviceLostCallbackInfo deviceLostCallbackInfo{
+            .mode      = WGPUCallbackMode_AllowSpontaneous,
+            .callback  = onWGPUDeviceLost,
+            .userdata1 = this,
+        };
         const WGPUUncapturedErrorCallbackInfo errorCallbackInfo{
             .callback = logWGPUUncapturedError,
         };
         const WGPUDeviceDescriptor deviceDesc{
+            .deviceLostCallbackInfo = deviceLostCallbackInfo,
             .uncapturedErrorCallbackInfo = errorCallbackInfo,
         };
         const WGPURequestDeviceCallbackInfo deviceCallbackInfo{

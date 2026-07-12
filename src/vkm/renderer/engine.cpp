@@ -236,7 +236,9 @@ namespace vkm
             ("enable-validation-layer", "Enable the graphics validation layer",
                 cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableValidationLayer ? "true" : "false"))
             ("enable-gpu-capture", "Enable GPU capture tooling support (e.g. native debug labels for RenderDoc/Xcode)",
-                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableGpuCapture ? "true" : "false"));
+                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableGpuCapture ? "true" : "false"))
+            ("enable-gpu-crash-dump", "Enable GPU crash handler submission-breadcrumb recording",
+                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableGpuCrashDump ? "true" : "false"));
 
         VkmEngineLaunchOptions launchOptions = DEFAULT_ENGINE_LAUNCH_OPTIONS;
         try
@@ -244,6 +246,7 @@ namespace vkm
             auto result = options.parse(argc, argv);
             launchOptions.enableValidationLayer = result["enable-validation-layer"].as<bool>();
             launchOptions.enableGpuCapture = result["enable-gpu-capture"].as<bool>();
+            launchOptions.enableGpuCrashDump = result["enable-gpu-crash-dump"].as<bool>();
         }
         catch (const std::exception& e)
         {

@@ -4,10 +4,12 @@
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
+#include <vkm/renderer/backend/common/gpu_crash_handler.h>
 
 #import <Metal/MTL4CommandQueue.h>
 #import <Metal/MTL4CommandBuffer.h>
 #import <Metal/MTL4CommandAllocator.h>
+#import <Metal/MTL4CommitFeedback.h>
 
 namespace vkm
 {
@@ -99,10 +101,32 @@ namespace vkm
         VkmRenderResourcePoolMetal* renderResourcePoolMetal = static_cast<VkmRenderResourcePoolMetal*>(_driver->getRenderResourcePool());
         renderResourcePoolMetal->commitPendingResidencyChanges();
 
-        [_mtlCommandQueue commit:mtlCommandBuffers count:count];
+        const VkmGpuEventTimelineObject timelineObject(gpuEventTimelineMetal, lastSubmittedTimelineValue);
+        _driver->getGpuCrashHandler()->recordSubmission(this, submitInfos, timelineObject);
+
+        // MTL4's per-submission error reporting: register a feedback handler on this commit's
+        // options. Metal invokes it asynchronously (on the queue's feedbackQueue, an internal
+        // dispatch queue by default) once the committed work completes; commitFeedback.error is
+        // non-nil when the GPU encountered an issue running it (see MTL4CommandQueueError,
+        // which includes MTL4CommandQueueErrorDeviceRemoved). The captured driver pointer must
+        // outlive the async callback -- true under normal shutdown, where GPU work is drained
+        // before the driver is torn down.
+        VkmDriverBase* driver = _driver;
+        MTL4CommitOptions* commitOptions = [[MTL4CommitOptions alloc] init];
+        [commitOptions addFeedbackHandler:^(id<MTL4CommitFeedback> commitFeedback) {
+            NSError* error = commitFeedback.error;
+            if (error != nil)
+            {
+                const std::string errorCode = fmt::format("{}({})", error.domain.UTF8String, static_cast<long>(error.code));
+                const std::string reason = error.localizedDescription != nil ? error.localizedDescription.UTF8String : "";
+                driver->getGpuCrashHandler()->reportCrash("Metal", errorCode, reason);
+            }
+        }];
+
+        [_mtlCommandQueue commit:mtlCommandBuffers count:count options:commitOptions];
         [_mtlCommandQueue signalEvent:mtlSharedEvent value:lastSubmittedTimelineValue];
 
-        return VkmGpuEventTimelineObject(gpuEventTimelineMetal, lastSubmittedTimelineValue);
+        return timelineObject;
     }
 
     void VkmCommandQueueMetal::setDebugName(const char* name)

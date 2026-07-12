@@ -265,6 +265,11 @@ namespace vkm
 
     VkmInitResult VkmDriverVulkan::initializeInner(const VkmEngineLaunchOptions* options)
     {
+        // Registers this driver so vulkan_util.cpp's vkCheckResult() can route a detected
+        // VK_ERROR_DEVICE_LOST (from this call or any later VkResult-returning call in this
+        // backend) to the shared VkmGpuCrashHandler.
+        setActiveVulkanDriver(this);
+
         if (volkInitialize() != VK_SUCCESS)
         {
             return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "Failed to initialize the Vulkan loader (no Vulkan runtime installed on this system)."};
@@ -446,6 +451,16 @@ namespace vkm
             pNextChainPushFront(&_features11, &_swapchainFeatures);
             deviceExtensions.push_back(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
         }
+        // Opportunistic: only requested when the crash handler's breadcrumb recording was
+        // opted into, and only enabled if the GPU/driver actually supports it (not every
+        // vendor implements VK_EXT_device_fault). See isDeviceFaultExtensionEnabled().
+        const bool requestDeviceFaultExtension = options != nullptr && options->enableGpuCrashDump
+            && isExtensionSupported(VK_EXT_DEVICE_FAULT_EXTENSION_NAME, availableDeviceExtensions);
+        if(requestDeviceFaultExtension)
+        {
+            pNextChainPushFront(&_features11, &_deviceFaultFeatures);
+            deviceExtensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+        }
         // Required by the Vulkan spec (VUID-VkDeviceCreateInfo-pProperties-04451) whenever the
         // physical device exposes it, e.g. MoltenVK on macOS.
         if(isExtensionSupported("VK_KHR_portability_subset", availableDeviceExtensions))
@@ -457,6 +472,11 @@ namespace vkm
         // By requesting, it turns on all feature that it is supported, but the user could request specific features instead
         _deviceFeatures.pNext = &_features11;
         vkGetPhysicalDeviceFeatures2(_physicalDevice, &_deviceFeatures);
+
+        // The extension name may be present while the specific feature bit isn't (some
+        // drivers expose VK_EXT_device_fault without the base deviceFault feature) --
+        // vkGetDeviceFaultInfoEXT is only valid to call once this feature is actually enabled.
+        _deviceFaultExtensionEnabled = requestDeviceFaultExtension && _deviceFaultFeatures.deviceFault == VK_TRUE;
 
         // maintenance5/6 are requested and activated opportunistically above when the driver
         // supports them, but are not required: MoltenVK does not expose either extension yet.
@@ -590,6 +610,8 @@ namespace vkm
 
     void VkmDriverVulkan::destroyInner()
     {
+        setActiveVulkanDriver(nullptr);
+
         if (_gpuTimer)
         {
             _gpuTimer->destroy();

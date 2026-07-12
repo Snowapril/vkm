@@ -8,7 +8,17 @@
 
 namespace vkm
 {
+class VkmDriverVulkan;
+
 bool vkCheckResult(int result, const char* msg);
+
+/*
+* @brief Registers the currently-initializing Vulkan driver so vkCheckResult() can route a
+* detected VK_ERROR_DEVICE_LOST to its VkmGpuCrashHandler. Exactly one Vulkan driver is ever
+* active in this engine; VkmDriverVulkan::initializeInner()/destroyInner() call this with
+* itself/nullptr respectively.
+*/
+void setActiveVulkanDriver(VkmDriverVulkan* driver);
 
 VkFormat toVkFormat(VkmFormat format);
 VkmFormat fromVkFormat(VkFormat format);

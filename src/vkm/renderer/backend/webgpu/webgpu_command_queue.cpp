@@ -4,6 +4,7 @@
 #include <vkm/renderer/backend/webgpu/webgpu_command_buffer.h>
 #include <vkm/renderer/backend/webgpu/webgpu_driver.h>
 #include <vkm/renderer/backend/webgpu/webgpu_util.h>
+#include <vkm/renderer/backend/common/gpu_crash_handler.h>
 
 #include <emscripten/emscripten.h>
 #include <vector>
@@ -122,6 +123,8 @@ namespace vkm
     {
         VkmGpuEventTimelineObject timelineObject = _gpuEventTimeline->allocateGpuEventTimelineObject();
         VkmGpuEventTimelineWebGPU* timeline = static_cast<VkmGpuEventTimelineWebGPU*>(_gpuEventTimeline.get());
+
+        _driver->getGpuCrashHandler()->recordSubmission(this, submitInfos, timelineObject);
 
         std::vector<WGPUCommandBuffer> wgpuCommandBuffers;
         wgpuCommandBuffers.reserve(submitInfos.commandBufferCount);

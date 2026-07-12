@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/webgpu/webgpu_util.h>
+#include <vkm/renderer/backend/webgpu/webgpu_driver.h>
+#include <vkm/renderer/backend/common/gpu_crash_handler.h>
 
 namespace vkm
 {
@@ -143,5 +145,33 @@ namespace vkm
             return;
         }
         VKM_DEBUG_ERROR(fmt::format("WebGPU uncaptured error ({}): {}", (int)type, toStdString(message)).c_str());
+    }
+
+    namespace
+    {
+        const char* wgpuDeviceLostReasonToString(WGPUDeviceLostReason reason)
+        {
+            switch (reason)
+            {
+                case WGPUDeviceLostReason_Unknown:           return "Unknown";
+                case WGPUDeviceLostReason_Destroyed:         return "Destroyed";
+                case WGPUDeviceLostReason_CallbackCancelled: return "CallbackCancelled";
+                case WGPUDeviceLostReason_FailedCreation:    return "FailedCreation";
+                default:                                     return "UnknownReason";
+            }
+        }
+    }
+
+    void onWGPUDeviceLost(WGPUDevice const*, WGPUDeviceLostReason reason, WGPUStringView message, void* userdata1, void*)
+    {
+        // WGPUDeviceLostReason_Destroyed also fires on the engine's own ordinary
+        // wgpuDeviceRelease() during VkmDriverWebGPU::destroyInner() -- not a crash.
+        if (reason == WGPUDeviceLostReason_Destroyed)
+        {
+            return;
+        }
+
+        VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(userdata1);
+        driverWebGPU->getGpuCrashHandler()->reportCrash("WebGPU", wgpuDeviceLostReasonToString(reason), toStdString(message));
     }
 } // namespace vkm

@@ -8,6 +8,8 @@
 #include <vkm/renderer/backend/common/driver_resource.h>
 #include <vkm/renderer/backend/common/command_queue.h>
 
+#include <string>
+
 namespace vkm
 {
     class VkmDriverBase;
@@ -57,6 +59,16 @@ namespace vkm
 
         inline const VkmGpuEventTimelineObject& getGpuEventTimelineObject() const { return _gpuEventTimelineObject; }
 
+        /*
+        * @brief In-engine-only bookkeeping name (never pushed to a native driver API, unlike
+        * VkmDriverResourceBase::setDebugName()) used by VkmGpuCrashHandler to identify this
+        * command buffer's submission in a crash report's breadcrumb trail. Defaults to empty;
+        * VkmGpuCrashHandler synthesizes a "<queueName>#<index>" fallback name for breadcrumb
+        * entries left unnamed.
+        */
+        inline void setDebugName(const char* name) { _debugName = name != nullptr ? name : ""; }
+        inline const std::string& getDebugName() const { return _debugName; }
+
     protected:
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) = 0;
         virtual void onEndRenderPass() = 0;
@@ -81,5 +93,6 @@ namespace vkm
 
     private:
         VkmPipelineStateBase* _boundPipelineState = nullptr;
+        std::string _debugName;
     };
 }

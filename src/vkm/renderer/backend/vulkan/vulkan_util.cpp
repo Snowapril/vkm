@@ -1,7 +1,11 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/vulkan/vulkan_util.h>
+#include <vkm/renderer/backend/vulkan/vulkan_driver.h>
+#include <vkm/renderer/backend/common/gpu_crash_handler.h>
 #include <vulkan/vulkan.h>
+
+#include <vector>
 
 // On Linux, <vulkan/vulkan.h> pulls in X11/Xlib.h's VK_USE_PLATFORM_XLIB_KHR path, which
 // #defines Always as a bare integer (the backing-store hint enum), clobbering every later
@@ -54,6 +58,58 @@ const char* vkResultToString(VkResult result)
         default:                                return "VK_ERROR_UNKNOWN_RESULT";
     }
 }
+
+// Exactly one Vulkan driver is ever active in this engine; see setActiveVulkanDriver().
+VkmDriverVulkan* g_activeVulkanDriver = nullptr;
+
+// Best-effort VK_EXT_device_fault dump for a detected VK_ERROR_DEVICE_LOST. Only valid to call
+// when the extension was actually enabled (see VkmDriverVulkan::isDeviceFaultExtensionEnabled()).
+// Deliberately never requests pVendorBinaryData -- that's a large opaque vendor dump, not
+// useful in a human-readable crash log.
+std::string queryVulkanDeviceFaultInfo(VkmDriverVulkan* driver)
+{
+    if (driver->isDeviceFaultExtensionEnabled() == false)
+    {
+        return "VK_EXT_device_fault not enabled (unsupported by this GPU/driver, or --enable-gpu-crash-dump was not passed).";
+    }
+
+    VkDeviceFaultCountsEXT counts{.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT};
+    if (vkGetDeviceFaultInfoEXT(driver->getDevice(), &counts, nullptr) != VK_SUCCESS)
+    {
+        return "vkGetDeviceFaultInfoEXT (counts query) failed.";
+    }
+
+    std::vector<VkDeviceFaultAddressInfoEXT> addressInfos(counts.addressInfoCount);
+    std::vector<VkDeviceFaultVendorInfoEXT> vendorInfos(counts.vendorInfoCount);
+
+    VkDeviceFaultInfoEXT faultInfo{.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT};
+    faultInfo.pAddressInfos = addressInfos.empty() ? nullptr : addressInfos.data();
+    faultInfo.pVendorInfos = vendorInfos.empty() ? nullptr : vendorInfos.data();
+    faultInfo.pVendorBinaryData = nullptr;
+
+    if (vkGetDeviceFaultInfoEXT(driver->getDevice(), &counts, &faultInfo) != VK_SUCCESS)
+    {
+        return "vkGetDeviceFaultInfoEXT (info query) failed.";
+    }
+
+    std::string result = fmt::format("description=\"{}\"", faultInfo.description);
+    for (const VkDeviceFaultAddressInfoEXT& addr : addressInfos)
+    {
+        result += fmt::format(" | address=0x{:x} type={} precision=0x{:x}",
+            addr.reportedAddress, static_cast<int>(addr.addressType), addr.addressPrecision);
+    }
+    for (const VkDeviceFaultVendorInfoEXT& vendor : vendorInfos)
+    {
+        result += fmt::format(" | vendor=\"{}\" code=0x{:x} data=0x{:x}",
+            vendor.description, vendor.vendorFaultCode, vendor.vendorFaultData);
+    }
+    return result;
+}
+}
+
+void setActiveVulkanDriver(VkmDriverVulkan* driver)
+{
+    g_activeVulkanDriver = driver;
 }
 
 bool vkCheckResult(int result, const char* msg)
@@ -62,6 +118,14 @@ bool vkCheckResult(int result, const char* msg)
     {
         const std::string msgString = fmt::format("{}: {}", vkResultToString(static_cast<VkResult>(result)), msg);
         VKM_DEBUG_ERROR(msgString.c_str());
+
+        if (result == VK_ERROR_DEVICE_LOST && g_activeVulkanDriver != nullptr)
+        {
+            const std::string faultInfo = queryVulkanDeviceFaultInfo(g_activeVulkanDriver);
+            g_activeVulkanDriver->getGpuCrashHandler()->reportCrash("Vulkan", "VK_ERROR_DEVICE_LOST",
+                fmt::format("{} | {}", msg, faultInfo));
+        }
+
         return false;
     }
     return true;

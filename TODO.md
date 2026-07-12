@@ -30,3 +30,5 @@
 - Metal resources bound via `overrideExternalHandle()` after creation never enter a residency set.
 - `VkmRenderResourcePool`'s constructor takes a `VkmDriverBase*` but never stores it in a member.
 - Metal `releaseResource` stages `removeAllocation:` for swapchain backbuffers that were never added to the residency set.
+- `VkmGpuCrashHandler` breadcrumbs are per-submission only; `VK_NV_device_diagnostic_checkpoints` (per-draw-call attribution on NVIDIA) was deliberately not implemented.
+- `VkmCommandBufferBase::setDebugName()` is never called by the render graph today, so crash-handler breadcrumbs always fall back to their auto-generated `"<queueName>#<index>"` name.
