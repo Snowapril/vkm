@@ -159,6 +159,7 @@ endif()
 if (VKM_USE_METAL_API)
     list(APPEND PUBLIC_HDRS
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_driver.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_render_resource_pool.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_command_buffer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_command_queue.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_swapchain.h
@@ -174,6 +175,7 @@ if (VKM_USE_METAL_API)
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_driver.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_render_resource_pool.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_command_buffer.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_command_queue.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_swapchain.mm

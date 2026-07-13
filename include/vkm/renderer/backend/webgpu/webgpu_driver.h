@@ -34,6 +34,7 @@ namespace vkm
         virtual VkmBufferView* newBufferViewInner() override final;
         virtual VkmCommandQueueBase* newCommandQueueInner() override final;
         virtual VkmPipelineStateBase* newPipelineStateInner() override final;
+        virtual VkmRenderResourcePool* newRenderResourcePoolInner() override final;
 
     private:
         WGPUInstance _instance{nullptr};

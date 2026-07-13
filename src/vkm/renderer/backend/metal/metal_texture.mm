@@ -79,6 +79,7 @@ namespace vkm
         return true;
     }
 
+    // A handle bound here after creation is never registered into a residency set (the swapchain, today's only such caller, bypasses the common newBuffer/newTexture residency hook entirely).
     bool VkmTextureMetal::overrideExternalHandle(void* externalHandle)
     {
         _mtlTexture = static_cast<id<MTLTexture>>(externalHandle);

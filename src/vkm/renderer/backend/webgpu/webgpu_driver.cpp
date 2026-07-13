@@ -11,6 +11,7 @@
 #include <vkm/renderer/backend/webgpu/webgpu_buffer_view.h>
 #include <vkm/renderer/backend/webgpu/webgpu_command_queue.h>
 #include <vkm/renderer/backend/webgpu/webgpu_pipeline_state.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/engine.h>
 
 #include <emscripten/emscripten.h>
@@ -178,6 +179,11 @@ namespace vkm
     VkmBufferView* VkmDriverWebGPU::newBufferViewInner()
     {
         return new VkmBufferViewWebGPU(this);
+    }
+
+    VkmRenderResourcePool* VkmDriverWebGPU::newRenderResourcePoolInner()
+    {
+        return new VkmRenderResourcePool(this);
     }
 
     VkmPipelineStateBase* VkmDriverWebGPU::newPipelineStateInner()

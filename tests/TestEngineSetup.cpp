@@ -219,6 +219,7 @@ protected:
     vkm::VkmSwapChainBase* newSwapChainInner() override { return nullptr; }
     vkm::VkmCommandQueueBase* newCommandQueueInner() override { return new FakeCommandQueue(this); }
     vkm::VkmPipelineStateBase* newPipelineStateInner() override { return nullptr; }
+    vkm::VkmRenderResourcePool* newRenderResourcePoolInner() override { return new vkm::VkmRenderResourcePool(this); }
 };
 
 class MockBuffer : public vkm::VkmBuffer {

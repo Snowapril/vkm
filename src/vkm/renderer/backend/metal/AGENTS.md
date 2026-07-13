@@ -70,6 +70,15 @@ Overrides all 7 `VkmDriverBase` pure virtuals:
 - `newBufferViewInner` → `new VkmBufferViewMetal` (metadata-only; Metal has no buffer-view object)
 - `newSwapChainInner` → `new VkmSwapChainMetal`
 - `newCommandQueueInner` → `new VkmCommandQueueMetal` (via `VkmCommandBufferPoolMetal`)
+- `newRenderResourcePoolInner` → `new VkmRenderResourcePoolMetal`
+
+### VkmRenderResourcePoolMetal
+- Owns one `id<MTLResidencySet>` per `VkmResourcePoolType` (only `Default` today), attached to each `MTL4CommandQueue` at queue init — Metal4 command buffers do not implicitly make referenced resources resident
+- Sets are created in `initialize()` (called after `initializeInner()`'s device validation), never in the constructor — residency-set APIs hang inside the Metal framework on unsupported (e.g. paravirtualized CI) GPUs instead of returning nil
+- `onResourceInitialized` / `releaseResource` — stage `addAllocation:`/`removeAllocation:` for Buffer/Texture/StagingBuffer native handles (samplers/views own no distinct `MTLAllocation`); guarded by a dedicated mutex because the deferred reclaimer releases from a background thread
+- `commitPendingResidencyChanges` — flushes staged changes with one `commit` per set; called from `VkmCommandQueueMetal::submit()` before command-buffer commit, no-op when nothing staged
+- `registerExternalAllocation` — residency for allocations outside handle tracking (e.g. `MTLHeap` pool blocks, registered in `allocateFromHeapPool`)
+- Swapchain backbuffers are exempt: they bypass `newTexture()` and swap their drawable-provided native handle every frame
 
 ### VkmCommandQueueMetal
 - Holds `id<MTLCommandQueue> _mtlCommandQueue`

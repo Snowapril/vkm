@@ -77,6 +77,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_command_queue.h>
 #include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
 #include <vkm/renderer/backend/vulkan/vulkan_gpu_timer.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
 
 // X11/Xlib.h (see above) also #defines None and Always as bare integers, clobbering
 // VkmCullMode::None and VkmCompareOp::Always in pipeline_state.h, transitively included
@@ -216,6 +217,11 @@ namespace vkm
     VkmBufferView* VkmDriverVulkan::newBufferViewInner()
     {
         return new VkmBufferViewVulkan(this);
+    }
+
+    VkmRenderResourcePool* VkmDriverVulkan::newRenderResourcePoolInner()
+    {
+        return new VkmRenderResourcePool(this);
     }
 
     VkmPipelineStateBase* VkmDriverVulkan::newPipelineStateInner()

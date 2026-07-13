@@ -3,6 +3,7 @@
 #include <vkm/renderer/backend/metal/metal_command_queue.h>
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
+#include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
 
 #import <Metal/MTL4CommandQueue.h>
 #import <Metal/MTL4CommandBuffer.h>
@@ -95,6 +96,9 @@ namespace vkm
             mtlCommandBuffers[i] = mtlCommandBuffer;
         }
 
+        VkmRenderResourcePoolMetal* renderResourcePoolMetal = static_cast<VkmRenderResourcePoolMetal*>(_driver->getRenderResourcePool());
+        renderResourcePoolMetal->commitPendingResidencyChanges();
+
         [_mtlCommandQueue commit:mtlCommandBuffers count:count];
         [_mtlCommandQueue signalEvent:mtlSharedEvent value:lastSubmittedTimelineValue];
 
@@ -111,6 +115,17 @@ namespace vkm
     {
         VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
         _mtlCommandQueue = [driverMetal->getMTLDevice() newMTL4CommandQueue];
+
+        VkmRenderResourcePoolMetal* renderResourcePoolMetal = static_cast<VkmRenderResourcePoolMetal*>(driverMetal->getRenderResourcePool());
+        id<MTLResidencySet> residencySet = renderResourcePoolMetal->getResidencySet(VkmResourcePoolType::Default);
+        if (residencySet == nil)
+        {
+            // Without a residency set no resource is ever made resident on this queue --
+            // fail loudly at init instead of faulting at first GPU use.
+            VKM_DEBUG_ERROR("Residency set unavailable; cannot initialize Metal command queue");
+            return false;
+        }
+        [_mtlCommandQueue addResidencySet:residencySet];
 
         _commandBufferPool.reset(new VkmCommandBufferPoolMetal(_driver, this));
         _gpuEventTimeline.reset(new VkmGpuEventTimelineMetal(_driver));
