@@ -110,6 +110,8 @@ namespace vkm
     {
         // Options for committing the render graph, such as whether to wait for completion
         bool waitForCompletion = true; // Default to waiting for completion
+        // When non-null, the graph submit consumes this swapchain's present semaphores.
+        VkmSwapChainBase* presentSwapChain = nullptr;
     };
 
     class VkmRenderGraph

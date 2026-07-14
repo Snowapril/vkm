@@ -29,6 +29,9 @@ namespace vkm
         VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
         id<MTLDevice> device = driverMetal->getMTLDevice();
 
+        MTLSizeAndAlign sizeAndAlign = [device heapBufferSizeAndAlignWithLength:info._size options:MTLResourceStorageModeShared];
+        _memoryAlignment = (uint32_t)sizeAndAlign.align;
+
         // Always committed + host-visible; never pooled.
         _mtlBuffer = [device newBufferWithLength:info._size options:MTLResourceStorageModeShared];
         if (_mtlBuffer == nil)
@@ -36,6 +39,7 @@ namespace vkm
             VKM_DEBUG_ERROR("Failed to create MTLBuffer for staging buffer");
             return false;
         }
+        _allocatedSize = [_mtlBuffer allocatedSize];
 
         _mappedPointer = [_mtlBuffer contents];
         return true;

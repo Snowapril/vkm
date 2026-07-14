@@ -76,6 +76,9 @@ jobs:
           sudo add-apt-repository ppa:ubuntu-toolchain-r/test
           sudo apt-get update && sudo apt-get upgrade && sudo apt-get dist-upgrade
           sudo apt-get install xorg-dev build-essential libgl-dev libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev libxkbcommon-dev libwayland-dev libwayland-bin wayland-protocols python3-setuptools xvfb
+          if [ "${{ matrix.backend }}" = "vulkan" ]; then
+            sudo apt-get install mesa-vulkan-drivers
+          fi
           if [ "${{ matrix.compiler }}" = "gcc" ]; then
             sudo apt-get install cmake gcc-${{ matrix.version }} g++-${{ matrix.version }}
           else
@@ -116,8 +119,15 @@ jobs:
         # even for an invisible window; headless runners have no display at all, so xvfb-run
         # provides a virtual framebuffer for it. The webgpu backend runs headlessly in Chrome
         # instead and doesn't need this.
+        #
+        # Hosted runners have no GPU, so vkCreateInstance would fail against a hardware ICD;
+        # mesa-vulkan-drivers installs lavapipe (a software Vulkan implementation), and both
+        # VK_DRIVER_FILES (current loader env var) and the legacy VK_ICD_FILENAMES alias point
+        # the Vulkan loader at its ICD manifest so it's picked up regardless of loader version.
         run: |
           if [ "${{ matrix.backend }}" = "vulkan" ]; then
+            export VK_DRIVER_FILES="$(ls /usr/share/vulkan/icd.d/lvp_icd.*.json | tr '\n' ':')"
+            export VK_ICD_FILENAMES="${VK_DRIVER_FILES}"
             xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}
           else
             python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}

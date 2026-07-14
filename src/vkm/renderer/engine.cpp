@@ -194,12 +194,23 @@ namespace vkm
 
     void VkmEngine::render(const double deltaTime)
     {
+        // Throttle before acquiring: prepareRender() timeline-waits on this frame slot's previous
+        // submit and resets its render graph. This must precede acquireNextImage() so the
+        // image-available semaphore for this slot is guaranteed free before it is reused.
+        prepareRender();
+
         VkmResourceHandle currentBackBuffer = _mainSwapChain->acquireNextImage();
+        if (!currentBackBuffer.isValid())
+        {
+            // Acquire failed (e.g. surface lost/out-of-date). prepareRender() only waited on and
+            // reset this frame slot, so there is no half-recorded work to unwind; skip the frame
+            // rather than record and present a stale image index.
+            return;
+        }
         VKM_DEBUG_INFO(fmt::format("Engine update : delta time : {}", deltaTime).c_str());
-        
+
         VkmRenderGraph* renderGraph = _frameRenderGraphs[_currentFrameIndex].get();
-        renderGraph->reset();
-        
+
         _appDelegate->render(renderGraph, currentBackBuffer);
 
 #if defined(VKM_ENABLE_IMGUI)
@@ -222,8 +233,8 @@ namespace vkm
 #endif
 
         renderGraph->compile();
-        
-        renderGraph->execute(VkmRenderGraphCommitOptions{ .waitForCompletion = true } );
+
+        renderGraph->execute(VkmRenderGraphCommitOptions{ .waitForCompletion = false, .presentSwapChain = _mainSwapChain } );
 
         _mainSwapChain->present();
     }

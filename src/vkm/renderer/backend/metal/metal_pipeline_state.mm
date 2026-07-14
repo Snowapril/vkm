@@ -2,6 +2,7 @@
 
 #include <vkm/renderer/backend/metal/metal_pipeline_state.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
+#include <vkm/renderer/backend/metal/metal_util.h>
 #include <vkm/renderer/backend/common/shader_cache_loader.h>
 #include <vkm/renderer/backend/common/shader_cache_util.h>
 
@@ -25,31 +26,6 @@ namespace vkm
 {
     namespace
     {
-        // NOTE: duplicated from metal_texture.mm's anonymous-namespace helper of the
-        // same name -- no shared metal-format-conversion header exists yet in this
-        // codebase, and adding one is out of scope for this pipeline-state-only change.
-        MTLPixelFormat getMTLPixelFormat(VkmFormat format)
-        {
-            switch (format)
-            {
-                case VkmFormat::R8G8B8A8_UNORM:      return MTLPixelFormatRGBA8Unorm;
-                case VkmFormat::R8G8B8A8_SRGB:       return MTLPixelFormatRGBA8Unorm_sRGB;
-                case VkmFormat::R8G8B8A8_UINT:       return MTLPixelFormatRGBA8Uint;
-                case VkmFormat::R8G8B8A8_SNORM:      return MTLPixelFormatRGBA8Snorm;
-                case VkmFormat::R8G8B8A8_SINT:       return MTLPixelFormatRGBA8Sint;
-                case VkmFormat::R16G16B16A16_UNORM:  return MTLPixelFormatRGBA16Unorm;
-                case VkmFormat::R16G16B16A16_SFLOAT: return MTLPixelFormatRGBA16Float;
-                case VkmFormat::R32G32B32A32_SFLOAT: return MTLPixelFormatRGBA32Float;
-                case VkmFormat::D32_SFLOAT:          return MTLPixelFormatDepth32Float;
-                case VkmFormat::D24_UNORM_S8_UINT:   return MTLPixelFormatDepth24Unorm_Stencil8;
-                case VkmFormat::D32_SFLOAT_S8_UINT:  return MTLPixelFormatDepth32Float_Stencil8;
-                case VkmFormat::BGRA8_UNORM:         return MTLPixelFormatBGRA8Unorm;
-                case VkmFormat::BGRA8_SRGB:          return MTLPixelFormatBGRA8Unorm_sRGB;
-                case VkmFormat::Undefined:
-                default:                             return MTLPixelFormatInvalid;
-            }
-        }
-
         MTLPrimitiveTopologyClass toMTLPrimitiveTopologyClass(VkmPrimitiveTopology topology)
         {
             switch (topology)
@@ -367,7 +343,20 @@ namespace vkm
         // depthAttachmentPixelFormat/stencilAttachmentPixelFormat (unlike the classic
         // MTLRenderPipelineDescriptor) -- confirmed against the macOS 26 SDK headers.
         // Depth/stencil attachment formats are therefore only known at encoder/render-
-        // pass time (MTL4RenderPassDescriptor), not at pipeline-creation time.
+        // pass time (MTL4RenderPassDescriptor), not at pipeline-creation time. This means a
+        // mismatch between desc.depthStencilState.depthStencilFormat and the format actually
+        // bound in the render pass cannot be caught here; it can only surface (if at all) via
+        // Metal's own validation layer at draw time.
+        //
+        // Encoder-time validation was considered (compare against
+        // VkmCommandBufferMetal's bound PSO in VkmCommandEncoderMetal::beginRenderPass /
+        // metal_command_buffer.mm) but is not currently implementable without invasive
+        // plumbing: beginRenderPass() only receives a VkmFrameBufferDescriptor, no PSO
+        // reference (per the common VkmCommandBufferBase ordering, bindPipeline() is always
+        // called *after* beginRenderPass(), so no pipeline is bound yet at that point), and
+        // VkmCommandEncoderMetal does not retain the render pass's chosen depth/stencil pixel
+        // format as member state that a later onBindPipeline() call could compare against.
+        // Left as a documented limitation rather than adding that plumbing here.
 
         const VkmVertexInputLayoutDescriptor& vertexLayout = desc.vertexInputLayout;
         if (vertexLayout.perVertex.has_value() || vertexLayout.perInstance.has_value())

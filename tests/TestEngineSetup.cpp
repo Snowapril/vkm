@@ -350,6 +350,31 @@ TEST_CASE("VkmRenderResourcePool - tagResource tracks per-category memory usage 
     driver.destroy();
 }
 
+TEST_CASE("VkmRenderResourcePool - releaseResource recycles the id with a new generation, rejecting the stale handle") {
+    FakeDriver driver;
+    REQUIRE(driver.initialize(nullptr).code == vkm::VkmInitResultCode::Success);
+    vkm::VkmRenderResourcePool* pool = driver.getRenderResourcePool();
+
+    vkm::VkmResourceHandle staleHandle = pool->allocateBuffer(new MockBuffer(&driver));
+    REQUIRE(staleHandle.isValid());
+    REQUIRE(pool->getResource<vkm::VkmBuffer>(staleHandle) != nullptr);
+
+    pool->releaseResource(staleHandle);
+    CHECK(pool->getResource<vkm::VkmBuffer>(staleHandle) == nullptr);
+
+    vkm::VkmResourceHandle recycledHandle = pool->allocateBuffer(new MockBuffer(&driver));
+    CHECK(recycledHandle.id == staleHandle.id); // free-list reused the same id
+    CHECK(recycledHandle.generation != staleHandle.generation); // but with a bumped generation
+
+    // The stale (old-generation) handle must still be rejected even though it shares the
+    // same id with the newly-recycled, live handle.
+    CHECK(pool->getResource<vkm::VkmBuffer>(staleHandle) == nullptr);
+    CHECK(pool->getResource<vkm::VkmBuffer>(recycledHandle) != nullptr);
+
+    pool->releaseResource(recycledHandle);
+    driver.destroy();
+}
+
 TEST_CASE("VkmEngineLaunchOptions - parseEngineLaunchOptions parses --enable-gpu-capture") {
     const char* rawArgs[] = { "vkm", "--enable-gpu-capture=true" };
     vkm::VkmEngineLaunchOptions options = vkm::VkmEngine::parseEngineLaunchOptions(2, const_cast<char**>(rawArgs));

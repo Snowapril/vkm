@@ -4,6 +4,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_command_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_util.h>
+#include <vkm/renderer/backend/vulkan/vulkan_swapchain.h>
 #include <vkm/renderer/backend/common/gpu_crash_handler.h>
 
 #include <volk.h>
@@ -158,20 +159,60 @@ namespace vkm
             });
         }
 
+        // Swapchain present synchronization: consume the acquire semaphore as a wait and the
+        // per-image render-finished semaphore as an extra signal. Only the render-graph submit
+        // sets presentSwapChain; side submits (e.g. uploadToBuffer) leave it null.
+        VkmSwapChainVulkan* presentSwapChain = static_cast<VkmSwapChainVulkan*>(submitInfos.presentSwapChain);
+
+        uint32_t waitSemaphoreCount = 0;
+        VkSemaphoreSubmitInfo waitSemaphoreInfo{};
+        if (presentSwapChain != nullptr)
+        {
+            VkSemaphore acquireSemaphore = presentSwapChain->takePendingAcquireSemaphore();
+            if (acquireSemaphore != VK_NULL_HANDLE)
+            {
+                waitSemaphoreInfo = VkSemaphoreSubmitInfo{
+                    .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                    .semaphore = acquireSemaphore,
+                    // Conservative: the first access of the acquired image is an in-command-buffer
+                    // layout transition, so wait before any command stage runs.
+                    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                };
+                waitSemaphoreCount = 1;
+            }
+        }
+
         const uint64_t signalValue = timelineObject._timelineValue;
-        const VkSemaphoreSubmitInfo signalSemaphoreInfo{
+        std::array<VkSemaphoreSubmitInfo, 2> signalSemaphoreInfos{};
+        signalSemaphoreInfos[0] = VkSemaphoreSubmitInfo{
             .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
             .semaphore = timeline->getTimelineSemaphore(),
             .value     = signalValue,
             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
         };
+        uint32_t signalSemaphoreCount = 1;
+        if (presentSwapChain != nullptr)
+        {
+            const VkSemaphore renderFinishedSemaphore = presentSwapChain->takeRenderFinishedSemaphoreForSignal();
+            if (renderFinishedSemaphore != VK_NULL_HANDLE)
+            {
+                signalSemaphoreInfos[1] = VkSemaphoreSubmitInfo{
+                    .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                    .semaphore = renderFinishedSemaphore,
+                    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                };
+                signalSemaphoreCount = 2;
+            }
+        }
 
         const VkSubmitInfo2 submitInfo2{
             .sType                    = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+            .waitSemaphoreInfoCount   = waitSemaphoreCount,
+            .pWaitSemaphoreInfos      = &waitSemaphoreInfo,
             .commandBufferInfoCount   = (uint32_t)cmdBufferInfos.size(),
             .pCommandBufferInfos      = cmdBufferInfos.data(),
-            .signalSemaphoreInfoCount = 1,
-            .pSignalSemaphoreInfos    = &signalSemaphoreInfo,
+            .signalSemaphoreInfoCount = signalSemaphoreCount,
+            .pSignalSemaphoreInfos    = signalSemaphoreInfos.data(),
         };
         VKM_VK_CHECK_RESULT_MSG(vkQueueSubmit2(_vkQueue, 1, &submitInfo2, VK_NULL_HANDLE), "Failed to submit command buffer(s) to graphics queue");
 

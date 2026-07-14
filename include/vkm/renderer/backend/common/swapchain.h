@@ -85,12 +85,18 @@ namespace vkm
         void destroySwapChainCommon();
 
     protected:
-        std::array<VkmResourceHandle, FRAME_BUFFER_COUNT> _backBuffers;
+        // Entries beyond _backBufferCount stay VKM_INVALID_RESOURCE_HANDLE; they must never
+        // reach releaseResource() with indeterminate contents.
+        std::array<VkmResourceHandle, MAX_BACK_BUFFER_COUNT> _backBuffers = [] {
+            std::array<VkmResourceHandle, MAX_BACK_BUFFER_COUNT> handles;
+            handles.fill(VKM_INVALID_RESOURCE_HANDLE);
+            return handles;
+        }();
 
         VkmDriverBase* _driver;
         VkmCommandQueueBase* _presentQueue = nullptr;
         glm::uvec2 _extent;
-        uint8_t _backBufferCount;
+        uint8_t _backBufferCount = 0;
         uint32_t _currentBackBufferIndex = INVALID_VALUE32;
     };
 } // namespace vkm

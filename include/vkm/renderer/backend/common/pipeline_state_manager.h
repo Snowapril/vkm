@@ -45,7 +45,8 @@ namespace vkm
 
         // Looks up by name (must include the "[option]" suffix when applicable, exactly as
         // expandPipelineStateOptions() produced it). The single-arg overload checks Engine
-        // first, then User, on name collision.
+        // first, then User; a name can never collide across origins since loadPipelineState()
+        // rejects loading a name that already exists in the other origin's map.
         VkmPipelineStateBase* getPipelineState(const std::string& name) const;
         VkmPipelineStateBase* getPipelineState(const std::string& name, VkmPipelineStateOrigin origin) const;
 

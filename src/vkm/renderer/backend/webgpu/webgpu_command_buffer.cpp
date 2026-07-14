@@ -77,10 +77,15 @@ namespace vkm
         VkmPipelineStateWebGPU* pipelineStateWebGPU = static_cast<VkmPipelineStateWebGPU*>(pipelineState);
         if (pipelineStateWebGPU->isCompute())
         {
-            // No compute pass encoder is tracked by this command buffer yet (only render passes
-            // are wired up so far, see onBeginRenderPass above) -- compute dispatch recording
-            // remains out of scope for this phase.
-            VKM_DEBUG_ERROR("Binding a compute pipeline requires a compute pass encoder, which VkmCommandBufferWebGPU does not track yet");
+            // Mirrors Metal's compute lifecycle (see VkmCommandEncoderMetal::beginComputePass):
+            // there is no separate begin/end-compute entry point on the common command-buffer
+            // interface, so the compute pass encoder is lazily created here on first bind and
+            // torn down in onUnbindPipeline.
+            if (_computePassEncoder == nullptr)
+            {
+                _computePassEncoder = wgpuCommandEncoderBeginComputePass(_encoder, nullptr);
+            }
+            wgpuComputePassEncoderSetPipeline(_computePassEncoder, pipelineStateWebGPU->getComputePipeline());
             return;
         }
 
@@ -90,8 +95,14 @@ namespace vkm
 
     void VkmCommandBufferWebGPU::onUnbindPipeline()
     {
-        // WebGPU has no explicit "unbind pipeline" call -- pipeline state is simply replaced by
-        // the next bind or discarded at pass end. Nothing to do here.
+        if (_computePassEncoder != nullptr)
+        {
+            wgpuComputePassEncoderEnd(_computePassEncoder);
+            wgpuComputePassEncoderRelease(_computePassEncoder);
+            _computePassEncoder = nullptr;
+        }
+        // WebGPU has no explicit "unbind pipeline" call for a graphics pipeline -- render-pass
+        // pipeline state is simply replaced by the next bind or discarded at pass end.
     }
 
     void VkmCommandBufferWebGPU::onCopyBuffer(VkmResourceHandle, VkmResourceHandle, uint64_t, uint64_t, uint64_t)

@@ -73,9 +73,10 @@ struct VkmResourceHandle { uint64_t id; VkmResourcePoolType poolType; VkmResourc
 - Pooled resources: `handle.isPooledResource()` true when `poolType != Undefined`.
 - `generation` is bumped by the pool each time a slot is released; `getResource()` only
   returns a resource when the handle's `generation` still matches the slot's, giving views a
-  weak-reference liveness check. Purely additive scaffolding — not exercised today since the
-  pool never reuses an `id`, so a released slot's generation is never compared against a fresh
-  handle in the same slot. `isValid()`/`isPooledResource()` stay id/poolType-based only.
+  weak-reference liveness check. `allocateResourceLocked()` recycles released ids from a
+  per-type free-list before growing the pool, so a stale (pre-release) handle sharing a
+  recycled slot's `id` is correctly rejected by its now-mismatched `generation`.
+  `isValid()`/`isPooledResource()` stay id/poolType-based only.
 
 ## View Handles
 

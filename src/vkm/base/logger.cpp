@@ -5,6 +5,7 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <iostream>
 #include <chrono>
+#include <new>
 #if !defined(VKM_PLATFORM_WASM)
 #include <backward.hpp>
 #endif // !defined(VKM_PLATFORM_WASM)
@@ -132,8 +133,13 @@ namespace vkm
 
     LoggerManager& LoggerManager::singleton()
     {
-        static LoggerManager sInstance;
-        return sInstance;
+        // Immortal singleton: same placement-new-into-static-storage idiom as
+        // MemoryTracker::singleton() (see src/vkm/base/memory.cpp) - sidesteps static
+        // destruction order entirely rather than relying on it. close() remains the
+        // explicit shutdown path for callers that need to flush/release loggers.
+        alignas(LoggerManager) static unsigned char storage[sizeof(LoggerManager)];
+        static LoggerManager* instance = ::new (storage) LoggerManager();
+        return *instance;
     }
 
     LoggerManager::LoggerManager()

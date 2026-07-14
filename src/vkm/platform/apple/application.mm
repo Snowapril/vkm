@@ -18,8 +18,10 @@
 
 #include <QuartzCore/CAMetalLayer.h>
 #elif defined(VKM_USE_VULKAN_API)
-#include <GLFW/glfw3.h>
+// vulkan_driver.h (volk) must precede glfw3.h: glfw3.h only declares
+// glfwInitVulkanLoader() when the Vulkan API types are already visible.
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
+#include <GLFW/glfw3.h>
 #endif
 
 #include <vkm/platform/common/window.h>
@@ -433,6 +435,18 @@ namespace vkm
             VKM_DEBUG_ERROR("Failed to initialize engine");
             return -1;
         }
+
+        // On modern macOS, bare-name dlopen no longer searches /usr/local/lib, where the Vulkan
+        // SDK installs the loader, so GLFW's own probe in glfwVulkanSupported() fails to find it.
+        // volkInitialize() locates the loader (it has an explicit /usr/local/lib fallback) and
+        // populates vkGetInstanceProcAddr; hand that to GLFW so it skips its own dlopen. A later
+        // volkInitialize() in the driver is harmless (it just re-resolves the loader).
+        if (volkInitialize() != VK_SUCCESS)
+        {
+            VKM_DEBUG_ERROR("Failed to initialize the Vulkan loader");
+            return -1;
+        }
+        glfwInitVulkanLoader(vkGetInstanceProcAddr);
 
         VKM_ASSERT(glfwInit(), "Failed to initialize GLFW");
         VKM_ASSERT(glfwVulkanSupported(), "This system does not support Vulkan API");

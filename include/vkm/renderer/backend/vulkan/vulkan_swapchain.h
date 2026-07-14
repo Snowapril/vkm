@@ -17,6 +17,13 @@ namespace vkm
 
         inline VkFormat getImageFormat() const { return _imageFormat; }
 
+        // Returns the pending acquire semaphore and clears it, so a submit consumes it exactly
+        // once. Returns VK_NULL_HANDLE if no acquire is pending.
+        VkSemaphore takePendingAcquireSemaphore();
+        // Returns the render-finished semaphore for the currently acquired image and marks a
+        // present-wait as pending. Must be signaled by the frame's submit.
+        VkSemaphore takeRenderFinishedSemaphoreForSignal();
+
     protected:
         virtual bool createSwapChain(void* windowHandle) override final;
         virtual void destroySwapChain() override final;
@@ -27,6 +34,23 @@ namespace vkm
         VkSwapchainKHR  _swapChain{VK_NULL_HANDLE};
         VkFormat        _imageFormat;
         VkSurfaceKHR    _surface{VK_NULL_HANDLE};
-        VkFence         _acquireFence{VK_NULL_HANDLE};
+
+        // Per frame-in-flight, indexed by _frameRingIndex (advanced once per acquire attempt,
+        // whether it succeeds or fails, to stay in lockstep with the engine's per-frame
+        // _currentFrameIndex). Reuse of slot i is safe because the engine's ensureCompleted()
+        // timeline wait precedes the next acquire on that slot, so the previous acquire that used
+        // this semaphore has already been consumed by a completed submit; a failed acquire leaves
+        // its slot's semaphore unsignaled, which is likewise safe to reuse later (guards the
+        // acquire-semaphore-reuse pitfall / VUID-vkAcquireNextImageKHR-semaphore-01286).
+        std::array<VkSemaphore, FRAME_COUNT>        _imageAvailableSemaphores{};
+        // Per swapchain image, indexed by the acquired imageIndex; signaled by the frame's
+        // submit and waited by vkQueuePresentKHR. Sized to MAX_BACK_BUFFER_COUNT because
+        // the driver may create more images than the requested FRAME_BUFFER_COUNT.
+        std::array<VkSemaphore, MAX_BACK_BUFFER_COUNT> _renderFinishedSemaphores{};
+        // Advanced on every acquire attempt (success or failure); see _imageAvailableSemaphores.
+        uint32_t    _frameRingIndex{0};
+        // Handoff state between acquire, submit and present.
+        VkSemaphore _pendingAcquireSemaphore{VK_NULL_HANDLE};
+        bool        _renderFinishedPending{false};
     };
 } // namespace vkm

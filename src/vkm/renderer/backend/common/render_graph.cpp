@@ -107,6 +107,7 @@ namespace vkm
         submitInfo.commandBuffers[0] = commandBuffer;
         submitInfo.commandBufferCount = 1;
         submitInfo.frameIndex = _frameIndex;
+        submitInfo.presentSwapChain = options.presentSwapChain;
 
         _lastSubmitInfo = commandQueue->submit(submitInfo);
 
@@ -131,8 +132,6 @@ namespace vkm
         // deferred destruction; on Vulkan/Metal it's a harmless redundant sweep alongside
         // the background thread that already does the real work.
         _driver->getDeferredReclaimer()->pollOnce();
-
-        (void)options; // Suppress unused variable warning at now
     }
 
     void VkmRenderGraph::reset()

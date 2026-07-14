@@ -13,6 +13,7 @@ namespace vkm
     class VkmCommandBufferBase;
     class VkmCommandQueueBase;
     class VkmDriverBase;
+    class VkmSwapChainBase;
 
     static constexpr const uint32_t MAX_NUM_COMMAND_BUFFER_SUBMITS = 8;
 
@@ -27,6 +28,9 @@ namespace vkm
         // Read by VkmGpuCrashHandler::recordSubmission() to locate the right marker-buffer slice
         // when reporting per-subgraph completion; unused/0 for submissions outside the render graph.
         uint32_t frameIndex = 0;
+        // When non-null, this submit consumes the swapchain's pending acquire semaphore as a
+        // wait and its per-image render-finished semaphore as a signal (backend present sync).
+        VkmSwapChainBase* presentSwapChain = nullptr;
     };
 
     /*

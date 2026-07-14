@@ -20,6 +20,8 @@ namespace vkm
         inline WGPUCommandEncoder getWGPUCommandEncoder() const { return _encoder; }
         // Valid only between onBeginRenderPass/onEndRenderPass.
         inline WGPURenderPassEncoder getActiveRenderPassEncoder() const { return _renderPassEncoder; }
+        // Valid only between onBindPipeline(compute)/onUnbindPipeline.
+        inline WGPUComputePassEncoder getActiveComputePassEncoder() const { return _computePassEncoder; }
 
     protected:
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) override final;
@@ -38,5 +40,6 @@ namespace vkm
     private:
         WGPUCommandEncoder _encoder{nullptr};
         WGPURenderPassEncoder _renderPassEncoder{nullptr};
+        WGPUComputePassEncoder _computePassEncoder{nullptr};
     };
 } // namespace vkm

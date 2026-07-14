@@ -11,6 +11,12 @@
 #include <utility>
 #include <vector>
 
+// mimalloc backs the global allocator on all platforms except WASM/Emscripten,
+// where the default emmalloc/dlmalloc is used instead.
+#if !defined(VKM_PLATFORM_WASM)
+#define VKM_USE_MIMALLOC 1
+#endif
+
 namespace vkm
 {
     /*
@@ -87,7 +93,6 @@ namespace vkm
 
     private:
         MemoryTracker();
-        ~MemoryTracker();
 
         // Identifies an aggregate row: either (file, line) for an auto-captured call site,
         // or `label` alone for a manually-tagged/sentinel row (file/line ignored when
@@ -142,6 +147,20 @@ namespace vkm
             void* mem = MemoryTracker::singleton().allocate(sizeof(T), file, line, label);
             return ::new (mem) T(std::forward<Args>(args)...);
         }
+
+        // Compile-time enforcement that VKM_NEW_TAGGED's label is a string literal (or
+        // other array with static storage duration): allocate() stores `label` by pointer
+        // rather than copying it, so a non-literal argument here would be a dangling-pointer
+        // trap. Deducing `const char (&)[N]` rejects plain `const char*` arguments (including
+        // runtime-computed or short-lived ones) at the call site. Callers that legitimately
+        // hold a label pointer with static storage duration but not literal-array type (e.g.
+        // a `constexpr const char*` variable) should call detail::trackedNew directly - that
+        // is the documented escape hatch around this check.
+        template <typename T, size_t N, typename... Args>
+        T* trackedNewTagged(const char* file, int line, const char (&label)[N], Args&&... args)
+        {
+            return trackedNew<T>(file, line, label, std::forward<Args>(args)...);
+        }
     }
 
     // Tag a heap allocation with its own call site (file/line), captured automatically.
@@ -150,8 +169,8 @@ namespace vkm
     #define VKM_NEW(Type, ...) \
         ::vkm::detail::trackedNew<Type>(__FILE__, __LINE__, nullptr, ##__VA_ARGS__)
 
-    // Tag a heap allocation with a user-supplied label instead of file/line.
-    // `Label` must be a string literal or otherwise have static storage duration.
+    // Tag a heap allocation with a user-supplied label instead of file/line. `Label` must be
+    // a string literal (enforced at compile time - see detail::trackedNewTagged).
     #define VKM_NEW_TAGGED(Type, Label, ...) \
-        ::vkm::detail::trackedNew<Type>(__FILE__, __LINE__, (Label), ##__VA_ARGS__)
+        ::vkm::detail::trackedNewTagged<Type>(__FILE__, __LINE__, (Label), ##__VA_ARGS__)
 }

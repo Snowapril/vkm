@@ -20,15 +20,14 @@ namespace vkm
         virtual bool overrideExternalHandle(void* externalHandle) override final;
         virtual void setDebugName(const char* name) override final;
 
-        // Metal exposes no allocation-introspection API -- best-effort passthrough of the
-        // requested size; 256 matches this backend's own MTLHeap pool alignment convention
-        // (see metal_buffer.mm's allocateFromHeapPool call).
-        uint64_t getAllocatedSize() const override { return computeTextureByteSize(_textureInfo); }
-        uint32_t getMemoryAlignment() const override { return 256; }
+        uint64_t getAllocatedSize() const override { return _allocatedSize; }
+        uint32_t getMemoryAlignment() const override { return _memoryAlignment; }
 
         inline id<MTLTexture> getInternalHandle() const { return _mtlTexture; }
 
     private:
         id<MTLTexture> _mtlTexture {nullptr};
+        uint64_t _allocatedSize{0};
+        uint32_t _memoryAlignment{256}; // sane default; overwritten with a real value at creation time
     };
 } // namespace vkm
