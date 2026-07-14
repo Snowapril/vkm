@@ -71,7 +71,10 @@ namespace vkm
 
         if (!shouldUseCommittedBuffer(info))
         {
-            _mtlBuffer = driverMetal->allocateFromHeapPool(info._size, 256, MTLResourceStorageModePrivate);
+            // Pass the device-queried alignment (not a hardcoded constant) as the capacity hint
+            // for the heap's maxAvailableSizeWithAlignment: check; the heap sub-allocates and
+            // aligns placed buffers internally, so this only affects the capacity estimate.
+            _mtlBuffer = driverMetal->allocateFromHeapPool(info._size, sizeAndAlign.align, MTLResourceStorageModePrivate);
             if (_mtlBuffer != nil)
             {
                 _allocatedSize = [_mtlBuffer allocatedSize];

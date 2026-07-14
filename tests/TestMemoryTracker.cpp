@@ -94,7 +94,7 @@ TEST_CASE("MemoryTracker - plain new/delete still routes through mimalloc under 
     CHECK(after->liveCount <= liveDuring - 1);
 }
 
-#if !defined(VKM_PLATFORM_WASM)
+#if defined(VKM_USE_MIMALLOC)
 TEST_CASE("MemoryTracker - getMimallocStats returns real, self-consistent numbers") {
     // Not delta-tested against a specific allocation: mi_process_info's commit/RSS
     // counters don't necessarily update synchronously with each individual mi_malloc

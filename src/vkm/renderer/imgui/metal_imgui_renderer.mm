@@ -139,6 +139,9 @@ namespace vkm
         // macOS virtual-keycode -> ImGuiKey table, mirroring Dear ImGui's official
         // imgui_impl_osx.mm backend (ImGui_ImplOSX_KeyCodeToImGuiKey), since this renderer
         // bridges input via its own NSEvent local monitor instead of that backend.
+        // Provenance: mirrors ImGui_ImplOSX_KeyCodeToImGuiKey from the vendored Dear ImGui
+        // 1.92.8 (dependencies/src/imgui/backends/imgui_impl_osx.mm, not compiled into this
+        // build); re-sync this table when the vendored imgui is bumped.
         ImGuiKey keyCodeToImGuiKey(int keyCode)
         {
             switch (keyCode)
@@ -263,15 +266,42 @@ namespace vkm
         // Dear ImGui's official imgui_impl_osx backend.
         void addFilteredInputCharacters(ImGuiIO& io, NSString* characters)
         {
-            NSMutableString* filtered = [NSMutableString stringWithCapacity:characters.length];
-            for (NSUInteger i = 0; i < characters.length; ++i)
+            const NSUInteger length = characters.length;
+            NSUInteger firstFilteredIndex = length;
+            for (NSUInteger i = 0; i < length; ++i)
             {
                 const unichar c = [characters characterAtIndex:i];
                 if (c < 0x20 || c == 0x7F || (c >= 0xF700 && c <= 0xF8FF))
                 {
-                    continue;
+                    firstFilteredIndex = i;
+                    break;
                 }
-                [filtered appendFormat:@"%C", c];
+            }
+
+            if (firstFilteredIndex == length)
+            {
+                // Nothing to filter: forward the string as-is, no allocation needed.
+                io.AddInputCharactersUTF8(characters.UTF8String);
+                return;
+            }
+
+            // A filtered char was found: build the filtered copy in a single pass, appending
+            // contiguous runs of kept characters via substring ranges (no per-char appendFormat:).
+            NSMutableString* filtered = [NSMutableString stringWithCapacity:length];
+            NSUInteger runStart = 0;
+            for (NSUInteger i = 0; i <= length; ++i)
+            {
+                const bool isFiltered = i < length &&
+                    ([characters characterAtIndex:i] < 0x20 || [characters characterAtIndex:i] == 0x7F ||
+                     ([characters characterAtIndex:i] >= 0xF700 && [characters characterAtIndex:i] <= 0xF8FF));
+                if (isFiltered || i == length)
+                {
+                    if (i > runStart)
+                    {
+                        [filtered appendString:[characters substringWithRange:NSMakeRange(runStart, i - runStart)]];
+                    }
+                    runStart = i + 1;
+                }
             }
             if (filtered.length > 0)
             {

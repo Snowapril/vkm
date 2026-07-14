@@ -193,12 +193,16 @@ namespace vkm
         uint32_t signalSemaphoreCount = 1;
         if (presentSwapChain != nullptr)
         {
-            signalSemaphoreInfos[1] = VkSemaphoreSubmitInfo{
-                .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                .semaphore = presentSwapChain->takeRenderFinishedSemaphoreForSignal(),
-                .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-            };
-            signalSemaphoreCount = 2;
+            const VkSemaphore renderFinishedSemaphore = presentSwapChain->takeRenderFinishedSemaphoreForSignal();
+            if (renderFinishedSemaphore != VK_NULL_HANDLE)
+            {
+                signalSemaphoreInfos[1] = VkSemaphoreSubmitInfo{
+                    .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                    .semaphore = renderFinishedSemaphore,
+                    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                };
+                signalSemaphoreCount = 2;
+            }
         }
 
         const VkSubmitInfo2 submitInfo2{

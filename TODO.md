@@ -13,6 +13,7 @@
 - PSO JSON has no push-constant/descriptor-set representation; the bindless set 0 layout and push-constant range are hardcoded in `VkmPipelineStateVulkan::createInner` instead.
 - `VkmCommandBufferMetal`/`VkmCommandBufferWebGPU`'s `onCopyBuffer`/`onDraw`/`onSetPushConstants` are stub-only (log an error, no-op); bindless draw-call recording is Vulkan-only.
 - `getProcessCpuUsagePercent()` returns 0 on wasm.
+- wasm builds bake the on-disk `RESOURCES_DIR` into the engine library and samples; the MEMFS `--preload-file` remap covers only the `UnitTests` target.
 - Extend `VkmResourcePoolType` with Graphics/Compute categories for narrower Metal residency sets.
 - Metal resources bound via `overrideExternalHandle()` after creation never enter a residency set.
 - `VkmRenderResourcePool`'s constructor takes a `VkmDriverBase*` but never stores it in a member.

@@ -3,6 +3,7 @@
 #include <vkm/renderer/backend/common/pipeline_state.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
+#include <vkm/renderer/backend/common/pipeline_state_parser.h>
 #include <vkm/renderer/backend/common/shader_cache.h>
 #include <vkm/renderer/backend/common/shader_cache_util.h>
 
@@ -263,6 +264,58 @@ TEST_CASE("VkmPipelineStateManager - Engine and User origins are isolated")
     // Single-arg overload checks Engine first, then User.
     CHECK(manager.getPipelineState("engine_pso") == enginePso);
     CHECK(manager.getPipelineState("user_pso") == userPso);
+
+    fs::remove_all(tempDir, ec);
+}
+
+TEST_CASE("VkmPipelineStateManager - a later variant's collision leaves no earlier variant registered")
+{
+    VulkanDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+
+    const fs::path tempDir = fs::temp_directory_path() / "vkm_test_pso_manager_partial_load";
+    std::error_code ec;
+    fs::remove_all(tempDir, ec);
+    fs::create_directories(tempDir, ec);
+    REQUIRE_FALSE(ec);
+
+    std::string parseError;
+    std::optional<vkm::VkmPipelineStateDescriptor> desc = vkm::parsePipelineStateFromFile(
+        std::string(RESOURCES_DIR) + "tests/pso_with_options.json", &parseError);
+    REQUIRE_MESSAGE(desc.has_value(), parseError);
+
+    writeStageCacheFiles(tempDir, "triangle", "default");
+    writeStageCacheFiles(tempDir, "triangle", "wireframe");
+
+    vkm::VkmPipelineStateManager manager(f.driver.get());
+
+    // Pre-register the *later*-expanded variant's name ("triangle_pso[wireframe]") under
+    // the opposite origin, so that loading `desc` under User expands "default" first
+    // (inserted successfully pre-fix) and only then collides on "wireframe".
+    vkm::VkmPipelineStateDescriptor collidingDesc{};
+    collidingDesc.name = "triangle_pso[wireframe]";
+    collidingDesc.colorAttachments.push_back(vkm::VkmColorBlendAttachmentState{});
+    collidingDesc.colorAttachments[0].format = vkm::VkmFormat::BGRA8_UNORM;
+    collidingDesc.vertexShader = vkm::VkmShaderStageDescriptor{};
+    collidingDesc.vertexShader->filepath = "triangle.vert";
+    collidingDesc.fragmentShader = vkm::VkmShaderStageDescriptor{};
+    collidingDesc.fragmentShader->filepath = "triangle.frag";
+    writeStageCacheFiles(tempDir, "triangle", "");
+    std::string engineError;
+    REQUIRE_MESSAGE(manager.loadPipelineState(collidingDesc, tempDir.string(), vkm::VkmPipelineStateOrigin::Engine, &engineError), engineError);
+
+    std::string userError;
+    const bool result = manager.loadPipelineState(*desc, tempDir.string(), vkm::VkmPipelineStateOrigin::User, &userError);
+    CHECK_FALSE(result);
+    CHECK_FALSE(userError.empty());
+
+    // Neither variant must have been registered under User: the collision on the later
+    // "wireframe" variant must not leave the earlier "default" variant partially loaded.
+    CHECK(manager.getPipelineState("triangle_pso[default]", vkm::VkmPipelineStateOrigin::User) == nullptr);
+    CHECK(manager.getPipelineState("triangle_pso[wireframe]", vkm::VkmPipelineStateOrigin::User) == nullptr);
+
+    // The pre-registered Engine entry must be untouched.
+    CHECK(manager.getPipelineState("triangle_pso[wireframe]", vkm::VkmPipelineStateOrigin::Engine) != nullptr);
 
     fs::remove_all(tempDir, ec);
 }

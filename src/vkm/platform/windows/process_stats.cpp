@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/platform/common/process_stats.h>
+#include <vkm/platform/common/process_stats_common.h>
 
 #include <windows.h>
 
@@ -19,9 +20,6 @@ namespace vkm
 
     double getProcessCpuUsagePercent()
     {
-        static double s_previousWallTimeSeconds = -1.0;
-        static double s_previousCpuTimeSeconds = -1.0;
-
         FILETIME creationTime{};
         FILETIME exitTime{};
         FILETIME kernelTime{};
@@ -33,23 +31,6 @@ namespace vkm
         GetSystemTimeAsFileTime(&wallFileTime);
         const double wallTimeSeconds = filetimeToSeconds(wallFileTime);
 
-        if (s_previousCpuTimeSeconds < 0.0)
-        {
-            s_previousWallTimeSeconds = wallTimeSeconds;
-            s_previousCpuTimeSeconds = cpuTimeSeconds;
-            return 0.0;
-        }
-
-        const double deltaWallSeconds = wallTimeSeconds - s_previousWallTimeSeconds;
-        const double deltaCpuSeconds = cpuTimeSeconds - s_previousCpuTimeSeconds;
-
-        s_previousWallTimeSeconds = wallTimeSeconds;
-        s_previousCpuTimeSeconds = cpuTimeSeconds;
-
-        if (deltaWallSeconds <= 0.0)
-        {
-            return 0.0;
-        }
-        return (deltaCpuSeconds / deltaWallSeconds) * 100.0;
+        return cpuUsagePercentFromSamples(cpuTimeSeconds, wallTimeSeconds);
     }
 } // namespace vkm

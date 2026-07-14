@@ -11,6 +11,12 @@
 #include <utility>
 #include <vector>
 
+// mimalloc backs the global allocator on all platforms except WASM/Emscripten,
+// where the default emmalloc/dlmalloc is used instead.
+#if !defined(VKM_PLATFORM_WASM)
+#define VKM_USE_MIMALLOC 1
+#endif
+
 namespace vkm
 {
     /*

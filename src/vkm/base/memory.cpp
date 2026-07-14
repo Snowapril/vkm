@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include <new>
 
-#if !defined(VKM_PLATFORM_WASM)
+#if defined(VKM_USE_MIMALLOC)
 #include <mimalloc.h>
 #endif
 
@@ -38,7 +38,7 @@ namespace
     // global operator new/delete path).
     void* rawAlloc(size_t bytes)
     {
-#if !defined(VKM_PLATFORM_WASM)
+#if defined(VKM_USE_MIMALLOC)
         return mi_malloc(bytes);
 #else
         return std::malloc(bytes);
@@ -47,7 +47,7 @@ namespace
 
     void rawFree(void* ptr)
     {
-#if !defined(VKM_PLATFORM_WASM)
+#if defined(VKM_USE_MIMALLOC)
         mi_free(ptr);
 #else
         std::free(ptr);
@@ -63,7 +63,7 @@ namespace
     // TaggedAllocationSummary::usableBytes in memory.h.
     size_t usableSize(void* raw, size_t headerSize, size_t requestedSize)
     {
-#if !defined(VKM_PLATFORM_WASM)
+#if defined(VKM_USE_MIMALLOC)
         (void)requestedSize;
         return mi_usable_size(raw) - headerSize;
 #else
@@ -80,7 +80,7 @@ namespace
     vkm::MemoryStats rawProcessStats()
     {
         vkm::MemoryStats stats{};
-#if !defined(VKM_PLATFORM_WASM)
+#if defined(VKM_USE_MIMALLOC)
         mi_process_info(nullptr, nullptr, nullptr,
                          &stats.currentRssBytes, &stats.peakRssBytes,
                          &stats.currentCommittedBytes, &stats.peakCommittedBytes,

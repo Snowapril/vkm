@@ -8,6 +8,7 @@
 #include <vkm/renderer/backend/common/pipeline_state_parser.h>
 
 #include <filesystem>
+#include <unordered_set>
 
 namespace vkm
 {
@@ -35,19 +36,37 @@ namespace vkm
         const std::unordered_map<std::string, std::unique_ptr<VkmPipelineStateBase>>& other =
             (origin == VkmPipelineStateOrigin::Engine) ? _userPipelineStates : _enginePipelineStates;
 
+        // Validate every expanded variant's name before creating or inserting anything, so a
+        // later variant's collision can't leave earlier variants already registered in
+        // `target` (a partial load). Checks both against the other origin's map and against
+        // duplicate names within this same batch of variants.
+        std::unordered_set<std::string> seenNames;
         for (const VkmPipelineStateDescriptor& variant : *variants)
         {
+            std::string message;
             if (other.find(variant.name) != other.end())
             {
-                const std::string message = "Pipeline state '" + variant.name + "' already exists under the other origin (Engine/User collision)";
-                if (outError != nullptr)
-                {
-                    *outError = message;
-                }
-                VKM_DEBUG_ERROR(message.c_str());
-                return false;
+                message = "Pipeline state '" + variant.name + "' already exists under the other origin (Engine/User collision)";
+            }
+            else if (!seenNames.insert(variant.name).second)
+            {
+                message = "Pipeline state '" + variant.name + "' is defined more than once in this descriptor's expanded variants";
+            }
+            else
+            {
+                continue;
             }
 
+            if (outError != nullptr)
+            {
+                *outError = message;
+            }
+            VKM_DEBUG_ERROR(message.c_str());
+            return false;
+        }
+
+        for (const VkmPipelineStateDescriptor& variant : *variants)
+        {
             VkmPipelineStateBase* pipelineState = _driver->newPipelineState(variant, shaderCacheDir, outError);
             if (pipelineState == nullptr)
             {

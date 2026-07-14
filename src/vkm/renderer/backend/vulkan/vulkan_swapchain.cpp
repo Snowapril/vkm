@@ -303,23 +303,56 @@ namespace vkm
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
         VkDevice device = driverVulkan->getDevice();
 
-        // One submit must consume the previous acquire before another one is issued.
-        VKM_ASSERT(_pendingAcquireSemaphore == VK_NULL_HANDLE,
-            "Acquired a swapchain image while a previous acquire is still pending (one submit per acquire)");
+        // One submit must consume the previous acquire before another one is issued. If an
+        // exception unwound between a successful acquire and its submit on a previous frame, the
+        // pending image-available semaphore was signaled by acquire but never waited. Such a
+        // binary semaphore has no pending GPU work, so it is legal to destroy; recreating it in
+        // the same ring slot is the only way to return it to the unsignaled state host-side.
+        if (_pendingAcquireSemaphore != VK_NULL_HANDLE)
+        {
+            VKM_DEBUG_ERROR("Previous acquire's image-available semaphore was never consumed by a submit; recreating it");
+            for (uint32_t i = 0; i < FRAME_COUNT; ++i)
+            {
+                if (_imageAvailableSemaphores[i] != _pendingAcquireSemaphore)
+                {
+                    continue;
+                }
+
+                vkDestroySemaphore(device, _imageAvailableSemaphores[i], nullptr);
+                const VkSemaphoreCreateInfo semaphoreCreateInfo{ .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+                VkResult recreateResult = vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &_imageAvailableSemaphores[i]);
+                VKM_VK_ASSERT(recreateResult, "Failed to recreate swapchain image-available semaphore");
+#ifdef VKM_DEBUG_NAME_ENABLED
+                const std::string semaphoreName = fmt::format("SwapChainImageAvailableSemaphore_{}", i);
+                const VkDebugUtilsObjectNameInfoEXT nameInfo{
+                    .sType        = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+                    .objectType   = VK_OBJECT_TYPE_SEMAPHORE,
+                    .objectHandle = reinterpret_cast<uint64_t>(_imageAvailableSemaphores[i]),
+                    .pObjectName  = semaphoreName.c_str(),
+                };
+                vkSetDebugUtilsObjectNameEXT(device, &nameInfo);
+#endif
+                break;
+            }
+            _pendingAcquireSemaphore = VK_NULL_HANDLE;
+        }
 
         VkSemaphore imageAvailableSemaphore = _imageAvailableSemaphores[_frameRingIndex];
+        // Advance the ring on every acquire attempt (success or failure) to stay in lockstep with
+        // the engine's per-frame _currentFrameIndex. A failed acquire leaves this slot's semaphore
+        // unsignaled, which is safe to reuse on a later attempt.
+        _frameRingIndex = (_frameRingIndex + 1) % FRAME_COUNT;
 
         uint32_t imageIndex = 0;
         VkResult vkResult = vkAcquireNextImageKHR(device, _swapChain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
         if (vkResult != VK_SUCCESS && vkResult != VK_SUBOPTIMAL_KHR)
         {
-            // Do not advance the ring or set pending state: the semaphore was not signaled.
+            // Do not set pending state: the semaphore was not signaled.
             VKM_DEBUG_ERROR("Failed to acquire next swapchain image");
             return VKM_INVALID_RESOURCE_HANDLE;
         }
 
         _pendingAcquireSemaphore = imageAvailableSemaphore;
-        _frameRingIndex = (_frameRingIndex + 1) % FRAME_COUNT;
         _currentBackBufferIndex = imageIndex;
         return _backBuffers[imageIndex];
     }
@@ -329,6 +362,11 @@ namespace vkm
         VkmCommandQueueVulkan* presentQueueVulkan = static_cast<VkmCommandQueueVulkan*>(_presentQueue);
         VkQueue vkQueue = presentQueueVulkan->getVkQueue();
 
+        // Present sync assumes exactly one submit per frame passes presentSwapChain and that it is
+        // the only work touching the acquired swapchain image (single device queue today;
+        // uploadToBuffer self-blocks and never touches swapchain images). That single submit is
+        // what signals _renderFinishedSemaphores[_currentBackBufferIndex] below.
+        //
         // Presenting without the render-finished wait semaphore would race the GPU against the
         // display engine, which the validation layer flags. Require a completed submit to have
         // taken the signal semaphore for this image.
@@ -362,6 +400,13 @@ namespace vkm
 
     VkSemaphore VkmSwapChainVulkan::takeRenderFinishedSemaphoreForSignal()
     {
+        if (_currentBackBufferIndex == INVALID_VALUE32)
+        {
+            // No image has been successfully acquired yet, so there is no valid render-finished
+            // semaphore to signal. Do not mark a present-wait pending; the submit must skip it.
+            VKM_DEBUG_ERROR("Requested a render-finished signal semaphore before any image was acquired");
+            return VK_NULL_HANDLE;
+        }
         _renderFinishedPending = true;
         return _renderFinishedSemaphores[_currentBackBufferIndex];
     }

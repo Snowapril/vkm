@@ -200,6 +200,13 @@ namespace vkm
         prepareRender();
 
         VkmResourceHandle currentBackBuffer = _mainSwapChain->acquireNextImage();
+        if (!currentBackBuffer.isValid())
+        {
+            // Acquire failed (e.g. surface lost/out-of-date). prepareRender() only waited on and
+            // reset this frame slot, so there is no half-recorded work to unwind; skip the frame
+            // rather than record and present a stale image index.
+            return;
+        }
         VKM_DEBUG_INFO(fmt::format("Engine update : delta time : {}", deltaTime).c_str());
 
         VkmRenderGraph* renderGraph = _frameRenderGraphs[_currentFrameIndex].get();
