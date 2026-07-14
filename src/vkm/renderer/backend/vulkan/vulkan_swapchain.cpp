@@ -175,7 +175,11 @@ namespace vkm
 
         uint32_t imageCount;
         vkGetSwapchainImagesKHR(device, _swapChain, &imageCount, nullptr);
-        VKM_ASSERT(minImageCountClamped == imageCount, "Wrong swapchain setup");
+        // The implementation may legally create more images than the requested minImageCount
+        // (Mesa's X11 WSI does); only require the count to be in the range our fixed-size
+        // per-image storage supports.
+        VKM_ASSERT(imageCount >= minImageCountClamped && imageCount <= MAX_BACK_BUFFER_COUNT,
+                   "Swapchain image count outside supported range");
         std::vector<VkImage> swapImages(imageCount);
         vkGetSwapchainImagesKHR(device, _swapChain, &imageCount, swapImages.data());
 

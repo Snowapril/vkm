@@ -42,8 +42,9 @@ namespace vkm
         // acquire-semaphore-reuse pitfall / VUID-vkAcquireNextImageKHR-semaphore-01286).
         std::array<VkSemaphore, FRAME_COUNT>        _imageAvailableSemaphores{};
         // Per swapchain image, indexed by the acquired imageIndex; signaled by the frame's
-        // submit and waited by vkQueuePresentKHR.
-        std::array<VkSemaphore, FRAME_BUFFER_COUNT> _renderFinishedSemaphores{};
+        // submit and waited by vkQueuePresentKHR. Sized to MAX_BACK_BUFFER_COUNT because
+        // the driver may create more images than the requested FRAME_BUFFER_COUNT.
+        std::array<VkSemaphore, MAX_BACK_BUFFER_COUNT> _renderFinishedSemaphores{};
         uint32_t    _frameRingIndex{0};
         // Handoff state between acquire, submit and present.
         VkSemaphore _pendingAcquireSemaphore{VK_NULL_HANDLE};

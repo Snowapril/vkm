@@ -11,6 +11,10 @@ namespace vkm
 {
     constexpr const uint32_t BACK_BUFFER_COUNT = 3;
     constexpr const uint32_t FRAME_BUFFER_COUNT = 3;
+    // Vulkan allows the driver to create more swapchain images than the requested
+    // minImageCount (Mesa's X11 WSI does, e.g. under lavapipe); per-image storage is
+    // sized to this upper bound while FRAME_BUFFER_COUNT stays the requested count.
+    constexpr const uint32_t MAX_BACK_BUFFER_COUNT = 8;
 
     enum class VkmResourceType : uint8_t
     {

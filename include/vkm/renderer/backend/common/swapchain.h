@@ -85,7 +85,7 @@ namespace vkm
         void destroySwapChainCommon();
 
     protected:
-        std::array<VkmResourceHandle, FRAME_BUFFER_COUNT> _backBuffers;
+        std::array<VkmResourceHandle, MAX_BACK_BUFFER_COUNT> _backBuffers;
 
         VkmDriverBase* _driver;
         VkmCommandQueueBase* _presentQueue = nullptr;
