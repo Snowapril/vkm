@@ -22,6 +22,12 @@ namespace vkm
 
     void VkmRenderResourcePool::releaseResource(VkmResourceHandle handle)
     {
+        // Guard before any indexing: an invalid handle carries poolType/type values that
+        // must not be used as array indices.
+        if (!handle.isValid() || handle.poolType >= VkmResourcePoolType::Count ||
+            handle.type >= VkmResourceType::Count)
+            return;
+
         std::lock_guard<std::mutex> lock(_mutex);
         VkmDriverResourceSubPool& subPool = _subPools[(uint8_t)handle.poolType];
         if (handle.id < subPool._resources[(uint8_t)handle.type].size() &&
