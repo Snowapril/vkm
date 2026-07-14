@@ -14,6 +14,19 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Why: <the edge case that forced it>
 ```
 
+### 2026-07-14 — per-image swapchain storage sized past FRAME_BUFFER_COUNT
+- Planned: the reviewed swapchain design sized per-image arrays (render-finished
+  semaphores, back-buffer handles) to `FRAME_BUFFER_COUNT`, relying on the existing
+  `minImageCountClamped == imageCount` assert.
+- Did instead: added `MAX_BACK_BUFFER_COUNT` (8) for per-image storage, relaxed the
+  assert to a range check, filled `_backBuffers` with `VKM_INVALID_RESOURCE_HANDLE`
+  (members were previously indeterminate when default-initialized), and made
+  `releaseResource()` reject invalid/out-of-range handles before any indexing.
+- Why: the first lavapipe CI run proved Mesa's X11 WSI legally creates more swapchain
+  images than requested, firing the assert on all Ubuntu vulkan jobs; the enlargement
+  then exposed the garbage-handle release path (heap corruption via out-of-bounds
+  `_subPools` indexing). `FRAME_BUFFER_COUNT` itself stays 3 per the AGENTS.md rule.
+
 ### 2026-07-13 — VKM_NEW_TAGGED: no escape hatch added
 - Planned: harden the macro against non-literal labels, keeping `allocate()`/`trackedNew()`
   as an escape hatch for legitimate non-literal static-duration call sites.
