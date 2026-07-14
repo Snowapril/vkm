@@ -38,6 +38,13 @@ namespace vkm
         inline VkmBindlessResourceManagerVulkan* getBindlessResourceManager() const { return _bindlessResourceManager.get(); }
         inline VkmGpuTimerVulkan* getGpuTimer() const { return _gpuTimer.get(); }
 
+        /*
+        * @brief true if VK_EXT_device_fault was requested (enableGpuCrashDump) and the
+        * GPU/driver actually supports it. Guards whether vkGetDeviceFaultInfoEXT() may be
+        * called from vulkan_util.cpp's device-lost handling.
+        */
+        inline bool isDeviceFaultExtensionEnabled() const { return _deviceFaultExtensionEnabled; }
+
         uint32_t getQueueFamilyIndex(VkmCommandQueueType queueType) const;
 
         struct PooledBufferAllocation
@@ -96,5 +103,8 @@ namespace vkm
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT};
         VkPhysicalDevicePushDescriptorPropertiesKHR _pushDescriptorProperties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR};
         std::vector<VkBaseOutStructure*> _linkedDeviceProperties{reinterpret_cast<VkBaseOutStructure*>(&_pushDescriptorProperties)};
+
+        VkPhysicalDeviceFaultFeaturesEXT _deviceFaultFeatures{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
+        bool _deviceFaultExtensionEnabled{false};
     };
 }

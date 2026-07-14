@@ -163,6 +163,13 @@ endif()
 # Build Options
 option(BUILD_COVERAGE "Build code coverage" OFF)
 option(GPU_RESOURCE_DEBUG_NAME "Enable vulkan object debug name" ON)
+# Default ON except for Release builds; pass -DGPU_BREAD_CRUMBS=ON to opt a Release build back in.
+if (CMAKE_BUILD_TYPE MATCHES Release)
+    set(VKM_GPU_BREAD_CRUMBS_DEFAULT OFF)
+else()
+    set(VKM_GPU_BREAD_CRUMBS_DEFAULT ON)
+endif()
+option(GPU_BREAD_CRUMBS "Enable GPU crash breadcrumb instrumentation (submission history + per-subgraph completion markers)" ${VKM_GPU_BREAD_CRUMBS_DEFAULT})
 option(CHROME_TRACING "Enable Chrome Tracing for CPU profiling" ON)
 option(TASKFLOW_PROFILER, "Enable Taskflow Profiler" ON)
 option(VKM_ENABLE_IMGUI "Enable ImGui integration" ON)
@@ -174,6 +181,10 @@ endif()
 
 if (GPU_RESOURCE_DEBUG_NAME)
     add_definitions(-DVKM_DEBUG_NAME_ENABLED)
+endif()
+
+if (GPU_BREAD_CRUMBS)
+    add_definitions(-DVKM_ENABLE_GPU_BREAD_CRUMBS)
 endif()
 
 if (CHROME_TRACING)

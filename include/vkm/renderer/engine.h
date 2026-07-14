@@ -23,8 +23,9 @@ namespace vkm
     {
         bool enableValidationLayer;
         bool enableGpuCapture = false;
+        bool enableGpuCrashDump = false;
     };
-    constexpr const VkmEngineLaunchOptions DEFAULT_ENGINE_LAUNCH_OPTIONS = { true, false };
+    constexpr const VkmEngineLaunchOptions DEFAULT_ENGINE_LAUNCH_OPTIONS = { true, false, false };
 
     /*
     * @brief Engine base class

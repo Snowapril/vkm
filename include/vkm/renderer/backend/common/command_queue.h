@@ -23,6 +23,10 @@ namespace vkm
     {
         std::array<VkmCommandBufferBase*, MAX_NUM_COMMAND_BUFFER_SUBMITS> commandBuffers;
         uint32_t commandBufferCount;
+        // Which VkmRenderGraph frame slot this submission came from (VkmRenderGraph::frameIndex()).
+        // Read by VkmGpuCrashHandler::recordSubmission() to locate the right marker-buffer slice
+        // when reporting per-subgraph completion; unused/0 for submissions outside the render graph.
+        uint32_t frameIndex = 0;
     };
 
     /*

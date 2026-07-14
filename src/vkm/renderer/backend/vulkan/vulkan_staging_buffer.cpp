@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_util.h>
 
 #include <vk_mem_alloc.h>
+#include <cstring>
 
 namespace vkm
 {
@@ -81,6 +82,12 @@ namespace vkm
     {
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
         vmaFlushAllocation(driverVulkan->getVmaAllocator(), _vmaAllocation, offset, size);
+    }
+
+    void VkmStagingBufferVulkan::writeDirect(uint64_t offset, const void* data, uint64_t size)
+    {
+        std::memcpy(static_cast<uint8_t*>(_mappedPointer) + offset, data, size);
+        flush(offset, size);
     }
 
     void VkmStagingBufferVulkan::setDebugName(const char* name)

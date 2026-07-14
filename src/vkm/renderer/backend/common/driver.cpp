@@ -14,6 +14,8 @@
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
+#include <vkm/renderer/backend/common/gpu_crash_handler.h>
+
 #include <cstring>
 
 namespace vkm
@@ -30,16 +32,19 @@ namespace vkm
     {
         _renderResourcePool.reset(newRenderResourcePoolInner());
         _deferredReclaimer = std::make_unique<VkmDeferredResourceReclaimer>(this);
+        _gpuCrashHandler = std::make_unique<VkmGpuCrashHandler>(this);
 
         if (options != nullptr)
         {
             _launchOptions = *options;
             _debugNamingEnabled = options->enableValidationLayer || options->enableGpuCapture;
+            _gpuCrashDumpEnabled = options->enableGpuCrashDump;
         }
         else
         {
             _launchOptions = DEFAULT_ENGINE_LAUNCH_OPTIONS;
             _debugNamingEnabled = false;
+            _gpuCrashDumpEnabled = false;
         }
 
         VkmInitResult result = initializeInner(options);

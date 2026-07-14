@@ -3,6 +3,8 @@
 #include <vkm/renderer/backend/vulkan/vulkan_command_queue.h>
 #include <vkm/renderer/backend/vulkan/vulkan_command_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
+#include <vkm/renderer/backend/vulkan/vulkan_util.h>
+#include <vkm/renderer/backend/common/gpu_crash_handler.h>
 
 #include <volk.h>
 
@@ -139,6 +141,10 @@ namespace vkm
         VkmGpuEventTimelineObject timelineObject = _gpuEventTimeline->allocateGpuEventTimelineObject();
         VkmGpuEventTimelineVulkan* timeline = static_cast<VkmGpuEventTimelineVulkan*>(_gpuEventTimeline.get());
 
+#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
+        _driver->getGpuCrashHandler()->recordSubmission(this, submitInfos, timelineObject);
+#endif // VKM_ENABLE_GPU_BREAD_CRUMBS
+
         std::vector<VkCommandBufferSubmitInfo> cmdBufferInfos;
         cmdBufferInfos.reserve(submitInfos.commandBufferCount);
         for (uint32_t i = 0; i < submitInfos.commandBufferCount; ++i)
@@ -167,7 +173,7 @@ namespace vkm
             .signalSemaphoreInfoCount = 1,
             .pSignalSemaphoreInfos    = &signalSemaphoreInfo,
         };
-        vkQueueSubmit2(_vkQueue, 1, &submitInfo2, VK_NULL_HANDLE);
+        VKM_VK_CHECK_RESULT_MSG(vkQueueSubmit2(_vkQueue, 1, &submitInfo2, VK_NULL_HANDLE), "Failed to submit command buffer(s) to graphics queue");
 
         return timelineObject;
     }

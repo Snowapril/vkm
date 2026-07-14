@@ -349,7 +349,7 @@ namespace vkm
         {
             // Note : initialize engine first for logger manager initialization precede
 
-            if (_engine.initializeEngine( appDelegate ) == false)
+            if (_engine.initializeEngine( appDelegate, VkmEngine::parseEngineLaunchOptions(argc, argv) ) == false)
             {
                 VKM_DEBUG_ERROR("Failed to initialize VkmEngine for apple platform");
                 return -1;
