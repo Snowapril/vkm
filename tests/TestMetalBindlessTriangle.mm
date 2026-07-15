@@ -15,9 +15,12 @@
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
+#include <vkm/renderer/backend/common/staging_buffer.h>
+#include <vkm/renderer/backend/common/command_queue.h>
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 
 namespace
@@ -140,12 +143,85 @@ TEST_CASE("Metal bindless - registerBuffer returns valid slots and draw path exe
     renderGraph.execute();
     renderGraph.ensureCompleted();
 
-    // TODO: compare center/corner pixels once VkmDriverBase::readbackTexture() exists
-    // (see TestBackbufferReadback.mm for the agreed interface) -- until then this test
-    // verifies the draw path records/submits cleanly under the validation layer.
+    // Pixel-level proof the bindless draw actually produced geometry (regression test for
+    // the argument-buffer layout bug where the shader read null pointers and only the
+    // clear color survived). Target is BGRA8: byte order B,G,R,A. Clear is opaque black
+    // (see fbDesc), the triangle spans NDC y in [-0.5, 0.5] so the framebuffer center is
+    // inside it and corners are outside.
+    vkm::VkmTextureReadbackResult readback = driver->readbackTexture(offscreen->getHandle());
+    REQUIRE(readback.pixels.size() == static_cast<size_t>(64) * 64 * 4);
+
+    const auto pixelAt = [&](uint32_t x, uint32_t y) {
+        return &readback.pixels[(static_cast<size_t>(y) * readback.width + x) * readback.channels];
+    };
+    const uint8_t* corner = pixelAt(1, 1);
+    CHECK(corner[0] == 0);   // B
+    CHECK(corner[1] == 0);   // G
+    CHECK(corner[2] == 0);   // R
+    CHECK(corner[3] == 255); // A
+
+    // Center interpolates all three vertex colors, so every channel must be non-zero;
+    // avoid exact interpolation values (rasterization/rounding tolerance).
+    const uint8_t* center = pixelAt(32, 32);
+    CHECK(center[0] > 0); // B
+    CHECK(center[1] > 0); // G
+    CHECK(center[2] > 0); // R
 
     bindlessManager->unregisterBuffer(vertexSlot, vkm::VkmBindlessArrayType::Buffer);
     bindlessManager->unregisterBuffer(indexSlot, vkm::VkmBindlessArrayType::IndexBuffer);
+}
+
+TEST_CASE("Metal bindless - buffer upload/copy round-trip preserves bytes")
+{
+    MetalBindlessFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+    vkm::VkmDriverBase* driver = f.driver.get();
+
+    // Upload a known pattern to a device-local buffer, copy it back into a fresh readback
+    // staging buffer, and compare -- exercises VkmCommandBufferMetal::onCopyBuffer in both
+    // directions through engine APIs only (rules out silent upload corruption).
+    std::array<uint8_t, 256> pattern{};
+    for (size_t i = 0; i < pattern.size(); ++i)
+    {
+        pattern[i] = static_cast<uint8_t>((i * 7 + 3) & 0xFF);
+    }
+
+    vkm::VkmBufferInfo bufferInfo{};
+    bufferInfo._flags = vkm::VkmResourceCreateInfo::AllowShaderWrite |
+                        vkm::VkmResourceCreateInfo::AllowTransferDst |
+                        vkm::VkmResourceCreateInfo::AllowTransferSrc;
+    bufferInfo._size = pattern.size();
+    bufferInfo._placementHint = vkm::VkmMemoryPlacementHint::ForceCommitted;
+    bufferInfo._debugName = "RoundTripDeviceBuffer";
+    vkm::VkmBuffer* deviceBuffer = driver->newBuffer(bufferInfo);
+    REQUIRE(deviceBuffer != nullptr);
+    REQUIRE(driver->uploadToBuffer(deviceBuffer->getHandle(), pattern.data(), pattern.size()));
+
+    vkm::VkmStagingBufferInfo readbackInfo{};
+    readbackInfo._flags = vkm::VkmResourceCreateInfo::AllowTransferDst;
+    readbackInfo._size = pattern.size();
+    readbackInfo._debugName = "RoundTripReadbackStaging";
+    vkm::VkmStagingBuffer* readbackStaging = driver->newStagingBuffer(readbackInfo);
+    REQUIRE(readbackStaging != nullptr);
+
+    vkm::VkmCommandQueueBase* queue = driver->getCommandQueue(vkm::VkmCommandQueueType::Graphics, 0);
+    vkm::VkmCommandBufferBase* commandBuffer = queue->getCommandBufferPool()->allocate();
+    commandBuffer->beginCommandBuffer();
+    commandBuffer->copyBuffer(deviceBuffer->getHandle(), readbackStaging->getHandle(), 0, 0, pattern.size());
+    commandBuffer->endCommandBuffer();
+
+    vkm::CommandSubmitInfo submitInfo;
+    submitInfo.commandBuffers[0] = commandBuffer;
+    submitInfo.commandBufferCount = 1;
+    vkm::VkmGpuEventTimelineObject submitResult = queue->submit(submitInfo);
+    REQUIRE(submitResult._gpuEventTimeline != nullptr);
+    submitResult._gpuEventTimeline->waitIdle(vkm::MAX_GPU_TIMEOUT_PER_FRAME);
+
+    readbackStaging->invalidate(0, pattern.size());
+    const uint8_t* mapped = static_cast<const uint8_t*>(readbackStaging->map());
+    REQUIRE(mapped != nullptr);
+    CHECK(std::memcmp(mapped, pattern.data(), pattern.size()) == 0);
+    readbackStaging->unmap();
 }
 
 TEST_CASE("Metal bindless - slots are recycled after unregister")

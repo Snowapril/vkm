@@ -223,6 +223,30 @@ namespace vkm
         _commandEncoder.commit();
     }
 
+    void VkmCommandBufferMetal::onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset)
+    {
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        VkmTextureMetal* textureMetal = static_cast<VkmTextureMetal*>(renderResourcePool->getResource<VkmTexture>(srcTexture));
+        id<MTLBuffer> mtlDstBuffer = resolveMTLBuffer(renderResourcePool, dstBuffer);
+
+        const VkmTextureInfo& textureInfo = textureMetal->getTextureInfo();
+        const uint32_t bytesPerRow = textureInfo._extent.x * vkmBytesPerTexel(textureInfo._format);
+
+        // Metal4 has no blit encoder -- texture copies live on the compute encoder. Same
+        // per-call encoder rationale as onCopyBuffer above.
+        _commandEncoder.beginComputePass();
+        [_commandEncoder.getActiveComputeCommandEncoder() copyFromTexture:textureMetal->getInternalHandle()
+                                                              sourceSlice:0
+                                                              sourceLevel:0
+                                                             sourceOrigin:MTLOriginMake(0, 0, 0)
+                                                               sourceSize:MTLSizeMake(textureInfo._extent.x, textureInfo._extent.y, 1)
+                                                                 toBuffer:mtlDstBuffer
+                                                        destinationOffset:dstOffset
+                                                   destinationBytesPerRow:bytesPerRow
+                                                 destinationBytesPerImage:0];
+        _commandEncoder.commit();
+    }
+
     void VkmCommandBufferMetal::onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
     {
         [_commandEncoder.getActiveRenderCommandEncoder() drawPrimitives:static_cast<MTLPrimitiveType>(_boundPrimitiveType)

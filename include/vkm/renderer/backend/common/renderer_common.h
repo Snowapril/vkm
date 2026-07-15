@@ -175,6 +175,9 @@ namespace vkm
     * requestedSize for textures, independent of backend (Metal/WebGPU have no format-size
     * introspection API of their own to compute this).
     */
+    // Bytes per texel for uncompressed formats; 0 for Undefined/unknown.
+    uint32_t vkmBytesPerTexel(VkmFormat format);
+
     uint64_t computeTextureByteSize(const VkmTextureInfo& info);
 
     struct VkmBufferInfo : public VkmResourceInfo

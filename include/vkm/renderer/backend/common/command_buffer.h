@@ -48,6 +48,11 @@ namespace vkm
         // recording but outside a render pass.
         void copyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size);
 
+        // Texture-to-buffer copy (e.g. render target -> readback staging). Copies mip 0 /
+        // layer 0 of an uncompressed color texture, tightly packed. Must be recorded while
+        // recording but outside a render pass.
+        void copyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset = 0);
+
         // Draw related -- indices, if any, are fetched manually in-shader via a bindless
         // index buffer rather than a bound VkBuffer, so there is no separate "indexed" draw.
         void draw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex = 0, uint32_t firstInstance = 0);
@@ -97,6 +102,7 @@ namespace vkm
         virtual void onBindPipeline(VkmPipelineStateBase* pipelineState) = 0;
         virtual void onUnbindPipeline() = 0;
         virtual void onCopyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size) = 0;
+        virtual void onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset) = 0;
         virtual void onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) = 0;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) = 0;
         virtual void onSetDebugName(const char* name) = 0;

@@ -94,6 +94,16 @@ namespace vkm
         onCopyBuffer(srcBuffer, dstBuffer, srcOffset, dstOffset, size);
     }
 
+    void VkmCommandBufferBase::copyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset)
+    {
+        if (!_isRecording || _isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("copyTextureToBuffer must be called while recording and outside a render pass");
+            return;
+        }
+        onCopyTextureToBuffer(srcTexture, dstBuffer, dstOffset);
+    }
+
     void VkmCommandBufferBase::draw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
     {
         if (!_isRecording || !_isInRenderPass || _boundPipelineState == nullptr)

@@ -11,6 +11,8 @@
 #include <vkm/renderer/backend/common/render_pass.h>
 #include <vkm/renderer/backend/common/texture.h>
 
+#include <algorithm>
+#include <cstdlib>
 #include <memory>
 #include <vector>
 
@@ -18,9 +20,8 @@ static constexpr int kWidth    = 64;
 static constexpr int kHeight   = 64;
 [[maybe_unused]] static constexpr int kChannels = 4;
 
-// Renders a solid colour to a 64x64 offscreen texture via the vkm engine abstraction.
-// Returns the CPU pixel data. Readback is stubbed until VkmDriverBase::readbackTexture()
-// is available — the returned vector is always empty for now.
+// Renders a solid colour to a 64x64 offscreen texture via the vkm engine abstraction and
+// reads the pixels back through VkmDriverBase::readbackTexture().
 static std::vector<uint8_t> renderSolidColorAndReadback(
     vkm::VkmDriverBase* driver,
     float r, float g, float b, float a)
@@ -57,44 +58,8 @@ static std::vector<uint8_t> renderSolidColorAndReadback(
     renderGraph.execute();  // waitForCompletion = true by default
     renderGraph.ensureCompleted();
 
-    // TODO: Implement CPU readback once VkmDriverBase::readbackTexture() is available.
-    //
-    // To restore this test:
-    //   1. Add the readback call:
-    //        vkm::VkmTextureReadbackResult rb = driver->readbackTexture(offscreen->getHandle());
-    //        return rb.pixels;
-    //
-    //   2. Restore the reference PNG helper and STB includes:
-    //        #pragma clang diagnostic push
-    //        #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    //        #define STB_IMAGE_IMPLEMENTATION
-    //        #define STB_IMAGE_WRITE_IMPLEMENTATION
-    //        #include <stb_image.h>
-    //        #include <stb_image_write.h>
-    //        #pragma clang diagnostic pop
-    //        #include <filesystem>
-    //        #include <string>
-    //
-    //   3. Uncomment the comparison block in each test case (see below).
-    //
-    // Expected engine-side interface (to be added to common/driver.h):
-    //
-    //   struct VkmTextureReadbackResult {
-    //       std::vector<uint8_t> pixels;   // row-major, kChannels bytes per pixel
-    //       uint32_t             width;
-    //       uint32_t             height;
-    //       uint32_t             channels;
-    //   };
-    //   VkmTextureReadbackResult readbackTexture(VkmResourceHandle handle);
-    //
-    // Engine implementation responsibilities:
-    //   a. Allocate a CPU-mappable staging buffer of size width * height * bytesPerPixel.
-    //   b. Record a transfer command (blit / buffer-image copy) from the source texture
-    //      into the staging buffer on the graphics or transfer queue.
-    //   c. Submit and wait for completion via VkmGpuEventTimelineBase::waitIdle().
-    //   d. Map the staging buffer, memcpy into result vector, then release.
-
-    return {};  // empty until readbackTexture() is implemented
+    vkm::VkmTextureReadbackResult readback = driver->readbackTexture(offscreen->getHandle());
+    return readback.pixels;
 }
 
 // MTLCreateSystemDefaultDevice() is called solely to construct VkmDriverMetal.
@@ -118,52 +83,35 @@ struct ReadbackFixture {
     }
 };
 
-TEST_CASE("Backbuffer readback - solid red renders and matches reference PNG") {
+// Checks every pixel of an R8G8B8A8 image equals the expected RGBA value (within one
+// LSB of quantization tolerance). Direct pixel asserts instead of the PNG-reference
+// comparison originally sketched here -- see implementation-notes.md.
+static void checkSolidColor(const std::vector<uint8_t>& pixels, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+    REQUIRE(pixels.size() == static_cast<size_t>(kWidth) * kHeight * kChannels);
+    int maxDiff = 0;
+    const uint8_t expected[4] = {r, g, b, a};
+    for (size_t i = 0; i < pixels.size(); ++i)
+    {
+        maxDiff = std::max(maxDiff, std::abs(static_cast<int>(pixels[i]) - static_cast<int>(expected[i % 4])));
+    }
+    CHECK(maxDiff <= 1);
+}
+
+TEST_CASE("Backbuffer readback - solid red renders and reads back") {
     ReadbackFixture f;
     VKM_REQUIRE_DEVICE(f.initResult);
 
     auto rendered = renderSolidColorAndReadback(f.driver, 1.0f, 0.0f, 0.0f, 1.0f);
-
-    // TODO: uncomment once VkmDriverBase::readbackTexture() is implemented.
-    // See renderSolidColorAndReadback() for restore instructions.
-    //
-    // std::string refPath = std::string(RESOURCES_DIR) + "tests/reference_red_64x64.png";
-    // auto reference = loadOrGenerateReferencePng(refPath, 255, 0, 0, 255);
-    //
-    // stbi_write_png("/tmp/vkm_backbuffer_rendered.png",
-    //                kWidth, kHeight, kChannels, rendered.data(), kWidth * kChannels);
-    //
-    // REQUIRE(rendered.size() == reference.size());
-    // int maxDiff = 0;
-    // for (size_t i = 0; i < rendered.size(); ++i)
-    //     maxDiff = std::max(maxDiff, std::abs((int)rendered[i] - (int)reference[i]));
-    // CHECK(maxDiff <= 1);
-
-    CHECK(rendered.empty());  // placeholder until readbackTexture() is implemented
+    checkSolidColor(rendered, 255, 0, 0, 255);
 }
 
-TEST_CASE("Backbuffer readback - solid green renders and matches reference PNG") {
+TEST_CASE("Backbuffer readback - solid green renders and reads back") {
     ReadbackFixture f;
     VKM_REQUIRE_DEVICE(f.initResult);
 
     auto rendered = renderSolidColorAndReadback(f.driver, 0.0f, 1.0f, 0.0f, 1.0f);
-
-    // TODO: uncomment once VkmDriverBase::readbackTexture() is implemented.
-    // See renderSolidColorAndReadback() for restore instructions.
-    //
-    // std::string refPath = std::string(RESOURCES_DIR) + "tests/reference_green_64x64.png";
-    // auto reference = loadOrGenerateReferencePng(refPath, 0, 255, 0, 255);
-    //
-    // stbi_write_png("/tmp/vkm_backbuffer_rendered_green.png",
-    //                kWidth, kHeight, kChannels, rendered.data(), kWidth * kChannels);
-    //
-    // REQUIRE(rendered.size() == reference.size());
-    // int maxDiff = 0;
-    // for (size_t i = 0; i < rendered.size(); ++i)
-    //     maxDiff = std::max(maxDiff, std::abs((int)rendered[i] - (int)reference[i]));
-    // CHECK(maxDiff <= 1);
-
-    CHECK(rendered.empty());  // placeholder until readbackTexture() is implemented
+    checkSolidColor(rendered, 0, 255, 0, 255);
 }
 
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE

@@ -143,6 +143,31 @@ namespace vkm
                                              size);
     }
 
+    void VkmCommandBufferWebGPU::onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset)
+    {
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        VkmTextureWebGPU* textureWebGPU = static_cast<VkmTextureWebGPU*>(renderResourcePool->getResource<VkmTexture>(srcTexture));
+
+        const VkmTextureInfo& textureInfo = textureWebGPU->getTextureInfo();
+        const uint32_t bytesPerRow = textureInfo._extent.x * vkmBytesPerTexel(textureInfo._format);
+        // WebGPU requires texture->buffer copy rows to be 256-byte aligned.
+        VKM_ASSERT(bytesPerRow % 256 == 0, "WebGPU texture readback requires a 256-byte-aligned row pitch");
+
+        WGPUTexelCopyTextureInfo source{};
+        source.texture = textureWebGPU->getWGPUTexture();
+        source.mipLevel = 0;
+        source.aspect = WGPUTextureAspect_All;
+
+        WGPUTexelCopyBufferInfo destination{};
+        destination.layout.offset = dstOffset;
+        destination.layout.bytesPerRow = bytesPerRow;
+        destination.layout.rowsPerImage = textureInfo._extent.y;
+        destination.buffer = resolveWGPUBuffer(renderResourcePool, dstBuffer);
+
+        const WGPUExtent3D copySize{textureInfo._extent.x, textureInfo._extent.y, 1};
+        wgpuCommandEncoderCopyTextureToBuffer(_encoder, &source, &destination, &copySize);
+    }
+
     void VkmCommandBufferWebGPU::onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
     {
         wgpuRenderPassEncoderDraw(_renderPassEncoder, vertexCount, instanceCount, firstVertex, firstInstance);

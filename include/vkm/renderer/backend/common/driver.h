@@ -46,6 +46,17 @@ namespace vkm
         return static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs);
     }
 
+    // CPU-side pixel data returned by VkmDriverBase::readbackTexture(). Row-major,
+    // tightly packed, `channels` bytes per pixel in the texture's native channel order
+    // (e.g. BGRA for BGRA8_UNORM).
+    struct VkmTextureReadbackResult
+    {
+        std::vector<uint8_t> pixels;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        uint32_t channels = 0;
+    };
+
     enum class VkmInitResultCode
     {
         Success,
@@ -99,6 +110,14 @@ namespace vkm
          * @brief Create staging buffer with the given staging buffer info
          */
         VkmStagingBuffer* newStagingBuffer(const VkmStagingBufferInfo& info);
+
+        /*
+         * @brief Synchronous GPU texture -> CPU pixels readback of mip 0 / layer 0 of an
+         * uncompressed color texture, via a transient readback staging buffer and a one-off
+         * command buffer on the Graphics queue. Blocks until the copy completes -- intended
+         * for tests and debugging, not per-frame use. Returns empty pixels on failure.
+         */
+        VkmTextureReadbackResult readbackTexture(VkmResourceHandle textureHandle);
 
         /*
          * @brief Synchronously upload `size` bytes from `data` into `dstBuffer` at

@@ -20,6 +20,7 @@ namespace vkm
         virtual void* map() override final;
         virtual void unmap() override final;
         virtual void flush(uint64_t offset, uint64_t size) override final;
+        virtual void invalidate(uint64_t offset, uint64_t size) override final;
         virtual void writeDirect(uint64_t offset, const void* data, uint64_t size) override final;
         virtual void setDebugName(const char* name) override final;
 

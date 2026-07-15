@@ -48,9 +48,15 @@ namespace vkm
         };
 
         // Staging buffers are always committed + persistently host-mapped (never suballocated).
+        // AllowTransferDst marks a readback buffer: the CPU reads it after GPU writes, so it
+        // needs HOST_ACCESS_RANDOM (readable) memory rather than the write-combined memory
+        // SEQUENTIAL_WRITE may select.
         VmaAllocationCreateInfo allocCreateInfo{};
         allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-        allocCreateInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+        allocCreateInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
+            (((info._flags & VkmResourceCreateInfo::AllowTransferDst) != 0)
+                ? VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT
+                : VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
 
         VmaAllocationInfo vmaAllocationInfo{};
         const VkResult vkResult = vmaCreateBuffer(driverVulkan->getVmaAllocator(), &bufferCreateInfo, &allocCreateInfo, &_vkBuffer, &_vmaAllocation, &vmaAllocationInfo);
@@ -82,6 +88,12 @@ namespace vkm
     {
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
         vmaFlushAllocation(driverVulkan->getVmaAllocator(), _vmaAllocation, offset, size);
+    }
+
+    void VkmStagingBufferVulkan::invalidate(uint64_t offset, uint64_t size)
+    {
+        VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
+        vmaInvalidateAllocation(driverVulkan->getVmaAllocator(), _vmaAllocation, offset, size);
     }
 
     void VkmStagingBufferVulkan::writeDirect(uint64_t offset, const void* data, uint64_t size)

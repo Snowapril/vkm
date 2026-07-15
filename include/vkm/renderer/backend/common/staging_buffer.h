@@ -19,6 +19,14 @@ namespace vkm
         virtual void flush(uint64_t offset, uint64_t size) = 0;
 
         /*
+        * @brief Makes GPU writes visible to the CPU before reading a mapped range back
+        * (mirror of flush()). Default no-op: Metal Shared storage and WebGPU MapRead
+        * mappings are coherent; only Vulkan overrides this (vmaInvalidateAllocation) for
+        * potentially non-coherent host memory.
+        */
+        virtual void invalidate(uint64_t offset, uint64_t size) { (void)offset; (void)size; }
+
+        /*
         * @brief Writes `size` bytes from `data` into this buffer at `offset` from the CPU,
         * without requiring the buffer to be in a mapped state (unlike map()+memcpy()+flush()).
         * On Vulkan/Metal this is equivalent to map()+memcpy()+flush(), since those buffers stay

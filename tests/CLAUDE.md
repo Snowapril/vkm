@@ -69,13 +69,12 @@ Tests that need CPU-side pixel data must request it through a dedicated engine f
 layer. Until that API exists, tests that require pixel comparison should be left as stubs
 with a `// TODO: implement when engine readback API is available` comment.
 
-### Current exception — TestBackbufferReadback.mm
+### Pixel readback
 
-`TestBackbufferReadback.mm` currently drives a Metal render pass and performs `[MTLTexture getBytes:]`
-readback directly because `VkmDriverBase` has no CPU readback API yet. This is a **temporary
-exception**. When `VkmDriverBase::readbackTexture(handle, ...)` (or equivalent) is added to the
-engine, this file must be refactored to remove all direct Metal calls. New tests must not
-introduce further direct-API exceptions without a documented reason.
+`VkmDriverBase::readbackTexture(handle)` is the engine-level CPU readback API — use it for
+any pixel-comparison test (see `TestBackbufferReadback.mm` and `TestMetalBindlessTriangle.mm`
+for the pattern). The former direct-`[MTLTexture getBytes:]` exception is resolved; new tests
+must not introduce direct-API exceptions without a documented reason.
 
 ### Rationale
 

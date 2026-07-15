@@ -205,6 +205,40 @@ namespace vkm
         vkCmdCopyBuffer(_vkCommandBuffer, srcVkBuffer, dstVkBuffer, 1, &copyRegion);
     }
 
+    void VkmCommandBufferVulkan::onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset)
+    {
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        VkmTextureVulkan* textureVulkan = static_cast<VkmTextureVulkan*>(renderResourcePool->getResource<VkmTexture>(srcTexture));
+        uint64_t dstBaseOffset = 0;
+        VkBuffer dstVkBuffer = resolveVkBufferAndOffset(renderResourcePool, dstBuffer, &dstBaseOffset);
+
+        const VkmTextureInfo& textureInfo = textureVulkan->getTextureInfo();
+        const VkImageLayout previousLayout = textureVulkan->getCurrentLayout();
+        transitionImageLayout(_vkCommandBuffer, textureVulkan->getImage(), previousLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+        const VkBufferImageCopy region{
+            .bufferOffset      = dstOffset + dstBaseOffset,
+            .bufferRowLength   = 0, // tightly packed
+            .bufferImageHeight = 0,
+            .imageSubresource  = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+            .imageOffset       = { 0, 0, 0 },
+            .imageExtent       = { textureInfo._extent.x, textureInfo._extent.y, 1 },
+        };
+        vkCmdCopyImageToBuffer(_vkCommandBuffer, textureVulkan->getImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dstVkBuffer, 1, &region);
+
+        // Leave the texture as we found it so later render passes/present see the layout
+        // the tracker says it is in. UNDEFINED is not a valid transition target (and means
+        // the texture was never rendered to anyway) -- keep TRANSFER_SRC and track it.
+        if (previousLayout != VK_IMAGE_LAYOUT_UNDEFINED)
+        {
+            transitionImageLayout(_vkCommandBuffer, textureVulkan->getImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, previousLayout);
+        }
+        else
+        {
+            textureVulkan->setCurrentLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        }
+    }
+
     void VkmCommandBufferVulkan::onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
     {
         vkCmdDraw(_vkCommandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
