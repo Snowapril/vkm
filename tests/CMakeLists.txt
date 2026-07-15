@@ -23,6 +23,7 @@ if (VKM_USE_METAL_API)
     list(APPEND SRCS
         ${SRC_DIR}/TestMetalDriver.mm
         ${SRC_DIR}/TestBackbufferReadback.mm
+        ${SRC_DIR}/TestMetalBindlessTriangle.mm
     )
 endif()
 
@@ -33,8 +34,17 @@ if (VKM_USE_METAL_API)
     set_source_files_properties(
         ${SRC_DIR}/TestMetalDriver.mm
         ${SRC_DIR}/TestBackbufferReadback.mm
+        ${SRC_DIR}/TestMetalBindlessTriangle.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++"
     )
+
+    # TestMetalBindlessTriangle drives the real triangle sample PSO; compile its shader
+    # caches for this build's backend next to the test binary.
+    vkm_add_shader_cache_target(
+        TARGET_NAME   tests_triangle_shaders
+        OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
+        PSO_JSON_FILES "${ROOT_DIR}/src/samples/triangle/renderpass.json"
+        EXTRA_DEPENDS  "${ROOT_DIR}/src/samples/triangle/triangle.hlsl")
 endif()
 
 if (NOT EMSCRIPTEN)
@@ -82,6 +92,15 @@ target_compile_definitions(${target}
     RESOURCES_DIR="${TEST_RESOURCES_DIR}"
     ${DEFAULT_COMPILE_DEFINITIONS}
 )
+
+if (VKM_USE_METAL_API)
+    add_dependencies(${target} tests_triangle_shaders)
+    target_compile_definitions(${target}
+        PRIVATE
+        TEST_TRIANGLE_SAMPLE_DIR="${ROOT_DIR}/src/samples/triangle/"
+        TEST_TRIANGLE_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
+    )
+endif()
 
 # Link libraries
 target_link_libraries(${target}

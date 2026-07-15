@@ -14,6 +14,28 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Why: <the edge case that forced it>
 ```
 
+### 2026-07-15 — Metal bindless triangle test has no pixel comparison
+- Planned: the bindless plan's Metal test would "read back center/corner pixels
+  following TestBackbufferReadback.mm's existing readback".
+- Did instead: TestMetalBindlessTriangle.mm drives the full bindless draw path
+  (register/upload/bind/push/draw) headlessly under the Metal validation layer, with
+  pixel comparison left as a stub TODO, exactly like TestBackbufferReadback.mm.
+- Why: TestBackbufferReadback.mm no longer performs raw readback -- it was stubbed
+  pending an engine `readbackTexture()` API, and tests/CLAUDE.md requires pixel tests
+  to stay stubs until that API exists. Adding a readback engine API mid-plan (new
+  command-buffer hooks on all three backends) would have been larger scope than the
+  bindless task itself.
+
+### 2026-07-15 — MSL argument-buffer layout pinned by explicit ids, not padding
+- Planned: set spirv-cross's `pad_argument_buffer_resources` so the set-0 argument
+  buffer struct layout stays fixed across shaders.
+- Did instead: dropped `pad_argument_buffer_resources`; the explicit
+  `add_msl_resource_binding` remaps alone pin each member's `[[id(N)]]`, which fully
+  determines Tier-2 entry offsets (id*8). Verified by inspecting the generated MSL.
+- Why: with padding enabled, spirv-cross requires a `basetype` on every resource
+  binding including the special argument-buffer/push-constant pin entries, which have
+  none, and rejects them ("Unexpected argument buffer resource base type").
+
 ### 2026-07-14 — per-image swapchain storage sized past FRAME_BUFFER_COUNT
 - Planned: the reviewed swapchain design sized per-image arrays (render-finished
   semaphores, back-buffer handles) to `FRAME_BUFFER_COUNT`, relying on the existing
