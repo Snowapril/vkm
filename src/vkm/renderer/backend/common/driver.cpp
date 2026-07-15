@@ -15,6 +15,7 @@
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/gpu_crash_handler.h>
+#include <vkm/renderer/backend/common/bindless_resource_manager.h>
 
 #include <cstring>
 
@@ -61,6 +62,11 @@ namespace vkm
         if (setUpPredefinedCommandQueues() == false)
         {
             return VkmInitResult{VkmInitResultCode::Failed, "Failed to set up predefined command queues"};
+        }
+
+        if (postInitializeInner() == false)
+        {
+            return VkmInitResult{VkmInitResultCode::Failed, "Failed post-initialization"};
         }
 
         _deferredReclaimer->start();

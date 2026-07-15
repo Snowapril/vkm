@@ -593,11 +593,12 @@ namespace vkm
         // Must exist before VkmEngine::initializeBackendDriver() loads engine PSOs, since
         // pipeline-layout creation (VkmPipelineStateVulkan::createInner) needs the bindless
         // set 0 layout.
-        _bindlessResourceManager = std::make_unique<VkmBindlessResourceManagerVulkan>(this);
-        if (!_bindlessResourceManager->initialize())
+        auto bindlessResourceManager = std::make_unique<VkmBindlessResourceManagerVulkan>(this);
+        if (!bindlessResourceManager->initialize())
         {
             return VkmInitResult{VkmInitResultCode::Failed, "Failed to initialize bindless resource manager"};
         }
+        _bindlessResourceManager = std::move(bindlessResourceManager);
 
         _gpuTimer = std::make_unique<VkmGpuTimerVulkan>(this);
         if (!_gpuTimer->initialize())

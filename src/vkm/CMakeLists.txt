@@ -55,6 +55,7 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/backend/common/shader_cache_loader.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/pipeline_state_object.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/pipeline_state_manager.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/bindless_resource_manager.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/command_buffer.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/command_queue.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/driver.cpp

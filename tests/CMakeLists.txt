@@ -16,6 +16,7 @@ set(SRCS
     ${SRC_DIR}/TestMemoryTracker.cpp
     ${SRC_DIR}/TestShaderCacheUtil.cpp
     ${SRC_DIR}/TestPipelineStateManager.cpp
+    ${SRC_DIR}/TestBindlessSlotAllocator.cpp
 )
 
 if (VKM_USE_METAL_API)
