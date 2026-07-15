@@ -175,6 +175,7 @@ if (VKM_USE_METAL_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_texture_view.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_buffer_view.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_bindless_resource_manager.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_driver.mm
@@ -191,6 +192,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_texture_view.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_buffer_view.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_bindless_resource_manager.mm
     )
     if (VKM_ENABLE_IMGUI)
         list(APPEND PUBLIC_HDRS

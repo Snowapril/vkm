@@ -78,6 +78,11 @@ namespace vkm
         id<MTL4CommandBuffer> _mtlCommandBuffer;
         VkmCommandEncoderMetal _commandEncoder;
 
+        // Primitive type of the currently bound graphics pipeline, captured at
+        // onBindPipeline() time for onDraw() (Metal passes it per draw call, not in the
+        // pipeline state object). uint32_t to keep MTLPrimitiveType out of this header.
+        uint32_t _boundPrimitiveType = 0;
+
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         // onWriteCompletionMarker() queues here instead of opening/closing its own compute
         // encoder immediately; onEndCommandBuffer() flushes all of them as one batched compute

@@ -55,9 +55,27 @@ namespace vkm
         return VkmInitResult{VkmInitResultCode::Success, ""};
     }
 
+    bool VkmDriverMetal::postInitializeInner()
+    {
+        // Runs after the render resource pool (residency sets) and command queues exist --
+        // the manager registers its shared buffers into the Default residency set.
+        auto bindlessResourceManager = std::make_unique<VkmBindlessResourceManagerMetal>(this);
+        if (!bindlessResourceManager->initialize())
+        {
+            VKM_DEBUG_ERROR("Failed to initialize Metal bindless resource manager");
+            return false;
+        }
+        _bindlessResourceManager = std::move(bindlessResourceManager);
+        return true;
+    }
+
     void VkmDriverMetal::destroyInner()
     {
-
+        if (_bindlessResourceManager)
+        {
+            _bindlessResourceManager->destroy();
+            _bindlessResourceManager.reset();
+        }
     }
 
     VkmTexture* VkmDriverMetal::newTextureInner()

@@ -3,14 +3,18 @@
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
+#include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/metal/metal_pipeline_state.h>
+#include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_staging_buffer.h>
 
 #import <Metal/MTL4CommandBuffer.h>
 #import <Metal/MTL4RenderCommandEncoder.h>
 #import <Metal/MTL4ComputeCommandEncoder.h>
 #import <Metal/MTL4RenderPass.h>
+#import <Metal/MTL4ArgumentTable.h>
+#import <Metal/MTLBuffer.h>
 
 namespace vkm
 {
@@ -36,6 +40,32 @@ namespace vkm
             case VkmStoreAction::DontCare:
                 return MTLStoreActionDontCare;
         }
+    }
+
+    static MTLPrimitiveType getPrimitiveType(VkmPrimitiveTopology topology)
+    {
+        switch (topology)
+        {
+            case VkmPrimitiveTopology::PointList:     return MTLPrimitiveTypePoint;
+            case VkmPrimitiveTopology::LineList:      return MTLPrimitiveTypeLine;
+            case VkmPrimitiveTopology::LineStrip:     return MTLPrimitiveTypeLineStrip;
+            case VkmPrimitiveTopology::TriangleList:  return MTLPrimitiveTypeTriangle;
+            case VkmPrimitiveTopology::TriangleStrip: return MTLPrimitiveTypeTriangleStrip;
+        }
+        return MTLPrimitiveTypeTriangle;
+    }
+
+    // copyBuffer() accepts either a Buffer or a StagingBuffer resource on either side (see
+    // the same-named helper in vulkan_command_buffer.cpp) -- resolve via the handle's own
+    // recorded type. Metal buffers are never sub-allocated within a shared MTLBuffer, so
+    // no extra base offset applies on either kind.
+    static id<MTLBuffer> resolveMTLBuffer(VkmRenderResourcePool* renderResourcePool, VkmResourceHandle handle)
+    {
+        if (handle.type == VkmResourceType::StagingBuffer)
+        {
+            return static_cast<VkmStagingBufferMetal*>(renderResourcePool->getResource<VkmStagingBuffer>(handle))->getBuffer();
+        }
+        return static_cast<VkmBufferMetal*>(renderResourcePool->getResource<VkmBuffer>(handle))->getBuffer();
     }
 
     void VkmCommandEncoderMetal::beginRenderPass(VkmRenderResourcePool* renderResourcePool, const VkmFrameBufferDescriptor& frameBufferDesc)
@@ -150,6 +180,20 @@ namespace vkm
             id<MTL4RenderCommandEncoder> renderCommandEncoder = _commandEncoder.getActiveRenderCommandEncoder();
             [renderCommandEncoder setRenderPipelineState:pipelineStateMetal->getRenderPipelineState()];
             [renderCommandEncoder setDepthStencilState:pipelineStateMetal->getDepthStencilState()];
+            _boundPrimitiveType = static_cast<uint32_t>(
+                getPrimitiveType(pipelineStateMetal->getDescriptor().primitiveTopology));
+
+            // Every graphics pipeline shares the engine-global bindless argument table:
+            // the set-0 argument buffer at [[buffer(2)]] and a safe default for the
+            // push-constant slot at [[buffer(3)]] (overwritten per setPushConstants call).
+            // Mirrors VkmCommandBufferVulkan::onBindPipeline's implicit set-0 bind.
+            VkmBindlessResourceManagerMetal* bindlessManager =
+                static_cast<VkmDriverMetal*>(_driver)->getBindlessResourceManager();
+            id<MTL4ArgumentTable> argumentTable = bindlessManager->getArgumentTable();
+            [renderCommandEncoder setArgumentTable:argumentTable
+                                          atStages:MTLRenderStageVertex | MTLRenderStageFragment];
+            [argumentTable setAddress:bindlessManager->getArgumentBuffer().gpuAddress
+                              atIndex:kVkmMetalBindlessArgumentBufferIndex];
         }
     }
 
@@ -159,22 +203,48 @@ namespace vkm
         // end of the render/compute pass) supersedes whatever pipeline state is set.
     }
 
-    void VkmCommandBufferMetal::onCopyBuffer(VkmResourceHandle, VkmResourceHandle, uint64_t, uint64_t, uint64_t)
+    void VkmCommandBufferMetal::onCopyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size)
     {
-        // Not implemented yet on Metal -- bindless resource upload is Vulkan-only for now.
-        VKM_DEBUG_ERROR("VkmCommandBufferMetal::onCopyBuffer is not implemented");
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        id<MTLBuffer> mtlSrcBuffer = resolveMTLBuffer(renderResourcePool, srcBuffer);
+        id<MTLBuffer> mtlDstBuffer = resolveMTLBuffer(renderResourcePool, dstBuffer);
+
+        // Metal4 has no blit encoder -- buffer copies live on the compute encoder. The
+        // base class guarantees copyBuffer() is only called outside a render pass, and it
+        // is a setup-time upload path, so a per-call encoder is acceptable here; do NOT
+        // leave a compute encoder open across recording (see onEndCommandBuffer's batched
+        // marker writes and the queue-timeout lesson behind them).
+        _commandEncoder.beginComputePass();
+        [_commandEncoder.getActiveComputeCommandEncoder() copyFromBuffer:mtlSrcBuffer
+                                                            sourceOffset:srcOffset
+                                                                toBuffer:mtlDstBuffer
+                                                       destinationOffset:dstOffset
+                                                                    size:size];
+        _commandEncoder.commit();
     }
 
-    void VkmCommandBufferMetal::onDraw(uint32_t, uint32_t, uint32_t, uint32_t)
+    void VkmCommandBufferMetal::onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
     {
-        // Not implemented yet on Metal -- bindless draw-call recording is Vulkan-only for now.
-        VKM_DEBUG_ERROR("VkmCommandBufferMetal::onDraw is not implemented");
+        [_commandEncoder.getActiveRenderCommandEncoder() drawPrimitives:static_cast<MTLPrimitiveType>(_boundPrimitiveType)
+                                                            vertexStart:firstVertex
+                                                            vertexCount:vertexCount
+                                                          instanceCount:instanceCount
+                                                           baseInstance:firstInstance];
     }
 
-    void VkmCommandBufferMetal::onSetPushConstants(const void*, uint32_t, uint32_t)
+    void VkmCommandBufferMetal::onSetPushConstants(const void* data, uint32_t size, uint32_t offset)
     {
-        // Not implemented yet on Metal -- bindless push constants are Vulkan-only for now.
-        VKM_DEBUG_ERROR("VkmCommandBufferMetal::onSetPushConstants is not implemented");
+        // Each call fills a fresh ring entry, so a partial update at a non-zero offset
+        // cannot preserve previously-pushed bytes; no caller needs that today.
+        VKM_ASSERT(offset == 0, "Metal push constants only support offset 0");
+
+        VkmBindlessResourceManagerMetal* bindlessManager =
+            static_cast<VkmDriverMetal*>(_driver)->getBindlessResourceManager();
+        const uint64_t gpuAddress = bindlessManager->allocatePushConstantSlot(data, size);
+        // Argument-table values are captured at each encoded draw, so mutating the shared
+        // table between draws is safe (the ImGui Metal renderer relies on the same rule).
+        [bindlessManager->getArgumentTable() setAddress:gpuAddress
+                                                atIndex:kVkmMetalPushConstantBufferIndex];
     }
 
     void VkmCommandBufferMetal::onSetDebugName(const char* name)

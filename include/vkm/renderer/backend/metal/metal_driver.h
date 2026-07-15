@@ -3,6 +3,7 @@
 #pragma once
 
 #include <vkm/renderer/backend/common/driver.h>
+#include <vkm/renderer/backend/metal/metal_bindless_resource_manager.h>
 
 #include <memory>
 #include <vector>
@@ -34,8 +35,16 @@ namespace vkm
         */
         id<MTLBuffer> allocateFromHeapPool(uint64_t sizeBytes, uint64_t alignment, uint64_t options);
 
+        // Shadows VkmDriverBase::getBindlessResourceManager() with the Metal-typed manager
+        // (the base member always holds a VkmBindlessResourceManagerMetal for this driver).
+        inline VkmBindlessResourceManagerMetal* getBindlessResourceManager() const
+        {
+            return static_cast<VkmBindlessResourceManagerMetal*>(_bindlessResourceManager.get());
+        }
+
     protected:
         virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) override final;
+        virtual bool postInitializeInner() override final;
         virtual void destroyInner() override final;
         virtual VkmSwapChainBase* newSwapChainInner() override final;
         virtual VkmTexture* newTextureInner() override final;
