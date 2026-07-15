@@ -382,7 +382,8 @@ if (NOT EMSCRIPTEN)
         include(ExternalProject)
         set(VKM_DAWN_SOURCE_DIR "${PROJECT_SOURCE_DIR}/dependencies/src/dawn")
         set(VKM_DAWN_BUILD_DIR "${CMAKE_BINARY_DIR}/dawn-build")
-        set(VKM_TINT_EXECUTABLE "${VKM_DAWN_BUILD_DIR}/bin/tint")
+        # tint_cmd's output lands at the Dawn build root, not under bin/.
+        set(VKM_TINT_EXECUTABLE "${VKM_DAWN_BUILD_DIR}/tint")
         ExternalProject_Add(dawn_tint_build
             SOURCE_DIR "${VKM_DAWN_SOURCE_DIR}"
             BINARY_DIR "${VKM_DAWN_BUILD_DIR}"

@@ -32,10 +32,15 @@ function(vkm_add_shader_cache_target)
 
     # vkm-compiler is a native host tool that cannot itself be an Emscripten
     # binary; there is no superbuild here to build it as a side effect of an
-    # Emscripten-toolchain configure. Skip (warn, don't fail).
-    if (EMSCRIPTEN)
-        message(STATUS "vkm_add_shader_cache_target(${SC_TARGET_NAME}): skipped under Emscripten toolchain")
+    # Emscripten-toolchain configure. A prebuilt native vkm-compiler can be
+    # supplied via -DVKM_HOST_VKM_COMPILER=<path> (scripts/run_sample.py does
+    # this for the webgpu backend); otherwise skip (warn, don't fail).
+    if (EMSCRIPTEN AND NOT VKM_HOST_VKM_COMPILER)
+        message(STATUS "vkm_add_shader_cache_target(${SC_TARGET_NAME}): skipped under Emscripten toolchain (set VKM_HOST_VKM_COMPILER to enable)")
         return()
+    endif()
+    if (VKM_HOST_VKM_COMPILER AND NOT EXISTS "${VKM_HOST_VKM_COMPILER}")
+        message(FATAL_ERROR "vkm_add_shader_cache_target(${SC_TARGET_NAME}): VKM_HOST_VKM_COMPILER points to a non-existent file: ${VKM_HOST_VKM_COMPILER}")
     endif()
 
     if (NOT SC_PSO_JSON_FILES)
@@ -55,6 +60,15 @@ function(vkm_add_shader_cache_target)
         return()
     endif()
 
+    # Either the in-tree vkm-compiler target or the externally supplied host binary.
+    if (VKM_HOST_VKM_COMPILER)
+        set(_compiler "${VKM_HOST_VKM_COMPILER}")
+        set(_compiler_dep "${VKM_HOST_VKM_COMPILER}")
+    else()
+        set(_compiler "$<TARGET_FILE:vkm-compiler>")
+        set(_compiler_dep vkm-compiler)
+    endif()
+
     set(_stamp_dir "${CMAKE_CURRENT_BINARY_DIR}/${SC_TARGET_NAME}.stamps")
     file(MAKE_DIRECTORY "${_stamp_dir}")
 
@@ -65,12 +79,12 @@ function(vkm_add_shader_cache_target)
         set(_stamp "${_stamp_dir}/${_pso_name}.${_index}.stamp")
         add_custom_command(
             OUTPUT "${_stamp}"
-            COMMAND $<TARGET_FILE:vkm-compiler>
+            COMMAND ${_compiler}
                     --pso "${_pso}"
                     --output-dir "${SC_OUTPUT_DIR}"
                     --backend ${_backend}
             COMMAND ${CMAKE_COMMAND} -E touch "${_stamp}"
-            DEPENDS "${_pso}" ${SC_EXTRA_DEPENDS} vkm-compiler
+            DEPENDS "${_pso}" ${SC_EXTRA_DEPENDS} ${_compiler_dep}
             COMMENT "vkm-compiler: compiling shaders for ${_pso_name} (${_backend})"
             VERBATIM)
         list(APPEND _stamps "${_stamp}")

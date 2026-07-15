@@ -233,11 +233,67 @@ def run_native_sample(backend: str, sample: str, build_type: str,
     return run_cmd([str(binary)], env=env).returncode
 
 
-def run_webgpu_sample(sample: str, build_type: str, jobs: int) -> int:
+def build_host_vkm_compiler(jobs: int, system: str):
+    """Build a native WGSL-capable vkm-compiler for the Emscripten build to consume.
+
+    The wasm build itself cannot build vkm-compiler (a native host tool), but the
+    sample's shader caches must be generated before they are preloaded into MEMFS --
+    so a separate native tree (build/host-tools) provides the binary, passed to the
+    emcmake configure via -DVKM_HOST_VKM_COMPILER (see buildscripts/ShaderCompile.cmake).
+    Returns the binary path, or None on failure."""
+    dawn_dir = PROJECT_ROOT / "dependencies" / "src" / "dawn"
+    if not dawn_dir.exists():
+        print("[ERROR] Dawn source not found under dependencies/src/dawn (required to build "
+              "tint for WGSL output). Re-run bootstrap.py without skipping dawn.")
+        return None
+
+    if system == "Darwin" and metal4_available():
+        host_flags = NATIVE_BACKEND_FLAGS["metal"]
+    elif vulkan_available():
+        host_flags = NATIVE_BACKEND_FLAGS["vulkan"]
+    else:
+        print("[ERROR] No native backend available to build the host vkm-compiler "
+              "(vkm-compiler links vkmcore, which needs metal or vulkan).")
+        return None
+
+    host_tools_dir = PROJECT_ROOT / "build" / "host-tools"
+    cmd = [
+        "cmake",
+        "-S", str(PROJECT_ROOT),
+        "-B", str(host_tools_dir),
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DBUILD_SAMPLES=OFF",
+        "-DVKM_COMPILER_ENABLE_WGSL=ON",
+    ]
+    for key, value in host_flags.items():
+        cmd.append(f"-D{key}={value}")
+    if system == "Windows":
+        cmd += ["-DCMAKE_GENERATOR_PLATFORM=x64"]
+    if run_cmd(cmd).returncode != 0:
+        print("[ERROR] CMake configuration failed for the host-tools tree.")
+        return None
+
+    if not cmake_build_target(host_tools_dir, "vkm-compiler", jobs):
+        print("[ERROR] Build failed for the host vkm-compiler.")
+        return None
+
+    binary_name = "vkm-compiler.exe" if system == "Windows" else "vkm-compiler"
+    binary = host_tools_dir / "bin" / binary_name
+    if not binary.exists():
+        print(f"[ERROR] Host vkm-compiler not found: {binary}")
+        return None
+    return binary
+
+
+def run_webgpu_sample(sample: str, build_type: str, jobs: int, system: str) -> int:
     emsdk_dir = emsdk_available()
     env = _capture_emsdk_env(emsdk_dir)
     emcmake = str(_emcmake_path(emsdk_dir))
     build_dir = PROJECT_ROOT / "build-wasm"
+
+    host_compiler = build_host_vkm_compiler(jobs, system)
+    if host_compiler is None:
+        return 1
 
     configure_cmd = [
         emcmake, "cmake",
@@ -245,6 +301,7 @@ def run_webgpu_sample(sample: str, build_type: str, jobs: int) -> int:
         "-B", str(build_dir),
         f"-DCMAKE_BUILD_TYPE={build_type}",
         "-DBUILD_SAMPLES=ON",
+        f"-DVKM_HOST_VKM_COMPILER={host_compiler}",
     ]
     if run_cmd(configure_cmd, env=env).returncode != 0:
         print("[ERROR] CMake configuration failed for webgpu backend.")
@@ -313,7 +370,7 @@ def main() -> None:
 
     system = platform.system()
     if args.backend == "webgpu":
-        sys.exit(run_webgpu_sample(args.sample, args.build_type, args.jobs))
+        sys.exit(run_webgpu_sample(args.sample, args.build_type, args.jobs, system))
     else:
         sys.exit(run_native_sample(args.backend, args.sample, args.build_type,
                                     Path(args.build_dir), args.jobs, system))
