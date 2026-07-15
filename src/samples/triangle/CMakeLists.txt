@@ -99,10 +99,6 @@ if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
         "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}@/SampleData/triangle"
         "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/ShaderCache@/ShaderCache/triangle"
     )
-    # Repack the .data bundle when regenerated caches change (the stamp path matches
-    # vkm_add_shader_cache_target's naming for this target's single PSO json).
-    set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS
-        "${CMAKE_CURRENT_BINARY_DIR}/triangle_shaders.stamps/renderpass.0.stamp")
 endif()
 
 # Compile this sample's HLSL through vkm-compiler at build time. This is the
@@ -114,4 +110,13 @@ vkm_add_shader_cache_target(
     EXTRA_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/triangle.hlsl")
 if (TARGET triangle_shaders)
     add_dependencies(${target} triangle_shaders)
+    if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
+        # Repack the .data bundle when regenerated caches change (the stamp path
+        # matches vkm_add_shader_cache_target's naming for this target's single
+        # PSO json). Only when the shader-cache rule exists: without
+        # VKM_HOST_VKM_COMPILER the stamp has no producing rule and make would
+        # fail with "No rule to make target".
+        set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS
+            "${CMAKE_CURRENT_BINARY_DIR}/triangle_shaders.stamps/renderpass.0.stamp")
+    endif()
 endif()

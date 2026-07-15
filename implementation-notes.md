@@ -14,6 +14,21 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Why: <the edge case that forced it>
 ```
 
+### 2026-07-15 — PR #18 CI fixes: wasm stamp dependency and DXC vs new AppleClang
+- Planned: the bindless work was expected to pass existing CI as-is.
+- Did instead: two follow-up fixes after the first PR run. (1) The triangle sample's
+  Emscripten `LINK_DEPENDS` on `triangle_shaders.stamps/renderpass.0.stamp` moved under
+  the `if (TARGET triangle_shaders)` guard — the wasm CI configures without
+  `VKM_HOST_VKM_COMPILER`, so no rule produces the stamp and make failed with "No rule
+  to make target". (2) The dxc ExternalProject now passes
+  `-Wno-unknown-warning-option -Wno-invalid-specialization`: the macOS 26 CI runner's
+  AppleClang rejects DXC's vendored `llvm/ADT/StringRef.h` specializing
+  `std::is_nothrow_constructible` as a default-error, and this PR is the first to make
+  CI build dxc at all (UnitTests now depends on vkm-compiler via tests_triangle_shaders).
+- Why: both are the minimal fixes that keep behavior identical where the builds already
+  worked; third-party DXC sources are not patched, the diagnostic is disabled for that
+  nested build only.
+
 ### 2026-07-15 — unplanned fixes required to get the WebGPU triangle running
 - Planned: the bindless plan assumed the WebGPU backend's existing swapchain/render-pass
   scaffold worked and only draw/copy/push-constant/bind-group code was missing.
