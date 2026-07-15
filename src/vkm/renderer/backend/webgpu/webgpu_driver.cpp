@@ -133,8 +133,27 @@ namespace vkm
         return VkmInitResult{VkmInitResultCode::Success, ""};
     }
 
+    bool VkmDriverWebGPU::postInitializeInner()
+    {
+        // Runs after the resource pool and command queues exist; the manager submits
+        // transient copies to the device queue when buffers are registered.
+        auto bindlessResourceManager = std::make_unique<VkmBindlessResourceManagerWebGPU>(this);
+        if (!bindlessResourceManager->initialize())
+        {
+            VKM_DEBUG_ERROR("Failed to initialize WebGPU bindless resource manager");
+            return false;
+        }
+        _bindlessResourceManager = std::move(bindlessResourceManager);
+        return true;
+    }
+
     void VkmDriverWebGPU::destroyInner()
     {
+        if (_bindlessResourceManager)
+        {
+            _bindlessResourceManager->destroy();
+            _bindlessResourceManager.reset();
+        }
         if (_queue != nullptr)
         {
             wgpuQueueRelease(_queue);

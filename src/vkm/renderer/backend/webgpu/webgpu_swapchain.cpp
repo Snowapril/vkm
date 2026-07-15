@@ -141,6 +141,9 @@ namespace vkm
 
     void VkmSwapChainWebGPU::presentInner()
     {
-        wgpuSurfacePresent(_surface);
+        // Nothing to do: under Emscripten the browser presents the canvas implicitly at
+        // the end of each requestAnimationFrame tick (the emscripten_set_main_loop driver
+        // in platform/wasm), and emdawnwebgpu's wgpuSurfacePresent aborts with
+        // "unsupported (use requestAnimationFrame via html5.h instead)" if called.
     }
 } // namespace vkm

@@ -219,6 +219,7 @@ if (VKM_USE_WEBGPU_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_command_queue.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_command_buffer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_pipeline_state.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_bindless_resource_manager.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/wasm/application.cpp
@@ -235,6 +236,7 @@ if (VKM_USE_WEBGPU_API)
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_command_queue.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_command_buffer.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_pipeline_state.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_bindless_resource_manager.cpp
     )
     if (VKM_ENABLE_IMGUI)
         list(APPEND PUBLIC_HDRS
