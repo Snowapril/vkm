@@ -59,7 +59,11 @@ namespace vkm
 
     void VkmGpuEventTimelineMetal::waitIdle(const uint64_t timeoutMs)
     {
-        [_mtlSharedEvent waitUntilSignaledValue:_lastCompletedCachedTimeline timeoutMS:timeoutMs];
+        // Wait until the last ALLOCATED (submitted) value signals, mirroring
+        // VkmGpuEventTimelineVulkan::waitIdle -- waiting on the cached completed value
+        // returns immediately without waiting for in-flight work.
+        [_mtlSharedEvent waitUntilSignaledValue:_lastAllocatedTimeline timeoutMS:timeoutMs];
+        _lastCompletedCachedTimeline = [_mtlSharedEvent signaledValue];
     }
 
     VkmCommandQueueMetal::VkmCommandQueueMetal(VkmDriverBase* driver)

@@ -54,6 +54,10 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
   an actions cache to be tolerable — the plan explicitly allowed deferring on cost.
 
 ### 2026-07-15 — Metal bindless triangle test has no pixel comparison
+  **[Resolved 2026-07-16: `VkmDriverBase::readbackTexture()` now exists and both
+  TestBackbufferReadback.mm and TestMetalBindlessTriangle.mm assert real pixels --
+  with direct pixel-value comparisons rather than the PNG-reference machinery the
+  original stub sketched.]**
 - Planned: the bindless plan's Metal test would "read back center/corner pixels
   following TestBackbufferReadback.mm's existing readback".
 - Did instead: TestMetalBindlessTriangle.mm drives the full bindless draw path
@@ -66,14 +70,30 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
   bindless task itself.
 
 ### 2026-07-15 — MSL argument-buffer layout pinned by explicit ids, not padding
+  **[SUPERSEDED — this was the bug behind the invisible Metal triangle; see the
+  2026-07-16 correction below]**
 - Planned: set spirv-cross's `pad_argument_buffer_resources` so the set-0 argument
   buffer struct layout stays fixed across shaders.
-- Did instead: dropped `pad_argument_buffer_resources`; the explicit
-  `add_msl_resource_binding` remaps alone pin each member's `[[id(N)]]`, which fully
-  determines Tier-2 entry offsets (id*8). Verified by inspecting the generated MSL.
+- Did instead: dropped `pad_argument_buffer_resources`; assumed the explicit `[[id(N)]]`
+  remaps alone determine Tier-2 entry offsets (id*8). The MSL inspection only verified
+  the [[id]] attributes were present, not the members' byte offsets.
 - Why: with padding enabled, spirv-cross requires a `basetype` on every resource
   binding including the special argument-buffer/push-constant pin entries, which have
   none, and rejects them ("Unexpected argument buffer resource base type").
+
+### 2026-07-16 — argument-buffer padding re-enabled (invisible-triangle fix)
+- Planned (debug plan): `[[id(N)]]` is only an argument-index attribute; the Metal
+  compiler lays the struct out sequentially, so without padding the vertex-buffer array
+  sat at byte 0 while the runtime wrote at byte 32768 -- the shader read null pointers
+  and only the clear color rendered.
+- Did: re-enabled `pad_argument_buffer_resources` and gave the two pin entries
+  `SPIRType::UInt` basetypes (the set-0 lookup entry the argument-buffer pin inserts at
+  index 2 is inert: the padding walk jumps from the texture binding at id 0 with count
+  4096 straight to 4096). Generated MSL now emits `_m0_pad [[id(0)]]` (4096 textures),
+  making byte offsets equal id*8 as the runtime assumes.
+- Also fixed while verifying: `VkmGpuEventTimelineMetal::waitIdle` waited on the cached
+  *completed* timeline value (an immediate no-op) instead of the last *allocated* value
+  like Vulkan does -- GPU-ordering hid it until CPU readback needed a real wait.
 
 ### 2026-07-14 — per-image swapchain storage sized past FRAME_BUFFER_COUNT
 - Planned: the reviewed swapchain design sized per-image arrays (render-finished

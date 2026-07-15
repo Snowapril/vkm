@@ -228,10 +228,13 @@ namespace
                 mslOptions.argument_buffers = true;
                 mslOptions.argument_buffers_tier =
                     spirv_cross::CompilerMSL::Options::ArgumentBuffersTier::Tier2;
-                // The explicit msl_buffer/msl_texture remaps below become the members'
-                // [[id(N)]] attributes, which alone determine Tier-2 entry offsets (id*8);
-                // pad_argument_buffer_resources is unnecessary (and rejects the special
-                // argument-buffer/push-constant pin entries, which have no basetype).
+                // [[id(N)]] is only an argument-index attribute -- the Metal compiler lays
+                // the argument-buffer struct out sequentially, so byte offsets only equal
+                // id*8 (the runtime's flat-table model) when padding members fill every id
+                // gap. pad_argument_buffer_resources synthesizes those members from the
+                // add_msl_resource_binding entries below (e.g. the texture array at ids
+                // 0..4095 when a shader doesn't declare it).
+                mslOptions.pad_argument_buffer_resources = true;
                 mslOptions.force_active_argument_buffer_resources = true;
                 compiler.set_msl_options(mslOptions);
 
@@ -267,19 +270,26 @@ namespace
                                   kVkmMetalBindlessIndexBufferIdBase, 0);
 
                 // Pin the set-0 argument buffer itself ([[buffer(0)]]/[[buffer(1)]] are
-                // reserved for the vertex-stream buffers).
+                // reserved for the vertex-stream buffers). With padding enabled, every
+                // registered binding needs a valid basetype (UInt = buffer category); the
+                // lookup entry this inserts at set-0 index 2 is inert because the padding
+                // walk jumps from id 0 (texture array, count 4096) straight to 4096 and
+                // never queries index 2.
                 {
                     spirv_cross::MSLResourceBinding resourceBinding;
                     resourceBinding.stage = executionModel;
+                    resourceBinding.basetype = spirv_cross::SPIRType::UInt;
                     resourceBinding.desc_set = 0;
                     resourceBinding.binding = spirv_cross::kArgumentBufferBinding;
                     resourceBinding.msl_buffer = kVkmMetalBindlessArgumentBufferIndex;
                     compiler.add_msl_resource_binding(resourceBinding);
                 }
-                // Pin the push-constant block.
+                // Pin the push-constant block (kPushConstDescSet is its own namespace,
+                // never involved in set-0 padding).
                 {
                     spirv_cross::MSLResourceBinding resourceBinding;
                     resourceBinding.stage = executionModel;
+                    resourceBinding.basetype = spirv_cross::SPIRType::UInt;
                     resourceBinding.desc_set = spirv_cross::kPushConstDescSet;
                     resourceBinding.binding = spirv_cross::kPushConstBinding;
                     resourceBinding.msl_buffer = kVkmMetalPushConstantBufferIndex;
