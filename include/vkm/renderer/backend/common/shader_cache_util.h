@@ -22,4 +22,17 @@ namespace vkm
     //     == "triangle[wireframe].vert.vulkan.vfcache"
     std::string buildShaderCacheFilename(const std::string& shaderStem, const std::string& optionName,
         VkmShaderCacheStage stage, VkmShaderCacheBackend backend);
+
+    // The backend this vkmcore build targets. One backend is active per build (see
+    // ShaderCompile.cmake's identical selection); the priority order below matches it.
+    inline VkmShaderCacheBackend vkmActiveShaderCacheBackend()
+    {
+#if defined(VKM_USE_VULKAN_API)
+        return VkmShaderCacheBackend::Vulkan;
+#elif defined(VKM_USE_METAL_API)
+        return VkmShaderCacheBackend::Metal;
+#else
+        return VkmShaderCacheBackend::WebGPU;
+#endif
+    }
 } // namespace vkm

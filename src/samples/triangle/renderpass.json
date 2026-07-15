@@ -20,6 +20,7 @@
     "options": {
         "default": {},
         "wireframe": {
+            "backends": ["vulkan", "metal"],
             "rasterization_state": { "fill_mode": "wireframe" },
             "definitions": { "WIREFRAME": true }
         }

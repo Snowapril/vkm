@@ -139,6 +139,7 @@ namespace
             "-T", info.profile,
             "-E", desc.entryPoint,
             "-D", backendDefine(backend),
+            "-D", "VKM_BINDLESS_BUFFER_CAPACITY=" + std::to_string(kVkmBindlessBufferCapacity),
         };
         for (const auto& [name, value] : desc.definitions)
         {
@@ -414,7 +415,7 @@ int main(int argc, char** argv)
 
     std::string expandError;
     std::optional<std::vector<VkmPipelineStateDescriptor>> variants =
-        expandPipelineStateOptions(*pso, &expandError);
+        expandPipelineStateOptions(*pso, backend, &expandError);
     if (!variants.has_value())
     {
         std::cerr << "vkm-compiler: failed to expand PSO options for " << psoPath

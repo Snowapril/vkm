@@ -34,10 +34,13 @@ namespace vkm
     // Expands `base` into one fully-resolved VkmPipelineStateDescriptor per entry in
     // `base.options`, each renamed to "<base.name>[<option_name>]" with fixed-function
     // fields and shader-stage definitions overridden per the documented precedence (see
-    // pipeline_state.h). If `base.options` is empty, returns a single-element vector
-    // containing an unmodified copy of `base`. Returns std::nullopt (+ *outError) if
-    // `base.options` is non-empty but `base.name` is empty, or if a resolved variant ends up
-    // with both a compute and a graphics stage set.
+    // pipeline_state.h). Options whose non-empty "backends" allowlist excludes `backend`
+    // are dropped from the result (callers pass their active backend: vkmcore its
+    // compile-time backend, vkm-compiler its --backend argument). If `base.options` is
+    // empty, returns a single-element vector containing an unmodified copy of `base`.
+    // Returns std::nullopt (+ *outError) if `base.options` is non-empty but `base.name`
+    // is empty, or if a resolved variant ends up with both a compute and a graphics
+    // stage set.
     std::optional<std::vector<VkmPipelineStateDescriptor>> expandPipelineStateOptions(
-        const VkmPipelineStateDescriptor& base, std::string* outError = nullptr);
+        const VkmPipelineStateDescriptor& base, VkmShaderCacheBackend backend, std::string* outError = nullptr);
 } // namespace vkm
