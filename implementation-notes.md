@@ -14,6 +14,30 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Why: <the edge case that forced it>
 ```
 
+### 2026-07-15 — unplanned fixes required to get the WebGPU triangle running
+- Planned: the bindless plan assumed the WebGPU backend's existing swapchain/render-pass
+  scaffold worked and only draw/copy/push-constant/bind-group code was missing.
+- Did instead: three additional fixes, all exposed the first time the sample actually
+  rendered/presented on WebGPU: (1) `VkmSwapChainWebGPU::presentInner` no longer calls
+  `wgpuSurfacePresent` (emdawnwebgpu aborts under the requestAnimationFrame main loop;
+  the browser presents implicitly); (2) `onBeginRenderPass` sets
+  `depthSlice = WGPU_DEPTH_SLICE_UNDEFINED` (zero-init means "3D slice 0", rejected for
+  2D attachments); (3) the triangle sample links with `ALLOW_MEMORY_GROWTH=0` +
+  fixed 128 MiB heap, the same documented V8 TextDecoder-vs-resizable-ArrayBuffer
+  workaround tests/CMakeLists.txt already uses. Also fixed the never-exercised
+  `VKM_TINT_EXECUTABLE` path in the root CMakeLists (tint_cmd outputs to the Dawn build
+  root, not bin/).
+- Why: pre-existing latent bugs in the never-run WebGPU present/render path blocked the
+  plan's "webgpu triangle renders in Chrome" verification; each fix is the minimal
+  established-pattern option.
+
+### 2026-07-15 — wasm.yml shader-cache wiring deferred
+- Planned: Phase 4 optionally wires the host vkm-compiler + tint build into wasm.yml
+  with a `.webgpu.vfcache` artifact check.
+- Did instead: deferred as a TODO.md line; CI stays build-only without caches.
+- Why: the tint/dawn ExternalProject adds a 15+ minute native build per CI OS and needs
+  an actions cache to be tolerable — the plan explicitly allowed deferring on cost.
+
 ### 2026-07-15 — Metal bindless triangle test has no pixel comparison
 - Planned: the bindless plan's Metal test would "read back center/corner pixels
   following TestBackbufferReadback.mm's existing readback".
