@@ -3,7 +3,6 @@
 ## Known Limitations
 
 - Vulkan `UnitTests` in GitHub Actions CI still lack a software Vulkan ICD on the Windows and macOS runners (Ubuntu now installs lavapipe).
-- Metal triangle sample fails to build: spirv-cross MSL generation of the bindless `triangle.hlsl` requires argument buffer tier 2.
 - `MemoryTracker`'s global mutex serializes every allocation/deallocation across all threads.
 - Design and implement descriptor sets 1-3 of the engine/user resource-binding convention (set 0 bindless is implemented, Vulkan-only).
 - The common command-buffer interface has no compute dispatch entry point; Metal's `beginComputePass` scaffolding is never invoked.
