@@ -55,6 +55,7 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/backend/common/shader_cache_loader.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/pipeline_state_object.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/pipeline_state_manager.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/bindless_resource_manager.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/command_buffer.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/command_queue.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/driver.cpp
@@ -174,6 +175,7 @@ if (VKM_USE_METAL_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_texture_view.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_buffer_view.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_bindless_resource_manager.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_driver.mm
@@ -190,6 +192,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_texture_view.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_buffer_view.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_bindless_resource_manager.mm
     )
     if (VKM_ENABLE_IMGUI)
         list(APPEND PUBLIC_HDRS
@@ -216,6 +219,7 @@ if (VKM_USE_WEBGPU_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_command_queue.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_command_buffer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_pipeline_state.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_bindless_resource_manager.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/wasm/application.cpp
@@ -232,6 +236,7 @@ if (VKM_USE_WEBGPU_API)
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_command_queue.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_command_buffer.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_pipeline_state.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_bindless_resource_manager.cpp
     )
     if (VKM_ENABLE_IMGUI)
         list(APPEND PUBLIC_HDRS

@@ -50,11 +50,22 @@ target_compile_options(${target}
 )
 
 # Compile definitions
+if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
+    # Inside the WASM sandbox the on-disk paths don't exist; the sample dir (renderpass
+    # JSON) and the generated shader caches are preloaded into MEMFS instead (see the
+    # --preload-file link options below).
+    set(TRIANGLE_SAMPLE_DIR "/SampleData/triangle/")
+    set(TRIANGLE_SHADER_CACHE_DIR "/ShaderCache/triangle/")
+else()
+    set(TRIANGLE_SAMPLE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/")
+    set(TRIANGLE_SHADER_CACHE_DIR "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/")
+endif()
+
 target_compile_definitions(${target}
     PRIVATE
     RESOURCES_DIR="${RESOURCES_DIR}"
-    SAMPLE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/"
-    SAMPLE_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
+    SAMPLE_DIR="${TRIANGLE_SAMPLE_DIR}"
+    SAMPLE_SHADER_CACHE_DIR="${TRIANGLE_SHADER_CACHE_DIR}"
     ${DEFAULT_COMPILE_DEFINITIONS}
 )
 
@@ -69,6 +80,25 @@ target_link_libraries(${target}
 if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
     target_compile_options(${target} PRIVATE ${VKM_EMSCRIPTEN_COMPILE_FLAGS})
     target_link_options(${target} PRIVATE ${VKM_EMSCRIPTEN_PORT_FLAGS})
+
+    # Same V8 TextDecoder-vs-resizable-ArrayBuffer workaround as tests/CMakeLists.txt:
+    # ALLOW_MEMORY_GROWTH=1 breaks WebGPU adapter negotiation under current Chrome, and
+    # this sample's heap usage is small and known, so fix a generous initial size instead.
+    # Must come after VKM_EMSCRIPTEN_PORT_FLAGS so the last-specified `-s` value wins.
+    target_link_options(${target} PRIVATE
+        "SHELL:-s ALLOW_MEMORY_GROWTH=0"
+        "SHELL:-s INITIAL_MEMORY=134217728"
+    )
+
+    # Mount the sample dir (renderpass.json) and the generated shader caches into MEMFS
+    # at the paths baked into SAMPLE_DIR/SAMPLE_SHADER_CACHE_DIR above. The ShaderCache
+    # dir is produced by triangle_shaders (requires VKM_HOST_VKM_COMPILER; see
+    # buildscripts/ShaderCompile.cmake) before this target links.
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache")
+    target_link_options(${target} PRIVATE
+        "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}@/SampleData/triangle"
+        "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/ShaderCache@/ShaderCache/triangle"
+    )
 endif()
 
 # Compile this sample's HLSL through vkm-compiler at build time. This is the
@@ -80,4 +110,13 @@ vkm_add_shader_cache_target(
     EXTRA_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/triangle.hlsl")
 if (TARGET triangle_shaders)
     add_dependencies(${target} triangle_shaders)
+    if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
+        # Repack the .data bundle when regenerated caches change (the stamp path
+        # matches vkm_add_shader_cache_target's naming for this target's single
+        # PSO json). Only when the shader-cache rule exists: without
+        # VKM_HOST_VKM_COMPILER the stamp has no producing rule and make would
+        # fail with "No rule to make target".
+        set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS
+            "${CMAKE_CURRENT_BINARY_DIR}/triangle_shaders.stamps/renderpass.0.stamp")
+    endif()
 endif()

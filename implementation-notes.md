@@ -14,6 +14,67 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Why: <the edge case that forced it>
 ```
 
+### 2026-07-15 — PR #18 CI fixes: wasm stamp dependency and DXC vs new AppleClang
+- Planned: the bindless work was expected to pass existing CI as-is.
+- Did instead: two follow-up fixes after the first PR run. (1) The triangle sample's
+  Emscripten `LINK_DEPENDS` on `triangle_shaders.stamps/renderpass.0.stamp` moved under
+  the `if (TARGET triangle_shaders)` guard — the wasm CI configures without
+  `VKM_HOST_VKM_COMPILER`, so no rule produces the stamp and make failed with "No rule
+  to make target". (2) The dxc ExternalProject now passes
+  `-Wno-unknown-warning-option -Wno-invalid-specialization`: the macOS 26 CI runner's
+  AppleClang rejects DXC's vendored `llvm/ADT/StringRef.h` specializing
+  `std::is_nothrow_constructible` as a default-error, and this PR is the first to make
+  CI build dxc at all (UnitTests now depends on vkm-compiler via tests_triangle_shaders).
+- Why: both are the minimal fixes that keep behavior identical where the builds already
+  worked; third-party DXC sources are not patched, the diagnostic is disabled for that
+  nested build only.
+
+### 2026-07-15 — unplanned fixes required to get the WebGPU triangle running
+- Planned: the bindless plan assumed the WebGPU backend's existing swapchain/render-pass
+  scaffold worked and only draw/copy/push-constant/bind-group code was missing.
+- Did instead: three additional fixes, all exposed the first time the sample actually
+  rendered/presented on WebGPU: (1) `VkmSwapChainWebGPU::presentInner` no longer calls
+  `wgpuSurfacePresent` (emdawnwebgpu aborts under the requestAnimationFrame main loop;
+  the browser presents implicitly); (2) `onBeginRenderPass` sets
+  `depthSlice = WGPU_DEPTH_SLICE_UNDEFINED` (zero-init means "3D slice 0", rejected for
+  2D attachments); (3) the triangle sample links with `ALLOW_MEMORY_GROWTH=0` +
+  fixed 128 MiB heap, the same documented V8 TextDecoder-vs-resizable-ArrayBuffer
+  workaround tests/CMakeLists.txt already uses. Also fixed the never-exercised
+  `VKM_TINT_EXECUTABLE` path in the root CMakeLists (tint_cmd outputs to the Dawn build
+  root, not bin/).
+- Why: pre-existing latent bugs in the never-run WebGPU present/render path blocked the
+  plan's "webgpu triangle renders in Chrome" verification; each fix is the minimal
+  established-pattern option.
+
+### 2026-07-15 — wasm.yml shader-cache wiring deferred
+- Planned: Phase 4 optionally wires the host vkm-compiler + tint build into wasm.yml
+  with a `.webgpu.vfcache` artifact check.
+- Did instead: deferred as a TODO.md line; CI stays build-only without caches.
+- Why: the tint/dawn ExternalProject adds a 15+ minute native build per CI OS and needs
+  an actions cache to be tolerable — the plan explicitly allowed deferring on cost.
+
+### 2026-07-15 — Metal bindless triangle test has no pixel comparison
+- Planned: the bindless plan's Metal test would "read back center/corner pixels
+  following TestBackbufferReadback.mm's existing readback".
+- Did instead: TestMetalBindlessTriangle.mm drives the full bindless draw path
+  (register/upload/bind/push/draw) headlessly under the Metal validation layer, with
+  pixel comparison left as a stub TODO, exactly like TestBackbufferReadback.mm.
+- Why: TestBackbufferReadback.mm no longer performs raw readback -- it was stubbed
+  pending an engine `readbackTexture()` API, and tests/CLAUDE.md requires pixel tests
+  to stay stubs until that API exists. Adding a readback engine API mid-plan (new
+  command-buffer hooks on all three backends) would have been larger scope than the
+  bindless task itself.
+
+### 2026-07-15 — MSL argument-buffer layout pinned by explicit ids, not padding
+- Planned: set spirv-cross's `pad_argument_buffer_resources` so the set-0 argument
+  buffer struct layout stays fixed across shaders.
+- Did instead: dropped `pad_argument_buffer_resources`; the explicit
+  `add_msl_resource_binding` remaps alone pin each member's `[[id(N)]]`, which fully
+  determines Tier-2 entry offsets (id*8). Verified by inspecting the generated MSL.
+- Why: with padding enabled, spirv-cross requires a `basetype` on every resource
+  binding including the special argument-buffer/push-constant pin entries, which have
+  none, and rejects them ("Unexpected argument buffer resource base type").
+
 ### 2026-07-14 — per-image swapchain storage sized past FRAME_BUFFER_COUNT
 - Planned: the reviewed swapchain design sized per-image arrays (render-finished
   semaphores, back-buffer handles) to `FRAME_BUFFER_COUNT`, relying on the existing

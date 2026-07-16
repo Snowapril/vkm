@@ -4,6 +4,7 @@
 
 #include <vkm/base/common.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
+#include <vkm/renderer/backend/common/shader_cache.h>
 
 #include <optional>
 #include <string>
@@ -226,6 +227,12 @@ namespace vkm
         std::unordered_map<std::string, std::string> vertexDefinitions;   // merged after `definitions`, vertex only
         std::unordered_map<std::string, std::string> fragmentDefinitions;
         std::unordered_map<std::string, std::string> computeDefinitions;
+
+        // Optional JSON "backends" allowlist: when non-empty, this option variant only
+        // exists on the listed backends -- expandPipelineStateOptions() drops it for
+        // other backends, and vkm-compiler generates no caches for it (e.g. a wireframe
+        // variant on WebGPU, which has no polygon-mode concept). Empty = all backends.
+        std::vector<VkmShaderCacheBackend> backends;
     };
 
     // Top-level, backend-agnostic pipeline state descriptor. Fully populated by

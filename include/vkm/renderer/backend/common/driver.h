@@ -28,6 +28,7 @@ namespace vkm
     class VkmPipelineStateBase;
     class VkmDeferredResourceReclaimer;
     class VkmGpuCrashHandler;
+    class VkmBindlessResourceManagerBase;
 
     enum class VkmDriverCapabilityFlags : uint32_t
     {
@@ -144,6 +145,15 @@ namespace vkm
         inline VkmRenderResourcePool* getRenderResourcePool() const { return _renderResourcePool.get(); }
 
         /*
+        * @brief get the engine-global bindless resource manager (set 0 convention -- see
+        * common/bindless_resource_manager.h). Created by each backend driver during
+        * initialization (Vulkan in initializeInner since pipeline layouts need the set
+        * layout; Metal/WebGPU in postInitializeInner since they need the resource pool
+        * and queues).
+        */
+        inline VkmBindlessResourceManagerBase* getBindlessResourceManager() const { return _bindlessResourceManager.get(); }
+
+        /*
         * @brief get deferred resource reclaimer; VkmRenderGraph drives its per-frame
         * pollOnce() fallback on WASM through this accessor.
         */
@@ -202,6 +212,12 @@ namespace vkm
 
     protected:
         virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) = 0;
+        /*
+        * @brief called at the end of initialize(), after the render resource pool and
+        * command queues exist. Backends whose bindless manager needs those (Metal residency
+        * registration, WebGPU queue-side uploads) create it here.
+        */
+        virtual bool postInitializeInner() { return true; }
         virtual void destroyInner() = 0;
         virtual VkmTexture* newTextureInner() = 0;
         virtual VkmBuffer* newBufferInner() = 0;
@@ -217,6 +233,7 @@ namespace vkm
     protected:
         std::array<std::vector<VkmCommandQueueBase*>, (uint8_t)VkmCommandQueueType::Count> _commandQueues;
         VkmDriverCapabilityFlags _driverCapabilityFlags;
+        std::unique_ptr<VkmBindlessResourceManagerBase> _bindlessResourceManager;
 
     private:
         std::unique_ptr<VkmRenderResourcePool> _renderResourcePool;

@@ -4,6 +4,7 @@
 
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/gpu_offset_allocator.h>
+#include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
 #include <volk.h>
 
 // Mirrors VMA's own VK_DEFINE_HANDLE(VmaAllocator) expansion (vk_mem_alloc.h), so this
@@ -13,7 +14,6 @@ typedef struct VmaAllocator_T* VmaAllocator;
 namespace vkm
 {
     class VkmGpuBufferPoolVulkan;
-    class VkmBindlessResourceManagerVulkan;
     class VkmGpuTimerVulkan;
 
     /*
@@ -35,7 +35,12 @@ namespace vkm
         inline VkPhysicalDevice getPhysicalDevice() const { return _physicalDevice; }
         inline VkInstance getInstance() const { return _instance; }
         inline VmaAllocator getVmaAllocator() const { return _vmaAllocator; }
-        inline VkmBindlessResourceManagerVulkan* getBindlessResourceManager() const { return _bindlessResourceManager.get(); }
+        // Shadows VkmDriverBase::getBindlessResourceManager() with the Vulkan-typed manager
+        // (the base member always holds a VkmBindlessResourceManagerVulkan for this driver).
+        inline VkmBindlessResourceManagerVulkan* getBindlessResourceManager() const
+        {
+            return static_cast<VkmBindlessResourceManagerVulkan*>(_bindlessResourceManager.get());
+        }
         inline VkmGpuTimerVulkan* getGpuTimer() const { return _gpuTimer.get(); }
 
         /*
@@ -75,7 +80,6 @@ namespace vkm
     private:
         VmaAllocator _vmaAllocator{VK_NULL_HANDLE};
         std::vector<std::unique_ptr<VkmGpuBufferPoolVulkan>> _bufferPools;
-        std::unique_ptr<VkmBindlessResourceManagerVulkan> _bindlessResourceManager;
         std::unique_ptr<VkmGpuTimerVulkan> _gpuTimer;
 
         uint32_t _graphicsQueueFamilyIndex{UINT32_MAX};

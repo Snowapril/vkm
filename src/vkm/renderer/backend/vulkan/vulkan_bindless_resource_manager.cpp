@@ -129,36 +129,9 @@ namespace vkm
     {
         switch (arrayType)
         {
-            case VkmBindlessArrayType::Texture:
-            {
-                if (!_freeTextureSlots.empty())
-                {
-                    uint32_t slot = _freeTextureSlots.back();
-                    _freeTextureSlots.pop_back();
-                    return slot;
-                }
-                return (_nextTextureSlot < TEXTURE_CAPACITY) ? _nextTextureSlot++ : UINT32_MAX;
-            }
-            case VkmBindlessArrayType::Buffer:
-            {
-                if (!_freeBufferSlots.empty())
-                {
-                    uint32_t slot = _freeBufferSlots.back();
-                    _freeBufferSlots.pop_back();
-                    return slot;
-                }
-                return (_nextBufferSlot < BUFFER_CAPACITY) ? _nextBufferSlot++ : UINT32_MAX;
-            }
-            case VkmBindlessArrayType::IndexBuffer:
-            {
-                if (!_freeIndexBufferSlots.empty())
-                {
-                    uint32_t slot = _freeIndexBufferSlots.back();
-                    _freeIndexBufferSlots.pop_back();
-                    return slot;
-                }
-                return (_nextIndexBufferSlot < INDEX_BUFFER_CAPACITY) ? _nextIndexBufferSlot++ : UINT32_MAX;
-            }
+            case VkmBindlessArrayType::Texture:     return _textureSlots.allocate();
+            case VkmBindlessArrayType::Buffer:      return _bufferSlots.allocate();
+            case VkmBindlessArrayType::IndexBuffer: return _indexBufferSlots.allocate();
         }
         return UINT32_MAX;
     }
@@ -207,9 +180,9 @@ namespace vkm
     {
         switch (arrayType)
         {
-            case VkmBindlessArrayType::Buffer:      _freeBufferSlots.push_back(slot); break;
-            case VkmBindlessArrayType::IndexBuffer: _freeIndexBufferSlots.push_back(slot); break;
-            case VkmBindlessArrayType::Texture:     _freeTextureSlots.push_back(slot); break;
+            case VkmBindlessArrayType::Buffer:      _bufferSlots.release(slot); break;
+            case VkmBindlessArrayType::IndexBuffer: _indexBufferSlots.release(slot); break;
+            case VkmBindlessArrayType::Texture:     _textureSlots.release(slot); break;
         }
     }
 } // namespace vkm

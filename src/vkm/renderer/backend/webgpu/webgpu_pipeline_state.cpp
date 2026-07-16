@@ -237,18 +237,21 @@ namespace vkm
         VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
         WGPUDevice device = driverWebGPU->getDevice();
 
-        // Minimal empty pipeline layout -- descriptor sets/bind groups are a deliberately
-        // deferred follow-up (see pipeline_state_object.h).
+        // Every pipeline shares the engine-global bindless bind group 0 (see
+        // VkmBindlessResourceManagerWebGPU), mirroring Vulkan's hardcoded set-0-only
+        // pipeline layout in VkmPipelineStateVulkan::createInner. Groups 1-3 are deferred
+        // (same as Vulkan's sets 1-3, see TODO.md).
+        WGPUBindGroupLayout bindlessLayout = driverWebGPU->getBindlessResourceManager()->getBindGroupLayout();
         WGPUPipelineLayoutDescriptor pipelineLayoutDesc{};
-        pipelineLayoutDesc.label = toWGPUStringView("VkmPipelineStateWebGPU EmptyLayout");
-        pipelineLayoutDesc.bindGroupLayoutCount = 0;
-        pipelineLayoutDesc.bindGroupLayouts = nullptr;
+        pipelineLayoutDesc.label = toWGPUStringView("VkmPipelineStateWebGPU BindlessLayout");
+        pipelineLayoutDesc.bindGroupLayoutCount = 1;
+        pipelineLayoutDesc.bindGroupLayouts = &bindlessLayout;
 
         WGPUPipelineLayout pipelineLayout = wgpuDeviceCreatePipelineLayout(device, &pipelineLayoutDesc);
         if (pipelineLayout == nullptr)
         {
             if (outError != nullptr)
-                *outError = "Failed to create empty WebGPU pipeline layout";
+                *outError = "Failed to create WebGPU pipeline layout";
             return false;
         }
 

@@ -3,6 +3,7 @@
 #pragma once
 
 #include <vkm/renderer/backend/common/driver.h>
+#include <vkm/renderer/backend/webgpu/webgpu_bindless_resource_manager.h>
 #include <webgpu/webgpu.h>
 
 namespace vkm
@@ -23,8 +24,16 @@ namespace vkm
         inline WGPUDevice getDevice() const { return _device; }
         inline WGPUQueue getQueue() const { return _queue; }
 
+        // Shadows VkmDriverBase::getBindlessResourceManager() with the WebGPU-typed manager
+        // (the base member always holds a VkmBindlessResourceManagerWebGPU for this driver).
+        inline VkmBindlessResourceManagerWebGPU* getBindlessResourceManager() const
+        {
+            return static_cast<VkmBindlessResourceManagerWebGPU*>(_bindlessResourceManager.get());
+        }
+
     protected:
         virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) override final;
+        virtual bool postInitializeInner() override final;
         virtual void destroyInner() override final;
         virtual VkmTexture* newTextureInner() override final;
         virtual VkmBuffer* newBufferInner() override final;

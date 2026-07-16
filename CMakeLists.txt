@@ -362,6 +362,14 @@ if (NOT EMSCRIPTEN)
                 # clang-format formats differently than this vendored fork
                 # expects, which otherwise fails the build spuriously.
                 -DCLANG_FORMAT_EXE=CLANG_FORMAT_EXE-NOTFOUND
+                # DXC's vendored LLVM headers specialize std::is_nothrow_-
+                # constructible (llvm/ADT/StringRef.h), which the macOS 26 CI
+                # runner's AppleClang rejects as a default-error
+                # (-Winvalid-specialization). Third-party code we don't patch;
+                # disable the diagnostic for this nested build only.
+                # -Wno-unknown-warning-option keeps older AppleClangs (which
+                # don't have this diagnostic yet) from warning about it.
+                "-DCMAKE_CXX_FLAGS=-Wno-unknown-warning-option -Wno-invalid-specialization"
             BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target dxc
             INSTALL_COMMAND ""
             BUILD_BYPRODUCTS "${VKM_DXC_EXECUTABLE}")
@@ -382,7 +390,8 @@ if (NOT EMSCRIPTEN)
         include(ExternalProject)
         set(VKM_DAWN_SOURCE_DIR "${PROJECT_SOURCE_DIR}/dependencies/src/dawn")
         set(VKM_DAWN_BUILD_DIR "${CMAKE_BINARY_DIR}/dawn-build")
-        set(VKM_TINT_EXECUTABLE "${VKM_DAWN_BUILD_DIR}/bin/tint")
+        # tint_cmd's output lands at the Dawn build root, not under bin/.
+        set(VKM_TINT_EXECUTABLE "${VKM_DAWN_BUILD_DIR}/tint")
         ExternalProject_Add(dawn_tint_build
             SOURCE_DIR "${VKM_DAWN_SOURCE_DIR}"
             BINARY_DIR "${VKM_DAWN_BUILD_DIR}"

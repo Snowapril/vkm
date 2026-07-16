@@ -4,7 +4,9 @@
 #include <vkm/renderer/backend/webgpu/webgpu_texture.h>
 #include <vkm/renderer/backend/webgpu/webgpu_util.h>
 #include <vkm/renderer/backend/webgpu/webgpu_pipeline_state.h>
+#include <vkm/renderer/backend/webgpu/webgpu_buffer.h>
 #include <vkm/renderer/backend/webgpu/webgpu_staging_buffer.h>
+#include <vkm/renderer/backend/webgpu/webgpu_driver.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/render_pass.h>
@@ -46,6 +48,9 @@ namespace vkm
 
             colorAttachments.push_back(WGPURenderPassColorAttachment{
                 .view       = view,
+                // Zero-initialization would mean "3D texture slice 0", which WebGPU
+                // rejects for 2D attachments -- must be explicitly undefined.
+                .depthSlice = WGPU_DEPTH_SLICE_UNDEFINED,
                 .loadOp     = toWGPULoadOp(colorDesc._loadAction),
                 .storeOp    = toWGPUStoreOp(colorDesc._storeAction),
                 .clearValue = WGPUColor{colorDesc._clearColors[0], colorDesc._clearColors[1], colorDesc._clearColors[2], colorDesc._clearColors[3]},
@@ -91,6 +96,14 @@ namespace vkm
 
         VKM_ASSERT(_renderPassEncoder != nullptr, "onBindPipeline called for a graphics pipeline outside an active render pass");
         wgpuRenderPassEncoderSetPipeline(_renderPassEncoder, pipelineStateWebGPU->getRenderPipeline());
+
+        // Every graphics pipeline shares the engine-global bindless bind group 0; bind it
+        // with a zero dynamic offset as a safe default so draws that never push constants
+        // are still valid (mirrors VkmCommandBufferVulkan::onBindPipeline's set-0 bind).
+        VkmBindlessResourceManagerWebGPU* bindlessManager =
+            static_cast<VkmDriverWebGPU*>(_driver)->getBindlessResourceManager();
+        const uint32_t zeroOffset = 0;
+        wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, 0, bindlessManager->getBindGroup(), 1, &zeroOffset);
     }
 
     void VkmCommandBufferWebGPU::onUnbindPipeline()
@@ -105,22 +118,46 @@ namespace vkm
         // pipeline state is simply replaced by the next bind or discarded at pass end.
     }
 
-    void VkmCommandBufferWebGPU::onCopyBuffer(VkmResourceHandle, VkmResourceHandle, uint64_t, uint64_t, uint64_t)
+    // copyBuffer() accepts either a Buffer or a StagingBuffer resource on either side (see
+    // the same-named helper in vulkan_command_buffer.cpp) -- resolve via the handle's own
+    // recorded type. WebGPU buffers are always dedicated WGPUBuffers, no base offset.
+    static WGPUBuffer resolveWGPUBuffer(VkmRenderResourcePool* renderResourcePool, VkmResourceHandle handle)
     {
-        // Not implemented yet on WebGPU -- bindless resource upload is Vulkan-only for now.
-        VKM_DEBUG_ERROR("VkmCommandBufferWebGPU::onCopyBuffer is not implemented");
+        if (handle.type == VkmResourceType::StagingBuffer)
+        {
+            return static_cast<VkmStagingBufferWebGPU*>(renderResourcePool->getResource<VkmStagingBuffer>(handle))->getBuffer();
+        }
+        return static_cast<VkmBufferWebGPU*>(renderResourcePool->getResource<VkmBuffer>(handle))->getBuffer();
     }
 
-    void VkmCommandBufferWebGPU::onDraw(uint32_t, uint32_t, uint32_t, uint32_t)
+    void VkmCommandBufferWebGPU::onCopyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size)
     {
-        // Not implemented yet on WebGPU -- bindless draw-call recording is Vulkan-only for now.
-        VKM_DEBUG_ERROR("VkmCommandBufferWebGPU::onDraw is not implemented");
+        // WebGPU requires 4-byte-aligned buffer-to-buffer copy offsets and size.
+        VKM_ASSERT((srcOffset % 4 == 0) && (dstOffset % 4 == 0) && (size % 4 == 0),
+            "WebGPU buffer copies require 4-byte-aligned offsets and size");
+
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        wgpuCommandEncoderCopyBufferToBuffer(_encoder,
+                                             resolveWGPUBuffer(renderResourcePool, srcBuffer), srcOffset,
+                                             resolveWGPUBuffer(renderResourcePool, dstBuffer), dstOffset,
+                                             size);
     }
 
-    void VkmCommandBufferWebGPU::onSetPushConstants(const void*, uint32_t, uint32_t)
+    void VkmCommandBufferWebGPU::onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
     {
-        // Not implemented yet on WebGPU -- bindless push constants are Vulkan-only for now.
-        VKM_DEBUG_ERROR("VkmCommandBufferWebGPU::onSetPushConstants is not implemented");
+        wgpuRenderPassEncoderDraw(_renderPassEncoder, vertexCount, instanceCount, firstVertex, firstInstance);
+    }
+
+    void VkmCommandBufferWebGPU::onSetPushConstants(const void* data, uint32_t size, uint32_t offset)
+    {
+        // Each call fills a fresh ring entry, so a partial update at a non-zero offset
+        // cannot preserve previously-pushed bytes; no caller needs that today.
+        VKM_ASSERT(offset == 0, "WebGPU push-constant emulation only supports offset 0");
+
+        VkmBindlessResourceManagerWebGPU* bindlessManager =
+            static_cast<VkmDriverWebGPU*>(_driver)->getBindlessResourceManager();
+        const uint32_t dynamicOffset = bindlessManager->writePushConstants(data, size);
+        wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, 0, bindlessManager->getBindGroup(), 1, &dynamicOffset);
     }
 
     void VkmCommandBufferWebGPU::onSetDebugName(const char* name)

@@ -344,7 +344,8 @@ TEST_CASE("expandPipelineStateOptions - no options returns a single unchanged de
     std::optional<vkm::VkmPipelineStateDescriptor> parsed = vkm::parsePipelineStateFromString(jsonText);
     REQUIRE(parsed.has_value());
 
-    std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> expanded = vkm::expandPipelineStateOptions(*parsed);
+    std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> expanded =
+        vkm::expandPipelineStateOptions(*parsed, vkm::VkmShaderCacheBackend::Vulkan);
     REQUIRE(expanded.has_value());
     REQUIRE(expanded->size() == 1);
     CHECK((*expanded)[0].name == "solo_pso");
@@ -357,7 +358,8 @@ TEST_CASE("expandPipelineStateOptions - two options resolve with merged state an
     std::optional<vkm::VkmPipelineStateDescriptor> parsed = vkm::parsePipelineStateFromFile(filepath);
     REQUIRE(parsed.has_value());
 
-    std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> expanded = vkm::expandPipelineStateOptions(*parsed);
+    std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> expanded =
+        vkm::expandPipelineStateOptions(*parsed, vkm::VkmShaderCacheBackend::Vulkan);
     REQUIRE(expanded.has_value());
     REQUIRE(expanded->size() == 2);
 
@@ -405,7 +407,7 @@ TEST_CASE("expandPipelineStateOptions - fails on empty name with non-empty optio
 
     std::string outError;
     std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> expanded =
-        vkm::expandPipelineStateOptions(*parsed, &outError);
+        vkm::expandPipelineStateOptions(*parsed, vkm::VkmShaderCacheBackend::Vulkan, &outError);
     CHECK_FALSE(expanded.has_value());
     CHECK(outError.find("name") != std::string::npos);
 }
@@ -420,7 +422,60 @@ TEST_CASE("expandPipelineStateOptions - fails when a variant has both compute an
 
     std::string outError;
     std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> expanded =
-        vkm::expandPipelineStateOptions(desc, &outError);
+        vkm::expandPipelineStateOptions(desc, vkm::VkmShaderCacheBackend::Vulkan, &outError);
     CHECK_FALSE(expanded.has_value());
     CHECK(outError.find("compute") != std::string::npos);
+}
+
+TEST_CASE("expandPipelineStateOptions - backends allowlist filters variants per backend") {
+    const std::string jsonText = R"({
+        "name": "filtered_pso",
+        "color_attachments": [ { "format": "bgra8_unorm" } ],
+        "shaders": {
+            "vertex": { "filepath": "triangle.vert" }
+        },
+        "options": {
+            "default": {},
+            "wireframe": {
+                "backends": ["vulkan", "metal"],
+                "rasterization_state": { "fill_mode": "wireframe" }
+            }
+        }
+    })";
+
+    std::optional<vkm::VkmPipelineStateDescriptor> parsed = vkm::parsePipelineStateFromString(jsonText);
+    REQUIRE(parsed.has_value());
+
+    // Allowlisted backends keep both variants.
+    std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> vulkanExpanded =
+        vkm::expandPipelineStateOptions(*parsed, vkm::VkmShaderCacheBackend::Vulkan);
+    REQUIRE(vulkanExpanded.has_value());
+    CHECK(vulkanExpanded->size() == 2);
+
+    std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> metalExpanded =
+        vkm::expandPipelineStateOptions(*parsed, vkm::VkmShaderCacheBackend::Metal);
+    REQUIRE(metalExpanded.has_value());
+    CHECK(metalExpanded->size() == 2);
+
+    // A backend outside the allowlist drops the variant; an empty allowlist means all.
+    std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> webgpuExpanded =
+        vkm::expandPipelineStateOptions(*parsed, vkm::VkmShaderCacheBackend::WebGPU);
+    REQUIRE(webgpuExpanded.has_value());
+    REQUIRE(webgpuExpanded->size() == 1);
+    CHECK((*webgpuExpanded)[0].name == "filtered_pso[default]");
+}
+
+TEST_CASE("parsePipelineStateFromString - unknown backend name in allowlist fails") {
+    const std::string jsonText = R"({
+        "name": "bad_backend_pso",
+        "shaders": { "vertex": { "filepath": "triangle.vert" } },
+        "options": {
+            "broken": { "backends": ["direct3d"] }
+        }
+    })";
+
+    std::string outError;
+    std::optional<vkm::VkmPipelineStateDescriptor> parsed = vkm::parsePipelineStateFromString(jsonText, &outError);
+    CHECK_FALSE(parsed.has_value());
+    CHECK(outError.find("direct3d") != std::string::npos);
 }

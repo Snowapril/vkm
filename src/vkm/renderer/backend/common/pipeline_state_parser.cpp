@@ -7,6 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <optional>
@@ -43,6 +44,13 @@ namespace vkm
             { "line_strip", VkmPrimitiveTopology::LineStrip },
             { "triangle_list", VkmPrimitiveTopology::TriangleList },
             { "triangle_strip", VkmPrimitiveTopology::TriangleStrip },
+        };
+
+        // Backend names match scripts/run_sample.py's --backend and vkm-compiler's --backend.
+        const std::unordered_map<std::string_view, VkmShaderCacheBackend> kShaderCacheBackendTable = {
+            { "vulkan", VkmShaderCacheBackend::Vulkan },
+            { "metal", VkmShaderCacheBackend::Metal },
+            { "webgpu", VkmShaderCacheBackend::WebGPU },
         };
 
         const std::unordered_map<std::string_view, VkmFillMode> kFillModeTable = {
@@ -565,6 +573,37 @@ namespace vkm
                     parseDefinitionsMap(state, *compute, "definitions", fieldPrefix + ".shaders.compute.definitions", overlay.computeDefinitions);
                 }
             }
+            if (state.failed())
+            {
+                return;
+            }
+
+            if (obj.contains("backends"))
+            {
+                const Json& backendsJson = obj.at("backends");
+                const std::string backendsPath = fieldPrefix + ".backends";
+                if (!backendsJson.is_array())
+                {
+                    state.fail("Field '" + backendsPath + "' must be an array of backend name strings");
+                    return;
+                }
+                for (const Json& entry : backendsJson)
+                {
+                    if (!entry.is_string())
+                    {
+                        state.fail("Field '" + backendsPath + "' entries must be strings");
+                        return;
+                    }
+                    const std::string name = entry.get<std::string>();
+                    const auto backendIt = kShaderCacheBackendTable.find(name);
+                    if (backendIt == kShaderCacheBackendTable.end())
+                    {
+                        state.fail("Unknown value '" + name + "' for field '" + backendsPath + "'");
+                        return;
+                    }
+                    overlay.backends.push_back(backendIt->second);
+                }
+            }
         }
 
         bool parseDescriptor(ParseState& state, const Json& root, VkmPipelineStateDescriptor& desc)
@@ -775,7 +814,7 @@ namespace vkm
     }
 
     std::optional<std::vector<VkmPipelineStateDescriptor>> expandPipelineStateOptions(
-        const VkmPipelineStateDescriptor& base, std::string* outError)
+        const VkmPipelineStateDescriptor& base, VkmShaderCacheBackend backend, std::string* outError)
     {
         std::vector<VkmPipelineStateDescriptor> variants;
 
@@ -801,6 +840,14 @@ namespace vkm
             variants.reserve(base.options.size());
             for (const auto& [optionName, overlay] : base.options)
             {
+                // A non-empty "backends" allowlist scopes the variant to those backends
+                // (e.g. wireframe fill has no WebGPU equivalent).
+                if (!overlay.backends.empty() &&
+                    std::find(overlay.backends.begin(), overlay.backends.end(), backend) == overlay.backends.end())
+                {
+                    continue;
+                }
+
                 VkmPipelineStateDescriptor variant = base;
                 variant.options.clear();
                 variant.optionName = optionName;

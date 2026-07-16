@@ -18,6 +18,7 @@
 #include <cxxopts.hpp>
 #include <spirv_msl.hpp>
 
+#include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_parser.h>
 #include <vkm/renderer/backend/common/shader_cache.h>
 #include <vkm/renderer/backend/common/shader_cache_util.h>
@@ -114,10 +115,22 @@ namespace
         return static_cast<bool>(out);
     }
 
+    const char* backendDefine(VkmShaderCacheBackend backend)
+    {
+        switch (backend)
+        {
+            case VkmShaderCacheBackend::Vulkan: return "VKM_BACKEND_VULKAN";
+            case VkmShaderCacheBackend::Metal:  return "VKM_BACKEND_METAL";
+            case VkmShaderCacheBackend::WebGPU: return "VKM_BACKEND_WEBGPU";
+        }
+        return "VKM_BACKEND_VULKAN";
+    }
+
     // Runs dxc to compile `source` to SPIR-V at `spvOut`. Returns false and
     // prints dxc's captured output on failure (shader errors are build errors).
     bool compileToSpirv(const VkmShaderStageDescriptor& desc,
                         const StageInfo& info,
+                        VkmShaderCacheBackend backend,
                         const fs::path& source,
                         const fs::path& spvOut)
     {
@@ -125,6 +138,8 @@ namespace
             "-spirv",
             "-T", info.profile,
             "-E", desc.entryPoint,
+            "-D", backendDefine(backend),
+            "-D", "VKM_BINDLESS_BUFFER_CAPACITY=" + std::to_string(kVkmBindlessBufferCapacity),
         };
         for (const auto& [name, value] : desc.definitions)
         {
@@ -174,7 +189,7 @@ namespace
         const fs::path spvTmp =
             outputDir / (baseName + "." + info.shortName + ".tmp.spv");
 
-        if (!compileToSpirv(desc, info, source, spvTmp))
+        if (!compileToSpirv(desc, info, backend, source, spvTmp))
         {
             return false;
         }
@@ -202,6 +217,75 @@ namespace
             try
             {
                 spirv_cross::CompilerMSL compiler(toSpirvWords(spirv));
+
+                // The engine-global bindless set 0 (unsized descriptor arrays) requires
+                // Tier-2 argument buffers; the resulting MSL binding layout must match the
+                // runtime convention in common/bindless_resource_manager.h exactly (see
+                // VkmBindlessResourceManagerMetal).
+                spirv_cross::CompilerMSL::Options mslOptions;
+                mslOptions.platform = spirv_cross::CompilerMSL::Options::macOS;
+                mslOptions.set_msl_version(3, 0);
+                mslOptions.argument_buffers = true;
+                mslOptions.argument_buffers_tier =
+                    spirv_cross::CompilerMSL::Options::ArgumentBuffersTier::Tier2;
+                // The explicit msl_buffer/msl_texture remaps below become the members'
+                // [[id(N)]] attributes, which alone determine Tier-2 entry offsets (id*8);
+                // pad_argument_buffer_resources is unnecessary (and rejects the special
+                // argument-buffer/push-constant pin entries, which have no basetype).
+                mslOptions.force_active_argument_buffer_resources = true;
+                compiler.set_msl_options(mslOptions);
+
+                spv::ExecutionModel executionModel = spv::ExecutionModelVertex;
+                switch (info.stage)
+                {
+                    case VkmShaderCacheStage::Vertex:   executionModel = spv::ExecutionModelVertex; break;
+                    case VkmShaderCacheStage::Fragment: executionModel = spv::ExecutionModelFragment; break;
+                    case VkmShaderCacheStage::Compute:  executionModel = spv::ExecutionModelGLCompute; break;
+                }
+
+                const auto addSetZeroBinding = [&](uint32_t binding, uint32_t count,
+                                                   spirv_cross::SPIRType::BaseType baseType,
+                                                   uint32_t mslBuffer, uint32_t mslTexture) {
+                    spirv_cross::MSLResourceBinding resourceBinding;
+                    resourceBinding.stage = executionModel;
+                    resourceBinding.basetype = baseType;
+                    resourceBinding.desc_set = 0;
+                    resourceBinding.binding = binding;
+                    resourceBinding.count = count;
+                    resourceBinding.msl_buffer = mslBuffer;
+                    resourceBinding.msl_texture = mslTexture;
+                    compiler.add_msl_resource_binding(resourceBinding);
+                };
+                addSetZeroBinding(0, kVkmBindlessTextureCapacity,
+                                  spirv_cross::SPIRType::Image,
+                                  0, kVkmMetalBindlessTextureIdBase);
+                addSetZeroBinding(1, kVkmBindlessBufferCapacity,
+                                  spirv_cross::SPIRType::Float,
+                                  kVkmMetalBindlessBufferIdBase, 0);
+                addSetZeroBinding(2, kVkmBindlessIndexBufferCapacity,
+                                  spirv_cross::SPIRType::Float,
+                                  kVkmMetalBindlessIndexBufferIdBase, 0);
+
+                // Pin the set-0 argument buffer itself ([[buffer(0)]]/[[buffer(1)]] are
+                // reserved for the vertex-stream buffers).
+                {
+                    spirv_cross::MSLResourceBinding resourceBinding;
+                    resourceBinding.stage = executionModel;
+                    resourceBinding.desc_set = 0;
+                    resourceBinding.binding = spirv_cross::kArgumentBufferBinding;
+                    resourceBinding.msl_buffer = kVkmMetalBindlessArgumentBufferIndex;
+                    compiler.add_msl_resource_binding(resourceBinding);
+                }
+                // Pin the push-constant block.
+                {
+                    spirv_cross::MSLResourceBinding resourceBinding;
+                    resourceBinding.stage = executionModel;
+                    resourceBinding.desc_set = spirv_cross::kPushConstDescSet;
+                    resourceBinding.binding = spirv_cross::kPushConstBinding;
+                    resourceBinding.msl_buffer = kVkmMetalPushConstantBufferIndex;
+                    compiler.add_msl_resource_binding(resourceBinding);
+                }
+
                 const std::string msl = compiler.compile();
                 content.assign(msl.begin(), msl.end());
                 format = VkmShaderCacheContentFormat::Msl;
@@ -331,7 +415,7 @@ int main(int argc, char** argv)
 
     std::string expandError;
     std::optional<std::vector<VkmPipelineStateDescriptor>> variants =
-        expandPipelineStateOptions(*pso, &expandError);
+        expandPipelineStateOptions(*pso, backend, &expandError);
     if (!variants.has_value())
     {
         std::cerr << "vkm-compiler: failed to expand PSO options for " << psoPath

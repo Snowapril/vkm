@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/pipeline_state_parser.h>
+#include <vkm/renderer/backend/common/shader_cache_util.h>
 
 #include <filesystem>
 #include <unordered_set>
@@ -25,7 +26,8 @@ namespace vkm
     bool VkmPipelineStateManager::loadPipelineState(const VkmPipelineStateDescriptor& desc,
         const std::string& shaderCacheDir, VkmPipelineStateOrigin origin, std::string* outError)
     {
-        std::optional<std::vector<VkmPipelineStateDescriptor>> variants = expandPipelineStateOptions(desc, outError);
+        std::optional<std::vector<VkmPipelineStateDescriptor>> variants =
+            expandPipelineStateOptions(desc, vkmActiveShaderCacheBackend(), outError);
         if (!variants.has_value())
         {
             return false;
