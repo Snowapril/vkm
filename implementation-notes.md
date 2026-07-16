@@ -81,6 +81,17 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
   binding including the special argument-buffer/push-constant pin entries, which have
   none, and rejects them ("Unexpected argument buffer resource base type").
 
+### 2026-07-16 — ImGui invisible on Metal: resources were never resident
+- Planned: n/a (user-reported: "why imgui not rendered?" after the triangle fix).
+- Root cause: the Metal ImGui renderer allocates its vertex/index/uniform MTLBuffers
+  and font textures raw (bypassing the resource pool) and binds them by
+  gpuAddress/gpuResourceID -- but MTL4 residency is explicit and only pool-created
+  resources joined the queue's residency set, so the GPU read the ImGui geometry as
+  zeros (no fault, no validation error; the path had never been exercised before Metal
+  draws worked). Fixed by registering every ImGui allocation via the pool's
+  registerExternalAllocation and a new unregisterExternalAllocation mirror (residency
+  sets retain members, so grow-reallocated buffers must be removed explicitly).
+
 ### 2026-07-16 — argument-buffer padding re-enabled (invisible-triangle fix)
 - Planned (debug plan): `[[id(N)]]` is only an argument-index attribute; the Metal
   compiler lays the struct out sequentially, so without padding the vertex-buffer array

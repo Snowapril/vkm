@@ -31,11 +31,25 @@ namespace vkm
 
         /*
         * @brief Stage residency for an allocation that lives outside the resource pool's
-        * handle tracking -- e.g. an MTLHeap pool block, whose placed sub-allocations may
-        * not make the backing heap resident on their own. Never removed: heap blocks live
-        * until driver teardown.
+        * handle tracking -- e.g. an MTLHeap pool block (whose placed sub-allocations may
+        * not make the backing heap resident on their own) or the ImGui renderer's raw
+        * MTLBuffers/MTLTextures. Long-lived allocations (heap blocks) are simply never
+        * unregistered; allocations that get released and recreated (ImGui's growing
+        * buffers) must call unregisterExternalAllocation before release, since the
+        * residency set retains its members.
         */
         void registerExternalAllocation(id<MTLAllocation> allocation, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
+
+        /*
+        * @brief Stage removal of a previously registered external allocation (mirror of
+        * registerExternalAllocation). The removal takes effect at the next
+        * commitPendingResidencyChanges(); like releaseResource, this only stages -- the
+        * deferred flush means the Metal object must stay valid until the pending change
+        * commits, which VkmDeferredResourceReclaimer-style delayed release already ensures
+        * for pool resources and callers must ensure for external ones (release after the
+        * frame's submit, or accept that the retained set reference keeps it alive).
+        */
+        void unregisterExternalAllocation(id<MTLAllocation> allocation, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
 
     protected:
         virtual bool initialize() override final;

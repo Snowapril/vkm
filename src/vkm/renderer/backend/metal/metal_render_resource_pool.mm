@@ -118,6 +118,18 @@ namespace vkm
         _residencyDirty = true;
     }
 
+    void VkmRenderResourcePoolMetal::unregisterExternalAllocation(id<MTLAllocation> allocation, VkmResourcePoolType poolType)
+    {
+        if (allocation == nil)
+        {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(_residencyMutex);
+        [_residencySets[(uint8_t)poolType] removeAllocation:allocation];
+        _residencyDirty = true;
+    }
+
     void VkmRenderResourcePoolMetal::commitPendingResidencyChanges()
     {
         std::lock_guard<std::mutex> lock(_residencyMutex);

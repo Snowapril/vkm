@@ -3,6 +3,7 @@
 #include <vkm/renderer/imgui/metal_imgui_renderer.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
+#include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 
 #include <imgui.h>
@@ -83,7 +84,11 @@ namespace vkm
             return resourceID;
         }
 
-        void updateTexture(id<MTLDevice> device, ImTextureData* tex)
+        // All resources this renderer creates bypass the engine resource pool, so each one
+        // must be registered into the queue's residency set explicitly -- MTL4 residency is
+        // explicit, and a non-resident buffer/texture bound via gpuAddress/gpuResourceID
+        // silently reads as zeros (no validation error), which renders no ImGui at all.
+        void updateTexture(id<MTLDevice> device, VkmRenderResourcePoolMetal* resourcePool, ImTextureData* tex)
         {
             if (tex->Status == ImTextureStatus_WantCreate)
             {
@@ -96,6 +101,7 @@ namespace vkm
 
                 id<MTLTexture> texture = [device newTextureWithDescriptor:texDesc];
                 [texDesc release];
+                resourcePool->registerExternalAllocation(texture);
 
                 const MTLRegion region = MTLRegionMake2D(0, 0, (NSUInteger)tex->Width, (NSUInteger)tex->Height);
                 [texture replaceRegion:region mipmapLevel:0 withBytes:tex->GetPixels() bytesPerRow:(NSUInteger)tex->GetPitch()];
@@ -119,6 +125,7 @@ namespace vkm
             else if (tex->Status == ImTextureStatus_WantDestroy && tex->UnusedFrames > 0)
             {
                 id<MTLTexture> texture = (id<MTLTexture>)tex->BackendUserData;
+                resourcePool->unregisterExternalAllocation(texture);
                 [texture release];
                 tex->BackendUserData = nullptr;
                 tex->SetTexID(ImTextureID_Invalid);
@@ -126,14 +133,20 @@ namespace vkm
             }
         }
 
-        id<MTLBuffer> ensureBufferCapacity(id<MTLDevice> device, id<MTLBuffer> buffer, NSUInteger requiredSize)
+        id<MTLBuffer> ensureBufferCapacity(id<MTLDevice> device, VkmRenderResourcePoolMetal* resourcePool,
+                                           id<MTLBuffer> buffer, NSUInteger requiredSize)
         {
             if (buffer != nil && buffer.length >= requiredSize)
             {
                 return buffer;
             }
+            // The residency set retains its members, so the outgoing buffer must be
+            // unregistered or it would stay resident (and alive) until pool teardown.
+            resourcePool->unregisterExternalAllocation(buffer);
             [buffer release];
-            return [device newBufferWithLength:requiredSize options:MTLResourceStorageModeShared];
+            id<MTLBuffer> grown = [device newBufferWithLength:requiredSize options:MTLResourceStorageModeShared];
+            resourcePool->registerExternalAllocation(grown);
+            return grown;
         }
 
         // macOS virtual-keycode -> ImGuiKey table, mirroring Dear ImGui's official
@@ -314,6 +327,7 @@ namespace vkm
     {
     public:
         id<MTLDevice> device = nil;
+        VkmRenderResourcePoolMetal* resourcePool = nullptr; // for residency registration of the raw allocations below
         id<MTLRenderPipelineState> pipelineState = nil;
         id<MTL4ArgumentTable> argumentTable = nil;
         id<MTLSamplerState> sampler = nil;
@@ -346,6 +360,7 @@ namespace vkm
 
         VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
         _impl->device = driverMetal->getMTLDevice();
+        _impl->resourcePool = static_cast<VkmRenderResourcePoolMetal*>(driverMetal->getRenderResourcePool());
         _impl->metalLayer = (__bridge CAMetalLayer*)windowHandle;
 
         ImGuiIO& io = ImGui::GetIO();
@@ -539,7 +554,7 @@ namespace vkm
             {
                 if (tex->Status != ImTextureStatus_OK)
                 {
-                    updateTexture(_impl->device, tex);
+                    updateTexture(_impl->device, _impl->resourcePool, tex);
                 }
             }
         }
@@ -554,9 +569,9 @@ namespace vkm
             return;
         }
 
-        frame.vertexBuffer = ensureBufferCapacity(_impl->device, frame.vertexBuffer, vertexBufferSize);
-        frame.indexBuffer = ensureBufferCapacity(_impl->device, frame.indexBuffer, indexBufferSize);
-        frame.uniformBuffer = ensureBufferCapacity(_impl->device, frame.uniformBuffer, sizeof(Uniforms));
+        frame.vertexBuffer = ensureBufferCapacity(_impl->device, _impl->resourcePool, frame.vertexBuffer, vertexBufferSize);
+        frame.indexBuffer = ensureBufferCapacity(_impl->device, _impl->resourcePool, frame.indexBuffer, indexBufferSize);
+        frame.uniformBuffer = ensureBufferCapacity(_impl->device, _impl->resourcePool, frame.uniformBuffer, sizeof(Uniforms));
 
         ImDrawVert* vtxDst = (ImDrawVert*)frame.vertexBuffer.contents;
         ImDrawIdx* idxDst = (ImDrawIdx*)frame.indexBuffer.contents;
@@ -648,6 +663,9 @@ namespace vkm
 
         for (Impl::FrameResources& frame : _impl->frames)
         {
+            _impl->resourcePool->unregisterExternalAllocation(frame.vertexBuffer);
+            _impl->resourcePool->unregisterExternalAllocation(frame.indexBuffer);
+            _impl->resourcePool->unregisterExternalAllocation(frame.uniformBuffer);
             [frame.vertexBuffer release];
             [frame.indexBuffer release];
             [frame.uniformBuffer release];
