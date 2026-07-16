@@ -203,6 +203,14 @@ endif()
 # Overrides
 set(CMAKE_MACOSX_RPATH ON)
 
+if (APPLE AND CMAKE_GENERATOR STREQUAL "Xcode")
+    # Xcode's default GPU Frame Capture mode ("Automatically", used when the scheme has
+    # no explicit setting) often fails to offer Metal capture for plain command-line
+    # executables like the samples/tests. Pin the generated schemes to "Metal" so the
+    # Capture GPU Workload button is always available when running from Xcode.
+    set(CMAKE_XCODE_SCHEME_ENABLE_GPU_FRAME_CAPTURE_MODE "Metal")
+endif()
+
 # Set resource directory
 set(RESOURCES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/")
 
