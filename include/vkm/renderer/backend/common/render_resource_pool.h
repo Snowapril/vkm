@@ -90,14 +90,14 @@ namespace vkm
 
         private:
             std::array<std::vector<std::unique_ptr<VkmDriverResourceBase>>, (uint8_t)VkmResourceType::Count> _resources;
-            std::array<std::vector<uint32_t>, (uint8_t)VkmResourceType::Count> _generations;
+            std::array<std::vector<VkmResourceHandle::GenerationType>, (uint8_t)VkmResourceType::Count> _generations;
             std::array<std::vector<VkmResourceMemoryTag>, (uint8_t)VkmResourceType::Count> _memoryTags;
             std::array<VkmResourceCategoryUsage, (uint8_t)VkmResourceType::Count> _categoryTotals{};
-            uint32_t _nextResourceId[(uint8_t)VkmResourceType::Count] = {0, };
+            VkmResourceHandle::IdType _nextResourceId[(uint8_t)VkmResourceType::Count] = {0, };
             // Ids freed by releaseResource(), reused by allocateResourceLocked() before growing
             // the pool -- the slot's generation (bumped on release) is what still lets a
             // stale pre-recycle handle be rejected by getResource().
-            std::array<std::vector<uint32_t>, (uint8_t)VkmResourceType::Count> _freeIds;
+            std::array<std::vector<VkmResourceHandle::IdType>, (uint8_t)VkmResourceType::Count> _freeIds;
         };
 
     private:

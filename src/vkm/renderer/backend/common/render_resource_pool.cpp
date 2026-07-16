@@ -47,7 +47,7 @@ namespace vkm
             subPool._freeIds[(uint8_t)handle.type].push_back(handle.id);
         }
     }
-
+    
     void VkmRenderResourcePool::tagResource(VkmResourceHandle handle, VkmResourceMemoryTag tag)
     {
         std::lock_guard<std::mutex> lock(_mutex);
@@ -181,9 +181,9 @@ namespace vkm
     {
         // Caller must already hold _mutex.
         VkmDriverResourceSubPool& subPool = _subPools[(uint8_t)poolType];
-        std::vector<uint32_t>& freeIds = subPool._freeIds[(uint8_t)type];
+        std::vector<VkmResourceHandle::IdType>& freeIds = subPool._freeIds[(uint8_t)type];
 
-        uint32_t next_id;
+        VkmResourceHandle::IdType next_id;
         if (!freeIds.empty())
         {
             next_id = freeIds.back();
@@ -199,7 +199,7 @@ namespace vkm
                 subPool._memoryTags[(uint8_t)type].resize(next_id + VkmDriverResourceSubPool::POOL_GRANURARITY);
             }
         }
-        uint32_t generation = subPool._generations[(uint8_t)type][next_id];
+        VkmResourceHandle::GenerationType generation = subPool._generations[(uint8_t)type][next_id];
         return VkmResourceHandle{ next_id, poolType, type, generation };
     }
 

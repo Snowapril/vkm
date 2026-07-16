@@ -41,10 +41,16 @@ namespace vkm
     */
     struct VkmResourceHandle
     {
-        uint64_t id;
+        // Containers that mirror handle fields (e.g. VkmDriverResourceSubPool's
+        // _freeIds/_generations) must use these aliases rather than hardcoding the
+        // integer types.
+        using IdType = uint64_t;
+        using GenerationType = uint32_t;
+
+        IdType id;
         VkmResourcePoolType poolType;
         VkmResourceType type;
-        uint32_t generation = 0;
+        GenerationType generation = 0;
 
         constexpr const bool operator==(const VkmResourceHandle& other) const
         {
@@ -56,14 +62,14 @@ namespace vkm
         }
         const bool isValid() const
         {
-            return (id != (uint64_t)-1);
+            return (id != (IdType)-1);
         }
         const bool isPooledResource() const
         {
             return (poolType != VkmResourcePoolType::Undefined);
         }
     };
-    constexpr const VkmResourceHandle VKM_INVALID_RESOURCE_HANDLE{(uint64_t)-1, VkmResourcePoolType::Undefined, VkmResourceType::Undefined};
+    constexpr const VkmResourceHandle VKM_INVALID_RESOURCE_HANDLE{(VkmResourceHandle::IdType)-1, VkmResourcePoolType::Undefined, VkmResourceType::Undefined};
 
     enum class VkmFormat : uint32_t
     {
