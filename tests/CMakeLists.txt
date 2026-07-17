@@ -24,6 +24,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestMetalDriver.mm
         ${SRC_DIR}/TestBackbufferReadback.mm
         ${SRC_DIR}/TestMetalBindlessTriangle.mm
+        ${SRC_DIR}/TestRenderGraphCapture.mm
     )
 endif()
 
@@ -35,6 +36,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestMetalDriver.mm
         ${SRC_DIR}/TestBackbufferReadback.mm
         ${SRC_DIR}/TestMetalBindlessTriangle.mm
+        ${SRC_DIR}/TestRenderGraphCapture.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++"
     )
 

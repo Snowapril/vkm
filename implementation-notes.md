@@ -3,6 +3,53 @@
 Running log of implementation work in this repo. Updated while a plan is being carried out;
 see `CLAUDE.md` §11 for the policy.
 
+## 2026-07-17 — Render graph visualization (capture + in-app inspector)
+
+- `VkmRenderSubGraph` gained a string name (optional trailing param on `begin*SubGraph`),
+  `getDependentSubGraphIds()`, and `VkmRenderGraphicsSubGraph::getFrameBufferDescriptor()`.
+- `VkmCommandBufferBase` records a per-recording `_boundPipelineHistory`; the capture takes
+  per-subgraph deltas of it to attribute pipelines to passes.
+- New `copyTexture`/`copyTextureToBuffer` on the command buffer (Metal: MTL4 compute-encoder
+  texture-copy selectors; Vulkan/WebGPU: error-logging stubs), gated by the new
+  `VkmDriverCapabilityFlags::TextureContentCapture` (Metal only).
+- `VkmDriverBase::readbackTexture()` implements the API spec'd in TestBackbufferReadback.mm
+  (staging + one-off submit + wait + map), and that test's reference-PNG comparison was
+  restored per its embedded instructions.
+- New `VkmRenderGraphCapture` (common/render_graph_capture.{h,cpp}): Idle/Armed/Pending/Ready
+  state machine; hooked into `VkmRenderGraph::execute()` via
+  `VkmRenderGraphCommitOptions::capture`. Snapshots color attachments post-commit (skipping
+  AllowPresent backbuffers -- framebufferOnly stays YES per user decision) and reads back up
+  to 64 KiB of each referenced buffer.
+- Engine: F10 (ImGui IO) arms a capture, `--capture-render-graph` arms at startup; the
+  capture frame takes one deliberate `ensureCompleted()` hitch before `finalize()`. Snapshot
+  handles are re-referenced on the ImGui overlay subgraph each frame while Ready so the
+  deferred reclaimer waits for in-flight ImGui draws on release.
+- New `VkmRenderGraphInspector` ImGui window (pass list, pipelines, dependencies,
+  inputs/outputs tables, `ImGui::Image` snapshot previews via new
+  `VkmImGuiRendererBase::getTextureID()` -- Metal override only -- and a hex viewer for
+  captured buffers).
+- Triangle sample: names its pass and declares its vertex/index buffers via
+  `addReferencedResource()` (first real producer of that API).
+- New `tests/TestRenderGraphCapture.mm` covers metadata, snapshot pixel contents, and buffer
+  readback headlessly.
+
+### 2026-07-17 — Metal fixes surfaced by the first real GPU readback
+- Planned: `copyTexture`/`copyTextureToBuffer` were expected to work with plain MTL4
+  compute-encoder copy calls, and `readbackTexture` to reuse the existing waitIdle path.
+- Did instead: (1) added explicit consumer/producer barriers
+  (`barrierAfterQueueStages:beforeStages:` / `barrierAfterStages:beforeQueueStages:`,
+  `MTL4VisibilityOptionDevice`) around all three Metal copy ops -- Metal4 does no automatic
+  hazard tracking, so the copy encoder read attachment data before the render pass's writes
+  completed (readback returned all zeros). The crash-handler completion-marker writes were
+  deliberately left barrier-free (they exist to observe partial execution).
+  (2) Fixed `VkmGpuEventTimelineMetal::waitIdle` to wait on `_lastAllocatedTimeline` instead
+  of `_lastCompletedCachedTimeline` -- the cached value is stale (usually 0), so every wait
+  returned immediately without waiting for in-flight work; Vulkan's implementation already
+  waits on the last allocated value, so this aligns Metal with the intended semantics.
+- Why: both were pre-existing latent gaps that only became observable now that readback
+  verifies GPU results on the CPU; conservative fixes limited to the copy ops and the one
+  timeline wait, leaving all other recording paths untouched.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:

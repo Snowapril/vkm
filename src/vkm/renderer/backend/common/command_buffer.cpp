@@ -21,6 +21,9 @@ namespace vkm
         _isInRenderPass = false;
         // Reset the current frame buffer descriptor
         _currentFrameBufferDesc = {};
+        // Command buffers are pooled/reused across frames -- discard bind history from a
+        // previous use before this one starts recording.
+        _boundPipelineHistory.clear();
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         // Command buffers are pooled/reused across frames -- discard any subgraph IDs recorded
         // during a previous use before this one starts recording.
@@ -75,6 +78,7 @@ namespace vkm
     void VkmCommandBufferBase::bindPipeline(VkmPipelineStateBase* pipelineState)
     {
         _boundPipelineState = pipelineState;
+        _boundPipelineHistory.push_back(pipelineState);
         onBindPipeline(pipelineState);
     }
 
@@ -92,6 +96,16 @@ namespace vkm
             return;
         }
         onCopyBuffer(srcBuffer, dstBuffer, srcOffset, dstOffset, size);
+    }
+
+    void VkmCommandBufferBase::copyTexture(VkmResourceHandle srcTexture, VkmResourceHandle dstTexture)
+    {
+        if (!_isRecording || _isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("copyTexture must be called while recording and outside a render pass");
+            return;
+        }
+        onCopyTexture(srcTexture, dstTexture);
     }
 
     void VkmCommandBufferBase::copyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset)

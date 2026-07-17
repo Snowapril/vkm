@@ -205,6 +205,13 @@ namespace vkm
         vkCmdCopyBuffer(_vkCommandBuffer, srcVkBuffer, dstVkBuffer, 1, &copyRegion);
     }
 
+    void VkmCommandBufferVulkan::onCopyTexture(VkmResourceHandle srcTexture, VkmResourceHandle dstTexture)
+    {
+        // Texture-to-texture copies (render graph capture snapshots) are Metal-only for
+        // now -- see VkmDriverCapabilityFlags::TextureContentCapture.
+        VKM_DEBUG_ERROR("copyTexture is not implemented on the Vulkan backend");
+    }
+
     void VkmCommandBufferVulkan::onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset)
     {
         VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();

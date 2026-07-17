@@ -53,6 +53,12 @@ namespace vkm
         // recording but outside a render pass.
         void copyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset = 0);
 
+        // Full texture-to-texture copy of mip 0 / layer 0; src and dst must share format and
+        // extent. Must be recorded while recording but outside a render pass. Only backends
+        // reporting VkmDriverCapabilityFlags::TextureContentCapture implement this (render
+        // graph capture snapshots); the others log an error and record nothing.
+        void copyTexture(VkmResourceHandle srcTexture, VkmResourceHandle dstTexture);
+
         // Draw related -- indices, if any, are fetched manually in-shader via a bindless
         // index buffer rather than a bound VkBuffer, so there is no separate "indexed" draw.
         void draw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex = 0, uint32_t firstInstance = 0);
@@ -96,6 +102,14 @@ namespace vkm
         void setDebugName(const char* name);
         inline const std::string& getDebugName() const { return _debugName; }
 
+        /*
+        * @brief Every pipeline bound via bindPipeline() since the last beginCommandBuffer(),
+        * in bind order. Read by VkmRenderGraphCapture to attribute pipelines to subgraphs
+        * (it snapshots the size before a subgraph's commit() and takes the delta after).
+        * Pointers are only valid while the frame that recorded them is in flight.
+        */
+        inline const std::vector<VkmPipelineStateBase*>& getBoundPipelineHistory() const { return _boundPipelineHistory; }
+
     protected:
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) = 0;
         virtual void onEndRenderPass() = 0;
@@ -103,6 +117,7 @@ namespace vkm
         virtual void onUnbindPipeline() = 0;
         virtual void onCopyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size) = 0;
         virtual void onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset) = 0;
+        virtual void onCopyTexture(VkmResourceHandle srcTexture, VkmResourceHandle dstTexture) = 0;
         virtual void onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) = 0;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) = 0;
         virtual void onSetDebugName(const char* name) = 0;
@@ -137,6 +152,7 @@ namespace vkm
 
     private:
         VkmPipelineStateBase* _boundPipelineState = nullptr;
+        std::vector<VkmPipelineStateBase*> _boundPipelineHistory;
         std::string _debugName;
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         std::vector<uint32_t> _recordedSubgraphIds;

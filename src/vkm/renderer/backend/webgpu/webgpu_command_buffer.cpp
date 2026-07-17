@@ -143,6 +143,13 @@ namespace vkm
                                              size);
     }
 
+    void VkmCommandBufferWebGPU::onCopyTexture(VkmResourceHandle srcTexture, VkmResourceHandle dstTexture)
+    {
+        // Texture-to-texture copies (render graph capture snapshots) are Metal-only for
+        // now -- see VkmDriverCapabilityFlags::TextureContentCapture.
+        VKM_DEBUG_ERROR("copyTexture is not implemented on the WebGPU backend");
+    }
+
     void VkmCommandBufferWebGPU::onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset)
     {
         VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();

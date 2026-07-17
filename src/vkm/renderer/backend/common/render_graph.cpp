@@ -10,6 +10,7 @@
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/gpu_crash_handler.h>
+#include <vkm/renderer/backend/common/render_graph_capture.h>
 
 namespace vkm
 {
@@ -31,20 +32,35 @@ namespace vkm
     {
     }
 
-    VkmRenderGraphicsSubGraph* VkmRenderGraph::beginGraphicsSubGraph(const VkmFrameBufferDescriptor& desc)
+    VkmRenderGraphicsSubGraph* VkmRenderGraph::beginGraphicsSubGraph(const VkmFrameBufferDescriptor& desc, const char* name)
     {
         // Create a new graphics subgraph with the provided framebuffer descriptor
-        return beginSubGraph<VkmRenderGraphicsSubGraph>(desc);
+        VkmRenderGraphicsSubGraph* subGraph = beginSubGraph<VkmRenderGraphicsSubGraph>(desc);
+        if (name != nullptr)
+        {
+            subGraph->setName(name);
+        }
+        return subGraph;
     }
 
-    VkmRenderComputeSubGraph* VkmRenderGraph::beginComputeSubGraph()
+    VkmRenderComputeSubGraph* VkmRenderGraph::beginComputeSubGraph(const char* name)
     {
-        return beginSubGraph<VkmRenderComputeSubGraph>();
+        VkmRenderComputeSubGraph* subGraph = beginSubGraph<VkmRenderComputeSubGraph>();
+        if (name != nullptr)
+        {
+            subGraph->setName(name);
+        }
+        return subGraph;
     }
 
-    VkmRenderTransferSubGraph* VkmRenderGraph::beginTransferSubGraph()
+    VkmRenderTransferSubGraph* VkmRenderGraph::beginTransferSubGraph(const char* name)
     {
-        return beginSubGraph<VkmRenderTransferSubGraph>();
+        VkmRenderTransferSubGraph* subGraph = beginSubGraph<VkmRenderTransferSubGraph>();
+        if (name != nullptr)
+        {
+            subGraph->setName(name);
+        }
+        return subGraph;
     }
 
     void VkmRenderGraph::compile(const VkmRenderGraphCompileOptions& options)
@@ -78,6 +94,11 @@ namespace vkm
         commandBuffer->beginCommandBuffer();
         commandBuffer->writeGpuTimestampBegin();
 
+        if (options.capture != nullptr)
+        {
+            options.capture->beginCapture(_driver, _frameIndex);
+        }
+
         for (auto& subGraph : _subGraphs)
         {
             // Execute each subgraph's commands
@@ -85,7 +106,15 @@ namespace vkm
             {
 
             }
+            const size_t pipelineHistoryBegin = commandBuffer->getBoundPipelineHistory().size();
             subGraph->commit(commandBuffer);
+
+            if (options.capture != nullptr)
+            {
+                // Recorded after commit() returns, i.e. outside any render pass -- the same
+                // guarantee the completion-marker writes below rely on.
+                options.capture->recordSubGraph(_driver, commandBuffer, subGraph.get(), pipelineHistoryBegin);
+            }
 
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
             if (gpuCrashDumpEnabled)

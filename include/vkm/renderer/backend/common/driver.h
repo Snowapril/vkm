@@ -34,6 +34,9 @@ namespace vkm
     {
         None                    = 0x000000000,
         CommandBufferReusable   = 0x00000001,
+        // Backend implements copyTexture/copyTextureToBuffer, so render graph capture can
+        // snapshot texture contents and readbackTexture() can return pixels.
+        TextureContentCapture   = 0x00000002,
     };
 
     inline VkmDriverCapabilityFlags operator|(VkmDriverCapabilityFlags lhs, VkmDriverCapabilityFlags rhs)

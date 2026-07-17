@@ -20,6 +20,8 @@ namespace vkm
         VkmImGuiRendererMetal(VkmDriverBase* driver);
         ~VkmImGuiRendererMetal();
 
+        virtual uint64_t getTextureID(VkmResourceHandle texture) override final;
+
     protected:
         virtual bool initializeInner(void* windowHandle, VkmFormat backBufferFormat) override final;
         virtual void newFrameInner() override final;

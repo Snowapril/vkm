@@ -27,6 +27,13 @@ namespace vkm
         void renderDrawData(VkmCommandBufferBase* commandBuffer);
         void shutdown();
 
+        /*
+        * @brief Returns an ImTextureID-compatible value for a pooled engine texture, for use
+        * with ImGui::Image(). Returns 0 when the backend cannot display engine textures in
+        * ImGui (Vulkan/WebGPU keep this default for now -- only Metal overrides it).
+        */
+        virtual uint64_t getTextureID(VkmResourceHandle texture) { (void)texture; return 0; }
+
     protected:
         virtual bool initializeInner(void* windowHandle, VkmFormat backBufferFormat) = 0;
         virtual void newFrameInner() = 0;

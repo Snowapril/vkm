@@ -215,11 +215,53 @@ namespace vkm
         // leave a compute encoder open across recording (see onEndCommandBuffer's batched
         // marker writes and the queue-timeout lesson behind them).
         _commandEncoder.beginComputePass();
-        [_commandEncoder.getActiveComputeCommandEncoder() copyFromBuffer:mtlSrcBuffer
-                                                            sourceOffset:srcOffset
-                                                                toBuffer:mtlDstBuffer
-                                                       destinationOffset:dstOffset
-                                                                    size:size];
+        id<MTL4ComputeCommandEncoder> computeEncoder = _commandEncoder.getActiveComputeCommandEncoder();
+        // Metal4 does no automatic hazard tracking: wait for prior encoders that may have
+        // written the source (e.g. render graph capture copying a buffer a pass just used),
+        // and make the copy visible to later encoders.
+        [computeEncoder barrierAfterQueueStages:MTLStageAll
+                                   beforeStages:MTLStageBlit
+                              visibilityOptions:MTL4VisibilityOptionDevice];
+        [computeEncoder copyFromBuffer:mtlSrcBuffer
+                          sourceOffset:srcOffset
+                              toBuffer:mtlDstBuffer
+                     destinationOffset:dstOffset
+                                  size:size];
+        [computeEncoder barrierAfterStages:MTLStageBlit
+                         beforeQueueStages:MTLStageAll
+                         visibilityOptions:MTL4VisibilityOptionDevice];
+        _commandEncoder.commit();
+    }
+
+    void VkmCommandBufferMetal::onCopyTexture(VkmResourceHandle srcTexture, VkmResourceHandle dstTexture)
+    {
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        VkmTextureMetal* srcTextureMetal = static_cast<VkmTextureMetal*>(renderResourcePool->getResource<VkmTexture>(srcTexture));
+        VkmTextureMetal* dstTextureMetal = static_cast<VkmTextureMetal*>(renderResourcePool->getResource<VkmTexture>(dstTexture));
+        const VkmTextureInfo& srcInfo = srcTextureMetal->getTextureInfo();
+
+        // Metal4 has no blit encoder -- texture copies live on the compute encoder, same
+        // per-call encoder tradeoff as onCopyBuffer above (debug-capture path, not per-frame).
+        _commandEncoder.beginComputePass();
+        id<MTL4ComputeCommandEncoder> computeEncoder = _commandEncoder.getActiveComputeCommandEncoder();
+        // Metal4 does no automatic hazard tracking: wait for prior encoders (e.g. the render
+        // pass that wrote the source) before copying, and make the copy visible to later
+        // encoders (e.g. an ImGui pass sampling the destination).
+        [computeEncoder barrierAfterQueueStages:MTLStageAll
+                                   beforeStages:MTLStageBlit
+                              visibilityOptions:MTL4VisibilityOptionDevice];
+        [computeEncoder copyFromTexture:srcTextureMetal->getInternalHandle()
+                            sourceSlice:0
+                            sourceLevel:0
+                           sourceOrigin:MTLOriginMake(0, 0, 0)
+                             sourceSize:MTLSizeMake(srcInfo._extent.x, srcInfo._extent.y, srcInfo._extent.z)
+                              toTexture:dstTextureMetal->getInternalHandle()
+                       destinationSlice:0
+                       destinationLevel:0
+                      destinationOrigin:MTLOriginMake(0, 0, 0)];
+        [computeEncoder barrierAfterStages:MTLStageBlit
+                         beforeQueueStages:MTLStageAll
+                         visibilityOptions:MTL4VisibilityOptionDevice];
         _commandEncoder.commit();
     }
 
@@ -233,17 +275,26 @@ namespace vkm
         const uint32_t bytesPerRow = textureInfo._extent.x * vkmBytesPerTexel(textureInfo._format);
 
         // Metal4 has no blit encoder -- texture copies live on the compute encoder. Same
-        // per-call encoder rationale as onCopyBuffer above.
+        // per-call encoder rationale as onCopyBuffer above; barriers because Metal4 does no
+        // automatic hazard tracking (a same-command-buffer copy right after the render pass
+        // that wrote the source, e.g. render graph capture, reads garbage without them).
         _commandEncoder.beginComputePass();
-        [_commandEncoder.getActiveComputeCommandEncoder() copyFromTexture:textureMetal->getInternalHandle()
-                                                              sourceSlice:0
-                                                              sourceLevel:0
-                                                             sourceOrigin:MTLOriginMake(0, 0, 0)
-                                                               sourceSize:MTLSizeMake(textureInfo._extent.x, textureInfo._extent.y, 1)
-                                                                 toBuffer:mtlDstBuffer
-                                                        destinationOffset:dstOffset
-                                                   destinationBytesPerRow:bytesPerRow
-                                                 destinationBytesPerImage:0];
+        id<MTL4ComputeCommandEncoder> computeEncoder = _commandEncoder.getActiveComputeCommandEncoder();
+        [computeEncoder barrierAfterQueueStages:MTLStageAll
+                                   beforeStages:MTLStageBlit
+                              visibilityOptions:MTL4VisibilityOptionDevice];
+        [computeEncoder copyFromTexture:textureMetal->getInternalHandle()
+                            sourceSlice:0
+                            sourceLevel:0
+                           sourceOrigin:MTLOriginMake(0, 0, 0)
+                             sourceSize:MTLSizeMake(textureInfo._extent.x, textureInfo._extent.y, 1)
+                               toBuffer:mtlDstBuffer
+                      destinationOffset:dstOffset
+                 destinationBytesPerRow:bytesPerRow
+               destinationBytesPerImage:0];
+        [computeEncoder barrierAfterStages:MTLStageBlit
+                         beforeQueueStages:MTLStageAll
+                         visibilityOptions:MTL4VisibilityOptionDevice];
         _commandEncoder.commit();
     }
 
