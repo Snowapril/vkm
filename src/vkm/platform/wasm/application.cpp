@@ -55,7 +55,7 @@ namespace vkm
         VkmApplication* self = static_cast<VkmApplication*>(userData);
         self->_window.update();
         self->_engine.loopInner(glfwGetTime());
-        if (self->_window.shouldClose())
+        if (self->_window.shouldClose() || self->_engine.shouldExit())
         {
             emscripten_cancel_main_loop();
             self->destroy();
@@ -93,6 +93,15 @@ namespace vkm
             VkmWindowInfo windowInfo = { 1280, 720, appDelegate->getAppName(), _window.getHandle() };
             _engine.addSwapChain(windowInfo);
         }
+
+        glfwSetWindowUserPointer(_window.getHandle(), &_engine);
+        glfwSetKeyCallback(_window.getHandle(), [](GLFWwindow* window, int key, int /*scancode*/, int action, int /*mods*/)
+        {
+            if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+            {
+                static_cast<VkmEngine*>(glfwGetWindowUserPointer(window))->getInputHandler().onKeyEvent(VkmKeyCode::Escape, VkmKeyAction::Press);
+            }
+        });
 
         // Emscripten forbids blocking the main thread. Register a callback-driven loop
         // (fired at the browser's requestAnimationFrame cadence) instead of the blocking

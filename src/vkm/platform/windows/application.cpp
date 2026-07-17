@@ -85,8 +85,17 @@ namespace vkm
             VkmWindowInfo windowInfo = { 1280, 720, _appName, _window.getHandle() };
             _engine.addSwapChain(windowInfo);
         }
-        
-        while (_window.shouldClose() == false)
+
+        glfwSetWindowUserPointer(_window.getHandle(), &_engine);
+        glfwSetKeyCallback(_window.getHandle(), [](GLFWwindow* window, int key, int /*scancode*/, int action, int /*mods*/)
+        {
+            if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+            {
+                static_cast<VkmEngine*>(glfwGetWindowUserPointer(window))->getInputHandler().onKeyEvent(VkmKeyCode::Escape, VkmKeyAction::Press);
+            }
+        });
+
+        while (_window.shouldClose() == false && _engine.shouldExit() == false)
         {
             _window.update();
             _engine.loopInner(glfwGetTime());
