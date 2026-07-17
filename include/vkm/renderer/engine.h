@@ -4,6 +4,7 @@
 
 #include <vkm/base/common.h>
 #include <vkm/platform/common/app_delegate.h>
+#include <vkm/platform/common/input_handler.h>
 #include <vkm/platform/common/window.h>
 #include <vkm/renderer/backend/common/render_graph.h>
 #include <memory>
@@ -108,6 +109,16 @@ namespace vkm
         */
         inline VkmDriverBase* getDriver() const { return _driver; }
 
+        /*
+        * @brief returns engine's input handler for platform layers to forward key events into
+        */
+        inline VkmInputHandler& getInputHandler() { return _inputHandler; }
+
+        /*
+        * @brief engine loop exit condition. True once the input handler has received an exit request.
+        */
+        inline bool shouldExit() const { return _inputHandler.shouldExit(); }
+
     public:
 
         /*
@@ -118,6 +129,8 @@ namespace vkm
     private:
         VkmDriverBase* _driver;
         double _lastUpdateTime;
+
+        VkmInputHandler _inputHandler;
 
         VkmSwapChainBase* _mainSwapChain {nullptr}; // main swapchain. engine should have multiple swapchains but at now, only one swapchain is supported.
 

@@ -28,6 +28,7 @@
 
 #if defined(VKM_USE_METAL_API)
 @interface VkmWindowImpl : NSWindow
+- (void)setEngine:(nonnull vkm::VkmEngine *)engine;
 @end
 
 @interface VkmApplicationImpl : NSObject <NSApplicationDelegate, NSWindowDelegate>
@@ -126,6 +127,14 @@ static void* renderWorker( void* _Nullable obj )
     _swapChain->overrideCurrentDrawable(drawable);
 
     _engine->loopInner(CACurrentMediaTime());
+
+    if (_engine->shouldExit())
+    {
+        // AppKit calls must run on the main thread, not this render-thread callback.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[NSApplication sharedApplication] terminate:nil];
+        });
+    }
 }
 
 - (void)setEngine:(nonnull vkm::VkmEngine*)engine
@@ -140,9 +149,22 @@ static void* renderWorker( void* _Nullable obj )
 @end
 
 @implementation VkmWindowImpl
+{
+    vkm::VkmEngine* _engine;
+}
+
+- (void)setEngine:(nonnull vkm::VkmEngine *)engine
+{
+    _engine = engine;
+}
+
 // Overriding this function allows to prevent clicking noise when using keyboard and esc key to go windowed
 - (void)keyDown:(NSEvent *)event
 {
+    if (_engine != nullptr && event.keyCode == 53) // kVK_Escape (avoids a Carbon.h dependency for one constant)
+    {
+        _engine->getInputHandler().onKeyEvent(vkm::VkmKeyCode::Escape, vkm::VkmKeyAction::Press);
+    }
 }
 @end
 
@@ -178,6 +200,7 @@ static void* renderWorker( void* _Nullable obj )
     _window.releasedWhenClosed = NO;
     _window.minSize = NSMakeSize(640, 360);
     _window.delegate = self;
+    [_window setEngine:_engine];
     [self updateWindowTitle:_window];
     
     vkm::VKM_DEBUG_INFO(fmt::format("Creating window with size: {}x{}", (int)_window.contentLayoutRect.size.width, (int)_window.contentLayoutRect.size.height).c_str());
@@ -471,7 +494,16 @@ namespace vkm
             _engine.addSwapChain(windowInfo);
         }
 
-        while (_window.shouldClose() == false)
+        glfwSetWindowUserPointer(_window.getHandle(), &_engine);
+        glfwSetKeyCallback(_window.getHandle(), [](GLFWwindow* window, int key, int /*scancode*/, int action, int /*mods*/)
+        {
+            if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+            {
+                static_cast<VkmEngine*>(glfwGetWindowUserPointer(window))->getInputHandler().onKeyEvent(VkmKeyCode::Escape, VkmKeyAction::Press);
+            }
+        });
+
+        while (_window.shouldClose() == false && _engine.shouldExit() == false)
         {
             _window.update();
             _engine.loopInner(glfwGetTime());
