@@ -34,8 +34,9 @@ namespace vkm
     {
         None                    = 0x000000000,
         CommandBufferReusable   = 0x00000001,
-        // Backend implements copyTexture/copyTextureToBuffer, so render graph capture can
-        // snapshot texture contents and readbackTexture() can return pixels.
+        // Backend implements copyTexture (texture-to-texture), so render graph capture can
+        // snapshot texture contents. (copyTextureToBuffer/readbackTexture are cross-backend
+        // and not gated by this flag.)
         TextureContentCapture   = 0x00000002,
     };
 
