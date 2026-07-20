@@ -198,6 +198,30 @@ When `isDebugNamingEnabled()` is true AND a `VkmResourceInfo::_debugName` was su
 `VkmCommandQueueBase::initialize()` likewise gates its `setDebugName(_queueName)` on the same flag.
 No `setDebugName()` method body itself changed — gating is entirely at these call sites.
 
+### Programmatic frame capture (Metal)
+
+When `enableGpuCapture` is set, `VkmDriverMetal::postInitializeInner()` additionally creates a
+frame-aligned `MTLCaptureScope` (label "vkm frame") on the Graphics MTL4 queue via
+`newCaptureScopeWithMTL4CommandQueue:` and installs it as `MTLCaptureManager.defaultCaptureScope`.
+`VkmEngine::loopInner()` brackets every frame with the cross-backend
+`VkmDriverBase::onFrameBegin()/onFrameEnd()` hooks (no-ops on Vulkan/WebGPU); the Metal overrides
+begin/end that scope, so Xcode's Metal capture button records a bounded frame instead of being
+unavailable for the MTL4 workload.
+
+One-shot `.gputrace` export: `VkmDriverBase::requestGpuFrameCapture()` (F9 in the ImGui overlay,
+or `--gpu-capture-frame` to capture the first frame at startup — that flag implies
+`--enable-gpu-capture`) arms a capture consumed at the next `onFrameBegin()`, writing
+`vkm_capture_<timestamp>.gputrace` to the working directory via
+`MTLCaptureDestinationGPUTraceDocument`. `MTL_CAPTURE_ENABLED=1` is set automatically before Metal
+device creation when either capture flag appears in the raw process arguments (see
+`vkmCreateSystemDefaultDevice()` in `platform/apple/application.mm`); if capture is still reported
+unsupported, launch with `MTL_CAPTURE_ENABLED=1` set in the shell.
+
+Xcode workflow: configure with `cmake -G Xcode` (the root CMakeLists already special-cases the
+nested DXC build for the Xcode generator), open the generated project, add `--enable-gpu-capture`
+to the sample scheme's arguments, and use the Metal capture button — the capture dialog defaults
+to the "vkm frame" scope. Traces of Metal 4 workloads require Xcode 26+ to record and open.
+
 ## GPU Crash Handler
 
 Two independent gates apply:

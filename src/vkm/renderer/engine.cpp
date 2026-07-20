@@ -96,6 +96,13 @@ namespace vkm
             return VkmInitResult{VkmInitResultCode::Failed, psoError};
         }
 
+        // Must run after driver init -- the Metal capture scope is created there, and
+        // requestGpuFrameCapture() is a no-op before it exists.
+        if (_engineOptions.captureGpuFrameOnStartup)
+        {
+            _driver->requestGpuFrameCapture();
+        }
+
         _appDelegate->postDriverReady(this);
 
         return result;
@@ -106,12 +113,18 @@ namespace vkm
         const double deltaTime = currentUpdateTime - _lastUpdateTime;
         _lastUpdateTime = currentUpdateTime;
 
+        // Frame-boundary driver hooks (MTLCaptureScope begin/end on Metal) bracket all of
+        // this frame's encoding, submission, and present.
+        _driver->onFrameBegin();
+
 #if defined(VKM_ENABLE_IMGUI)
         _imGuiRenderer->newFrame();
 #endif
 
         update( deltaTime );
         render( deltaTime );
+
+        _driver->onFrameEnd();
 
         _currentFrameIndex = (_currentFrameIndex + 1) % FRAME_COUNT;
     }
@@ -175,6 +188,10 @@ namespace vkm
         {
             _renderGraphCapture->arm();
         }
+        if (ImGui::IsKeyPressed(ImGuiKey_F9, false))
+        {
+            _driver->requestGpuFrameCapture();
+        }
         _renderGraphInspector->draw(*_renderGraphCapture, _driver, _imGuiRenderer.get());
 #endif
         _appDelegate->update(deltaTime);
@@ -200,6 +217,9 @@ namespace vkm
 #endif
         ImGui::Text("Frame: %u", _currentFrameIndex);
         ImGui::Text("F10: capture render graph");
+#if defined(VKM_USE_METAL_API)
+        ImGui::Text("F9: capture GPU frame (.gputrace)");
+#endif
         ImGui::End();
     }
 #endif
@@ -293,7 +313,9 @@ namespace vkm
             ("enable-gpu-crash-dump", "Enable GPU crash handler submission-breadcrumb recording",
                 cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableGpuCrashDump ? "true" : "false"))
             ("capture-render-graph", "Arm a render graph capture at startup (first frame is captured)",
-                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.captureRenderGraphOnStartup ? "true" : "false"));
+                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.captureRenderGraphOnStartup ? "true" : "false"))
+            ("gpu-capture-frame", "Capture the first rendered frame to a .gputrace file (Metal; implies --enable-gpu-capture)",
+                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.captureGpuFrameOnStartup ? "true" : "false"));
 
         VkmEngineLaunchOptions launchOptions = DEFAULT_ENGINE_LAUNCH_OPTIONS;
         try
@@ -303,6 +325,10 @@ namespace vkm
             launchOptions.enableGpuCapture = result["enable-gpu-capture"].as<bool>();
             launchOptions.enableGpuCrashDump = result["enable-gpu-crash-dump"].as<bool>();
             launchOptions.captureRenderGraphOnStartup = result["capture-render-graph"].as<bool>();
+            launchOptions.captureGpuFrameOnStartup = result["gpu-capture-frame"].as<bool>();
+            // The GPU frame capture scope only exists when enableGpuCapture is set --
+            // a startup capture request implies it.
+            launchOptions.enableGpuCapture |= launchOptions.captureGpuFrameOnStartup;
         }
         catch (const std::exception& e)
         {

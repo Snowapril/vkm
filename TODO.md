@@ -29,3 +29,4 @@
 - Render graph capture records depth/stencil attachments as metadata only (no snapshot/preview).
 - Render graph capture records swapchain backbuffer outputs as metadata only (`CAMetalLayer.framebufferOnly` stays YES).
 - Render graph capture texture previews in ImGui are Metal-only (`getTextureID` returns 0 on Vulkan/WebGPU).
+- Programmatic .gputrace capture scopes only the Metal Graphics queue 0; Vulkan/WebGPU `requestGpuFrameCapture()` is a no-op (no RenderDoc integration).

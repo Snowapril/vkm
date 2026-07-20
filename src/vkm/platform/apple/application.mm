@@ -354,8 +354,29 @@ namespace vkm
     {
     }
 
+    // MTL_CAPTURE_ENABLED must be in the environment before the Metal framework
+    // initializes its capture layer (first device creation); whether MTLCaptureManager
+    // re-consults it lazily is undocumented, so set it deterministically beforehand.
+    // Engine launch options are parsed later (entryPoint), so peek at the raw process
+    // arguments here. A `--enable-gpu-capture=false`-style argument also matches the
+    // prefix and sets the env var -- benign, since the env only enables the capture
+    // *capability*; capture-scope creation stays gated on the parsed flag.
+    // overwrite=0 respects an explicit user-provided MTL_CAPTURE_ENABLED value.
+    static id<MTLDevice> vkmCreateSystemDefaultDevice()
+    {
+        for (NSString* arg in [[NSProcessInfo processInfo] arguments])
+        {
+            if ([arg hasPrefix:@"--enable-gpu-capture"] || [arg hasPrefix:@"--gpu-capture-frame"])
+            {
+                setenv("MTL_CAPTURE_ENABLED", "1", 0);
+                break;
+            }
+        }
+        return MTLCreateSystemDefaultDevice();
+    }
+
     VkmApplication::VkmApplication()
-        : _mtlDevice(MTLCreateSystemDefaultDevice()), _engine( new vkm::VkmDriverMetal(_mtlDevice) )
+        : _mtlDevice(vkmCreateSystemDefaultDevice()), _engine( new vkm::VkmDriverMetal(_mtlDevice) )
     {
     }
 

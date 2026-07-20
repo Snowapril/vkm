@@ -199,6 +199,21 @@ namespace vkm
         inline bool isDebugNamingEnabled() const { return _debugNamingEnabled; }
 
         /*
+        * @brief Frame-boundary hooks called by VkmEngine::loopInner() on the render thread,
+        * bracketing all of a frame's encoding, submission, and present. Only the Metal
+        * backend overrides them (MTLCaptureScope begin/end for Xcode GPU capture).
+        */
+        virtual void onFrameBegin() {}
+        virtual void onFrameEnd() {}
+
+        /*
+        * @brief Arm a one-frame GPU capture (.gputrace) consumed at the next
+        * onFrameBegin(). Metal-only; default is a no-op. Requires enableGpuCapture at
+        * launch (the capture scope only exists then).
+        */
+        virtual void requestGpuFrameCapture() {}
+
+        /*
         * @brief true if --enable-gpu-crash-dump was requested at launch. Gates
         * VkmGpuCrashHandler::recordSubmission()'s breadcrumb bookkeeping and (on Vulkan)
         * VK_EXT_device_fault extension enablement. Device-lost/error detection itself stays

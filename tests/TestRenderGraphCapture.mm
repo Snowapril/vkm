@@ -27,13 +27,12 @@ struct CaptureFixture {
     vkm::VkmDriverMetal* driver = nullptr;
     vkm::VkmInitResult initResult;
 
-    CaptureFixture() {
+    explicit CaptureFixture(vkm::VkmEngineLaunchOptions opts = { .enableValidationLayer = true }) {
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
         if (device == nil) {
             initResult = vkm::VkmInitResult{vkm::VkmInitResultCode::HardwareUnsupported, "No Metal device available on this system."};
             return;
         }
-        vkm::VkmEngineLaunchOptions opts{ .enableValidationLayer = true };
         driver = new vkm::VkmDriverMetal(device);
         initResult = driver->initialize(&opts);
     }
@@ -144,6 +143,21 @@ TEST_CASE("Render graph capture - clear pass metadata, snapshot pixels, and buff
 
     capture.releaseResources(driver);
     CHECK(capture.getState() == vkm::VkmRenderGraphCapture::State::Idle);
+}
+
+TEST_CASE("GPU frame capture - scope hooks and request are crash-free headless") {
+    // With enableGpuCapture set, the driver creates a frame-aligned MTLCaptureScope.
+    // Headless (MTL_CAPTURE_ENABLED unset), a requested .gputrace capture exercises the
+    // supportsDestination failure path gracefully; scope begin/end with no commits in
+    // between is validation-legal. Real .gputrace output is verified manually.
+    CaptureFixture f(vkm::VkmEngineLaunchOptions{ .enableValidationLayer = true, .enableGpuCapture = true });
+    VKM_REQUIRE_DEVICE(f.initResult);
+
+    f.driver->requestGpuFrameCapture();
+    f.driver->onFrameBegin();
+    f.driver->onFrameEnd();
+    f.driver->onFrameBegin();
+    f.driver->onFrameEnd();
 }
 
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE

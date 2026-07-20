@@ -50,6 +50,19 @@ see `CLAUDE.md` §11 for the policy.
   verifies GPU results on the CPU; conservative fixes limited to the copy ops and the one
   timeline wait, leaving all other recording paths untouched.
 
+## 2026-07-20 — Xcode GPU capture (MTLCaptureManager, Metal 4)
+
+- `--enable-gpu-capture` now creates a frame-aligned `MTLCaptureScope` ("vkm frame") on the
+  Graphics MTL4 queue and installs it as `MTLCaptureManager.defaultCaptureScope`; new
+  cross-backend `VkmDriverBase::onFrameBegin()/onFrameEnd()` hooks (called from
+  `VkmEngine::loopInner()`, no-ops off-Metal) begin/end the scope each frame.
+- One-shot `.gputrace` export via `requestGpuFrameCapture()` — F9 hotkey or the new
+  `--gpu-capture-frame` flag (implies `--enable-gpu-capture`) — written to the working
+  directory. `MTL_CAPTURE_ENABLED=1` is auto-set before Metal device creation by peeking
+  at raw process args in `platform/apple/application.mm`.
+- Verified end-to-end: triangle `--gpu-capture-frame` wrote a valid 8.4 MB `.gputrace`
+  bundle, validation-clean; smoke test added to `TestRenderGraphCapture.mm`.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:
@@ -61,7 +74,17 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Why: <the edge case that forced it>
 ```
 
-### 2026-07-15 — PR #18 CI fixes: wasm stamp dependency and DXC vs new AppleClang
+### 2026-07-20 — .gputrace captureObject: device instead of MTLCaptureScope
+- Planned: `MTLCaptureDescriptor.captureObject = _captureScope` for the programmatic
+  `.gputrace` export.
+- Did instead: `captureObject = _mtlDevice`. The scope remains the `defaultCaptureScope`
+  for Xcode's capture button; only the programmatic descriptor uses the device.
+- Why: with `MTL_CAPTURE_ENABLED=1`, the GPUToolsCapture layer throws
+  `-[MTLCaptureScope traceStream]: unrecognized selector` (uncaught NSException, app
+  terminates) when `startCaptureWithDescriptor:` receives a scope created via
+  `newCaptureScopeWithMTL4CommandQueue:` — a tooling incompatibility with the new MTL4
+  scope API. Device capture is still exactly one frame because start/stopCapture bracket
+  a single onFrameBegin()/onFrameEnd() pair.
 - Planned: the bindless work was expected to pass existing CI as-is.
 - Did instead: two follow-up fixes after the first PR run. (1) The triangle sample's
   Emscripten `LINK_DEPENDS` on `triangle_shaders.stamps/renderpass.0.stamp` moved under
