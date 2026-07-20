@@ -15,8 +15,10 @@ namespace vkm
     class VkmTexture;
     class VkmSwapChainBase;
     class VkmPipelineStateManager;
+    class VkmRenderGraphCapture;
 #if defined(VKM_ENABLE_IMGUI)
     class VkmImGuiRendererBase;
+    class VkmRenderGraphInspector;
 #endif
     struct VkmInitResult;
 
@@ -25,8 +27,14 @@ namespace vkm
         bool enableValidationLayer;
         bool enableGpuCapture = false;
         bool enableGpuCrashDump = false;
+        // Arm a render graph capture at startup so the first rendered frame is captured
+        // (equivalent to pressing the capture hotkey before frame 0).
+        bool captureRenderGraphOnStartup = false;
+        // Capture the first rendered frame to a .gputrace file at startup (Metal only;
+        // implies enableGpuCapture). Equivalent to pressing F9 before frame 0.
+        bool captureGpuFrameOnStartup = false;
     };
-    constexpr const VkmEngineLaunchOptions DEFAULT_ENGINE_LAUNCH_OPTIONS = { true, false, false };
+    constexpr const VkmEngineLaunchOptions DEFAULT_ENGINE_LAUNCH_OPTIONS = { true, false, false, false, false };
 
     /*
     * @brief Engine base class
@@ -119,6 +127,12 @@ namespace vkm
         */
         inline bool shouldExit() const { return _inputHandler.shouldExit(); }
 
+        /*
+        * @brief returns the engine-owned render graph capture (see render_graph_capture.h).
+        * Armed via the F10 hotkey, --capture-render-graph, or arm() directly.
+        */
+        inline VkmRenderGraphCapture* getRenderGraphCapture() const { return _renderGraphCapture.get(); }
+
     public:
 
         /*
@@ -147,8 +161,11 @@ namespace vkm
         std::array<std::unique_ptr<VkmRenderGraph>, FRAME_COUNT> _frameRenderGraphs;
         uint32_t _currentFrameIndex {0}; // current frame index for render graph
 
+        std::unique_ptr<VkmRenderGraphCapture> _renderGraphCapture;
+
 #if defined(VKM_ENABLE_IMGUI)
         double _fpsSmoothed {0.0}; // exponential moving average, used by renderDebugOverlay()
+        std::unique_ptr<VkmRenderGraphInspector> _renderGraphInspector;
 #endif
     };
 }

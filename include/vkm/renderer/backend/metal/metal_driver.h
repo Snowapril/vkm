@@ -6,10 +6,12 @@
 #include <vkm/renderer/backend/metal/metal_bindless_resource_manager.h>
 
 #include <memory>
+#include <string>
 #include <vector>
 
 @protocol MTLDevice;
 @protocol MTLBuffer;
+@protocol MTLCaptureScope;
 namespace vkm
 {
     class VkmGpuHeapPoolMetal;
@@ -42,6 +44,11 @@ namespace vkm
             return static_cast<VkmBindlessResourceManagerMetal*>(_bindlessResourceManager.get());
         }
 
+        // MTLCaptureScope begin/end + one-shot .gputrace capture -- see driver.h.
+        virtual void onFrameBegin() override final;
+        virtual void onFrameEnd() override final;
+        virtual void requestGpuFrameCapture() override final;
+
     protected:
         virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) override final;
         virtual bool postInitializeInner() override final;
@@ -60,5 +67,12 @@ namespace vkm
     private:
         id<MTLDevice> _mtlDevice;
         std::vector<std::unique_ptr<VkmGpuHeapPoolMetal>> _heapPools;
+
+        // Frame-aligned capture scope on the Graphics MTL4 queue (created in
+        // postInitializeInner when enableGpuCapture is set; owned +1 under MRC).
+        id<MTLCaptureScope> _captureScope {nullptr};
+        bool _gpuFrameCaptureRequested {false}; // render-thread only
+        bool _programmaticCaptureActive {false}; // a startCaptureWithDescriptor is in flight
+        std::string _pendingTracePath;
     };
 }

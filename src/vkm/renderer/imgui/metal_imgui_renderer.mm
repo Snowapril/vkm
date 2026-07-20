@@ -4,7 +4,11 @@
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
 #include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
+#include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
+#include <vkm/renderer/backend/common/render_resource_pool.hpp>
+#include <vkm/renderer/backend/common/texture.h>
 
 #include <imgui.h>
 
@@ -352,6 +356,21 @@ namespace vkm
     VkmImGuiRendererMetal::~VkmImGuiRendererMetal()
     {
         delete _impl;
+    }
+
+    uint64_t VkmImGuiRendererMetal::getTextureID(VkmResourceHandle texture)
+    {
+        VkmTextureMetal* textureMetal =
+            static_cast<VkmTextureMetal*>(_driver->getRenderResourcePool()->getResource<VkmTexture>(texture));
+        if (textureMetal == nullptr || textureMetal->getInternalHandle() == nil)
+        {
+            return 0;
+        }
+        // Pooled textures sit in the Default residency set attached to the graphics queue
+        // (metal_render_resource_pool.mm), so sampling them from the ImGui pass is safe.
+        const ImTextureID texID = toImTextureID(textureMetal->getInternalHandle().gpuResourceID);
+        static_assert(sizeof(ImTextureID) == sizeof(uint64_t), "ImTextureID must be 64-bit");
+        return static_cast<uint64_t>(texID);
     }
 
     bool VkmImGuiRendererMetal::initializeInner(void* windowHandle, VkmFormat backBufferFormat)

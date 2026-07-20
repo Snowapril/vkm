@@ -4,6 +4,7 @@
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
+#include <vkm/renderer/backend/common/render_graph_capture.h>
 #include <cxxopts.hpp>
 #include <iostream>
 
@@ -29,6 +30,7 @@
 #include <vkm/renderer/imgui/webgpu_imgui_renderer.h>
 #endif
 #include <vkm/platform/common/process_stats.h>
+#include <vkm/renderer/imgui/render_graph_inspector.h>
 #include <imgui.h>
 #endif
 
@@ -61,6 +63,15 @@ namespace vkm
             _frameRenderGraphs[i] = std::make_unique<VkmRenderGraph>(_driver, i);
         }
 
+        _renderGraphCapture = std::make_unique<VkmRenderGraphCapture>();
+        if (_engineOptions.captureRenderGraphOnStartup)
+        {
+            _renderGraphCapture->arm();
+        }
+#if defined(VKM_ENABLE_IMGUI)
+        _renderGraphInspector = std::make_unique<VkmRenderGraphInspector>();
+#endif
+
         return true;
     }
     
@@ -85,6 +96,13 @@ namespace vkm
             return VkmInitResult{VkmInitResultCode::Failed, psoError};
         }
 
+        // Must run after driver init -- the Metal capture scope is created there, and
+        // requestGpuFrameCapture() is a no-op before it exists.
+        if (_engineOptions.captureGpuFrameOnStartup)
+        {
+            _driver->requestGpuFrameCapture();
+        }
+
         _appDelegate->postDriverReady(this);
 
         return result;
@@ -95,6 +113,10 @@ namespace vkm
         const double deltaTime = currentUpdateTime - _lastUpdateTime;
         _lastUpdateTime = currentUpdateTime;
 
+        // Frame-boundary driver hooks (MTLCaptureScope begin/end on Metal) bracket all of
+        // this frame's encoding, submission, and present.
+        _driver->onFrameBegin();
+
 #if defined(VKM_ENABLE_IMGUI)
         _imGuiRenderer->newFrame();
 #endif
@@ -102,11 +124,17 @@ namespace vkm
         update( deltaTime );
         render( deltaTime );
 
+        _driver->onFrameEnd();
+
         _currentFrameIndex = (_currentFrameIndex + 1) % FRAME_COUNT;
     }
 
     void VkmEngine::destroy()
     {
+        if (_renderGraphCapture)
+        {
+            _renderGraphCapture->releaseResources(_driver);
+        }
 #if defined(VKM_ENABLE_IMGUI)
         if (_imGuiRenderer)
         {
@@ -155,6 +183,16 @@ namespace vkm
         // VkmImGuiRendererBase::renderDrawData() in render() below) -- ImGui::Begin/End
         // calls made after that point in the same frame would be dropped.
         renderDebugOverlay(deltaTime);
+
+        if (ImGui::IsKeyPressed(ImGuiKey_F10, false))
+        {
+            _renderGraphCapture->arm();
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_F9, false))
+        {
+            _driver->requestGpuFrameCapture();
+        }
+        _renderGraphInspector->draw(*_renderGraphCapture, _driver, _imGuiRenderer.get());
 #endif
         _appDelegate->update(deltaTime);
     }
@@ -178,6 +216,10 @@ namespace vkm
         ImGui::Text("GPU: n/a");
 #endif
         ImGui::Text("Frame: %u", _currentFrameIndex);
+        ImGui::Text("F10: capture render graph");
+#if defined(VKM_USE_METAL_API)
+        ImGui::Text("F9: capture GPU frame (.gputrace)");
+#endif
         ImGui::End();
     }
 #endif
@@ -225,16 +267,36 @@ namespace vkm
         imGuiFrameBufferDesc._height = _mainSwapChain->getExtent().y;
         imGuiFrameBufferDesc._colorAttachments[0] = currentBackBuffer;
 
-        VkmRenderGraphicsSubGraph* imGuiSubGraph = renderGraph->beginGraphicsSubGraph(imGuiFrameBufferDesc);
+        VkmRenderGraphicsSubGraph* imGuiSubGraph = renderGraph->beginGraphicsSubGraph(imGuiFrameBufferDesc, "EngineImGuiOverlay");
         VkmImGuiRendererBase* imGuiRenderer = _imGuiRenderer.get();
         imGuiSubGraph->setRenderCallback([imGuiRenderer](VkmCommandBufferBase* commandBuffer) {
             imGuiRenderer->renderDrawData(commandBuffer);
         });
+
+        // While a capture is inspectable, the ImGui pass may sample its snapshot textures --
+        // reference them so recordUsage() tracks the in-flight draws and the deferred
+        // reclaimer waits for them when the capture is released.
+        if (_renderGraphCapture->getState() == VkmRenderGraphCapture::State::Ready)
+        {
+            for (VkmResourceHandle snapshotHandle : _renderGraphCapture->getSnapshotTextureHandles())
+            {
+                imGuiSubGraph->addReferencedResource(snapshotHandle);
+            }
+        }
 #endif
 
         renderGraph->compile();
 
-        renderGraph->execute(VkmRenderGraphCommitOptions{ .waitForCompletion = false, .presentSwapChain = _mainSwapChain } );
+        VkmRenderGraphCapture* capture =
+            (_renderGraphCapture->getState() == VkmRenderGraphCapture::State::Armed) ? _renderGraphCapture.get() : nullptr;
+        renderGraph->execute(VkmRenderGraphCommitOptions{ .waitForCompletion = false, .presentSwapChain = _mainSwapChain, .capture = capture } );
+        if (capture != nullptr)
+        {
+            // One deliberate hitch on the capture frame: the buffer readbacks and snapshot
+            // copies must have completed on the GPU before finalize() maps them.
+            renderGraph->ensureCompleted();
+            capture->finalize(_driver);
+        }
 
         _mainSwapChain->present();
     }
@@ -249,7 +311,11 @@ namespace vkm
             ("enable-gpu-capture", "Enable GPU capture tooling support (e.g. native debug labels for RenderDoc/Xcode)",
                 cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableGpuCapture ? "true" : "false"))
             ("enable-gpu-crash-dump", "Enable GPU crash handler submission-breadcrumb recording",
-                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableGpuCrashDump ? "true" : "false"));
+                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableGpuCrashDump ? "true" : "false"))
+            ("capture-render-graph", "Arm a render graph capture at startup (first frame is captured)",
+                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.captureRenderGraphOnStartup ? "true" : "false"))
+            ("gpu-capture-frame", "Capture the first rendered frame to a .gputrace file (Metal; implies --enable-gpu-capture)",
+                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.captureGpuFrameOnStartup ? "true" : "false"));
 
         VkmEngineLaunchOptions launchOptions = DEFAULT_ENGINE_LAUNCH_OPTIONS;
         try
@@ -258,6 +324,11 @@ namespace vkm
             launchOptions.enableValidationLayer = result["enable-validation-layer"].as<bool>();
             launchOptions.enableGpuCapture = result["enable-gpu-capture"].as<bool>();
             launchOptions.enableGpuCrashDump = result["enable-gpu-crash-dump"].as<bool>();
+            launchOptions.captureRenderGraphOnStartup = result["capture-render-graph"].as<bool>();
+            launchOptions.captureGpuFrameOnStartup = result["gpu-capture-frame"].as<bool>();
+            // The GPU frame capture scope only exists when enableGpuCapture is set --
+            // a startup capture request implies it.
+            launchOptions.enableGpuCapture |= launchOptions.captureGpuFrameOnStartup;
         }
         catch (const std::exception& e)
         {

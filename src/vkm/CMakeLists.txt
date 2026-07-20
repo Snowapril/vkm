@@ -17,6 +17,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/base/memory.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/renderer_common.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_graph.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_graph_capture.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_pass.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/enum_string_util.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/pipeline_state.h
@@ -52,6 +53,7 @@ set(SRCS
     ${SRC_DIR}/vkm/platform/common/input_handler.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/renderer_common.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_graph.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/render_graph_capture.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/pipeline_state_parser.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/shader_cache_util.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/shader_cache_loader.cpp
@@ -80,9 +82,11 @@ set(SRCS
 if (VKM_ENABLE_IMGUI)
     list(APPEND PUBLIC_HDRS
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/imgui_renderer.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/render_graph_inspector.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/imgui/imgui_renderer.cpp
+        ${SRC_DIR}/vkm/renderer/imgui/render_graph_inspector.cpp
     )
 endif()
 

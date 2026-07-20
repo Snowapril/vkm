@@ -104,6 +104,9 @@ public:
         _vertexBufferSlot = bindlessManager->registerBuffer(vertexBuffer->getHandle(), VkmBindlessArrayType::Buffer);
         _indexBufferSlot = bindlessManager->registerBuffer(indexBuffer->getHandle(), VkmBindlessArrayType::IndexBuffer);
         VKM_ASSERT(_vertexBufferSlot != UINT32_MAX && _indexBufferSlot != UINT32_MAX, "Failed to register triangle buffers into the bindless set");
+
+        _vertexBufferHandle = vertexBuffer->getHandle();
+        _indexBufferHandle = indexBuffer->getHandle();
     }
 
     virtual void preShutdown() override final
@@ -140,7 +143,13 @@ public:
         frameBufferDesc._height = 600; // Set the height of the framebuffer
         frameBufferDesc._colorAttachments[0] = backBuffer; // Attach the back buffer
 
-        auto graphicsSubGraph = renderGraph->beginGraphicsSubGraph(frameBufferDesc);
+        auto graphicsSubGraph = renderGraph->beginGraphicsSubGraph(frameBufferDesc, "TrianglePass");
+
+        // The triangle reads its vertex/index data through the bindless set, so declare
+        // those buffers as referenced resources for GPU-usage tracking and debug tooling
+        // (e.g. the render graph capture's inputs list / buffer viewer).
+        graphicsSubGraph->addReferencedResource(_vertexBufferHandle);
+        graphicsSubGraph->addReferencedResource(_indexBufferHandle);
 
         VkmPipelineStateBase* pso = _pso;
         const uint32_t pushConstants[2] = {_vertexBufferSlot, _indexBufferSlot};
@@ -160,6 +169,8 @@ private:
     VkmPipelineStateBase* _pso{nullptr};
     uint32_t _vertexBufferSlot{UINT32_MAX};
     uint32_t _indexBufferSlot{UINT32_MAX};
+    VkmResourceHandle _vertexBufferHandle{VKM_INVALID_RESOURCE_HANDLE};
+    VkmResourceHandle _indexBufferHandle{VKM_INVALID_RESOURCE_HANDLE};
 };
 
 int main(int argc, char* argv[])
