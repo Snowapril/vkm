@@ -136,6 +136,12 @@ namespace vkm
         VkmFrameBufferDescriptor _currentFrameBufferDesc;
 
     private:
+        // Copy/blit commands: recording, outside any render pass.
+        inline bool canRecordTransferCommand() const { return _isRecording && !_isInRenderPass; }
+        // Draw-time commands: recording, inside a render pass, with a pipeline bound.
+        inline bool canRecordDrawCommand() const { return _isRecording && _isInRenderPass && _boundPipelineState != nullptr; }
+
+    private:
         VkmPipelineStateBase* _boundPipelineState = nullptr;
         std::string _debugName;
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)

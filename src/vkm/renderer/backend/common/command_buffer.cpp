@@ -5,6 +5,10 @@
 
 namespace vkm
 {
+    // Logs `message` and returns early when a recording precondition is not met.
+    #define VKM_REQUIRE(condition, message) \
+        do { if (!(condition)) { VKM_DEBUG_ERROR(message); return; } } while (0)
+
     VkmCommandBufferBase::VkmCommandBufferBase(VkmDriverBase* driver, VkmCommandQueueBase* commandQueue, VkmCommandBufferPoolBase* commandBufferPool)
         : _driver(driver), _commandQueue(commandQueue), _commandBufferPool(commandBufferPool), _isRecording(false), _isInRenderPass(false)
     {
@@ -42,11 +46,7 @@ namespace vkm
     
     void VkmCommandBufferBase::beginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc)
     {
-        if (!_isRecording)
-        {
-            VKM_DEBUG_ERROR("Cannot begin render pass when command buffer is not recording");
-            return;
-        }
+        VKM_REQUIRE(_isRecording, "Cannot begin render pass when command buffer is not recording");
         _isInRenderPass = true;
         // Here we would typically set up the render pass state and bind the frame buffer
         // For now, we just log the beginning of the render pass
@@ -59,11 +59,7 @@ namespace vkm
 
     void VkmCommandBufferBase::endRenderPass()
     {
-        if (!_isInRenderPass)
-        {
-            VKM_DEBUG_ERROR("Cannot end render pass when not in a render pass");
-            return;
-        }
+        VKM_REQUIRE(_isInRenderPass, "Cannot end render pass when not in a render pass");
         _isInRenderPass = false;
         // Here we would typically finalize the render pass state
         // For now, we just log the end of the render pass
@@ -86,41 +82,25 @@ namespace vkm
 
     void VkmCommandBufferBase::copyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size)
     {
-        if (!_isRecording || _isInRenderPass)
-        {
-            VKM_DEBUG_ERROR("copyBuffer must be called while recording and outside a render pass");
-            return;
-        }
+        VKM_REQUIRE(canRecordTransferCommand(), "copyBuffer must be called while recording and outside a render pass");
         onCopyBuffer(srcBuffer, dstBuffer, srcOffset, dstOffset, size);
     }
 
     void VkmCommandBufferBase::copyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset)
     {
-        if (!_isRecording || _isInRenderPass)
-        {
-            VKM_DEBUG_ERROR("copyTextureToBuffer must be called while recording and outside a render pass");
-            return;
-        }
+        VKM_REQUIRE(canRecordTransferCommand(), "copyTextureToBuffer must be called while recording and outside a render pass");
         onCopyTextureToBuffer(srcTexture, dstBuffer, dstOffset);
     }
 
     void VkmCommandBufferBase::draw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
     {
-        if (!_isRecording || !_isInRenderPass || _boundPipelineState == nullptr)
-        {
-            VKM_DEBUG_ERROR("draw requires an active render pass with a bound pipeline");
-            return;
-        }
+        VKM_REQUIRE(canRecordDrawCommand(), "draw requires an active render pass with a bound pipeline");
         onDraw(vertexCount, instanceCount, firstVertex, firstInstance);
     }
 
     void VkmCommandBufferBase::setPushConstants(const void* data, uint32_t size, uint32_t offset)
     {
-        if (!_isRecording || !_isInRenderPass || _boundPipelineState == nullptr)
-        {
-            VKM_DEBUG_ERROR("setPushConstants requires an active render pass with a bound pipeline");
-            return;
-        }
+        VKM_REQUIRE(canRecordDrawCommand(), "setPushConstants requires an active render pass with a bound pipeline");
         onSetPushConstants(data, size, offset);
     }
 
@@ -142,3 +122,5 @@ namespace vkm
         }
     }
 }
+
+#undef VKM_REQUIRE
