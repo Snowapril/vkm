@@ -15,11 +15,15 @@
 
 #import <Metal/MTLDevice.h>
 #import <Metal/MTLHeap.h>
+
+#if defined(VKM_GPU_CAPTURE)
 #import <Metal/MTLCaptureManager.h>
 #import <Metal/MTLCaptureScope.h>
 
+#include <algorithm>
 #include <ctime>
 #include <filesystem>
+#endif // VKM_GPU_CAPTURE
 
 namespace vkm
 {
@@ -72,6 +76,7 @@ namespace vkm
         }
         _bindlessResourceManager = std::move(bindlessResourceManager);
 
+#if defined(VKM_GPU_CAPTURE)
         if (getLaunchOptions().enableGpuCapture)
         {
             // Frame-aligned capture scope on the Graphics MTL4 queue. Set as the default
@@ -92,9 +97,11 @@ namespace vkm
                 VKM_DEBUG_WARN("Failed to create MTLCaptureScope; GPU frame capture unavailable");
             }
         }
+#endif // VKM_GPU_CAPTURE
         return true;
     }
 
+#if defined(VKM_GPU_CAPTURE)
     void VkmDriverMetal::onFrameBegin()
     {
         if (_captureScope == nil)
@@ -102,50 +109,58 @@ namespace vkm
             return;
         }
 
-        if (_gpuFrameCaptureRequested && !_programmaticCaptureActive)
+        if (!_programmaticCaptureActive && _captureFramesRemaining > 0)
         {
-            _gpuFrameCaptureRequested = false;
-
-            MTLCaptureManager* captureManager = [MTLCaptureManager sharedCaptureManager];
-            if (![captureManager supportsDestination:MTLCaptureDestinationGPUTraceDocument])
+            if (_captureStartCountdown > 0)
             {
-                VKM_DEBUG_ERROR(".gputrace capture unsupported: launch with --enable-gpu-capture "
-                                "(sets MTL_CAPTURE_ENABLED=1) or set MTL_CAPTURE_ENABLED=1 in the shell");
+                // Requested to start N frames later -- not this frame yet.
+                --_captureStartCountdown;
             }
             else
             {
-                char timestamp[32];
-                const std::time_t now = std::time(nullptr);
-                std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", std::localtime(&now));
-                const std::string tracePath =
-                    (std::filesystem::current_path() / (std::string("vkm_capture_") + timestamp + ".gputrace")).string();
-
-                MTLCaptureDescriptor* captureDescriptor = [[MTLCaptureDescriptor alloc] init];
-                // Capture the device, not _captureScope: with MTL_CAPTURE_ENABLED=1 the
-                // GPUToolsCapture layer throws "-[MTLCaptureScope traceStream]:
-                // unrecognized selector" for scopes created via
-                // newCaptureScopeWithMTL4CommandQueue:. The capture is still exactly one
-                // frame because startCapture/stopCapture bracket a single
-                // onFrameBegin()/onFrameEnd() pair.
-                captureDescriptor.captureObject = _mtlDevice;
-                captureDescriptor.destination = MTLCaptureDestinationGPUTraceDocument;
-                captureDescriptor.outputURL = [NSURL fileURLWithPath:[NSString stringWithUTF8String:tracePath.c_str()]];
-                NSError* error = nil;
-                if ([captureManager startCaptureWithDescriptor:captureDescriptor error:&error])
+                MTLCaptureManager* captureManager = [MTLCaptureManager sharedCaptureManager];
+                if (![captureManager supportsDestination:MTLCaptureDestinationGPUTraceDocument])
                 {
-                    _programmaticCaptureActive = true;
-                    _pendingTracePath = tracePath;
+                    VKM_DEBUG_ERROR(".gputrace capture unsupported: launch with --enable-gpu-capture "
+                                    "(sets MTL_CAPTURE_ENABLED=1) or set MTL_CAPTURE_ENABLED=1 in the shell");
+                    _captureFramesRemaining = 0;
                 }
                 else
                 {
-                    VKM_DEBUG_ERROR(fmt::format("startCaptureWithDescriptor failed: {}",
-                        error != nil ? error.localizedDescription.UTF8String : "unknown error").c_str());
+                    char timestamp[32];
+                    const std::time_t now = std::time(nullptr);
+                    std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", std::localtime(&now));
+                    const std::string tracePath =
+                        (std::filesystem::current_path() / (std::string("vkm_capture_") + timestamp + ".gputrace")).string();
+
+                    MTLCaptureDescriptor* captureDescriptor = [[MTLCaptureDescriptor alloc] init];
+                    // Capture the device, not _captureScope: with MTL_CAPTURE_ENABLED=1 the
+                    // GPUToolsCapture layer throws "-[MTLCaptureScope traceStream]:
+                    // unrecognized selector" for scopes created via
+                    // newCaptureScopeWithMTL4CommandQueue:. The capture window is still
+                    // frame-exact because startCapture/stopCapture bracket whole
+                    // onFrameBegin()/onFrameEnd() pairs (frameCount consecutive ones).
+                    captureDescriptor.captureObject = _mtlDevice;
+                    captureDescriptor.destination = MTLCaptureDestinationGPUTraceDocument;
+                    captureDescriptor.outputURL = [NSURL fileURLWithPath:[NSString stringWithUTF8String:tracePath.c_str()]];
+                    NSError* error = nil;
+                    if ([captureManager startCaptureWithDescriptor:captureDescriptor error:&error])
+                    {
+                        _programmaticCaptureActive = true;
+                        _pendingTracePath = tracePath;
+                    }
+                    else
+                    {
+                        VKM_DEBUG_ERROR(fmt::format("startCaptureWithDescriptor failed: {}",
+                            error != nil ? error.localizedDescription.UTF8String : "unknown error").c_str());
+                        _captureFramesRemaining = 0;
+                    }
+                    [captureDescriptor release]; // MRC
                 }
-                [captureDescriptor release]; // MRC
             }
         }
 
-        // Must follow startCaptureWithDescriptor so exactly this scope iteration is recorded.
+        // Must follow startCaptureWithDescriptor so this scope iteration is recorded.
         [_captureScope beginScope];
     }
 
@@ -157,7 +172,7 @@ namespace vkm
         }
         [_captureScope endScope];
 
-        if (_programmaticCaptureActive)
+        if (_programmaticCaptureActive && --_captureFramesRemaining == 0)
         {
             [[MTLCaptureManager sharedCaptureManager] stopCapture];
             _programmaticCaptureActive = false;
@@ -166,18 +181,26 @@ namespace vkm
         }
     }
 
-    void VkmDriverMetal::requestGpuFrameCapture()
+    void VkmDriverMetal::requestGpuFrameCapture(uint32_t startFrameDelay, uint32_t frameCount)
     {
         if (_captureScope == nil)
         {
             VKM_DEBUG_WARN("GPU frame capture requires --enable-gpu-capture at launch");
             return;
         }
-        _gpuFrameCaptureRequested = true;
+        if (_programmaticCaptureActive || _captureFramesRemaining > 0)
+        {
+            VKM_DEBUG_WARN("GPU frame capture already pending/active; ignoring new request");
+            return;
+        }
+        _captureStartCountdown = startFrameDelay;
+        _captureFramesRemaining = std::max<uint32_t>(frameCount, 1);
     }
+#endif // VKM_GPU_CAPTURE
 
     void VkmDriverMetal::destroyInner()
     {
+#if defined(VKM_GPU_CAPTURE)
         if (_captureScope != nil)
         {
             MTLCaptureManager* captureManager = [MTLCaptureManager sharedCaptureManager];
@@ -195,6 +218,7 @@ namespace vkm
             [_captureScope release];
             _captureScope = nil;
         }
+#endif // VKM_GPU_CAPTURE
 
         if (_bindlessResourceManager)
         {

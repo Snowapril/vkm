@@ -96,12 +96,14 @@ namespace vkm
             return VkmInitResult{VkmInitResultCode::Failed, psoError};
         }
 
+#if defined(VKM_GPU_CAPTURE)
         // Must run after driver init -- the Metal capture scope is created there, and
         // requestGpuFrameCapture() is a no-op before it exists.
         if (_engineOptions.captureGpuFrameOnStartup)
         {
-            _driver->requestGpuFrameCapture();
+            _driver->requestGpuFrameCapture(_engineOptions.gpuCaptureStartFrame, _engineOptions.gpuCaptureFrameCount);
         }
+#endif // VKM_GPU_CAPTURE
 
         _appDelegate->postDriverReady(this);
 
@@ -113,9 +115,11 @@ namespace vkm
         const double deltaTime = currentUpdateTime - _lastUpdateTime;
         _lastUpdateTime = currentUpdateTime;
 
+#if defined(VKM_GPU_CAPTURE)
         // Frame-boundary driver hooks (MTLCaptureScope begin/end on Metal) bracket all of
         // this frame's encoding, submission, and present.
         _driver->onFrameBegin();
+#endif // VKM_GPU_CAPTURE
 
 #if defined(VKM_ENABLE_IMGUI)
         _imGuiRenderer->newFrame();
@@ -124,7 +128,9 @@ namespace vkm
         update( deltaTime );
         render( deltaTime );
 
+#if defined(VKM_GPU_CAPTURE)
         _driver->onFrameEnd();
+#endif // VKM_GPU_CAPTURE
 
         _currentFrameIndex = (_currentFrameIndex + 1) % FRAME_COUNT;
     }
@@ -188,10 +194,12 @@ namespace vkm
         {
             _renderGraphCapture->arm();
         }
+#if defined(VKM_GPU_CAPTURE)
         if (ImGui::IsKeyPressed(ImGuiKey_F9, false))
         {
-            _driver->requestGpuFrameCapture();
+            _driver->requestGpuFrameCapture(_engineOptions.gpuCaptureStartFrame, _engineOptions.gpuCaptureFrameCount);
         }
+#endif // VKM_GPU_CAPTURE
         _renderGraphInspector->draw(*_renderGraphCapture, _driver, _imGuiRenderer.get());
 #endif
         _appDelegate->update(deltaTime);
@@ -217,7 +225,7 @@ namespace vkm
 #endif
         ImGui::Text("Frame: %u", _currentFrameIndex);
         ImGui::Text("F10: capture render graph");
-#if defined(VKM_USE_METAL_API)
+#if defined(VKM_USE_METAL_API) && defined(VKM_GPU_CAPTURE)
         ImGui::Text("F9: capture GPU frame (.gputrace)");
 #endif
         ImGui::End();
@@ -314,8 +322,12 @@ namespace vkm
                 cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableGpuCrashDump ? "true" : "false"))
             ("capture-render-graph", "Arm a render graph capture at startup (first frame is captured)",
                 cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.captureRenderGraphOnStartup ? "true" : "false"))
-            ("gpu-capture-frame", "Capture the first rendered frame to a .gputrace file (Metal; implies --enable-gpu-capture)",
-                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.captureGpuFrameOnStartup ? "true" : "false"));
+            ("gpu-capture-frame", "Capture a .gputrace at startup (Metal; implies --enable-gpu-capture)",
+                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.captureGpuFrameOnStartup ? "true" : "false"))
+            ("gpu-capture-start-frame", "Start the GPU capture N frames after it is requested",
+                cxxopts::value<uint32_t>()->default_value(std::to_string(DEFAULT_ENGINE_LAUNCH_OPTIONS.gpuCaptureStartFrame)))
+            ("gpu-capture-frame-count", "Number of consecutive frames to record into the .gputrace",
+                cxxopts::value<uint32_t>()->default_value(std::to_string(DEFAULT_ENGINE_LAUNCH_OPTIONS.gpuCaptureFrameCount)));
 
         VkmEngineLaunchOptions launchOptions = DEFAULT_ENGINE_LAUNCH_OPTIONS;
         try
@@ -326,6 +338,8 @@ namespace vkm
             launchOptions.enableGpuCrashDump = result["enable-gpu-crash-dump"].as<bool>();
             launchOptions.captureRenderGraphOnStartup = result["capture-render-graph"].as<bool>();
             launchOptions.captureGpuFrameOnStartup = result["gpu-capture-frame"].as<bool>();
+            launchOptions.gpuCaptureStartFrame = result["gpu-capture-start-frame"].as<uint32_t>();
+            launchOptions.gpuCaptureFrameCount = result["gpu-capture-frame-count"].as<uint32_t>();
             // The GPU frame capture scope only exists when enableGpuCapture is set --
             // a startup capture request implies it.
             launchOptions.enableGpuCapture |= launchOptions.captureGpuFrameOnStartup;

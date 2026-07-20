@@ -30,11 +30,15 @@ namespace vkm
         // Arm a render graph capture at startup so the first rendered frame is captured
         // (equivalent to pressing the capture hotkey before frame 0).
         bool captureRenderGraphOnStartup = false;
-        // Capture the first rendered frame to a .gputrace file at startup (Metal only;
-        // implies enableGpuCapture). Equivalent to pressing F9 before frame 0.
+        // Capture a .gputrace at startup (Metal only; implies enableGpuCapture).
+        // Equivalent to pressing F9 before frame 0. The capture starts
+        // gpuCaptureStartFrame frames later and spans gpuCaptureFrameCount consecutive
+        // frames (these two also apply to F9-triggered captures).
         bool captureGpuFrameOnStartup = false;
+        uint32_t gpuCaptureStartFrame = 0;
+        uint32_t gpuCaptureFrameCount = 1;
     };
-    constexpr const VkmEngineLaunchOptions DEFAULT_ENGINE_LAUNCH_OPTIONS = { true, false, false, false, false };
+    constexpr const VkmEngineLaunchOptions DEFAULT_ENGINE_LAUNCH_OPTIONS = { true, false, false, false, false, 0, 1 };
 
     /*
     * @brief Engine base class

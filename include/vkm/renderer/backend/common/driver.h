@@ -199,6 +199,7 @@ namespace vkm
         */
         inline bool isDebugNamingEnabled() const { return _debugNamingEnabled; }
 
+#if defined(VKM_GPU_CAPTURE)
         /*
         * @brief Frame-boundary hooks called by VkmEngine::loopInner() on the render thread,
         * bracketing all of a frame's encoding, submission, and present. Only the Metal
@@ -208,11 +209,16 @@ namespace vkm
         virtual void onFrameEnd() {}
 
         /*
-        * @brief Arm a one-frame GPU capture (.gputrace) consumed at the next
-        * onFrameBegin(). Metal-only; default is a no-op. Requires enableGpuCapture at
-        * launch (the capture scope only exists then).
+        * @brief Arm a GPU capture (.gputrace) starting `startFrameDelay` frames after the
+        * next onFrameBegin() and spanning `frameCount` consecutive frames. Metal-only;
+        * default is a no-op. Requires enableGpuCapture at launch (the capture scope only
+        * exists then).
         */
-        virtual void requestGpuFrameCapture() {}
+        virtual void requestGpuFrameCapture(uint32_t startFrameDelay = 0, uint32_t frameCount = 1)
+        {
+            (void)startFrameDelay; (void)frameCount;
+        }
+#endif // VKM_GPU_CAPTURE
 
         /*
         * @brief true if --enable-gpu-crash-dump was requested at launch. Gates

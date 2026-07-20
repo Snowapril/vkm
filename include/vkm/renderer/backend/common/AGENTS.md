@@ -200,6 +200,12 @@ No `setDebugName()` method body itself changed — gating is entirely at these c
 
 ### Programmatic frame capture (Metal)
 
+Compile-time gate: `VKM_GPU_CAPTURE` (CMake option `GPU_CAPTURE`, defaulting ON except in
+Release builds; pass `-DGPU_CAPTURE=ON` to opt a Release build back in — same pattern as
+`GPU_BREAD_CRUMBS`). Everything below, including the `VkmDriverBase`
+`onFrameBegin()/onFrameEnd()/requestGpuFrameCapture()` hooks and the `MTL_CAPTURE_ENABLED`
+env setup, compiles away when the gate is off.
+
 When `enableGpuCapture` is set, `VkmDriverMetal::postInitializeInner()` additionally creates a
 frame-aligned `MTLCaptureScope` (label "vkm frame") on the Graphics MTL4 queue via
 `newCaptureScopeWithMTL4CommandQueue:` and installs it as `MTLCaptureManager.defaultCaptureScope`.
@@ -208,11 +214,13 @@ frame-aligned `MTLCaptureScope` (label "vkm frame") on the Graphics MTL4 queue v
 begin/end that scope, so Xcode's Metal capture button records a bounded frame instead of being
 unavailable for the MTL4 workload.
 
-One-shot `.gputrace` export: `VkmDriverBase::requestGpuFrameCapture()` (F9 in the ImGui overlay,
-or `--gpu-capture-frame` to capture the first frame at startup — that flag implies
-`--enable-gpu-capture`) arms a capture consumed at the next `onFrameBegin()`, writing
+One-shot `.gputrace` export: `VkmDriverBase::requestGpuFrameCapture(startFrameDelay, frameCount)`
+(F9 in the ImGui overlay, or `--gpu-capture-frame` to arm at startup — that flag implies
+`--enable-gpu-capture`) arms a capture consumed at a subsequent `onFrameBegin()`, writing
 `vkm_capture_<timestamp>.gputrace` to the working directory via
-`MTLCaptureDestinationGPUTraceDocument`. `MTL_CAPTURE_ENABLED=1` is set automatically before Metal
+`MTLCaptureDestinationGPUTraceDocument`. `--gpu-capture-start-frame N` (default 0) delays the
+capture start by N frames and `--gpu-capture-frame-count N` (default 1) records N consecutive
+frames into the trace; both apply to F9-triggered captures too. `MTL_CAPTURE_ENABLED=1` is set automatically before Metal
 device creation when either capture flag appears in the raw process arguments (see
 `vkmCreateSystemDefaultDevice()` in `platform/apple/application.mm`); if capture is still reported
 unsupported, launch with `MTL_CAPTURE_ENABLED=1` set in the shell.
