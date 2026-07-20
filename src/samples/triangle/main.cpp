@@ -67,10 +67,14 @@ public:
                        (wireframePso != nullptr ? " and '" + wireframePso->getName() + "'" : "")).c_str());
         _pso = defaultPso;
 
+        // Written straight to SV_POSITION with no transform, so these are clip-space
+        // coordinates: +Y is up (the engine convention, matching HLSL/D3D, Metal and WebGPU;
+        // the Vulkan backend flips its viewport to match). Wound counter-clockwise to agree
+        // with the "front_face": "counter_clockwise" declared in renderpass.json.
         const std::array<TriangleVertex, 3> vertices{
-            TriangleVertex{{ 0.0f, -0.5f, 0.0f}, 0.0f, {1.0f, 0.0f, 0.0f, 1.0f}}, // top, red
-            TriangleVertex{{ 0.5f,  0.5f, 0.0f}, 0.0f, {0.0f, 1.0f, 0.0f, 1.0f}}, // bottom-right, green
-            TriangleVertex{{-0.5f,  0.5f, 0.0f}, 0.0f, {0.0f, 0.0f, 1.0f, 1.0f}}, // bottom-left, blue
+            TriangleVertex{{ 0.0f,  0.5f, 0.0f}, 0.0f, {1.0f, 0.0f, 0.0f, 1.0f}}, // top, red
+            TriangleVertex{{-0.5f, -0.5f, 0.0f}, 0.0f, {0.0f, 0.0f, 1.0f, 1.0f}}, // bottom-left, blue
+            TriangleVertex{{ 0.5f, -0.5f, 0.0f}, 0.0f, {0.0f, 1.0f, 0.0f, 1.0f}}, // bottom-right, green
         };
         const std::array<uint32_t, 3> indices{0, 1, 2};
 

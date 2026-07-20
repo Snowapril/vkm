@@ -82,6 +82,23 @@ Do not query features before calling `vkGetPhysicalDeviceFeatures2`.
 
 Shaders compiled via glslang → SPIRV, reflected via spirv-cross-core. No direct GLSL string injection.
 
+## Coordinate Space (Y Flip)
+
+The engine's clip space is +Y up (see `include/vkm/renderer/backend/common/AGENTS.md`), but
+Vulkan's NDC is +Y down. Vulkan is the only backend that has to compensate, and it does so in
+two places that must stay in sync:
+
+1. `vulkan_command_buffer.cpp` — `onBeginRenderPass` binds a **negative-height** viewport
+   (`y = height`, `height = -height`). Core since Vulkan 1.1; the instance targets 1.3.
+2. `vulkan_pipeline_state.cpp` — `toVkFrontFace` maps `CounterClockwise` to
+   `VK_FRONT_FACE_CLOCKWISE` and vice versa, cancelling the winding mirror the flipped
+   viewport introduces.
+
+The inverted enum mapping looks like a bug in isolation. Neither change is correct without the
+other — do not touch one alone.
+
+The scissor rect is unaffected: it is always in framebuffer pixel coordinates.
+
 ## Debug / Validation
 
 When `VKM_DEBUG_NAME_ENABLED` is defined, apply debug names via `vkSetDebugUtilsObjectNameEXT`. Always guard with `#ifdef VKM_DEBUG_NAME_ENABLED`.

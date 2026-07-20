@@ -55,6 +55,20 @@ virtual void flush(uint64_t offset, uint64_t size) = 0;
 virtual void writeDirect(uint64_t offset, const void* data, uint64_t size) = 0;
 ```
 
+## Coordinate Space
+
+Clip space is **+Y up** with a **0..1 depth range** — the HLSL/D3D convention the shaders are
+authored in, and what Metal and WebGPU use natively. `GLM_FORCE_DEPTH_ZERO_TO_ONE` is defined
+unconditionally in `base/platform.h` to match.
+
+Metal and WebGPU need no compensation. Vulkan's NDC is +Y down, so the Vulkan backend binds a
+negative-height viewport in `VkmCommandBufferVulkan::onBeginRenderPass` and inverts its
+`VkmFrontFace` mapping in `toVkFrontFace` to cancel the resulting winding flip. A new backend
+whose NDC is +Y down must do the same; one that is +Y up must do nothing.
+
+Never compensate in shader source or in `vkm-compiler` — a single SPIR-V module is shared by
+all three backends, so a flip applied there would follow it into the ones that don't need it.
+
 ## Constants
 
 - `FRAME_BUFFER_COUNT = 3` — triple-buffering, fixed. Do not parameterize.

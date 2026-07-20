@@ -58,14 +58,19 @@ namespace vkm
             return VK_CULL_MODE_BACK_BIT;
         }
 
+        // The mapping is deliberately INVERTED -- do not "fix" it. VkmCommandBufferVulkan's
+        // render passes bind a negative-height viewport to put the engine's +Y-up clip space
+        // on Vulkan's +Y-down NDC, and that flip also mirrors triangle winding in screen
+        // space. Inverting the enum here cancels that out, so a PSO declaring
+        // "counter_clockwise" culls the same faces on Vulkan as it does on Metal/WebGPU.
         VkFrontFace toVkFrontFace(VkmFrontFace frontFace)
         {
             switch (frontFace)
             {
-                case VkmFrontFace::CounterClockwise: return VK_FRONT_FACE_COUNTER_CLOCKWISE;
-                case VkmFrontFace::Clockwise:        return VK_FRONT_FACE_CLOCKWISE;
+                case VkmFrontFace::CounterClockwise: return VK_FRONT_FACE_CLOCKWISE;
+                case VkmFrontFace::Clockwise:        return VK_FRONT_FACE_COUNTER_CLOCKWISE;
             }
-            return VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            return VK_FRONT_FACE_CLOCKWISE;
         }
 
         VkStencilOp toVkStencilOp(VkmStencilOp stencilOp)

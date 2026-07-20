@@ -13,6 +13,7 @@
 - `getProcessCpuUsagePercent()` returns 0 on wasm.
 - wasm builds bake the on-disk `RESOURCES_DIR` into the engine library and samples; the MEMFS `--preload-file` remap covers only the `UnitTests` and `triangle` targets.
 - Metal draw-time encoder state (fill mode, cull mode, front face) from the PSO descriptor is never applied, so the wireframe PSO variant renders solid on Metal.
+- `VkmFrameBufferDescriptor::_width/_height` are consumed only by the Vulkan backend's viewport/scissor; Metal and WebGPU ignore them and use the full attachment, and both samples hardcode sizes that don't match the swapchain.
 - WebGPU bindless mega-buffers are fixed-capacity (16 MiB vertex / 8 MiB index) with no growth; registerBuffer fails hard when exhausted.
 - WebGPU bindless-registered buffers must be tightly packed engine VertexData/uint element arrays (typed mega-buffers; Vulkan/Metal treat them as opaque).
 - The Metal/WebGPU push-constant ring wraps after 1024 allocations with no per-frame reset; overlapping in-flight entries would be overwritten.
