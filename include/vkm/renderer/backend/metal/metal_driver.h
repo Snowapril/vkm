@@ -44,10 +44,12 @@ namespace vkm
             return static_cast<VkmBindlessResourceManagerMetal*>(_bindlessResourceManager.get());
         }
 
+#if defined(VKM_GPU_CAPTURE)
         // MTLCaptureScope begin/end + one-shot .gputrace capture -- see driver.h.
         virtual void onFrameBegin() override final;
         virtual void onFrameEnd() override final;
-        virtual void requestGpuFrameCapture() override final;
+        virtual void requestGpuFrameCapture(uint32_t startFrameDelay, uint32_t frameCount) override final;
+#endif // VKM_GPU_CAPTURE
 
     protected:
         virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) override final;
@@ -68,11 +70,16 @@ namespace vkm
         id<MTLDevice> _mtlDevice;
         std::vector<std::unique_ptr<VkmGpuHeapPoolMetal>> _heapPools;
 
+#if defined(VKM_GPU_CAPTURE)
         // Frame-aligned capture scope on the Graphics MTL4 queue (created in
         // postInitializeInner when enableGpuCapture is set; owned +1 under MRC).
         id<MTLCaptureScope> _captureScope {nullptr};
-        bool _gpuFrameCaptureRequested {false}; // render-thread only
+        // Render-thread only: frames to skip before starting a requested capture, and
+        // frames left to record (>0 while a capture is pending or active).
+        uint32_t _captureStartCountdown {0};
+        uint32_t _captureFramesRemaining {0};
         bool _programmaticCaptureActive {false}; // a startCaptureWithDescriptor is in flight
         std::string _pendingTracePath;
+#endif // VKM_GPU_CAPTURE
     };
 }

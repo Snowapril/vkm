@@ -145,6 +145,7 @@ TEST_CASE("Render graph capture - clear pass metadata, snapshot pixels, and buff
     CHECK(capture.getState() == vkm::VkmRenderGraphCapture::State::Idle);
 }
 
+#if defined(VKM_GPU_CAPTURE)
 TEST_CASE("GPU frame capture - scope hooks and request are crash-free headless") {
     // With enableGpuCapture set, the driver creates a frame-aligned MTLCaptureScope.
     // Headless (MTL_CAPTURE_ENABLED unset), a requested .gputrace capture exercises the
@@ -153,11 +154,15 @@ TEST_CASE("GPU frame capture - scope hooks and request are crash-free headless")
     CaptureFixture f(vkm::VkmEngineLaunchOptions{ .enableValidationLayer = true, .enableGpuCapture = true });
     VKM_REQUIRE_DEVICE(f.initResult);
 
-    f.driver->requestGpuFrameCapture();
-    f.driver->onFrameBegin();
-    f.driver->onFrameEnd();
-    f.driver->onFrameBegin();
-    f.driver->onFrameEnd();
+    // Delayed multi-frame request: start 1 frame later, span 2 frames. Run enough
+    // frame-boundary pairs to cover the delay, the capture window, and one idle frame.
+    f.driver->requestGpuFrameCapture(/*startFrameDelay=*/1, /*frameCount=*/2);
+    for (int i = 0; i < 4; ++i)
+    {
+        f.driver->onFrameBegin();
+        f.driver->onFrameEnd();
+    }
 }
+#endif // VKM_GPU_CAPTURE
 
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE
