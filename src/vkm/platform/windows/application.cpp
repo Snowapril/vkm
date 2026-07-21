@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/platform/windows/application.h>
+#include <vkm/platform/common/glfw_input.h>
 
 #ifdef _WIN32
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -86,14 +87,7 @@ namespace vkm
             _engine.addSwapChain(windowInfo);
         }
 
-        glfwSetWindowUserPointer(_window.getHandle(), &_engine);
-        glfwSetKeyCallback(_window.getHandle(), [](GLFWwindow* window, int key, int /*scancode*/, int action, int /*mods*/)
-        {
-            if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
-            {
-                static_cast<VkmEngine*>(glfwGetWindowUserPointer(window))->getInputHandler().onKeyEvent(VkmKeyCode::Escape, VkmKeyAction::Press);
-            }
-        });
+        installGlfwInputCallbacks(_window.getHandle(), &_engine);
 
         while (_window.shouldClose() == false && _engine.shouldExit() == false)
         {

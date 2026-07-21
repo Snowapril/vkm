@@ -9,7 +9,9 @@ set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../)
 set(PUBLIC_HDRS
     $(PUBLIC_HDR_DIR)/vkm/platform/common/app_delegate.h
     $(PUBLIC_HDR_DIR)/vkm/platform/common/window.h
+    ${PUBLIC_HDR_DIR}/vkm/platform/common/input_codes.h
     ${PUBLIC_HDR_DIR}/vkm/platform/common/input_handler.h
+    ${PUBLIC_HDR_DIR}/vkm/platform/common/glfw_input.h
     ${PUBLIC_HDR_DIR}/vkm/platform/common/process_stats.h
     ${PUBLIC_HDR_DIR}/vkm/base/platform.h
     ${PUBLIC_HDR_DIR}/vkm/base/common.h
@@ -51,6 +53,7 @@ set(SRCS
     ${SRC_DIR}/vkm/base/logger.cpp
     ${SRC_DIR}/vkm/base/memory.cpp
     ${SRC_DIR}/vkm/platform/common/input_handler.cpp
+    ${SRC_DIR}/vkm/platform/common/glfw_input.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/renderer_common.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_graph.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_graph_capture.cpp

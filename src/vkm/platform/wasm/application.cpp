@@ -2,6 +2,7 @@
 
 #include <vkm/platform/wasm/application.h>
 #include <vkm/platform/common/app_delegate.h>
+#include <vkm/platform/common/glfw_input.h>
 #include <vkm/renderer/backend/webgpu/webgpu_driver.h>
 
 #include <GLFW/glfw3.h>
@@ -94,14 +95,7 @@ namespace vkm
             _engine.addSwapChain(windowInfo);
         }
 
-        glfwSetWindowUserPointer(_window.getHandle(), &_engine);
-        glfwSetKeyCallback(_window.getHandle(), [](GLFWwindow* window, int key, int /*scancode*/, int action, int /*mods*/)
-        {
-            if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
-            {
-                static_cast<VkmEngine*>(glfwGetWindowUserPointer(window))->getInputHandler().onKeyEvent(VkmKeyCode::Escape, VkmKeyAction::Press);
-            }
-        });
+        installGlfwInputCallbacks(_window.getHandle(), &_engine);
 
         // Emscripten forbids blocking the main thread. Register a callback-driven loop
         // (fired at the browser's requestAnimationFrame cadence) instead of the blocking
