@@ -730,7 +730,7 @@ struct NullAppDelegate : vkm::AppDelegate {
     void postDriverReady(vkm::VkmEngine*) override {}
     void preShutdown() override {}
     void update(const double) override {}
-    void render(vkm::VkmRenderGraph*, vkm::VkmResourceHandle) override {}
+    void render(uint32_t, vkm::VkmRenderGraph*, vkm::VkmResourceHandle) override {}
     const char* getAppName() const override { return "ImGuiSmokeTest"; }
 };
 } // namespace
@@ -755,7 +755,8 @@ TEST_CASE("VkmEngine - ImGui renderer initializes and survives one loopInner() t
     }
     REQUIRE_MESSAGE(initResult.code == vkm::VkmInitResultCode::Success, initResult.reason);
 
-    engine.addSwapChain(vkm::VkmWindowInfo{ 256, 256, "UnitTest", window });
+    // isImGuiWindow = true so the engine creates and binds its ImGui renderer to this window.
+    engine.addSwapChain(vkm::VkmWindowInfo{ 256, 256, "UnitTest", window }, /*isImGuiWindow=*/true);
     CHECK_NOTHROW(engine.loopInner(0.016));
 
     engine.destroy();

@@ -63,6 +63,38 @@ see `CLAUDE.md` §11 for the policy.
 - Verified end-to-end: triangle `--gpu-capture-frame` wrote a valid 8.4 MB `.gputrace`
   bundle, validation-clean; smoke test added to `TestRenderGraphCapture.mm`.
 
+## 2026-07-21 — Multiple windows (per-window swapchain) + ImGui on a secondary window
+
+- `VkmEngine` no longer holds a single `_mainSwapChain`; it owns a
+  `std::vector<VkmWindowContext>`, one per window. Each `VkmWindowContext` carries its
+  swapchain, native handle, back-buffer format, an `_isImGuiWindow` flag, and its own
+  `FRAME_COUNT` render graphs (the per-frame render graphs moved off the engine into the
+  context). `addSwapChain(windowInfo, isImGuiWindow=false)` now returns a window index and
+  de-singletonizes (the `_mainSwapChain == nullptr` assert is gone); `getSwapChain(index)` /
+  `getWindowCount()` added, `getMainSwapChain()` kept as a window-0 shim.
+- `VkmEngine::render()` iterates windows: each window independently throttles+resets its
+  own frame-slot graph, acquires its own back buffer, records, then does one
+  `execute()`/submit carrying only its own `presentSwapChain`, then presents. This keeps the
+  backend invariant "exactly one presentSwapChain per submit per frame" intact with N windows
+  (one submit per window, not per frame). `prepareRender()` folded into that loop and removed.
+- ImGui is bound to exactly one window (`isImGuiWindow=true`). Its overlay subgraph now
+  targets that window's back buffer. A dedicated ImGui window clears its attachment (nothing
+  else draws to it); the single-window degrade case (WASM) loads instead, so the sole window
+  shows the app scene with the ImGui overlay on top.
+- `AppDelegate::render` gained a leading `uint32_t windowIndex`; the engine calls it once per
+  non-ImGui window (and, in single-window mode, for the sole window). Both samples updated.
+- Platform apps create a second window: GLFW platforms (linux/windows/apple-vulkan) open a
+  960x640 "ImGui" GLFW window and `addSwapChain(..., true)`; the loop polls both via a single
+  `glfwPollEvents()` and vetoes closing the ImGui window (main-window close quits). Apple/Metal
+  opens a second `NSWindow` + `CAMetalLayer` (RGBA16Float) driven by the existing single
+  `CAMetalDisplayLink` — its callback pulls `[secondaryLayer nextDrawable]` each frame so both
+  swapchains stay on one cadence (no second display link, which would desync the frame ring).
+  WASM stays single-window (a browser tab can't host a second OS window) and marks that window
+  the ImGui window.
+- `VkmSwapChainVulkan::createSwapChain` now asserts
+  `vkGetPhysicalDeviceSurfaceSupportKHR(graphicsFamily, surface)` — with two surfaces the
+  hard-coded Graphics[0] present queue is verified per surface instead of assumed.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:
@@ -73,6 +105,18 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Did instead: <the conservative option taken>
 - Why: <the edge case that forced it>
 ```
+
+### 2026-07-21 — render-graph capture bound to the scene window, not the ImGui window
+- Planned: the plan noted capture could bind to the ImGui window's execute (since the
+  inspector UI lives there), accepting that scene passes would not be captured.
+- Did instead: capture binds to window 0 (the scene window). The ImGui window still
+  references the capture's snapshot textures cross-window for `ImGui::Image` previews.
+- Why: the render-graph inspector exists to inspect the app's scene passes (the triangle
+  pass), so capturing the scene window's graph is what makes it useful; snapshot textures
+  are engine-global (owned by the capture, not a swapchain), so the ImGui pass on the other
+  window can still sample them for display. GPU-timer timestamps are left in every window's
+  execute — the timer rings its own slot with a reset-before-write per call, so N executes
+  per frame stay validation-clean (only the reported GPU time becomes per-window-arbitrary).
 
 ### 2026-07-20 — .gputrace captureObject: device instead of MTLCaptureScope
 - Planned: `MTLCaptureDescriptor.captureObject = _captureScope` for the programmatic

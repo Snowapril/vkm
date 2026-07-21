@@ -38,8 +38,9 @@ public:
         VKM_DEBUG_LOG("EmptyScreenApplication::update");
     }
 
-    virtual void render(VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) override final
+    virtual void render(uint32_t windowIndex, VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) override final
     {
+        (void)windowIndex;
         VKM_DEBUG_LOG("EmptyScreenApplication::render");
 
         VkmFrameBufferDescriptor frameBufferDesc;

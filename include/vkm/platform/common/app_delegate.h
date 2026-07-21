@@ -20,7 +20,9 @@ namespace vkm
         virtual void postDriverReady(VkmEngine* engine) = 0;
         virtual void preShutdown() = 0;
         virtual void update(const double deltaTime) = 0;
-        virtual void render(VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) = 0;
+        // Called once per non-ImGui window per frame. windowIndex identifies the target window
+        // (see VkmEngine::addSwapChain), letting an app render different content per window.
+        virtual void render(uint32_t windowIndex, VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) = 0;
         virtual const char* getAppName() const = 0;
     };
 }

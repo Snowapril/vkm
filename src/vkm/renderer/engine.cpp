@@ -58,11 +58,6 @@ namespace vkm
         _appDelegate.reset(appDelegate);
         _engineOptions = options;
 
-        for (uint8_t i = 0; i < FRAME_COUNT; ++i)
-        {
-            _frameRenderGraphs[i] = std::make_unique<VkmRenderGraph>(_driver, i);
-        }
-
         _renderGraphCapture = std::make_unique<VkmRenderGraphCapture>();
         if (_engineOptions.captureRenderGraphOnStartup)
         {
@@ -126,7 +121,10 @@ namespace vkm
         _inputHandler.beginFrame();
 
 #if defined(VKM_ENABLE_IMGUI)
-        _imGuiRenderer->newFrame();
+        if (_imGuiRenderer)
+        {
+            _imGuiRenderer->newFrame();
+        }
 #endif
 
         update( deltaTime );
@@ -183,58 +181,93 @@ namespace vkm
         }
 #endif
 
-        if (_mainSwapChain != nullptr)
+        for (VkmWindowContext& windowContext : _windowContexts)
         {
-            delete _mainSwapChain;
-            _mainSwapChain = nullptr;
+            // The per-frame render graphs must not outlive the swapchain they present to;
+            // release them first so no in-flight submit still references it.
+            for (std::unique_ptr<VkmRenderGraph>& renderGraph : windowContext._frameRenderGraphs)
+            {
+                renderGraph.reset();
+            }
+            delete windowContext._swapChain;
+            windowContext._swapChain = nullptr;
         }
+        _windowContexts.clear();
+        _imGuiWindowIndex = INVALID_VALUE32;
     }
 
-    void VkmEngine::addSwapChain(const VkmWindowInfo& windowInfo)
+    uint32_t VkmEngine::addSwapChain(const VkmWindowInfo& windowInfo, bool isImGuiWindow)
     {
         VkmSwapChainBase* swapChain = _driver->newSwapChain();
         const bool result = swapChain->initialize(windowInfo);
         VKM_ASSERT(result, "Failed to create swapchain");
 
-        VKM_ASSERT(_mainSwapChain == nullptr, "Main swapchain already exists");
-        _mainSwapChain = swapChain;
-
-#if defined(VKM_ENABLE_IMGUI)
         VkmFormat backBufferFormat = VkmFormat::Undefined;
 #if defined(VKM_USE_VULKAN_API)
         backBufferFormat = fromVkFormat(static_cast<VkmSwapChainVulkan*>(swapChain)->getImageFormat());
-        _imGuiRenderer = std::make_unique<VkmImGuiRendererVulkan>(_driver);
 #elif defined(VKM_USE_METAL_API)
         backBufferFormat = static_cast<VkmSwapChainMetal*>(swapChain)->getBackBufferFormat();
-        _imGuiRenderer = std::make_unique<VkmImGuiRendererMetal>(_driver);
 #elif defined(VKM_USE_WEBGPU_API)
         backBufferFormat = fromWGPUTextureFormat(static_cast<VkmSwapChainWebGPU*>(swapChain)->getSurfaceFormat());
-        _imGuiRenderer = std::make_unique<VkmImGuiRendererWebGPU>(_driver);
 #endif
-        const bool imGuiInitialized = _imGuiRenderer->initialize(windowInfo._windowHandle, backBufferFormat);
-        VKM_ASSERT(imGuiInitialized, "Failed to initialize ImGui renderer");
+
+        const uint32_t windowIndex = static_cast<uint32_t>(_windowContexts.size());
+
+        VkmWindowContext windowContext;
+        windowContext._swapChain = swapChain;
+        windowContext._windowHandle = windowInfo._windowHandle;
+        windowContext._backBufferFormat = backBufferFormat;
+        windowContext._isImGuiWindow = isImGuiWindow;
+        for (uint8_t i = 0; i < FRAME_COUNT; ++i)
+        {
+            windowContext._frameRenderGraphs[i] = std::make_unique<VkmRenderGraph>(_driver, i);
+        }
+        _windowContexts.push_back(std::move(windowContext));
+
+#if defined(VKM_ENABLE_IMGUI)
+        if (isImGuiWindow)
+        {
+            VKM_ASSERT(_imGuiRenderer == nullptr, "ImGui window already exists");
+#if defined(VKM_USE_VULKAN_API)
+            _imGuiRenderer = std::make_unique<VkmImGuiRendererVulkan>(_driver);
+#elif defined(VKM_USE_METAL_API)
+            _imGuiRenderer = std::make_unique<VkmImGuiRendererMetal>(_driver);
+#elif defined(VKM_USE_WEBGPU_API)
+            _imGuiRenderer = std::make_unique<VkmImGuiRendererWebGPU>(_driver);
 #endif
+            const bool imGuiInitialized = _imGuiRenderer->initialize(windowInfo._windowHandle, backBufferFormat);
+            VKM_ASSERT(imGuiInitialized, "Failed to initialize ImGui renderer");
+            _imGuiWindowIndex = windowIndex;
+        }
+#else
+        (void)isImGuiWindow;
+#endif
+
+        return windowIndex;
     }
 
     void VkmEngine::update(const double deltaTime)
     {
 #if defined(VKM_ENABLE_IMGUI)
-        // Must run before the frame's first ImGui::Render() call (triggered lazily by
-        // VkmImGuiRendererBase::renderDrawData() in render() below) -- ImGui::Begin/End
-        // calls made after that point in the same frame would be dropped.
-        renderDebugOverlay(deltaTime);
+        if (_imGuiRenderer)
+        {
+            // Must run before the frame's first ImGui::Render() call (triggered lazily by
+            // VkmImGuiRendererBase::renderDrawData() in render() below) -- ImGui::Begin/End
+            // calls made after that point in the same frame would be dropped.
+            renderDebugOverlay(deltaTime);
 
-        if (ImGui::IsKeyPressed(ImGuiKey_F10, false))
-        {
-            _renderGraphCapture->arm();
-        }
+            if (ImGui::IsKeyPressed(ImGuiKey_F10, false))
+            {
+                _renderGraphCapture->arm();
+            }
 #if defined(VKM_GPU_CAPTURE)
-        if (ImGui::IsKeyPressed(ImGuiKey_F9, false))
-        {
-            _driver->requestGpuFrameCapture(_engineOptions.gpuCaptureStartFrame, _engineOptions.gpuCaptureFrameCount);
-        }
+            if (ImGui::IsKeyPressed(ImGuiKey_F9, false))
+            {
+                _driver->requestGpuFrameCapture(_engineOptions.gpuCaptureStartFrame, _engineOptions.gpuCaptureFrameCount);
+            }
 #endif // VKM_GPU_CAPTURE
-        _renderGraphInspector->draw(*_renderGraphCapture, _driver, _imGuiRenderer.get());
+            _renderGraphInspector->draw(*_renderGraphCapture, _driver, _imGuiRenderer.get());
+        }
 #endif
         _appDelegate->update(deltaTime);
     }
@@ -266,80 +299,103 @@ namespace vkm
     }
 #endif
 
-    void VkmEngine::prepareRender()
-    {
-        // Need to wait gpu
-        VkmRenderGraph* renderGraph = _frameRenderGraphs[_currentFrameIndex].get();
-        // Ensure the render graph is completed before proceeding
-        renderGraph->ensureCompleted();
-        // Reset the render graph for the current frame
-        renderGraph->reset();
-    }
-
     void VkmEngine::render(const double deltaTime)
     {
-        // Throttle before acquiring: prepareRender() timeline-waits on this frame slot's previous
-        // submit and resets its render graph. This must precede acquireNextImage() so the
-        // image-available semaphore for this slot is guaranteed free before it is reused.
-        prepareRender();
+        (void)deltaTime;
 
-        VkmResourceHandle currentBackBuffer = _mainSwapChain->acquireNextImage();
-        if (!currentBackBuffer.isValid())
+        // Each window is driven independently: its own frame-slot render graph is throttled and
+        // reset, its own back buffer acquired, its own submit carries only its own presentSwapChain,
+        // and it presents on its own. Running one execute()/submit per window (rather than one per
+        // frame) is what keeps the backend's "exactly one presentSwapChain per submit" invariant
+        // valid with multiple windows.
+        const bool soleWindow = (_windowContexts.size() == 1);
+
+        for (uint32_t windowIndex = 0; windowIndex < _windowContexts.size(); ++windowIndex)
         {
-            // Acquire failed (e.g. surface lost/out-of-date). prepareRender() only waited on and
-            // reset this frame slot, so there is no half-recorded work to unwind; skip the frame
-            // rather than record and present a stale image index.
-            return;
-        }
+            VkmWindowContext& windowContext = _windowContexts[windowIndex];
+            VkmRenderGraph* renderGraph = windowContext._frameRenderGraphs[_currentFrameIndex].get();
 
-        VkmRenderGraph* renderGraph = _frameRenderGraphs[_currentFrameIndex].get();
+            // Throttle before acquiring: timeline-wait on this window's previous submit on this
+            // frame slot and reset its graph. Must precede acquireNextImage() so this slot's
+            // image-available semaphore is guaranteed free before it is reused.
+            renderGraph->ensureCompleted();
+            renderGraph->reset();
 
-        _appDelegate->render(renderGraph, currentBackBuffer);
+            VkmResourceHandle currentBackBuffer = windowContext._swapChain->acquireNextImage();
+            if (!currentBackBuffer.isValid())
+            {
+                // Acquire failed (e.g. surface lost/out-of-date). Only this window's slot was
+                // waited on and reset, so skip just this window this frame.
+                continue;
+            }
+
+            // A dedicated ImGui window renders ImGui only; any other window renders the app scene.
+            // In single-window mode the sole (ImGui) window renders the scene first, then the
+            // ImGui overlay on top of it.
+            const bool appRendersHere = !windowContext._isImGuiWindow || soleWindow;
+            if (appRendersHere)
+            {
+                _appDelegate->render(windowIndex, renderGraph, currentBackBuffer);
+            }
 
 #if defined(VKM_ENABLE_IMGUI)
-        // ImGui overlay: draws on top of whatever the app already recorded, loading (not
-        // clearing) the same back buffer.
-        VkmFrameBufferDescriptor imGuiFrameBufferDesc;
-        imGuiFrameBufferDesc._renderPass._colorAttachmentCount = 1;
-        imGuiFrameBufferDesc._renderPass._colorAttachments[0]._attachmentId = 0;
-        imGuiFrameBufferDesc._renderPass._colorAttachments[0]._loadAction = VkmLoadAction::Load;
-        imGuiFrameBufferDesc._renderPass._colorAttachments[0]._storeAction = VkmStoreAction::Store;
-        imGuiFrameBufferDesc._width = _mainSwapChain->getExtent().x;
-        imGuiFrameBufferDesc._height = _mainSwapChain->getExtent().y;
-        imGuiFrameBufferDesc._colorAttachments[0] = currentBackBuffer;
-
-        VkmRenderGraphicsSubGraph* imGuiSubGraph = renderGraph->beginGraphicsSubGraph(imGuiFrameBufferDesc, "EngineImGuiOverlay");
-        VkmImGuiRendererBase* imGuiRenderer = _imGuiRenderer.get();
-        imGuiSubGraph->setRenderCallback([imGuiRenderer](VkmCommandBufferBase* commandBuffer) {
-            imGuiRenderer->renderDrawData(commandBuffer);
-        });
-
-        // While a capture is inspectable, the ImGui pass may sample its snapshot textures --
-        // reference them so recordUsage() tracks the in-flight draws and the deferred
-        // reclaimer waits for them when the capture is released.
-        if (_renderGraphCapture->getState() == VkmRenderGraphCapture::State::Ready)
-        {
-            for (VkmResourceHandle snapshotHandle : _renderGraphCapture->getSnapshotTextureHandles())
+            if (windowContext._isImGuiWindow && _imGuiRenderer)
             {
-                imGuiSubGraph->addReferencedResource(snapshotHandle);
+                // If the app already recorded into this back buffer (single-window mode), load it;
+                // a dedicated ImGui window clears instead, since nothing else draws to it.
+                VkmFrameBufferDescriptor imGuiFrameBufferDesc;
+                imGuiFrameBufferDesc._renderPass._colorAttachmentCount = 1;
+                imGuiFrameBufferDesc._renderPass._colorAttachments[0]._attachmentId = 0;
+                imGuiFrameBufferDesc._renderPass._colorAttachments[0]._loadAction =
+                    appRendersHere ? VkmLoadAction::Load : VkmLoadAction::Clear;
+                imGuiFrameBufferDesc._renderPass._colorAttachments[0]._storeAction = VkmStoreAction::Store;
+                imGuiFrameBufferDesc._renderPass._colorAttachments[0]._clearColors[0] = 0.1f;
+                imGuiFrameBufferDesc._renderPass._colorAttachments[0]._clearColors[1] = 0.1f;
+                imGuiFrameBufferDesc._renderPass._colorAttachments[0]._clearColors[2] = 0.1f;
+                imGuiFrameBufferDesc._renderPass._colorAttachments[0]._clearColors[3] = 1.0f;
+                imGuiFrameBufferDesc._width = windowContext._swapChain->getExtent().x;
+                imGuiFrameBufferDesc._height = windowContext._swapChain->getExtent().y;
+                imGuiFrameBufferDesc._colorAttachments[0] = currentBackBuffer;
+
+                VkmRenderGraphicsSubGraph* imGuiSubGraph = renderGraph->beginGraphicsSubGraph(imGuiFrameBufferDesc, "EngineImGuiOverlay");
+                VkmImGuiRendererBase* imGuiRenderer = _imGuiRenderer.get();
+                imGuiSubGraph->setRenderCallback([imGuiRenderer](VkmCommandBufferBase* commandBuffer) {
+                    imGuiRenderer->renderDrawData(commandBuffer);
+                });
+
+                // While a capture is inspectable, the ImGui pass may sample its snapshot textures
+                // (owned engine-globally by the capture, not by any one swapchain) -- reference
+                // them so recordUsage() tracks the in-flight draws and the deferred reclaimer waits
+                // for them when the capture is released.
+                if (_renderGraphCapture->getState() == VkmRenderGraphCapture::State::Ready)
+                {
+                    for (VkmResourceHandle snapshotHandle : _renderGraphCapture->getSnapshotTextureHandles())
+                    {
+                        imGuiSubGraph->addReferencedResource(snapshotHandle);
+                    }
+                }
             }
-        }
 #endif
 
-        renderGraph->compile();
+            renderGraph->compile();
 
-        VkmRenderGraphCapture* capture =
-            (_renderGraphCapture->getState() == VkmRenderGraphCapture::State::Armed) ? _renderGraphCapture.get() : nullptr;
-        renderGraph->execute(VkmRenderGraphCommitOptions{ .waitForCompletion = false, .presentSwapChain = _mainSwapChain, .capture = capture } );
-        if (capture != nullptr)
-        {
-            // One deliberate hitch on the capture frame: the buffer readbacks and snapshot
-            // copies must have completed on the GPU before finalize() maps them.
-            renderGraph->ensureCompleted();
-            capture->finalize(_driver);
+            // Capture the primary (window 0) render graph so the inspector shows the app's scene
+            // passes; the inspector UI itself is drawn on the ImGui window and samples the
+            // resulting snapshot textures across windows.
+            VkmRenderGraphCapture* capture =
+                (windowIndex == 0 && _renderGraphCapture->getState() == VkmRenderGraphCapture::State::Armed)
+                    ? _renderGraphCapture.get() : nullptr;
+            renderGraph->execute(VkmRenderGraphCommitOptions{ .waitForCompletion = false, .presentSwapChain = windowContext._swapChain, .capture = capture });
+            if (capture != nullptr)
+            {
+                // One deliberate hitch on the capture frame: the buffer readbacks and snapshot
+                // copies must have completed on the GPU before finalize() maps them.
+                renderGraph->ensureCompleted();
+                capture->finalize(_driver);
+            }
+
+            windowContext._swapChain->present();
         }
-
-        _mainSwapChain->present();
     }
 
     VkmEngineLaunchOptions VkmEngine::parseEngineLaunchOptions(int argc, char* argv[])
