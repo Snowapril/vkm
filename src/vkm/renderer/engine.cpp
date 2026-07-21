@@ -257,7 +257,6 @@ namespace vkm
             // rather than record and present a stale image index.
             return;
         }
-        VKM_DEBUG_INFO(fmt::format("Engine update : delta time : {}", deltaTime).c_str());
 
         VkmRenderGraph* renderGraph = _frameRenderGraphs[_currentFrameIndex].get();
 
