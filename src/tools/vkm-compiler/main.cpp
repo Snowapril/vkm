@@ -7,7 +7,8 @@
 // to the active backend's binary/text form, wrapping each result in a
 // VkmShaderCacheHeader:
 //   - vulkan: dxc HLSL -> SPIR-V (stored as-is)
-//   - metal:  dxc HLSL -> SPIR-V -> spirv-cross -> MSL text
+//   - metal:  dxc HLSL -> SPIR-V -> spirv-cross -> MSL -> `metal` -> metallib
+//             (falls back to storing MSL text when no Metal toolchain is available)
 //   - webgpu: dxc HLSL -> SPIR-V -> tint -> WGSL text (requires WGSL support)
 //
 // If the PSO JSON declares an "options" node, it is expanded via
@@ -171,12 +172,85 @@ namespace
         return words;
     }
 
+#if defined(VKM_METAL_TOOLS_AVAILABLE)
+    // Compiles spirv-cross's MSL text into a metallib binary via the Metal toolchain
+    // (`xcrun -sdk macosx metal ... -o out.metallib`). The metallib is what gets stored
+    // in the .vfcache (VkmShaderCacheContentFormat::MetalLib) and loaded at runtime with
+    // -[MTLDevice newLibraryWithData:], so captured .gputrace frames replay without a
+    // source recompile.
+    //
+    // When `emitMsl` is set, the intermediate `.metal` source is kept next to the
+    // .vfcache and `-frecord-sources` embeds it in the metallib so Xcode's shader
+    // debugger shows the MSL directly inside a capture. Otherwise the temp source is
+    // removed and no source is recorded (leaner release caches). On success `metallibOut`
+    // holds the binary; on failure returns false with a message in `*outError`.
+    bool compileMslToMetallib(const std::string& msl, const std::string& baseName,
+        const std::string& optionName, const StageInfo& info, const fs::path& outputDir,
+        bool emitMsl, std::vector<uint8_t>& metallibOut, std::string* outError)
+    {
+        const auto fail = [&](const std::string& message) {
+            if (outError != nullptr) { *outError = message; }
+            return false;
+        };
+
+        // Persisted .metal mirrors the .vfcache naming (incl. the [option] suffix) so each
+        // variant stays distinct; the temp path is per-stem and removed immediately.
+        const std::string emitStem =
+            baseName + (optionName.empty() ? "" : "[" + optionName + "]");
+        const fs::path metalSource = emitMsl
+            ? outputDir / (emitStem + "." + info.shortName + ".metal")
+            : outputDir / (baseName + "." + info.shortName + ".tmp.metal");
+        {
+            std::ofstream src(metalSource, std::ios::binary | std::ios::trunc);
+            if (!src)
+            {
+                return fail("cannot write intermediate MSL source " + metalSource.string());
+            }
+            src.write(msl.data(), static_cast<std::streamsize>(msl.size()));
+            if (!src)
+            {
+                return fail("failed writing intermediate MSL source " + metalSource.string());
+            }
+        }
+
+        const fs::path metallibTmp =
+            outputDir / (baseName + "." + info.shortName + ".tmp.metallib");
+
+        std::vector<std::string> metalArgs = {"-sdk", "macosx", "metal"};
+        if (emitMsl)
+        {
+            metalArgs.push_back("-frecord-sources");
+            metalArgs.push_back("-gline-tables-only");
+        }
+        metalArgs.push_back("-o");
+        metalArgs.push_back(metallibTmp.string());
+        metalArgs.push_back(metalSource.string());
+
+        const SubprocessResult result = runSubprocess(VKM_XCRUN_EXECUTABLE_PATH, metalArgs);
+        if (result.exitCode != 0)
+        {
+            if (!emitMsl) { fs::remove(metalSource); }
+            return fail("metal failed for " + metalSource.filename().string() + ":\n" + result.output);
+        }
+
+        metallibOut = readFileBytes(metallibTmp);
+        fs::remove(metallibTmp);
+        if (!emitMsl) { fs::remove(metalSource); }
+        if (metallibOut.empty())
+        {
+            return fail("metal produced empty metallib for " + metalSource.filename().string());
+        }
+        return true;
+    }
+#endif // VKM_METAL_TOOLS_AVAILABLE
+
     bool compileStage(const VkmShaderStageDescriptor& desc,
                       const StageInfo& info,
                       VkmShaderCacheBackend backend,
                       const std::string& optionName,
                       const fs::path& shaderRoot,
-                      const fs::path& outputDir)
+                      const fs::path& outputDir,
+                      bool emitMsl)
     {
         const fs::path source = shaderRoot / desc.filepath;
         if (!fs::exists(source))
@@ -297,8 +371,24 @@ namespace
                 }
 
                 const std::string msl = compiler.compile();
+#if defined(VKM_METAL_TOOLS_AVAILABLE)
+                std::string metallibError;
+                if (compileMslToMetallib(msl, baseName, optionName, info, outputDir, emitMsl,
+                                         content, &metallibError))
+                {
+                    format = VkmShaderCacheContentFormat::MetalLib;
+                }
+                else
+                {
+                    std::cerr << "vkm-compiler: " << metallibError << "\n";
+                    ok = false;
+                }
+#else
+                // No Metal toolchain: fall back to storing MSL source text, which the
+                // runtime compiles on load (works, but does not serialize into captures).
                 content.assign(msl.begin(), msl.end());
                 format = VkmShaderCacheContentFormat::Msl;
+#endif // VKM_METAL_TOOLS_AVAILABLE
             }
             catch (const std::exception& e)
             {
@@ -368,6 +458,10 @@ int main(int argc, char** argv)
         ("shader-root", "Root directory for resolving shader filepaths "
                         "(default: directory containing --pso)",
          cxxopts::value<std::string>()->default_value(""))
+        ("emit-msl", "Metal only: keep the intermediate .metal source beside each "
+                     ".vfcache and embed it in the metallib (-frecord-sources) so Xcode "
+                     "GPU captures show shader source",
+         cxxopts::value<bool>()->default_value("false"))
         ("h,help", "Print usage");
 
     cxxopts::ParseResult parsed;
@@ -390,6 +484,7 @@ int main(int argc, char** argv)
     const fs::path psoPath = parsed["pso"].as<std::string>();
     const fs::path outputDir = parsed["output-dir"].as<std::string>();
     const std::string backendName = parsed["backend"].as<std::string>();
+    const bool emitMsl = parsed["emit-msl"].as<bool>();
 
     VkmShaderCacheBackend backend{};
     if (!backendToEnum(backendName, backend))
@@ -443,17 +538,17 @@ int main(int argc, char** argv)
         if (variant.vertexShader.has_value())
         {
             allOk &= compileStage(*variant.vertexShader, vertexInfo, backend,
-                                  variant.optionName, shaderRoot, outputDir);
+                                  variant.optionName, shaderRoot, outputDir, emitMsl);
         }
         if (variant.fragmentShader.has_value())
         {
             allOk &= compileStage(*variant.fragmentShader, fragmentInfo, backend,
-                                  variant.optionName, shaderRoot, outputDir);
+                                  variant.optionName, shaderRoot, outputDir, emitMsl);
         }
         if (variant.computeShader.has_value())
         {
             allOk &= compileStage(*variant.computeShader, computeInfo, backend,
-                                  variant.optionName, shaderRoot, outputDir);
+                                  variant.optionName, shaderRoot, outputDir, emitMsl);
         }
     }
 

@@ -177,6 +177,15 @@ else()
     set(VKM_GPU_CAPTURE_DEFAULT ON)
 endif()
 option(GPU_CAPTURE "Enable programmatic GPU frame capture (Metal MTLCaptureScope + .gputrace export)" ${VKM_GPU_CAPTURE_DEFAULT})
+# Metal only: keep the intermediate .metal source beside each .vfcache and embed it
+# in the metallib (-frecord-sources) so Xcode GPU captures show shader source. Default
+# ON except for Release builds (leaner caches); pass -DVKM_METAL_EMIT_MSL_SOURCE=ON to opt in.
+if (CMAKE_BUILD_TYPE MATCHES Release)
+    set(VKM_METAL_EMIT_MSL_SOURCE_DEFAULT OFF)
+else()
+    set(VKM_METAL_EMIT_MSL_SOURCE_DEFAULT ON)
+endif()
+option(VKM_METAL_EMIT_MSL_SOURCE "Emit intermediate MSL source + embed it in metallib for shader debugging" ${VKM_METAL_EMIT_MSL_SOURCE_DEFAULT})
 option(CHROME_TRACING "Enable Chrome Tracing for CPU profiling" ON)
 option(TASKFLOW_PROFILER, "Enable Taskflow Profiler" ON)
 option(VKM_ENABLE_IMGUI "Enable ImGui integration" ON)

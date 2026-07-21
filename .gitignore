@@ -438,5 +438,6 @@ dependencies/.bootstrap.json
 dependencies/archives/
 dependencies/src/
 *.vfpipeline
+*.gputrace/
 
 .DS_Store

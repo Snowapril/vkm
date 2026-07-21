@@ -60,6 +60,12 @@ function(vkm_add_shader_cache_target)
         return()
     endif()
 
+    # Metal only: forward the MSL-source/debug-info toggle (see VKM_METAL_EMIT_MSL_SOURCE).
+    set(_emit_msl_arg "")
+    if (_backend STREQUAL metal AND VKM_METAL_EMIT_MSL_SOURCE)
+        set(_emit_msl_arg --emit-msl)
+    endif()
+
     # Either the in-tree vkm-compiler target or the externally supplied host binary.
     if (VKM_HOST_VKM_COMPILER)
         set(_compiler "${VKM_HOST_VKM_COMPILER}")
@@ -83,6 +89,7 @@ function(vkm_add_shader_cache_target)
                     --pso "${_pso}"
                     --output-dir "${SC_OUTPUT_DIR}"
                     --backend ${_backend}
+                    ${_emit_msl_arg}
             COMMAND ${CMAKE_COMMAND} -E touch "${_stamp}"
             DEPENDS "${_pso}" ${SC_EXTRA_DEPENDS} ${_compiler_dep}
             COMMENT "vkm-compiler: compiling shaders for ${_pso_name} (${_backend})"

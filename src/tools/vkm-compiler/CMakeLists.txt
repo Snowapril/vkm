@@ -46,6 +46,25 @@ if (VKM_COMPILER_ENABLE_WGSL)
     )
 endif()
 
+# On Apple, vkm-compiler compiles spirv-cross MSL into a metallib via the Metal
+# toolchain (invoked through xcrun) so the stored .vfcache is a precompiled binary
+# library. xcrun ships with the macOS command-line tools and resolves the active
+# Metal toolchain at run time, so bake its path rather than a version-specific
+# metal binary that goes stale on toolchain updates.
+if (APPLE)
+    find_program(VKM_XCRUN_EXECUTABLE xcrun)
+    if (VKM_XCRUN_EXECUTABLE)
+        target_compile_definitions(${target}
+            PRIVATE
+            VKM_METAL_TOOLS_AVAILABLE=1
+            VKM_XCRUN_EXECUTABLE_PATH="${VKM_XCRUN_EXECUTABLE}"
+        )
+    else()
+        message(WARNING "vkm-compiler: xcrun not found; Metal shader caches will store "
+                        "MSL source instead of a precompiled metallib")
+    endif()
+endif()
+
 # Link libraries. Explicitly link both spirv-cross static libs rather than
 # relying on transitive propagation from spirv-cross's own private linkage.
 target_link_libraries(${target}

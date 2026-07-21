@@ -8,8 +8,8 @@ namespace vkm
 {
     // On-disk format for a single compiled shader stage produced by vkm-compiler.
     // Every .vfcache file is a VkmShaderCacheHeader written at offset 0, followed
-    // by exactly `contentSize` bytes of raw content (SPIR-V binary words, or UTF-8
-    // MSL/WGSL text depending on `contentFormat`).
+    // by exactly `contentSize` bytes of raw content (SPIR-V binary words, a metallib
+    // binary, or UTF-8 MSL/WGSL text depending on `contentFormat`).
     //
     // This header is the contract for the future runtime reader (out of scope
     // here: VkmDriverBase has no shader-module/pipeline-creation method yet, see
@@ -17,7 +17,7 @@ namespace vkm
 
     // 'V''F''C''H' little-endian magic identifying a vkm shader cache file.
     constexpr uint32_t kVkmShaderCacheMagic = 0x48434656u;
-    constexpr uint32_t kVkmShaderCacheVersion = 1u;
+    constexpr uint32_t kVkmShaderCacheVersion = 2u;
 
     enum class VkmShaderCacheBackend : uint8_t
     {
@@ -38,6 +38,11 @@ namespace vkm
         SpirV = 0,
         Msl = 1,
         Wgsl = 2,
+        // Precompiled Metal library (metallib binary, output of `metal`/`metallib`).
+        // Loaded at runtime via -[MTLDevice newLibraryWithData:] -- unlike Msl source,
+        // a binary library serializes into Xcode GPU captures without a replay-time
+        // recompile (see metal_pipeline_state.mm).
+        MetalLib = 3,
     };
 
 #pragma pack(push, 1)

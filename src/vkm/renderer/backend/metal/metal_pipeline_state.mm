@@ -161,12 +161,19 @@ namespace vkm
             return stencilDescriptor;
         }
 
-        // Loads one stage's .vfcache file, compiles it into a transient id<MTLLibrary>
-        // via the Metal4 compiler, and returns a MTL4LibraryFunctionDescriptor
-        // referencing its entry point. Returns nil (+ *outError) on any failure.
+        // Loads one stage's .vfcache file into a transient id<MTLLibrary> and returns a
+        // MTL4LibraryFunctionDescriptor referencing its entry point. Returns nil
+        // (+ *outError) on any failure.
+        //
+        // MetalLib content (the default vkm-compiler output) is loaded as a precompiled
+        // binary via -[MTLDevice newLibraryWithData:], which -- unlike compiling Msl
+        // source through the MTL4 compiler -- serializes into Xcode GPU captures so a
+        // .gputrace replays without a source recompile. Msl source is still accepted as a
+        // fallback for caches produced without a Metal toolchain.
         MTL4LibraryFunctionDescriptor* loadStageLibraryFunction(id<MTL4Compiler> compiler,
-            const VkmShaderStageDescriptor& stageDesc, const std::string& shaderCacheDir,
-            const std::string& optionName, VkmShaderCacheStage stage, std::string* outError)
+            id<MTLDevice> device, const VkmShaderStageDescriptor& stageDesc,
+            const std::string& shaderCacheDir, const std::string& optionName,
+            VkmShaderCacheStage stage, std::string* outError)
         {
             const std::string shaderStem = std::filesystem::path(stageDesc.filepath).stem().string();
             const std::string filename = buildShaderCacheFilename(shaderStem, optionName, stage, VkmShaderCacheBackend::Metal);
@@ -180,30 +187,47 @@ namespace vkm
                 return nil;
             }
 
-            if (loaded->contentFormat != VkmShaderCacheContentFormat::Msl)
+            id<MTLLibrary> library = nil;
+            if (loaded->contentFormat == VkmShaderCacheContentFormat::MetalLib)
             {
-                *outError = "Shader cache '" + fullPath + "' is not MSL content";
-                return nil;
+                dispatch_data_t libraryData = dispatch_data_create(loaded->content.data(),
+                    loaded->content.size(), dispatch_get_main_queue(),
+                    DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+                NSError* nsError = nil;
+                library = [device newLibraryWithData:libraryData error:&nsError];
+                if (library == nil)
+                {
+                    std::string reason = nsError != nil ? std::string(nsError.localizedDescription.UTF8String) : std::string("unknown error");
+                    *outError = "Failed to load metallib for '" + fullPath + "': " + reason;
+                    return nil;
+                }
             }
-
-            NSString* mslSource = [[NSString alloc] initWithBytes:loaded->content.data()
-                                                             length:loaded->content.size()
-                                                           encoding:NSUTF8StringEncoding];
-            if (mslSource == nil)
+            else if (loaded->contentFormat == VkmShaderCacheContentFormat::Msl)
             {
-                *outError = "Failed to decode MSL source as UTF-8 for '" + fullPath + "'";
-                return nil;
+                NSString* mslSource = [[NSString alloc] initWithBytes:loaded->content.data()
+                                                                 length:loaded->content.size()
+                                                               encoding:NSUTF8StringEncoding];
+                if (mslSource == nil)
+                {
+                    *outError = "Failed to decode MSL source as UTF-8 for '" + fullPath + "'";
+                    return nil;
+                }
+
+                MTL4LibraryDescriptor* libraryDescriptor = [[MTL4LibraryDescriptor alloc] init];
+                libraryDescriptor.source = mslSource;
+
+                NSError* nsError = nil;
+                library = [compiler newLibraryWithDescriptor:libraryDescriptor error:&nsError];
+                if (library == nil)
+                {
+                    std::string reason = nsError != nil ? std::string(nsError.localizedDescription.UTF8String) : std::string("unknown error");
+                    *outError = "Failed to compile MSL library for '" + fullPath + "': " + reason;
+                    return nil;
+                }
             }
-
-            MTL4LibraryDescriptor* libraryDescriptor = [[MTL4LibraryDescriptor alloc] init];
-            libraryDescriptor.source = mslSource;
-
-            NSError* nsError = nil;
-            id<MTLLibrary> library = [compiler newLibraryWithDescriptor:libraryDescriptor error:&nsError];
-            if (library == nil)
+            else
             {
-                std::string reason = nsError != nil ? std::string(nsError.localizedDescription.UTF8String) : std::string("unknown error");
-                *outError = "Failed to compile MSL library for '" + fullPath + "': " + reason;
+                *outError = "Shader cache '" + fullPath + "' is neither metallib nor MSL content";
                 return nil;
             }
 
@@ -262,7 +286,7 @@ namespace vkm
         {
             std::string loadError;
             MTL4LibraryFunctionDescriptor* computeFunctionDescriptor = loadStageLibraryFunction(
-                compiler, desc.computeShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Compute, &loadError);
+                compiler, device, desc.computeShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Compute, &loadError);
             if (computeFunctionDescriptor == nil)
             {
                 setError(loadError);
@@ -294,7 +318,7 @@ namespace vkm
 
         std::string loadError;
         MTL4LibraryFunctionDescriptor* vertexFunctionDescriptor = loadStageLibraryFunction(
-            compiler, desc.vertexShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Vertex, &loadError);
+            compiler, device, desc.vertexShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Vertex, &loadError);
         if (vertexFunctionDescriptor == nil)
         {
             setError(loadError);
@@ -305,7 +329,7 @@ namespace vkm
         if (desc.fragmentShader.has_value())
         {
             fragmentFunctionDescriptor = loadStageLibraryFunction(
-                compiler, desc.fragmentShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Fragment, &loadError);
+                compiler, device, desc.fragmentShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Fragment, &loadError);
             if (fragmentFunctionDescriptor == nil)
             {
                 setError(loadError);
