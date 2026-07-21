@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/render_graph_capture.h>
+#include <vkm/base/global_variable.h>
 #include <cxxopts.hpp>
 #include <iostream>
 
@@ -54,6 +55,10 @@ namespace vkm
             return false;
         }
         VKM_DEBUG_INFO("LoggerManager initialized");
+
+        // Apply command-line global-variable overrides staged during parseEngineLaunchOptions,
+        // now that the logger can report which ones matched or were rejected.
+        GlobalVariableManager::singleton().applyCommandLineOverrides();
 
         _appDelegate.reset(appDelegate);
         _engineOptions = options;
@@ -432,6 +437,11 @@ namespace vkm
             // The GPU frame capture scope only exists when enableGpuCapture is set --
             // a startup capture request implies it.
             launchOptions.enableGpuCapture |= launchOptions.captureGpuFrameOnStartup;
+
+            // Anything the engine did not recognize is offered to the global-variable manager
+            // as a "--<name>=<value>" override. Only stage here (the logger is not up yet);
+            // applyCommandLineOverrides() runs in initializeEngine once it can report matches.
+            GlobalVariableManager::singleton().setCommandLineOverrides(result.unmatched());
         }
         catch (const std::exception& e)
         {

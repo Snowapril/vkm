@@ -2,11 +2,13 @@
 
 #include <vkm/renderer/backend/metal/metal_swapchain.h>
 #include <vkm/renderer/backend/metal/metal_command_queue.h>
+#include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <QuartzCore/CAMetalLayer.h>
 #import <Metal/MTL4CommandQueue.h>
+#import <Metal/MTLResidencySet.h>
 
 namespace vkm
 {
@@ -66,11 +68,43 @@ namespace vkm
                 return false;
             }
         }
+
+        // Metal 4 command buffers do not implicitly make referenced resources resident, so the
+        // drawable textures must live in a residency set attached to every queue that renders
+        // into or presents the backbuffer (today only the present queue). CAMetalLayer exposes a
+        // ready-made, auto-updating set for exactly this; track it in the manager and attach it.
+        CAMetalLayer* metalLayer = (__bridge CAMetalLayer*)windowHandle;
+        id<MTLResidencySet> layerResidencySet = metalLayer.residencySet;
+        if (layerResidencySet != nil)
+        {
+            VkmRenderResourcePoolMetal* renderResourcePoolMetal =
+                static_cast<VkmRenderResourcePoolMetal*>(_driver->getRenderResourcePool());
+            renderResourcePoolMetal->setSwapChainResidencySet(layerResidencySet);
+
+            VkmCommandQueueMetal* presentQueueMetal = static_cast<VkmCommandQueueMetal*>(_presentQueue);
+            [presentQueueMetal->getMTLCommandQueue() addResidencySet:layerResidencySet];
+        }
+        else
+        {
+            // Nil when the layer's device is unset or the GPU lacks residency-set support; the
+            // implicit waitForDrawable:/signalDrawable: path in acquire/present still functions.
+            VKM_DEBUG_WARN("CAMetalLayer.residencySet unavailable; drawable residency falls back to implicit synchronization");
+        }
         return true;
     }
 
     void VkmSwapChainMetal::destroySwapChain()
     {
+        VkmRenderResourcePoolMetal* renderResourcePoolMetal =
+            static_cast<VkmRenderResourcePoolMetal*>(_driver->getRenderResourcePool());
+        id<MTLResidencySet> layerResidencySet = renderResourcePoolMetal->getSwapChainResidencySet();
+        if (layerResidencySet != nil && _presentQueue != nullptr)
+        {
+            VkmCommandQueueMetal* presentQueueMetal = static_cast<VkmCommandQueueMetal*>(_presentQueue);
+            [presentQueueMetal->getMTLCommandQueue() removeResidencySet:layerResidencySet];
+            renderResourcePoolMetal->setSwapChainResidencySet(nil);
+        }
+
         _currentDrawable = nil;
 
         destroySwapChainCommon();

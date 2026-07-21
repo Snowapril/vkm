@@ -130,6 +130,13 @@ namespace vkm
         _residencyDirty = true;
     }
 
+    void VkmRenderResourcePoolMetal::setSwapChainResidencySet(id<MTLResidencySet> residencySet)
+    {
+        // Reference-only tracking: Core Animation owns and auto-updates this set, so it is
+        // deliberately kept out of _residencySets and never reaches commitPendingResidencyChanges().
+        _swapChainResidencySet = residencySet;
+    }
+
     void VkmRenderResourcePoolMetal::commitPendingResidencyChanges()
     {
         std::lock_guard<std::mutex> lock(_residencyMutex);

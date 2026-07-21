@@ -17,6 +17,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/base/common.h
     ${PUBLIC_HDR_DIR}/vkm/base/logger.h
     ${PUBLIC_HDR_DIR}/vkm/base/memory.h
+    ${PUBLIC_HDR_DIR}/vkm/base/global_variable.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/renderer_common.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_graph.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_graph_capture.h
@@ -52,6 +53,7 @@ set(SRCS
     ${SRC_DIR}/vkm/base/common.cpp
     ${SRC_DIR}/vkm/base/logger.cpp
     ${SRC_DIR}/vkm/base/memory.cpp
+    ${SRC_DIR}/vkm/base/global_variable.cpp
     ${SRC_DIR}/vkm/platform/common/input_handler.cpp
     ${SRC_DIR}/vkm/platform/common/glfw_input.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/renderer_common.cpp

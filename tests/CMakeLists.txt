@@ -19,6 +19,7 @@ set(SRCS
     ${SRC_DIR}/TestBindlessSlotAllocator.cpp
     ${SRC_DIR}/TestInputHandler.cpp
     ${SRC_DIR}/TestClipSpaceOrientation.cpp
+    ${SRC_DIR}/TestGlobalVariable.cpp
 )
 
 if (VKM_USE_METAL_API)

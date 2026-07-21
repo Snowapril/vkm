@@ -51,6 +51,17 @@ namespace vkm
         */
         void unregisterExternalAllocation(id<MTLAllocation> allocation, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
 
+        /*
+        * @brief Track the swapchain layer's residency set (CAMetalLayer.residencySet) so the
+        * manager is the single owner of every residency set the engine attaches to queues.
+        * Unlike the pool-owned _residencySets, this set is owned and auto-updated by Core
+        * Animation as drawables rotate; it is only referenced here and is never committed or
+        * otherwise modified (Apple forbids modifying it). VkmSwapChainMetal registers it here
+        * and attaches it to the backbuffer queue; pass nil to clear on swapchain teardown.
+        */
+        void setSwapChainResidencySet(id<MTLResidencySet> residencySet);
+        inline id<MTLResidencySet> getSwapChainResidencySet() const { return _swapChainResidencySet; }
+
     protected:
         virtual bool initialize() override final;
         virtual void onResourceInitialized(VkmResourceHandle handle) override final;
@@ -61,5 +72,7 @@ namespace vkm
         std::array<id<MTLResidencySet>, (uint8_t)VkmResourcePoolType::Count> _residencySets{};
         std::mutex _residencyMutex;
         bool _residencyDirty{false}; // guarded by _residencyMutex
+        // CAMetalLayer-owned residency set; tracked (not committed) -- see setSwapChainResidencySet.
+        id<MTLResidencySet> _swapChainResidencySet{};
     };
 } // namespace vkm
