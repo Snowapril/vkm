@@ -12,9 +12,9 @@
 #include <emscripten/emscripten.h>
 #endif // defined(VKM_PLATFORM_WASM)
 
-#if defined(VKM_USE_VULKAN_API) || defined(VKM_USE_METAL_API)
+// Vulkan, Metal and WebGPU all use a 0..1 NDC depth range (unlike OpenGL's -1..1), so this
+// applies to every backend the engine supports.
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
-#endif // defined(VKM_USE_VULKAN_API) || defined(VKM_USE_METAL_API)
 
 namespace vkm
 {

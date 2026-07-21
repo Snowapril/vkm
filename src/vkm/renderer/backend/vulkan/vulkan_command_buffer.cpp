@@ -139,6 +139,12 @@ namespace vkm
         // Every pipeline created by VkmPipelineStateVulkan marks viewport/scissor as
         // dynamic state (extents aren't known at pipeline-creation time), so they must be
         // set here every render pass or drawing has undefined viewport/scissor state.
+        //
+        // Plain positive-height viewport: the engine's +Y-up clip space is normalized to
+        // Vulkan's +Y-down NDC upstream by -fvk-invert-y in vkm-compiler (Vulkan target
+        // only), so no coordinate-space compensation happens here. That upstream Y-flip
+        // reverses screen-space winding, which toVkFrontFace() in vulkan_pipeline_state.cpp
+        // accounts for.
         const VkViewport viewport{
             .x = 0.0f, .y = 0.0f,
             .width = static_cast<float>(frameBufferDesc._width), .height = static_cast<float>(frameBufferDesc._height),

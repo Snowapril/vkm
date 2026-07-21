@@ -18,6 +18,7 @@ set(SRCS
     ${SRC_DIR}/TestPipelineStateManager.cpp
     ${SRC_DIR}/TestBindlessSlotAllocator.cpp
     ${SRC_DIR}/TestInputHandler.cpp
+    ${SRC_DIR}/TestClipSpaceOrientation.cpp
 )
 
 if (VKM_USE_METAL_API)
@@ -26,6 +27,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestBackbufferReadback.mm
         ${SRC_DIR}/TestMetalBindlessTriangle.mm
         ${SRC_DIR}/TestRenderGraphCapture.mm
+        ${SRC_DIR}/TestClipSpaceOrientationMetal.mm
     )
 endif()
 
@@ -38,11 +40,15 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestBackbufferReadback.mm
         ${SRC_DIR}/TestMetalBindlessTriangle.mm
         ${SRC_DIR}/TestRenderGraphCapture.mm
+        ${SRC_DIR}/TestClipSpaceOrientationMetal.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++"
     )
+endif()
 
-    # TestMetalBindlessTriangle drives the real triangle sample PSO; compile its shader
-    # caches for this build's backend next to the test binary.
+# TestMetalBindlessTriangle and TestClipSpaceOrientation* drive the real triangle sample
+# PSO; compile its shader caches for this build's backend next to the test binary. Needed
+# by both the Metal and Vulkan backends.
+if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
     vkm_add_shader_cache_target(
         TARGET_NAME   tests_triangle_shaders
         OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
@@ -96,7 +102,7 @@ target_compile_definitions(${target}
     ${DEFAULT_COMPILE_DEFINITIONS}
 )
 
-if (VKM_USE_METAL_API)
+if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
     add_dependencies(${target} tests_triangle_shaders)
     target_compile_definitions(${target}
         PRIVATE

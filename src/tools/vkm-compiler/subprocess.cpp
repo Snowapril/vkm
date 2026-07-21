@@ -48,6 +48,17 @@ namespace vkm
         // Redirect stderr into stdout so a single read captures both streams.
         command += " 2>&1";
 
+#if defined(_WIN32)
+        // _popen runs the command through `cmd /c`, which strips the first and last
+        // double-quote of the whole string whenever the line has more than two quote
+        // characters -- which it always does here (quoted executable + quoted args).
+        // That would merge "dxc.exe" "-spirv" ... into a single unrecognized token.
+        // Wrapping the entire command in one more pair of quotes gives cmd exactly those
+        // outer quotes to strip, leaving the inner command (and the 2>&1 redirect) intact.
+        // See the quoting rules under `cmd /?`.
+        command = "\"" + command + "\"";
+#endif
+
         SubprocessResult result;
 
         FILE* pipe = VKM_POPEN(command.c_str(), "r");

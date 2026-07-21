@@ -169,8 +169,9 @@
     "platforms": ["Linux"],
     "source": {
       "type": "archive",
-      "url": "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/linux_dxc_2026_05_26.x86_64.tar.gz",
-      "sha1": "283b86b09fcbafe51641d72996971a409054de83"
+      "comment": "Pinned to v1.8.2505.1 (not v1.9.2602.24 like dxc-win/dxc-macos-src): the newer Linux binaries link GLIBC 2.38 (Ubuntu 24.04), but CI runs on Ubuntu 22.04 (GLIBC 2.35). This release needs only GLIBC 2.34.",
+      "url": "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2505.1/linux_dxc_2025_07_14.x86_64.tar.gz",
+      "sha1": "2a000c13553c46bb310db5605686c91995251d9a"
     }
   },
   {

@@ -55,6 +55,24 @@ virtual void flush(uint64_t offset, uint64_t size) = 0;
 virtual void writeDirect(uint64_t offset, const void* data, uint64_t size) = 0;
 ```
 
+## Coordinate Space
+
+Clip space is **+Y up** with a **0..1 depth range** — the HLSL/D3D convention the shaders are
+authored in, and what Metal and WebGPU use natively. `GLM_FORCE_DEPTH_ZERO_TO_ONE` is defined
+unconditionally in `base/platform.h` to match.
+
+Metal and WebGPU need no compensation. Vulkan's NDC is +Y down, so it normalizes Y in the
+toolchain: `vkm-compiler` builds Vulkan SPIR-V with DXC's `-fvk-invert-y` (Vulkan target only),
+and the backend inverts its `VkmFrontFace` mapping in `toVkFrontFace` to cancel the winding flip
+that the Y negation causes. A new backend whose NDC is +Y down must do the same; one that is
++Y up must do nothing.
+
+`vkm-compiler` compiles SPIR-V **separately per backend** (`compileStage` → `compileToSpirv`,
+one invocation per backend with a distinct `-D VKM_BACKEND_*`), so a Vulkan-only compiler flag
+does not reach the Metal or WebGPU shaders. A Y-flip in *shared HLSL source* without a
+per-backend `#if` guard, however, would follow the geometry into every backend — so guard any
+source-level compensation on the backend define, or keep it in the per-backend compiler flags.
+
 ## Constants
 
 - `FRAME_BUFFER_COUNT = 3` — triple-buffering, fixed. Do not parameterize.

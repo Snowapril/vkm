@@ -82,6 +82,28 @@ Do not query features before calling `vkGetPhysicalDeviceFeatures2`.
 
 Shaders compiled via glslang → SPIRV, reflected via spirv-cross-core. No direct GLSL string injection.
 
+## Coordinate Space (Y Flip)
+
+The engine's clip space is +Y up (see `include/vkm/renderer/backend/common/AGENTS.md`), but
+Vulkan's NDC is +Y down. Vulkan is the only backend that has to compensate, and it does so in
+two places that must stay in sync:
+
+1. `src/tools/vkm-compiler/main.cpp` — `compileToSpirv` adds DXC's **`-fvk-invert-y`** for the
+   Vulkan target only, negating `SV_Position.y` so +Y-up clip space lands right-side-up on
+   Vulkan's +Y-down NDC. This is the single Y-flip site; the command buffer uses a plain
+   positive-height viewport.
+2. `vulkan_pipeline_state.cpp` — `toVkFrontFace` maps `CounterClockwise` to
+   `VK_FRONT_FACE_CLOCKWISE` and vice versa, cancelling the winding mirror the Y-flip
+   introduces.
+
+The inverted enum mapping looks like a bug in isolation. Neither change is correct without the
+other — do not touch one alone. (The winding flip is intrinsic to the +Y-up convention: any
+vertical flip reverses framebuffer winding, no matter which layer performs it, so moving the
+Y-flip does not remove the front-face inversion.)
+
+Changing `-fvk-invert-y` requires regenerating the `.vfcache` shader caches (they are
+`vkm-compiler` output); a stale cache silently masks the change.
+
 ## Debug / Validation
 
 When `VKM_DEBUG_NAME_ENABLED` is defined, apply debug names via `vkSetDebugUtilsObjectNameEXT`. Always guard with `#ifdef VKM_DEBUG_NAME_ENABLED`.
