@@ -132,6 +132,16 @@ namespace vkm
         inline bool shouldExit() const { return _inputHandler.shouldExit(); }
 
         /*
+        * @brief True while the ImGui overlay owns keyboard/mouse input, so platform layers
+        * should not forward the event to the input handler.
+        * @details Deliberately not inline: keeping the ImGui lookup inside engine.cpp is what
+        * lets platform code query capture state without ever including an ImGui header.
+        * Always false when VKM_ENABLE_IMGUI is off.
+        */
+        bool wantsCaptureKeyboard() const;
+        bool wantsCaptureMouse() const;
+
+        /*
         * @brief returns the engine-owned render graph capture (see render_graph_capture.h).
         * Armed via the F10 hotkey, --capture-render-graph, or arm() directly.
         */

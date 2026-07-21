@@ -121,6 +121,10 @@ namespace vkm
         _driver->onFrameBegin();
 #endif // VKM_GPU_CAPTURE
 
+        // Drains events pushed from platform callback threads and clears the previous frame's
+        // edge/delta state before any update()/render() code queries input.
+        _inputHandler.beginFrame();
+
 #if defined(VKM_ENABLE_IMGUI)
         _imGuiRenderer->newFrame();
 #endif
@@ -133,6 +137,36 @@ namespace vkm
 #endif // VKM_GPU_CAPTURE
 
         _currentFrameIndex = (_currentFrameIndex + 1) % FRAME_COUNT;
+    }
+
+    bool VkmEngine::wantsCaptureKeyboard() const
+    {
+#if defined(VKM_ENABLE_IMGUI)
+        // Platform callbacks can fire before addSwapChain() has created the ImGui context,
+        // and ImGui::GetIO() asserts when no context exists.
+        if (ImGui::GetCurrentContext() == nullptr)
+        {
+            return false;
+        }
+
+        return ImGui::GetIO().WantCaptureKeyboard;
+#else
+        return false;
+#endif
+    }
+
+    bool VkmEngine::wantsCaptureMouse() const
+    {
+#if defined(VKM_ENABLE_IMGUI)
+        if (ImGui::GetCurrentContext() == nullptr)
+        {
+            return false;
+        }
+
+        return ImGui::GetIO().WantCaptureMouse;
+#else
+        return false;
+#endif
     }
 
     void VkmEngine::destroy()
