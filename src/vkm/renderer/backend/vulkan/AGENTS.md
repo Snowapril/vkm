@@ -88,16 +88,21 @@ The engine's clip space is +Y up (see `include/vkm/renderer/backend/common/AGENT
 Vulkan's NDC is +Y down. Vulkan is the only backend that has to compensate, and it does so in
 two places that must stay in sync:
 
-1. `vulkan_command_buffer.cpp` — `onBeginRenderPass` binds a **negative-height** viewport
-   (`y = height`, `height = -height`). Core since Vulkan 1.1; the instance targets 1.3.
+1. `src/tools/vkm-compiler/main.cpp` — `compileToSpirv` adds DXC's **`-fvk-invert-y`** for the
+   Vulkan target only, negating `SV_Position.y` so +Y-up clip space lands right-side-up on
+   Vulkan's +Y-down NDC. This is the single Y-flip site; the command buffer uses a plain
+   positive-height viewport.
 2. `vulkan_pipeline_state.cpp` — `toVkFrontFace` maps `CounterClockwise` to
-   `VK_FRONT_FACE_CLOCKWISE` and vice versa, cancelling the winding mirror the flipped
-   viewport introduces.
+   `VK_FRONT_FACE_CLOCKWISE` and vice versa, cancelling the winding mirror the Y-flip
+   introduces.
 
 The inverted enum mapping looks like a bug in isolation. Neither change is correct without the
-other — do not touch one alone.
+other — do not touch one alone. (The winding flip is intrinsic to the +Y-up convention: any
+vertical flip reverses framebuffer winding, no matter which layer performs it, so moving the
+Y-flip does not remove the front-face inversion.)
 
-The scissor rect is unaffected: it is always in framebuffer pixel coordinates.
+Changing `-fvk-invert-y` requires regenerating the `.vfcache` shader caches (they are
+`vkm-compiler` output); a stale cache silently masks the change.
 
 ## Debug / Validation
 

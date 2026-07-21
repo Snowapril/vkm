@@ -140,15 +140,14 @@ namespace vkm
         // dynamic state (extents aren't known at pipeline-creation time), so they must be
         // set here every render pass or drawing has undefined viewport/scissor state.
         //
-        // The engine's clip space is +Y up (the HLSL/D3D convention the shaders are authored
-        // in, and what Metal and WebGPU use natively). Vulkan's NDC is +Y down, so this
-        // viewport flips Y by starting at the bottom edge and using a negative height --
-        // core behavior since Vulkan 1.1 (VK_KHR_maintenance1); the instance targets 1.3.
-        // This inverts screen-space triangle winding, which toVkFrontFace() in
-        // vulkan_pipeline_state.cpp compensates for.
+        // Plain positive-height viewport: the engine's +Y-up clip space is normalized to
+        // Vulkan's +Y-down NDC upstream by -fvk-invert-y in vkm-compiler (Vulkan target
+        // only), so no coordinate-space compensation happens here. That upstream Y-flip
+        // reverses screen-space winding, which toVkFrontFace() in vulkan_pipeline_state.cpp
+        // accounts for.
         const VkViewport viewport{
-            .x = 0.0f, .y = static_cast<float>(frameBufferDesc._height),
-            .width = static_cast<float>(frameBufferDesc._width), .height = -static_cast<float>(frameBufferDesc._height),
+            .x = 0.0f, .y = 0.0f,
+            .width = static_cast<float>(frameBufferDesc._width), .height = static_cast<float>(frameBufferDesc._height),
             .minDepth = 0.0f, .maxDepth = 1.0f,
         };
         const VkRect2D scissor{ {0, 0}, {frameBufferDesc._width, frameBufferDesc._height} };

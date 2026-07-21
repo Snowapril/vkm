@@ -142,6 +142,18 @@ namespace
             "-D", backendDefine(backend),
             "-D", "VKM_BINDLESS_BUFFER_CAPACITY=" + std::to_string(kVkmBindlessBufferCapacity),
         };
+        if (backend == VkmShaderCacheBackend::Vulkan && info.stage == VkmShaderCacheStage::Vertex)
+        {
+            // Negate SV_Position.y so the engine's +Y-up clip space (the HLSL/D3D convention,
+            // native to Metal and WebGPU) renders right-side-up on Vulkan's +Y-down NDC. This
+            // is the engine's single Y-flip site for Vulkan; the command buffer uses a plain
+            // positive-height viewport. The flip reverses screen-space winding, which
+            // toVkFrontFace() in vulkan_pipeline_state.cpp compensates for. Vulkan only: the
+            // Metal/WebGPU targets compile their own SPIR-V and are already +Y up. DXC rejects
+            // -fvk-invert-y on non-position-writing stages, so it is gated to the vertex stage
+            // (the engine has no DS/GS/mesh shaders that also write SV_Position).
+            args.push_back("-fvk-invert-y");
+        }
         for (const auto& [name, value] : desc.definitions)
         {
             args.push_back("-D");
