@@ -101,13 +101,14 @@ namespace vkm
 
         for (auto& subGraph : _subGraphs)
         {
-            // Execute each subgraph's commands
-            if (subGraph->getSubGraphType() == VkmRenderSubGraphType::Graphics)
-            {
-
-            }
             const size_t pipelineHistoryBegin = commandBuffer->getBoundPipelineHistory().size();
+
+            // Bracket each subgraph in a named GPU debug group so a capture shows it as a
+            // collapsible scope (e.g. "TrianglePass", "EngineImGuiOverlay"). Self-gated on
+            // enableGpuCapture; a no-op otherwise.
+            commandBuffer->pushDebugGroup(subGraph->getName().c_str());
             subGraph->commit(commandBuffer);
+            commandBuffer->popDebugGroup();
 
             if (options.capture != nullptr)
             {

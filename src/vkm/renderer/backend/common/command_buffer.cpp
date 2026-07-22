@@ -155,4 +155,20 @@ namespace vkm
             onSetDebugName(name);
         }
     }
+
+    void VkmCommandBufferBase::pushDebugGroup(const char* name)
+    {
+        if (_driver->getLaunchOptions().enableGpuCapture)
+        {
+            onPushDebugGroup(name != nullptr ? name : "");
+        }
+    }
+
+    void VkmCommandBufferBase::popDebugGroup()
+    {
+        if (_driver->getLaunchOptions().enableGpuCapture)
+        {
+            onPopDebugGroup();
+        }
+    }
 }

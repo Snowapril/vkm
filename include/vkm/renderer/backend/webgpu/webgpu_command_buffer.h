@@ -34,6 +34,8 @@ namespace vkm
         virtual void onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) override final;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) override final;
         virtual void onSetDebugName(const char* name) override final;
+        virtual void onPushDebugGroup(const char* name) override final;
+        virtual void onPopDebugGroup() override final;
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         virtual void onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset) override final;
         virtual void onEndCommandBuffer() override final;

@@ -103,6 +103,17 @@ namespace vkm
         inline const std::string& getDebugName() const { return _debugName; }
 
         /*
+        * @brief Open/close a named GPU debug group around the commands recorded until the
+        * matching popDebugGroup(). Used to bracket each render subgraph so a GPU capture shows
+        * named, collapsible scopes (e.g. "TrianglePass", "EngineImGuiOverlay"). Both are no-ops
+        * unless VkmDriverBase::getLaunchOptions().enableGpuCapture is set -- gating both on the
+        * same flag keeps push/pop balanced. The native call is delegated to onPushDebugGroup()/
+        * onPopDebugGroup() in each backend.
+        */
+        void pushDebugGroup(const char* name);
+        void popDebugGroup();
+
+        /*
         * @brief Every pipeline bound via bindPipeline() since the last beginCommandBuffer(),
         * in bind order. Read by VkmRenderGraphCapture to attribute pipelines to subgraphs
         * (it snapshots the size before a subgraph's commit() and takes the delta after).
@@ -121,6 +132,8 @@ namespace vkm
         virtual void onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) = 0;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) = 0;
         virtual void onSetDebugName(const char* name) = 0;
+        virtual void onPushDebugGroup(const char* name) = 0;
+        virtual void onPopDebugGroup() = 0;
 
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         virtual void onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset) = 0;

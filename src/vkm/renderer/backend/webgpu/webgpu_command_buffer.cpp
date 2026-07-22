@@ -197,6 +197,18 @@ namespace vkm
         wgpuCommandEncoderSetLabel(_encoder, toWGPUStringView(name));
     }
 
+    void VkmCommandBufferWebGPU::onPushDebugGroup(const char* name)
+    {
+        // Command-encoder scope fully contains each subgraph's render pass (the wrap site is
+        // outside the pass), satisfying WebGPU's debug-group nesting rules.
+        wgpuCommandEncoderPushDebugGroup(_encoder, toWGPUStringView(name));
+    }
+
+    void VkmCommandBufferWebGPU::onPopDebugGroup()
+    {
+        wgpuCommandEncoderPopDebugGroup(_encoder);
+    }
+
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
     void VkmCommandBufferWebGPU::onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset)
     {
