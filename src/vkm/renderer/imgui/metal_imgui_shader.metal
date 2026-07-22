@@ -11,7 +11,11 @@ using namespace metal;
 
 struct Uniforms { float4x4 projectionMatrix; };
 
-struct VertexIn { float2 position; float2 texCoord; uchar4 color; };
+// packed_float2 keeps this struct at 20 bytes (8 + 8 + 4) to match ImGui's ImDrawVert stride.
+// A plain float2 forces 8-byte alignment, padding the struct to 24 bytes, which would make the
+// vertex-pulling index (vertices[vertexID]) read every vertex after the first from the wrong
+// offset -- corrupting positions and colors (the UI renders garbled / all-white).
+struct VertexIn { packed_float2 position; packed_float2 texCoord; uchar4 color; };
 
 struct VertexOut
 {

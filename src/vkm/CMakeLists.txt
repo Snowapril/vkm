@@ -252,6 +252,11 @@ if (VKM_USE_METAL_API)
         set_source_files_properties(
             ${SRC_DIR}/vkm/renderer/imgui/metal_imgui_renderer.mm
             PROPERTIES OBJECT_DEPENDS ${_imgui_embed_hdr})
+        # OBJECT_DEPENDS alone does not reliably re-run the metallib/header custom commands on an
+        # incremental `--target triangle` build (the chain is only checked when vkmcore's own
+        # objects are rebuilt). Bind the header to a custom target that vkmcore depends on so the
+        # .metal -> metallib -> header chain is always checked whenever vkmcore is built.
+        add_custom_target(vkm_imgui_metal_shader DEPENDS ${_imgui_embed_hdr})
         set(VKM_IMGUI_METAL_GEN_DIR ${_imgui_gen_dir})
     endif()
 endif()
@@ -320,6 +325,12 @@ set_source_files_properties(${LIBRARY_DIR}/offsetAllocator/offsetAllocator.cpp P
 
 # Build library
 add_library(${target} ${SRCS} ${BACKWARD_ENABLE})
+
+# Ensure the ImGui metallib/header are regenerated (from metal_imgui_shader.metal) before vkmcore
+# builds, on incremental builds too -- see the vkm_imgui_metal_shader target above.
+if (TARGET vkm_imgui_metal_shader)
+    add_dependencies(${target} vkm_imgui_metal_shader)
+endif()
 
 if (NOT EMSCRIPTEN)
     # backward-cpp has no Emscripten/WASM stack-trace backend.
