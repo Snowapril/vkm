@@ -54,6 +54,12 @@ namespace vkm
             return result;
         }
 
+        // Decide the swapchain color format now (after the device is valid) so it is known
+        // before any pipeline state is created -- pipelines loaded during postDriverReady
+        // resolve a "swapchain" color format against this, and addSwapChain later creates the
+        // swapchain with the same format.
+        _swapChainColorFormat = selectSwapChainColorFormat(_launchOptions.enableHdr);
+
         if (_renderResourcePool->initialize() == false)
         {
             return VkmInitResult{VkmInitResultCode::Failed, "Failed to initialize render resource pool"};
@@ -406,8 +412,28 @@ namespace vkm
 
     VkmPipelineStateBase* VkmDriverBase::newPipelineState(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError)
     {
+        // Resolve any "swapchain" color format sentinel to the concrete swapchain format before
+        // the backend consumes it -- the format converters (getMTLPixelFormat/toVkFormat/...)
+        // must never see VkmFormat::Swapchain.
+        VkmPipelineStateDescriptor resolvedDesc = desc;
+        for (VkmColorBlendAttachmentState& attachment : resolvedDesc.colorAttachments)
+        {
+            if (attachment.format == VkmFormat::Swapchain)
+            {
+                if (_swapChainColorFormat == VkmFormat::Undefined || _swapChainColorFormat == VkmFormat::Swapchain)
+                {
+                    if (outError != nullptr)
+                    {
+                        *outError = "Pipeline requests \"swapchain\" color format but no swapchain color format has been resolved";
+                    }
+                    return nullptr;
+                }
+                attachment.format = _swapChainColorFormat;
+            }
+        }
+
         VkmPipelineStateBase* pipelineState = newPipelineStateInner();
-        if (pipelineState->initialize(desc, shaderCacheDir, outError) == false)
+        if (pipelineState->initialize(resolvedDesc, shaderCacheDir, outError) == false)
         {
             VKM_DEBUG_ERROR("Failed to initialize pipeline state");
             delete pipelineState;

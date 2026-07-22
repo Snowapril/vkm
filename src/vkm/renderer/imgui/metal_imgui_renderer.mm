@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
 #include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
+#include <vkm/renderer/backend/metal/metal_util.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
@@ -340,7 +341,9 @@ namespace vkm
 
     bool VkmImGuiRendererMetal::initializeInner(void* windowHandle, VkmFormat backBufferFormat)
     {
-        (void)backBufferFormat; // MTLPixelFormatRGBA16Float always, matches application.mm's CAMetalLayer setup
+        // The overlay renders into the swapchain backbuffer, so its pipeline's color format must
+        // match the engine-chosen swapchain format (backBufferFormat), not a hardcoded one.
+        const MTLPixelFormat backBufferPixelFormat = getMTLPixelFormat(backBufferFormat);
 
         VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
         _impl->device = driverMetal->getMTLDevice();
@@ -388,7 +391,7 @@ namespace vkm
         pipelineDesc.fragmentFunctionDescriptor = fragmentFuncDesc;
         pipelineDesc.rasterSampleCount = 1;
         pipelineDesc.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
-        pipelineDesc.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+        pipelineDesc.colorAttachments[0].pixelFormat = backBufferPixelFormat;
         pipelineDesc.colorAttachments[0].blendingState = MTL4BlendStateEnabled;
         pipelineDesc.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
         pipelineDesc.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;

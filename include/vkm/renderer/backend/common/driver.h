@@ -199,6 +199,15 @@ namespace vkm
         */
         inline bool isDebugNamingEnabled() const { return _debugNamingEnabled; }
 
+        /*
+        * @brief The color format the swapchain is (or will be) created with, decided once at
+        * initialize() from the platform's non-HDR/HDR table and the display's HDR capability
+        * (see selectSwapChainColorFormat). Known before any swapchain object exists, so it is
+        * the single source of truth used both to create the swapchain and to resolve a
+        * pipeline's "swapchain" color format (newPipelineState).
+        */
+        inline VkmFormat getSwapChainColorFormat() const { return _swapChainColorFormat; }
+
 #if defined(VKM_GPU_CAPTURE)
         /*
         * @brief Frame-boundary hooks called by VkmEngine::loopInner() on the render thread,
@@ -274,6 +283,13 @@ namespace vkm
         virtual VkmPipelineStateBase* newPipelineStateInner() = 0;
         virtual VkmRenderResourcePool* newRenderResourcePoolInner() = 0;
 
+        /*
+        * @brief Choose the swapchain color format for this platform. `enableHdr` is the launch
+        * request; a backend returns an HDR format only if it also confirms the display supports
+        * it, otherwise the non-HDR format. Called once from initialize() after initializeInner().
+        */
+        virtual VkmFormat selectSwapChainColorFormat(bool enableHdr) const = 0;
+
     protected:
         std::array<std::vector<VkmCommandQueueBase*>, (uint8_t)VkmCommandQueueType::Count> _commandQueues;
         VkmDriverCapabilityFlags _driverCapabilityFlags;
@@ -285,6 +301,7 @@ namespace vkm
         std::unique_ptr<VkmGpuCrashHandler> _gpuCrashHandler;
         VkmEngineLaunchOptions _launchOptions{};
         bool _debugNamingEnabled{false};
+        VkmFormat _swapChainColorFormat{VkmFormat::Undefined};
         bool _gpuCrashDumpEnabled{false};
     };
 }

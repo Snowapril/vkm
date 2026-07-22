@@ -87,6 +87,10 @@ namespace vkm
         D32_SFLOAT_S8_UINT = 11,
         BGRA8_UNORM = 12,
         BGRA8_SRGB = 13,
+        // Sentinel: a pipeline color attachment that adopts the swapchain's color format.
+        // Resolved to a concrete format in VkmDriverBase::newPipelineState() before any backend
+        // consumes it -- never reaches the getMTLPixelFormat/toVkFormat/toWGPUTextureFormat converters.
+        Swapchain = 14,
     };
 
     inline bool hasDepth(const VkmFormat format)

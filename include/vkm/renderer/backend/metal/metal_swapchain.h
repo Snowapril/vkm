@@ -19,10 +19,9 @@ namespace vkm
 
         virtual void setDebugName(const char* name) override final;
 
-        // Matches the CAMetalLayer.pixelFormat set up in platform/apple/application.mm
-        // (MTLPixelFormatRGBA16Float), independent of the approximate VkmFormat stored on the
-        // per-backbuffer VkmTextureMetal (which mirrors Vulkan/WebGPU's more limited format enum).
-        inline VkmFormat getBackBufferFormat() const { return VkmFormat::R16G16B16A16_SFLOAT; }
+        // The engine-chosen swapchain color format (see VkmDriverBase::getSwapChainColorFormat),
+        // which is also what the CAMetalLayer and the per-backbuffer VkmTextureMetal are created with.
+        VkmFormat getBackBufferFormat() const;
 
     protected:
         virtual bool createSwapChain(void* windowHandle) override final;
