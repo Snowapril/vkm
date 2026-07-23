@@ -60,7 +60,8 @@ namespace vkm
         class VkmApplicationImpl* _impl;
         id<MTLDevice> _mtlDevice;
 #elif defined(VKM_USE_VULKAN_API)
-        VkmWindow _window;
+        VkmWindow _window;       // main scene window
+        VkmWindow _imguiWindow;  // dedicated ImGui window
         const char* _appName;
 #endif
         VkmEngine _engine;

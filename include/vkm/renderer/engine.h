@@ -8,6 +8,7 @@
 #include <vkm/platform/common/window.h>
 #include <vkm/renderer/backend/common/render_graph.h>
 #include <memory>
+#include <vector>
 
 namespace vkm
 {
@@ -21,6 +22,21 @@ namespace vkm
     class VkmRenderGraphInspector;
 #endif
     struct VkmInitResult;
+
+    /*
+    * @brief One window owned by the engine: its swapchain, native handle, and per-frame-slot
+    * render graphs. Each window is driven independently in VkmEngine::render() -- own acquire,
+    * own submit carrying its own presentSwapChain, own present -- which is what keeps the
+    * backend's "exactly one presentSwapChain per submit" invariant intact with N windows.
+    */
+    struct VkmWindowContext
+    {
+        VkmSwapChainBase* _swapChain = nullptr;
+        void* _windowHandle = nullptr; // native handle (GLFWwindow* / CAMetalLayer*)
+        VkmFormat _backBufferFormat = VkmFormat::Undefined;
+        bool _isImGuiWindow = false; // the single window ImGui is bound to and drawn on
+        std::array<std::unique_ptr<VkmRenderGraph>, FRAME_COUNT> _frameRenderGraphs;
+    };
 
     struct VkmEngineLaunchOptions
     {
@@ -74,10 +90,13 @@ namespace vkm
         void destroy();
 
         /*
-        * @brief Add swapchain to engine
+        * @brief Add a window (with its own swapchain) to the engine. Returns the window index
+        * used to identify it later (e.g. in AppDelegate::render). When isImGuiWindow is true,
+        * the engine's single ImGui renderer is bound to this window and the ImGui overlay is
+        * drawn here; exactly one window should be created with isImGuiWindow = true.
         */
-        void addSwapChain(const VkmWindowInfo& windowInfo);
-        
+        uint32_t addSwapChain(const VkmWindowInfo& windowInfo, bool isImGuiWindow = false);
+
     private:
         /*
          
@@ -88,7 +107,6 @@ namespace vkm
 
          */
         void render(const double deltaTime);
-        void prepareRender();
 
 #if defined(VKM_ENABLE_IMGUI)
         /*
@@ -102,9 +120,22 @@ namespace vkm
         
     public:
         /*
-         * @brief returns engine's main swapchain created
+         * @brief returns the swapchain for the given window index (added via addSwapChain)
          */
-        inline VkmSwapChainBase* getMainSwapChain() { return _mainSwapChain; }
+        inline VkmSwapChainBase* getSwapChain(uint32_t windowIndex)
+        {
+            return (windowIndex < _windowContexts.size()) ? _windowContexts[windowIndex]._swapChain : nullptr;
+        }
+
+        /*
+         * @brief returns engine's main (first) swapchain, or nullptr if none added yet
+         */
+        inline VkmSwapChainBase* getMainSwapChain() { return getSwapChain(0); }
+
+        /*
+         * @brief number of windows currently owned by the engine
+         */
+        inline uint32_t getWindowCount() const { return static_cast<uint32_t>(_windowContexts.size()); }
 
         /*
         * @brief returns engine's launch options
@@ -160,7 +191,10 @@ namespace vkm
 
         VkmInputHandler _inputHandler;
 
-        VkmSwapChainBase* _mainSwapChain {nullptr}; // main swapchain. engine should have multiple swapchains but at now, only one swapchain is supported.
+        // One entry per window; each owns its swapchain and per-frame-slot render graphs.
+        std::vector<VkmWindowContext> _windowContexts;
+        // Index into _windowContexts of the ImGui-bound window, or INVALID_VALUE32 if none.
+        uint32_t _imGuiWindowIndex {INVALID_VALUE32};
 
         std::unique_ptr<VkmPipelineStateManager> _pipelineStateManager;
 
@@ -172,8 +206,7 @@ namespace vkm
         std::unique_ptr<AppDelegate> _appDelegate;
         VkmEngineLaunchOptions _engineOptions {};
 
-        std::array<std::unique_ptr<VkmRenderGraph>, FRAME_COUNT> _frameRenderGraphs;
-        uint32_t _currentFrameIndex {0}; // current frame index for render graph
+        uint32_t _currentFrameIndex {0}; // current frame slot, shared across all windows
 
         std::unique_ptr<VkmRenderGraphCapture> _renderGraphCapture;
 

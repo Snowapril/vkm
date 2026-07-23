@@ -91,8 +91,11 @@ namespace vkm
         }
         else
         {
+            // A browser tab cannot host a second OS window, so ImGui shares the single window:
+            // marking it the ImGui window makes the engine draw the ImGui overlay on top of the
+            // app scene in the same swapchain (see VkmEngine::render single-window path).
             VkmWindowInfo windowInfo = { 1280, 720, appDelegate->getAppName(), _window.getHandle() };
-            _engine.addSwapChain(windowInfo);
+            _engine.addSwapChain(windowInfo, /*isImGuiWindow=*/true);
         }
 
         installGlfwInputCallbacks(_window.getHandle(), &_engine);

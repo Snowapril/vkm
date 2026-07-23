@@ -120,6 +120,15 @@ namespace vkm
 
         glfwCreateWindowSurface(instance, glfwWindow, nullptr, reinterpret_cast<VkSurfaceKHR*>(&_surface));
 
+        // With multiple windows each surface is created independently; verify the graphics
+        // family (used as the present queue) can actually present to this surface instead of
+        // assuming it, so an unsupported configuration fails here rather than as a validation
+        // error at vkQueuePresentKHR.
+        const uint32_t graphicsFamily = driverVulkan->getQueueFamilyIndex(VkmCommandQueueType::Graphics);
+        VkBool32 presentSupported = VK_FALSE;
+        vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, graphicsFamily, _surface, &presentSupported);
+        VKM_ASSERT(presentSupported == VK_TRUE, "Graphics queue family cannot present to this window surface");
+
         // Query the physical device's capabilities for the given surface.
         const VkPhysicalDeviceSurfaceInfo2KHR surfaceInfo2{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR, .surface = _surface};
         VkSurfaceCapabilities2KHR             capabilities2{.sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR};

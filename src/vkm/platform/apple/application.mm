@@ -60,6 +60,10 @@ static void* renderWorker( void* _Nullable obj )
     CAMetalDisplayLink*             _metalDisplayLink;
     vkm::VkmEngine*                 _engine;
     vkm::VkmSwapChainMetal*         _swapChain;
+    // Secondary ImGui window. It has no display link of its own -- the main link's callback
+    // pulls a drawable for it each frame so both swapchains stay on the same frame cadence.
+    CAMetalLayer*                   _imguiMetalLayer;
+    vkm::VkmSwapChainMetal*         _imguiSwapChain;
 }
 
 - (nonnull instancetype)initWithMetalLayer:(nonnull CAMetalLayer *)metalLayer uiCanvasSize:(NSUInteger)uiCanvasSize
@@ -127,8 +131,16 @@ static void* renderWorker( void* _Nullable obj )
 #endif // TARGET_OS_IOS
     
     id<CAMetalDrawable> drawable = update.drawable;
-    
+
     _swapChain->overrideCurrentDrawable(drawable);
+
+    // Feed the secondary ImGui window a drawable for this frame. nextDrawable may briefly block
+    // on the drawable pool; if it returns nil the engine skips that window's render this frame.
+    if (_imguiSwapChain != nullptr && _imguiMetalLayer != nil)
+    {
+        id<CAMetalDrawable> imguiDrawable = [_imguiMetalLayer nextDrawable];
+        _imguiSwapChain->overrideCurrentDrawable(imguiDrawable);
+    }
 
     _engine->loopInner(CACurrentMediaTime());
 
@@ -149,6 +161,16 @@ static void* renderWorker( void* _Nullable obj )
 - (void)setSwapChain:(nonnull vkm::VkmSwapChainMetal*)swapChain
 {
     _swapChain = swapChain;
+}
+
+- (void)setImGuiSwapChain:(nonnull vkm::VkmSwapChainMetal*)swapChain
+{
+    _imguiSwapChain = swapChain;
+}
+
+- (void)setImGuiMetalLayer:(nonnull CAMetalLayer*)metalLayer
+{
+    _imguiMetalLayer = metalLayer;
 }
 @end
 
@@ -452,6 +474,10 @@ namespace
     vkm::VkmEngine*                 _engine;
     RendererCoordinatorController*  _rendererCoordinator;
     const char*                    _appName;
+    // Dedicated ImGui window (plain NSWindow) with its own Metal layer + swapchain.
+    NSWindow*                       _imguiWindow;
+    NSView*                         _imguiView;
+    CAMetalLayer*                   _imguiMetalLayer;
 }
 
 - (BOOL) applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender
@@ -523,7 +549,59 @@ namespace
     windowInfo._width = _metalLayer.drawableSize.width;
     windowInfo._height = _metalLayer.drawableSize.height;
     windowInfo._windowHandle = _metalLayer;
-    _engine->addSwapChain(windowInfo);
+    _engine->addSwapChain(windowInfo, /*isImGuiWindow=*/false);
+}
+
+// Create the dedicated ImGui window (a plain NSWindow; it need not receive the ESC handler).
+- (void)createImGuiWindow
+{
+    NSWindowStyleMask mask = NSWindowStyleMaskClosable | NSWindowStyleMaskTitled | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
+    NSScreen* screen = [NSScreen mainScreen];
+    NSRect contentRect = NSMakeRect(0, 0, 960, 640);
+    contentRect.origin.x = (screen.frame.size.width / 2) - (contentRect.size.width / 2) + 700;
+    contentRect.origin.y = (screen.frame.size.height / 2) - (contentRect.size.height / 2);
+    _imguiWindow = [[NSWindow alloc] initWithContentRect:contentRect
+                                               styleMask:mask
+                                                 backing:NSBackingStoreBuffered
+                                                   defer:NO
+                                                  screen:screen];
+    _imguiWindow.releasedWhenClosed = NO;
+    _imguiWindow.title = @"ImGui";
+}
+
+// Create the ImGui window's Metal layer + swapchain. Its pixel format must match the ImGui
+// Metal pipeline (RGBA16Float), same as the main layer.
+- (void)createImGuiView
+{
+    NSAssert(_imguiWindow, @"You need to create the ImGui window before its view");
+
+    _imguiMetalLayer = [[CAMetalLayer alloc] init];
+    _imguiMetalLayer.device = _mtlDevice;
+    _imguiMetalLayer.drawableSize = NSMakeSize(960, 640);
+    _imguiMetalLayer.opaque = YES;
+    _imguiMetalLayer.framebufferOnly = YES;
+    _imguiMetalLayer.contentsGravity = kCAGravityResizeAspect;
+    _imguiMetalLayer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
+    _imguiMetalLayer.pixelFormat = MTLPixelFormatRGBA16Float;
+    _imguiMetalLayer.wantsExtendedDynamicRangeContent = YES;
+    _imguiMetalLayer.colorspace = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearDisplayP3);
+
+    _imguiView = [[NSView alloc] initWithFrame:_imguiWindow.contentLayoutRect];
+    _imguiView.layer = _imguiMetalLayer;
+    _imguiWindow.contentView = _imguiView;
+
+    vkm::VkmWindowInfo imguiWindowInfo;
+    imguiWindowInfo._width = _imguiMetalLayer.drawableSize.width;
+    imguiWindowInfo._height = _imguiMetalLayer.drawableSize.height;
+    imguiWindowInfo._windowHandle = _imguiMetalLayer;
+    _engine->addSwapChain(imguiWindowInfo, /*isImGuiWindow=*/true);
+}
+
+- (void)showImGuiWindow
+{
+    // orderFront (not makeKey) so the main scene window keeps keyboard focus / ESC handling.
+    [_imguiWindow setIsVisible:YES];
+    [_imguiWindow orderFront:nil];
 }
 
 - (void)createGame
@@ -538,7 +616,9 @@ namespace
                                                                 uiCanvasSize:uiCanvasSize];
     
     [_rendererCoordinator setEngine: _engine];
-    [_rendererCoordinator setSwapChain: (vkm::VkmSwapChainMetal*)_engine->getMainSwapChain()];
+    [_rendererCoordinator setSwapChain: (vkm::VkmSwapChainMetal*)_engine->getSwapChain(0)];
+    [_rendererCoordinator setImGuiSwapChain: (vkm::VkmSwapChainMetal*)_engine->getSwapChain(1)];
+    [_rendererCoordinator setImGuiMetalLayer: _imguiMetalLayer];
 }
 
 - (void)evaluateCommandLine
@@ -556,7 +636,10 @@ namespace
 {
     [self createWindow];
     [self createView];
+    [self createImGuiWindow];
+    [self createImGuiView];
     [self createGame];
+    [self showImGuiWindow];
     [self showWindow];
     [self evaluateCommandLine];
     // [self updateMaxEDRValue];
@@ -791,14 +874,33 @@ namespace vkm
         else
         {
             VkmWindowInfo windowInfo = { 1280, 720, _appName, _window.getHandle() };
-            _engine.addSwapChain(windowInfo);
+            _engine.addSwapChain(windowInfo, /*isImGuiWindow=*/false);
+        }
+
+        // Dedicated ImGui window with its own swapchain. ImGui installs its own GLFW input
+        // callbacks on this window during addSwapChain(..., true).
+        if ( _imguiWindow.create( 960, 640, "ImGui" ) == false )
+        {
+            VKM_DEBUG_ERROR("Failed to initialize ImGui window");
+            return -1;
+        }
+        else
+        {
+            VkmWindowInfo imguiWindowInfo = { 960, 640, "ImGui", _imguiWindow.getHandle() };
+            _engine.addSwapChain(imguiWindowInfo, /*isImGuiWindow=*/true);
         }
 
         installGlfwInputCallbacks(_window.getHandle(), &_engine);
 
+        // The app quits when the main window closes; closing the ImGui window is vetoed so its
+        // swapchain need not be torn down mid-run.
         while (_window.shouldClose() == false && _engine.shouldExit() == false)
         {
-            _window.update();
+            glfwPollEvents(); // services every window; call once per frame
+            if (_imguiWindow.shouldClose())
+            {
+                glfwSetWindowShouldClose(_imguiWindow.getHandle(), GLFW_FALSE);
+            }
             _engine.loopInner(glfwGetTime());
         }
 

@@ -69,7 +69,8 @@ namespace vkm
 
     private:
         VkmEngine _engine;
-        VkmWindow _window;
+        VkmWindow _window;       // main scene window
+        VkmWindow _imguiWindow;  // dedicated ImGui window
 
         const char* _appName;
     };

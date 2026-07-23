@@ -129,8 +129,9 @@ public:
 #endif
     }
 
-    virtual void render(VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) override final
+    virtual void render(uint32_t windowIndex, VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) override final
     {
+        (void)windowIndex;
         VKM_DEBUG_LOG("TriangleApplication::render");
 
         VkmFrameBufferDescriptor frameBufferDesc;

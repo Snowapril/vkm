@@ -81,14 +81,33 @@ namespace vkm
         else
         {
             VkmWindowInfo windowInfo = { 1280, 720, _appName, _window.getHandle() };
-            _engine.addSwapChain(windowInfo);
+            _engine.addSwapChain(windowInfo, /*isImGuiWindow=*/false);
+        }
+
+        // Dedicated ImGui window with its own swapchain. ImGui installs its own GLFW input
+        // callbacks on this window during addSwapChain(..., true).
+        if ( _imguiWindow.create( 960, 640, "ImGui" ) == false )
+        {
+            VKM_DEBUG_ERROR("Failed to initialize ImGui window");
+            return -1;
+        }
+        else
+        {
+            VkmWindowInfo imguiWindowInfo = { 960, 640, "ImGui", _imguiWindow.getHandle() };
+            _engine.addSwapChain(imguiWindowInfo, /*isImGuiWindow=*/true);
         }
 
         installGlfwInputCallbacks(_window.getHandle(), &_engine);
 
+        // The app quits when the main window closes; closing the ImGui window is vetoed so its
+        // swapchain need not be torn down mid-run.
         while (_window.shouldClose() == false && _engine.shouldExit() == false)
         {
-            _window.update();
+            glfwPollEvents(); // services every window; call once per frame
+            if (_imguiWindow.shouldClose())
+            {
+                glfwSetWindowShouldClose(_imguiWindow.getHandle(), GLFW_FALSE);
+            }
             _engine.loopInner(glfwGetTime());
         }
 
