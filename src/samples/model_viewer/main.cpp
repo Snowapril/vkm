@@ -15,6 +15,7 @@
 #include <vkm/platform/common/input_handler.h>
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
+#include <vkm/renderer/backend/common/command_queue.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
@@ -38,12 +39,15 @@
 #endif // defined(VKM_PLATFORM_WINDOWS)
 
 #include <algorithm>
+#include <filesystem>
 #include <string>
+#include <vector>
 
 using namespace vkm;
 
-// Which glTF to open: ./model_viewer --gv_model_path=/path/to/scene.gltf
-// Defaults to the asset scripts/download_scenes.py drops into resources/Scenes/.
+// Which glTF to open at startup: ./model_viewer --gv_model_path=/path/to/scene.gltf
+// Defaults to the asset scripts/download_scenes.py drops into resources/Scenes/; when that
+// file is absent the viewer starts empty and the scene browser lists whatever else is there.
 VKM_GLOBAL_VARIABLE(std::string, gv_model_path,
                     std::string(RESOURCES_DIR) + "Scenes/DamagedHelmet/DamagedHelmet.gltf");
 
@@ -66,6 +70,50 @@ namespace
     constexpr VkmFormat kDepthFormat = VkmFormat::D32_SFLOAT;
     constexpr glm::vec3 kWorldLightDirection{ 0.4f, 0.8f, 0.45f }; // towards the light
     constexpr glm::vec4 kFallbackBaseColor{ 0.8f, 0.8f, 0.8f, 1.0f };
+
+    // One loadable file found under resources/Scenes/.
+    struct SceneEntry
+    {
+        std::string _displayName; // path relative to the scenes directory
+        std::string _path;
+    };
+
+    // Walks resources/Scenes/ for glTF files. Scenes are one directory per asset (that is
+    // how scripts/download_scenes.py lays them out), so the search has to be recursive.
+    std::vector<SceneEntry> scanSceneDirectory()
+    {
+        const std::filesystem::path scenesDirectory = std::filesystem::path(RESOURCES_DIR) / "Scenes";
+
+        std::vector<SceneEntry> entries;
+        std::error_code ec;
+        if (!std::filesystem::is_directory(scenesDirectory, ec))
+        {
+            return entries;
+        }
+
+        for (const std::filesystem::directory_entry& entry :
+             std::filesystem::recursive_directory_iterator(scenesDirectory, ec))
+        {
+            if (!entry.is_regular_file())
+            {
+                continue;
+            }
+            const std::filesystem::path extension = entry.path().extension();
+            if (extension != ".gltf" && extension != ".glb")
+            {
+                continue;
+            }
+            entries.push_back(SceneEntry{
+                std::filesystem::relative(entry.path(), scenesDirectory, ec).generic_string(),
+                entry.path().string(),
+            });
+        }
+
+        std::sort(entries.begin(), entries.end(), [](const SceneEntry& lhs, const SceneEntry& rhs) {
+            return lhs._displayName < rhs._displayName;
+        });
+        return entries;
+    }
 
     // Orbit camera: left-drag rotates, scroll dollies in/out.
     class OrbitCamera
@@ -144,29 +192,19 @@ public:
         _pso = manager->getPipelineState("model_viewer_pso[default]", VkmPipelineStateOrigin::User);
         VKM_ASSERT(_pso != nullptr, "Failed to create model_viewer_pso[default]");
 
-        const std::string modelPath = gv_model_path.get();
-        std::string importError;
-        if (!importGltfModel(modelPath, &_model, &importError))
-        {
-            VKM_DEBUG_ERROR(("Failed to import the model: " + importError).c_str());
-            VKM_DEBUG_ERROR("Run scripts/download_scenes.py, or pass --gv_model_path=<file.gltf|.glb>");
-            return;
-        }
-        VKM_DEBUG_LOG(("Imported '" + modelPath + "': " +
-                       std::to_string(_model._meshes.size()) + " meshes, " +
-                       std::to_string(_model.getTotalVertexCount()) + " vertices").c_str());
+        _sceneEntries = scanSceneDirectory();
 
-        VkmDriverBase* driver = engine->getDriver();
-        std::string uploadError;
-        if (!_modelGpu.upload(driver, _model, &uploadError))
+        const std::string startupPath = gv_model_path.get();
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(startupPath, ec))
         {
-            VKM_DEBUG_ERROR(("Failed to upload the model: " + uploadError).c_str());
-            return;
+            loadScene(startupPath);
         }
-
-        _drawList = _model.buildDrawList();
-        _camera.frame(_model.computeWorldBounds());
-        _modelReady = true;
+        else
+        {
+            VKM_DEBUG_INFO(("No scene at '" + startupPath +
+                            "'; pick one in the Scene Browser or run scripts/download_scenes.py").c_str());
+        }
     }
 
     virtual void preShutdown() override final
@@ -182,6 +220,19 @@ public:
         (void)deltaTime;
         _camera.update(_engine->getInputHandler());
         updateDepthTexture();
+
+#if defined(VKM_ENABLE_IMGUI)
+        drawSceneBrowser();
+#endif
+
+        // Deferred to here so the swap never happens while the browser window is still
+        // being built (loadScene() invalidates what that code is iterating over).
+        if (!_pendingScenePath.empty())
+        {
+            const std::string path = std::move(_pendingScenePath);
+            _pendingScenePath.clear();
+            loadScene(path);
+        }
     }
 
     virtual void render(uint32_t windowIndex, VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) override final
@@ -276,6 +327,120 @@ public:
     }
 
 private:
+    /*
+    * Replaces whatever is loaded with the glTF at `path`. Synchronous and stalling by
+    * nature -- VkmDriverBase::uploadToBuffer already blocks per buffer -- so the frame that
+    * triggers a load simply takes as long as the load does.
+    */
+    void loadScene(const std::string& path)
+    {
+        VkmDriverBase* driver = _engine->getDriver();
+
+        VkmSceneModel model;
+        std::string error;
+        if (!importGltfModel(path, &model, &error))
+        {
+            _loadError = error;
+            VKM_DEBUG_ERROR(("Failed to import the model: " + error).c_str());
+            return;
+        }
+
+        // The old model's buffers are still referenced by frames in flight, and its bindless
+        // slots would be handed straight back out by the upload below. Draining the queue is
+        // the honest way to make both safe, and this path is already a stall.
+        driver->getCommandQueue(VkmCommandQueueType::Graphics, 0)->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
+        _modelReady = false;
+        _drawList.clear();
+        _modelGpu.destroy(driver);
+
+        if (!_modelGpu.upload(driver, model, &error))
+        {
+            _loadError = error;
+            VKM_DEBUG_ERROR(("Failed to upload the model: " + error).c_str());
+            // Unlike a failed import, this already tore the previous scene down.
+            _model = VkmSceneModel{};
+            _currentScenePath.clear();
+            return;
+        }
+
+        _model = std::move(model);
+        _drawList = _model.buildDrawList();
+        _camera.frame(_model.computeWorldBounds());
+        _currentScenePath = path;
+        _loadError.clear();
+        _modelReady = true;
+
+        VKM_DEBUG_LOG(("Imported '" + path + "': " +
+                       std::to_string(_model._meshes.size()) + " meshes, " +
+                       std::to_string(_model.getTotalVertexCount()) + " vertices").c_str());
+    }
+
+#if defined(VKM_ENABLE_IMGUI)
+    void drawSceneBrowser()
+    {
+        if (!ImGui::Begin("Scene Browser"))
+        {
+            ImGui::End();
+            return;
+        }
+
+        if (ImGui::Button("Rescan"))
+        {
+            _sceneEntries = scanSceneDirectory();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("%zu scene(s) under resources/Scenes", _sceneEntries.size());
+
+        if (_sceneEntries.empty())
+        {
+            ImGui::TextWrapped("Nothing to load. Run 'python3 scripts/download_scenes.py' to fetch "
+                               "the sample scenes, then press Rescan.");
+        }
+
+        if (ImGui::BeginListBox("##scenes", ImVec2(-FLT_MIN, 8 * ImGui::GetTextLineHeightWithSpacing())))
+        {
+            for (const SceneEntry& entry : _sceneEntries)
+            {
+                const bool selected = (entry._path == _currentScenePath);
+                if (ImGui::Selectable(entry._displayName.c_str(), selected) && !selected)
+                {
+                    _pendingScenePath = entry._path;
+                }
+                if (selected)
+                {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndListBox();
+        }
+
+        ImGui::Separator();
+        if (_modelReady)
+        {
+            ImGui::Text("Loaded: %s", _currentScenePath.c_str());
+            ImGui::Text("%zu meshes, %llu vertices, %zu draws",
+                        _model._meshes.size(),
+                        static_cast<unsigned long long>(_model.getTotalVertexCount()),
+                        _drawList.size());
+            if (ImGui::Button("Reframe camera"))
+            {
+                _camera.frame(_model.computeWorldBounds());
+            }
+        }
+        else
+        {
+            ImGui::TextDisabled("No scene loaded");
+        }
+
+        if (!_loadError.empty())
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", _loadError.c_str());
+        }
+
+        ImGui::End();
+    }
+#endif // VKM_ENABLE_IMGUI
+
     // The depth buffer must always match the swapchain, which the window can resize under us.
     void updateDepthTexture()
     {
@@ -325,6 +490,10 @@ private:
     VkmSceneModelGpu _modelGpu;
     std::vector<VkmSceneModel::DrawItem> _drawList;
     OrbitCamera _camera;
+    std::vector<SceneEntry> _sceneEntries;
+    std::string _currentScenePath;
+    std::string _pendingScenePath; // set by the browser, consumed at the end of update()
+    std::string _loadError;
     bool _modelReady{false};
     VkmResourceHandle _depthTexture{VKM_INVALID_RESOURCE_HANDLE};
     glm::uvec2 _depthExtent{0, 0};
