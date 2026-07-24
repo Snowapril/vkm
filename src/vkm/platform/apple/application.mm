@@ -465,6 +465,39 @@ namespace
 }
 @end
 
+// An unbundled executable has no main menu of its own, so the menu bar stays empty once the app
+// registers as a regular UI app and Cmd+Q/Cmd+H do nothing. Build a minimal app menu (GLFW does the
+// same for its unbundled windows; see dependencies/src/glfw/src/cocoa_init.m). Must be installed
+// between +sharedApplication and -finishLaunching.
+static void createMenuBar(const char* appName)
+{
+    NSString* name = [NSString stringWithUTF8String:appName];
+
+    NSMenu* menuBar = [[NSMenu alloc] init];
+    NSMenuItem* appMenuItem = [menuBar addItemWithTitle:@"" action:NULL keyEquivalent:@""];
+    NSMenu* appMenu = [[NSMenu alloc] init];
+    [appMenuItem setSubmenu:appMenu]; // retains appMenu
+
+    [appMenu addItemWithTitle:[NSString stringWithFormat:@"Hide %@", name]
+                       action:@selector(hide:)
+                keyEquivalent:@"h"];
+    [[appMenu addItemWithTitle:@"Hide Others"
+                        action:@selector(hideOtherApplications:)
+                 keyEquivalent:@"h"]
+        setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
+    [appMenu addItemWithTitle:@"Show All"
+                       action:@selector(unhideAllApplications:)
+                keyEquivalent:@""];
+    [appMenu addItem:[NSMenuItem separatorItem]];
+    [appMenu addItemWithTitle:[NSString stringWithFormat:@"Quit %@", name]
+                       action:@selector(terminate:)
+                keyEquivalent:@"q"];
+
+    [NSApp setMainMenu:menuBar]; // retains menuBar
+    [appMenu release];
+    [menuBar release];
+}
+
 @implementation VkmApplicationImpl
 {
     id<MTLDevice>                   _mtlDevice;
@@ -643,6 +676,9 @@ namespace
     [self createGame];
     [self showImGuiWindow];
     [self showWindow];
+    // Launched from a terminal the app starts behind the shell; pull it to the front so the scene
+    // window is key and receives keyboard input without an extra click.
+    [NSApp activate];
     [self evaluateCommandLine];
     // [self updateMaxEDRValue];
 }
@@ -786,6 +822,14 @@ namespace vkm
 
         NSApplication* app = [NSApplication sharedApplication];
         [app setDelegate: (::VkmApplicationImpl*)_impl];
+
+        // The samples are plain executables, not .app bundles, so macOS would otherwise treat the
+        // process as an accessory app: no Dock tile, no menu bar and no Cmd-Tab entry. Registering
+        // the regular activation policy makes it a foreground UI app like the GLFW-backed Vulkan
+        // path already is (dependencies/src/glfw/src/cocoa_init.m).
+        [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+        createMenuBar(appDelegate->getAppName());
+
         return NSApplicationMain(argc, (const char**)argv);
     }
 

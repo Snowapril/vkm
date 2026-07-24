@@ -159,6 +159,22 @@ renders without validation errors. The one `ld: warning: ignoring duplicate libr
 libspirv-cross-core.a` on the vkm-compiler link predates this work — the generated link
 line names it twice both before and after — and is left alone.
 
+## 2026-07-24 — macOS Metal app registers as a foreground UI app
+
+- The samples are plain executables, not `.app` bundles, and the Metal path drives
+  `NSApplication` directly, so macOS registered the process as `type="BackgroundOnly"`
+  (verified with `lsappinfo`): no Dock tile, no menu bar, no Cmd-Tab entry. The Vulkan path
+  gets this for free from GLFW (`dependencies/src/glfw/src/cocoa_init.m:638`).
+- `VkmApplication::entryPoint` now sets `NSApplicationActivationPolicyRegular` and installs a
+  minimal app menu (Hide / Hide Others / Show All / Quit) before `NSApplicationMain`;
+  `applicationDidFinishLaunching` calls `[NSApp activate]` so the window is key on launch.
+- Side effect: as a foreground app the `CAMetalDisplayLink` is no longer throttled (5 s run
+  went from ~940 to ~2670 log lines), which makes the pre-existing shutdown race fire on every
+  exit — teardown never invalidates the display link or stops the detached render thread
+  (`applicationWillTerminate` only nils `_rendererCoordinator`, and the file is non-ARC), so
+  the render thread logs into spdlog after its statics are gone
+  (`[*** LOG ERROR #0001 ***] ... mutex lock failed`). Tracked in `TODO.md`; not fixed here.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:

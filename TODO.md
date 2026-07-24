@@ -31,3 +31,5 @@
 - Render graph capture records swapchain backbuffer outputs as metadata only (`CAMetalLayer.framebufferOnly` stays YES).
 - Render graph capture texture previews in ImGui are Metal-only (`getTextureID` returns 0 on Vulkan/WebGPU).
 - Programmatic .gputrace capture scopes only the Metal Graphics queue 0; Vulkan/WebGPU `requestGpuFrameCapture()` is a no-op (no RenderDoc integration).
+- Metal app teardown never invalidates the `CAMetalDisplayLink` or stops the render thread, so it renders/logs through static destruction (`mutex lock failed` on every exit).
+- macOS samples are unbundled executables, so the Dock tile shows the target name with the generic icon (no `.app` bundle / custom icon / bundle ID).
