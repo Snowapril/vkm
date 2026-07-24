@@ -3,7 +3,10 @@
 #include <vkm/base/global_variable.h>
 #include <vkm/base/common.h>
 
+#include <cerrno>
+#include <charconv>
 #include <cstdint>
+#include <cstdlib>
 #include <new>
 
 namespace vkm
@@ -99,69 +102,63 @@ namespace vkm
         return false;
     }
 
+    // std::from_chars is used instead of std::sto* because it never throws: the WASM build is
+    // compiled with -fno-exceptions, where a std::sto* parse failure (e.g. an empty or
+    // non-numeric value) aborts the process rather than being caught. from_chars reports the
+    // same conditions via its error code and enforces full-string consumption (ptr == last).
     template <>
     bool GlobalVariable<int32_t>::setFromString(const std::string& valueStr)
     {
-        try
-        {
-            size_t consumed = 0;
-            const long parsed = std::stol(valueStr, &consumed);
-            if (consumed != valueStr.size() || parsed < INT32_MIN || parsed > INT32_MAX)
-            {
-                return false;
-            }
-            _value = static_cast<int32_t>(parsed);
-            return true;
-        }
-        catch (const std::exception&)
+        const char* first = valueStr.data();
+        const char* last = first + valueStr.size();
+        int32_t parsed = 0;
+        const std::from_chars_result result = std::from_chars(first, last, parsed);
+        if (result.ec != std::errc() || result.ptr != last)
         {
             return false;
         }
+        _value = parsed;
+        return true;
     }
 
     template <>
     bool GlobalVariable<uint32_t>::setFromString(const std::string& valueStr)
     {
-        // std::stoul silently wraps a leading '-'; reject negatives explicitly.
-        if (valueStr.empty() || valueStr[0] == '-')
+        // from_chars rejects a leading '-' for unsigned types (unlike std::stoul, which wraps it).
+        const char* first = valueStr.data();
+        const char* last = first + valueStr.size();
+        uint32_t parsed = 0;
+        const std::from_chars_result result = std::from_chars(first, last, parsed);
+        if (result.ec != std::errc() || result.ptr != last)
         {
             return false;
         }
-        try
-        {
-            size_t consumed = 0;
-            const unsigned long parsed = std::stoul(valueStr, &consumed);
-            if (consumed != valueStr.size() || parsed > UINT32_MAX)
-            {
-                return false;
-            }
-            _value = static_cast<uint32_t>(parsed);
-            return true;
-        }
-        catch (const std::exception&)
-        {
-            return false;
-        }
+        _value = parsed;
+        return true;
     }
 
     template <>
     bool GlobalVariable<float>::setFromString(const std::string& valueStr)
     {
-        try
-        {
-            size_t consumed = 0;
-            const float parsed = std::stof(valueStr, &consumed);
-            if (consumed != valueStr.size())
-            {
-                return false;
-            }
-            _value = parsed;
-            return true;
-        }
-        catch (const std::exception&)
+        // std::from_chars for floating-point is unavailable in some standard libraries our CI
+        // uses (e.g. GCC 10's libstdc++), so use std::strtof, which likewise never throws --
+        // it reports errors via errno and the end pointer, keeping the -fno-exceptions safety.
+        // An explicit empty check is required because strtof consumes nothing for "" and would
+        // otherwise leave end == first == first + size() and be mistaken for a full parse of 0.
+        if (valueStr.empty())
         {
             return false;
         }
+        const char* first = valueStr.c_str();
+        char* end = nullptr;
+        errno = 0;
+        const float parsed = std::strtof(first, &end);
+        if (errno != 0 || end != first + valueStr.size())
+        {
+            return false;
+        }
+        _value = parsed;
+        return true;
     }
 
     template <>
