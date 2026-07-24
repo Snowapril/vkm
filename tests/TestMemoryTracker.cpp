@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <vkm/base/memory.h>
+#include <vkm/platform/common/process_stats.h>
 
 #include <algorithm>
 #include <cstring>
@@ -117,3 +118,27 @@ TEST_CASE("MemoryTracker - getMimallocStats returns real, self-consistent number
     delete[] buffer;
 }
 #endif
+
+TEST_CASE("getProcessMemoryStats reports the OS's own view of this process") {
+    // Same reasoning as the mimalloc case above: the OS updates these counters on its own
+    // schedule, so this checks that they are real and self-consistent rather than asserting
+    // that one allocation moved them by a given amount.
+    const vkm::VkmProcessMemoryStats stats = vkm::getProcessMemoryStats();
+
+    REQUIRE(stats._valid);
+    CHECK(stats._residentBytes > 0);
+    if (stats._peakResidentBytes > 0)
+    {
+        CHECK(stats._peakResidentBytes >= stats._residentBytes);
+    }
+
+    // The whole point of this API is that it sees memory the engine's own tracker cannot:
+    // the binary, thread stacks and every third-party allocation. So the process figure must
+    // never come out below what the tracker alone accounts for.
+    uint64_t trackedUsableBytes = 0;
+    for (const vkm::TaggedAllocationSummary& tag : vkm::MemoryTracker::singleton().getTaggedAllocations())
+    {
+        trackedUsableBytes += tag.usableBytes;
+    }
+    CHECK(stats._residentBytes >= trackedUsableBytes);
+}

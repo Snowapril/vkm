@@ -296,6 +296,35 @@ namespace vkm
         return buffer;
     }
 
+    VkmGpuMemoryStats VkmDriverMetal::getGpuMemoryStats() const
+    {
+        VkmGpuMemoryStats stats{};
+        if (_mtlDevice == nil)
+        {
+            return stats;
+        }
+
+        stats._deviceAllocatedBytes = static_cast<uint64_t>([_mtlDevice currentAllocatedSize]);
+        stats._deviceBudgetBytes = static_cast<uint64_t>([_mtlDevice recommendedMaxWorkingSetSize]);
+        stats._hasDeviceStats = true;
+
+        // Heap pools are the engine's own suballocator: currentAllocatedSize is what each
+        // block reserved from the device, usedSize what has been placed inside it.
+        for (const auto& pool : _heapPools)
+        {
+            id<MTLHeap> heap = pool->getHeap();
+            if (heap == nil)
+            {
+                continue;
+            }
+            stats._poolReservedBytes += static_cast<uint64_t>([heap currentAllocatedSize]);
+            stats._poolUsedBytes += static_cast<uint64_t>([heap usedSize]);
+            stats._hasPoolStats = true;
+        }
+
+        return stats;
+    }
+
     VkmPipelineStateBase* VkmDriverMetal::newPipelineStateInner()
     {
         return new VkmPipelineStateMetal(this);

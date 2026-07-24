@@ -186,6 +186,26 @@ line names it twice both before and after — and is left alone.
   `TestSceneModelRenderShared.hpp` render an imported mesh offscreen through the
   model_viewer PSO with a depth attachment and assert the material color reached the pixels.
 
+## 2026-07-24 — CPU/GPU memory statistics + ImGui Memory Inspector
+
+- The engine tracked memory but never showed it, and the two "actual" numbers were missing
+  entirely. Added `getProcessMemoryStats()` to `platform/common/process_stats.h` (one
+  implementation per OS, next to the existing CPU-usage ones) and
+  `VkmDriverBase::getGpuMemoryStats()` with Metal (`currentAllocatedSize`,
+  `recommendedMaxWorkingSetSize`, `MTLHeap.usedSize`/`currentAllocatedSize`) and Vulkan
+  (`vmaGetHeapBudgets` over device-local heaps, `vmaCalculateStatistics`' block-vs-allocation
+  split) overrides. WebGPU keeps the base default of "nothing to report".
+- New `renderer/memory_report.{h,cpp}` joins those with `MemoryTracker` and
+  `VkmRenderResourcePool` into one `VkmMemorySnapshot`, plus `logMemoryReport()` and
+  `formatByteSize()`. Deliberately ImGui-free so the shutdown dump and the unit tests share
+  the capture path with the UI.
+- New `renderer/imgui/memory_inspector.{h,cpp}` (F8) shows process/CPU/GPU tracked-vs-actual
+  sections, a top-32 table of CPU tags and a per-category GPU table; `VkmEngine` samples it at
+  2 Hz (the tracker's global mutex is on every allocation's path), the debug overlay reads the
+  same cached sample, and `VkmEngine::destroy()` logs a full report before teardown.
+- `vkmResourceTypeName()` moved into `renderer_common` because the report needed the same
+  mapping the render graph inspector had privately; the inspector now uses the shared one.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:
@@ -222,6 +242,16 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
   two scripts independent" over its own duplicated helpers. Introducing a shared module
   would have reversed a deliberate existing decision, which is well outside the scope of
   a build-time change.
+
+### 2026-07-24 — macOS peak memory comes from the footprint ledger, not getrusage
+- Planned: report the process peak from `getrusage`'s `ru_maxrss` alongside `phys_footprint`
+  as the current figure.
+- Did instead: read `task_vm_info`'s `ledger_phys_footprint_peak` (guarded by the returned
+  `TASK_VM_INFO_REV3_COUNT`), leaving the peak at 0 on kernels too old to fill it.
+- Why: the two are different metrics. A unit test caught the peak (61 MiB from `ru_maxrss`)
+  coming out *below* the current footprint (228 MiB) — `ru_maxrss` counts peak resident pages
+  and excludes compressed and IOKit-mapped memory, which `phys_footprint` includes. Mixing
+  them would have shown a peak lower than the live value in the UI.
 
 ### 2026-07-24 — depth attachments had to be implemented in the Vulkan/WebGPU backends
 - Planned: Phase 1 (geometry import + model_viewer) needed no backend changes; the sample

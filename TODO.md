@@ -37,3 +37,7 @@
 - Sponza-scale scenes exceed the WebGPU bindless mega-buffers (16 MiB vertex / 8 MiB index, no growth), and `model_viewer`'s wasm build preloads no scene at all.
 - The Vulkan/WebGPU depth-attachment paths in `onBeginRenderPass` are exercised only by CI (no Vulkan ICD on the dev machine; WebGPU has no equivalent offscreen test).
 - Metal's render-pass depth attachment hardcodes `MTLLoadActionClear`/`MTLStoreActionStore` instead of honoring `VkmDepthStencilAttachmentDescriptor`'s load/store actions.
+- `VkmDriverBase::getGpuMemoryStats()` reports nothing on WebGPU (no memory-introspection API exists), so the Memory Inspector's GPU "actual" column is blank there.
+- Sampling the Memory Inspector copies the whole tag table under `MemoryTracker`'s global mutex; the 2 Hz throttle hides but does not fix that cost.
+- The engine's shutdown memory report is only reachable through a graceful exit (ESC / window close), so a killed process leaves no report.
+- `getProcessMemoryStats()` reports no peak on wasm (`emscripten_get_heap_size()` has no high-water counterpart) and none on macOS kernels older than `TASK_VM_INFO_REV3`.

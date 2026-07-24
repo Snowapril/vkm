@@ -28,6 +28,10 @@ namespace vkm
         Undefined = Count,
     };
 
+    // Display name for a resource category, shared by the render graph inspector and the
+    // memory report.
+    const char* vkmResourceTypeName(VkmResourceType type);
+
     enum class VkmResourcePoolType : uint8_t
     {
         Default = 0,
@@ -158,6 +162,24 @@ namespace vkm
         uint64_t totalRequestedBytes = 0;
         uint64_t totalAllocatedBytes = 0;
         uint32_t liveCount = 0;
+    };
+
+    /*
+    * @brief What the graphics API itself reports about device memory, as opposed to the
+    * per-resource totals the engine accumulates in VkmRenderResourcePool.
+    * @details The gap between the two is the allocator's own cost -- block padding,
+    * alignment, driver-side bookkeeping -- which is exactly why both are worth showing side
+    * by side. Availability is per-backend: WebGPU exposes no memory introspection at all, so
+    * it leaves every field zero and both flags false.
+    */
+    struct VkmGpuMemoryStats
+    {
+        uint64_t _deviceAllocatedBytes = 0; // what the API says is really allocated on the device
+        uint64_t _deviceBudgetBytes = 0;    // working-set budget, 0 when the backend can't report one
+        uint64_t _poolReservedBytes = 0;    // bytes the engine's own suballocator holds in blocks/heaps
+        uint64_t _poolUsedBytes = 0;        // bytes handed out from within those blocks
+        bool _hasDeviceStats = false;
+        bool _hasPoolStats = false;
     };
 
     enum class VkmMemoryPlacementHint : uint8_t

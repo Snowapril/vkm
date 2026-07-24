@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/render_graph_capture.h>
+#include <vkm/renderer/memory_report.h>
 #include <vkm/base/global_variable.h>
 #include <cxxopts.hpp>
 #include <iostream>
@@ -32,6 +33,7 @@
 #endif
 #include <vkm/platform/common/process_stats.h>
 #include <vkm/renderer/imgui/render_graph_inspector.h>
+#include <vkm/renderer/imgui/memory_inspector.h>
 #include <imgui.h>
 #endif
 
@@ -70,6 +72,7 @@ namespace vkm
         }
 #if defined(VKM_ENABLE_IMGUI)
         _renderGraphInspector = std::make_unique<VkmRenderGraphInspector>();
+        _memoryInspector = std::make_unique<VkmMemoryInspector>();
 #endif
 
         return true;
@@ -174,6 +177,10 @@ namespace vkm
 
     void VkmEngine::destroy()
     {
+        // Before anything is torn down, while the driver and its resource pool can still
+        // report what is live -- a leak shows up here as resources that never went away.
+        logMemoryReport(captureMemorySnapshot(_driver));
+
         if (_renderGraphCapture)
         {
             _renderGraphCapture->releaseResources(_driver);
@@ -255,8 +262,14 @@ namespace vkm
             // Must run before the frame's first ImGui::Render() call (triggered lazily by
             // VkmImGuiRendererBase::renderDrawData() in render() below) -- ImGui::Begin/End
             // calls made after that point in the same frame would be dropped.
+            // Sampled before the overlay so both windows show the same numbers this frame.
+            _memoryInspector->update(_driver, deltaTime);
             renderDebugOverlay(deltaTime);
 
+            if (ImGui::IsKeyPressed(ImGuiKey_F8, false))
+            {
+                _memoryInspector->toggleVisible();
+            }
             if (ImGui::IsKeyPressed(ImGuiKey_F10, false))
             {
                 _renderGraphCapture->arm();
@@ -268,6 +281,7 @@ namespace vkm
             }
 #endif // VKM_GPU_CAPTURE
             _renderGraphInspector->draw(*_renderGraphCapture, _driver, _imGuiRenderer.get());
+            _memoryInspector->draw();
         }
 #endif
         _appDelegate->update(deltaTime);
@@ -292,6 +306,22 @@ namespace vkm
         ImGui::Text("GPU: n/a");
 #endif
         ImGui::Text("Frame: %u", _currentFrameIndex);
+
+        // Read from the inspector's cached sample rather than re-querying: the tag table
+        // lives behind the allocator's global mutex.
+        const VkmMemorySnapshot& memory = _memoryInspector->getSnapshot();
+        if (memory._process._valid)
+        {
+            ImGui::Text("Mem: %s (tracked %s)", formatByteSize(memory._process._residentBytes).c_str(),
+                        formatByteSize(memory._cpuTrackedUsableBytes).c_str());
+        }
+        if (memory._gpu._hasDeviceStats)
+        {
+            ImGui::Text("VRAM: %s / %s", formatByteSize(memory._gpu._deviceAllocatedBytes).c_str(),
+                        formatByteSize(memory._gpu._deviceBudgetBytes).c_str());
+        }
+
+        ImGui::Text("F8: memory inspector");
         ImGui::Text("F10: capture render graph");
 #if defined(VKM_USE_METAL_API) && defined(VKM_GPU_CAPTURE)
         ImGui::Text("F9: capture GPU frame (.gputrace)");

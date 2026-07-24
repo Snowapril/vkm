@@ -243,6 +243,45 @@ namespace vkm
         return new VkmSwapChainVulkan(this);
     }
 
+    VkmGpuMemoryStats VkmDriverVulkan::getGpuMemoryStats() const
+    {
+        VkmGpuMemoryStats stats{};
+        if (_vmaAllocator == VK_NULL_HANDLE)
+        {
+            return stats;
+        }
+
+        // Budgets are the cheap query (no allocation walk) and are what the driver itself
+        // reports for the heaps VMA allocates from -- i.e. the "actual" side.
+        VkPhysicalDeviceMemoryProperties memoryProperties{};
+        vkGetPhysicalDeviceMemoryProperties(_physicalDevice, &memoryProperties);
+
+        std::vector<VmaBudget> budgets(memoryProperties.memoryHeapCount);
+        vmaGetHeapBudgets(_vmaAllocator, budgets.data());
+        for (uint32_t heapIndex = 0; heapIndex < memoryProperties.memoryHeapCount; ++heapIndex)
+        {
+            // Only device-local heaps are "VRAM" in the sense the UI reports; host-visible
+            // system-memory heaps would otherwise double-count against process RSS.
+            if ((memoryProperties.memoryHeaps[heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) == 0)
+            {
+                continue;
+            }
+            stats._deviceAllocatedBytes += budgets[heapIndex].usage;
+            stats._deviceBudgetBytes += budgets[heapIndex].budget;
+        }
+        stats._hasDeviceStats = true;
+
+        // blockBytes = what VMA reserved in VkDeviceMemory blocks, allocationBytes = what it
+        // handed out of them; the difference is suballocator slack.
+        VmaTotalStatistics totalStatistics{};
+        vmaCalculateStatistics(_vmaAllocator, &totalStatistics);
+        stats._poolReservedBytes = totalStatistics.total.statistics.blockBytes;
+        stats._poolUsedBytes = totalStatistics.total.statistics.allocationBytes;
+        stats._hasPoolStats = true;
+
+        return stats;
+    }
+
     uint32_t VkmDriverVulkan::getQueueFamilyIndex(VkmCommandQueueType queueType) const
     {
         switch (queueType)
