@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/common/swapchain.h>
 
 @protocol CAMetalDrawable;
+@protocol MTLResidencySet;
 
 namespace vkm
 {
@@ -31,5 +32,9 @@ namespace vkm
         
     private:
         id<CAMetalDrawable> _currentDrawable = nullptr;
+        // This swapchain's own CAMetalLayer.residencySet, attached to the present queue in
+        // createSwapChain and detached in destroySwapChain. Held per-swapchain (not in a shared
+        // single slot) so multiple windows each add/remove exactly their own set.
+        id<MTLResidencySet> _layerResidencySet = nullptr;
     };
 } // namespace vkm

@@ -94,15 +94,11 @@ namespace vkm
         // drawable textures must live in a residency set attached to every queue that renders
         // into or presents the backbuffer (today only the present queue). CAMetalLayer exposes a
         // ready-made, auto-updating set for exactly this; track it in the manager and attach it.
-        id<MTLResidencySet> layerResidencySet = metalLayer.residencySet;
-        if (layerResidencySet != nil)
+        _layerResidencySet = metalLayer.residencySet;
+        if (_layerResidencySet != nil)
         {
-            VkmRenderResourcePoolMetal* renderResourcePoolMetal =
-                static_cast<VkmRenderResourcePoolMetal*>(_driver->getRenderResourcePool());
-            renderResourcePoolMetal->setSwapChainResidencySet(layerResidencySet);
-
             VkmCommandQueueMetal* presentQueueMetal = static_cast<VkmCommandQueueMetal*>(_presentQueue);
-            [presentQueueMetal->getMTLCommandQueue() addResidencySet:layerResidencySet];
+            [presentQueueMetal->getMTLCommandQueue() addResidencySet:_layerResidencySet];
         }
         else
         {
@@ -115,14 +111,11 @@ namespace vkm
 
     void VkmSwapChainMetal::destroySwapChain()
     {
-        VkmRenderResourcePoolMetal* renderResourcePoolMetal =
-            static_cast<VkmRenderResourcePoolMetal*>(_driver->getRenderResourcePool());
-        id<MTLResidencySet> layerResidencySet = renderResourcePoolMetal->getSwapChainResidencySet();
-        if (layerResidencySet != nil && _presentQueue != nullptr)
+        if (_layerResidencySet != nil && _presentQueue != nullptr)
         {
             VkmCommandQueueMetal* presentQueueMetal = static_cast<VkmCommandQueueMetal*>(_presentQueue);
-            [presentQueueMetal->getMTLCommandQueue() removeResidencySet:layerResidencySet];
-            renderResourcePoolMetal->setSwapChainResidencySet(nil);
+            [presentQueueMetal->getMTLCommandQueue() removeResidencySet:_layerResidencySet];
+            _layerResidencySet = nil;
         }
 
         _currentDrawable = nil;
