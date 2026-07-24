@@ -14,6 +14,10 @@ jobs:
   build-macos:
     env:
       build_type: "Release"
+      # Pin ccache's store inside the workspace so the cache step below has a
+      # predictable path (the default differs between ~/.ccache and
+      # ~/Library/Caches/ccache depending on the runner image).
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
     strategy:
       fail-fast: false
       matrix:
@@ -38,6 +42,12 @@ jobs:
         with:
           submodules: true
 
+      - name: Install build accelerators
+        # The root CMakeLists auto-detects ccache and scripts/run_tests.py auto-selects
+        # the Ninja generator; both degrade to the previous behaviour when the tools are
+        # missing, so CI has to install them explicitly to get any benefit.
+        run: brew install ninja ccache
+
       - name: Install Vulkan SDK (MoltenVK + headers)
         if: matrix.backend == 'vulkan'
         run: |
@@ -49,6 +59,51 @@ jobs:
           # vulkan-validationlayers installs to a non-standard prefix too, so the
           # loader needs an explicit layer manifest path to find VK_LAYER_KHRONOS_validation.
           echo "VK_LAYER_PATH=$(brew --prefix)/share/vulkan/explicit_layer.d" >> $GITHUB_ENV
+
+      - name: Resolve vendored dxc revision
+        id: dxc
+        run: |
+          rev=$(python3 -c "import json; print(next(e['source']['revision'] for e in json.load(open('dependencies/bootstrap.json')) if e['name'] == 'dxc-macos-src'))")
+          echo "revision=$rev" >> "$GITHUB_OUTPUT"
+
+      - name: Cache prebuilt dxc
+        # Upstream ships no macOS dxc binary, so it is built from a vendored LLVM/Clang
+        # fork (~4700 translation units) — by far the longest step in a cold build.
+        # Only the shipped artifacts are cached, not the ~350 MB build tree that
+        # produced them: the root CMakeLists skips the entire dxc ExternalProject as
+        # soon as VKM_DXC_EXECUTABLE exists, so nothing else has to be restored.
+        # bin/ holds the dxc symlink and its dxc-3.7 target; libdxcompiler.dylib is
+        # picked up through the binary's @executable_path/../lib rpath, so dxc cannot
+        # run without it.
+        uses: actions/cache@v4
+        with:
+          path: |
+            dependencies/dxc-macos-build/bin
+            dependencies/dxc-macos-build/lib/libdxcompiler.dylib
+          key: vkm-dxc-${{ runner.os }}-${{ steps.dxc.outputs.revision }}
+
+      - name: Cache bootstrapped dependency sources
+        # bootstrap.py skips any library whose recorded state in .bootstrap.json still
+        # matches bootstrap.json and whose directory exists, so restoring both turns the
+        # bootstrap step into a no-op. emsdk is deliberately excluded: at ~1.7 GB it
+        # would dominate the repository's shared 10 GB cache budget and evict the far
+        # more valuable dxc entry above. Dropping its directory while keeping its state
+        # entry is safe — bootstrap.py's `os.path.exists(lib_dir)` check re-clones it.
+        uses: actions/cache@v4
+        with:
+          path: |
+            dependencies/src
+            !dependencies/src/emsdk
+            dependencies/.bootstrap.json
+          key: vkm-deps-${{ runner.os }}-${{ hashFiles('dependencies/bootstrap.json') }}
+
+      - name: Cache ccache objects
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: vkm-ccache-${{ runner.os }}-${{ matrix.backend }}-${{ github.sha }}
+          restore-keys: |
+            vkm-ccache-${{ runner.os }}-${{ matrix.backend }}-
 
       - name: Execute bootstrap script
         # dawn is only needed for vkm-compiler's optional WGSL output

@@ -7,9 +7,16 @@ bootstrap.py (dependencies/src, dependencies/archives, dependencies/snapshots,
 dependencies/.bootstrap.json) — these are slow to re-populate since bootstrap.py
 re-clones every third-party library, so they're opt-in rather than default.
 
+Pass --dxc to also remove dependencies/dxc-macos-build, the shared out-of-tree
+macOS dxc build (see the APPLE branch of the root CMakeLists.txt). It is kept out
+of the build directory precisely so a normal clean does not throw away a ~4700
+translation unit LLVM build, so it too is opt-in. Do use it after bootstrap.py
+pulls a new dxc-macos-src revision: the CMake configure reuses whatever dxc
+binary is already there and will not notice the sources moved on.
+
 Usage
 -----
-  python3 scripts/run_clean.py [--build-dir <path>] [--deps] [--dry-run]
+  python3 scripts/run_clean.py [--build-dir <path>] [--deps] [--dxc] [--dry-run]
 """
 
 import argparse
@@ -48,6 +55,10 @@ def main() -> None:
         help="Also remove dependencies/ artifacts written by bootstrap.py",
     )
     parser.add_argument(
+        "--dxc", action="store_true",
+        help="Also remove dependencies/dxc-macos-build (the shared out-of-tree macOS dxc build)",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Print what would be removed without deleting anything",
     )
@@ -58,6 +69,9 @@ def main() -> None:
         build_dir = PROJECT_ROOT / build_dir
 
     targets = [build_dir, PROJECT_ROOT / "build-wasm"]
+
+    if args.dxc:
+        targets.append(PROJECT_ROOT / "dependencies" / "dxc-macos-build")
 
     if args.deps:
         deps_dir = PROJECT_ROOT / "dependencies"

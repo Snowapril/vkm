@@ -437,6 +437,7 @@ resources/Shaders/ShaderCache/
 dependencies/.bootstrap.json
 dependencies/archives/
 dependencies/src/
+dependencies/dxc-macos-build/
 *.vfpipeline
 *.gputrace/
 

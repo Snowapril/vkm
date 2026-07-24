@@ -17,6 +17,20 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/buildscripts")
 # Declare project
 project(vkm)
 
+# Route compilation through ccache when it is installed. Each backend gets its own
+# build tree (build/metal, build/vulkan, build/host-tools) and scripts/run_clean.py
+# wipes them wholesale, so the same third-party objects are otherwise recompiled over
+# and over. CMAKE_<LANG>_COMPILER_LAUNCHER is only honoured by the Makefile and Ninja
+# generators — under Xcode/Visual Studio it is silently ignored, so don't advertise it.
+find_program(VKM_CCACHE_EXECUTABLE ccache)
+if (VKM_CCACHE_EXECUTABLE AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
+    set(CMAKE_C_COMPILER_LAUNCHER   "${VKM_CCACHE_EXECUTABLE}")
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${VKM_CCACHE_EXECUTABLE}")
+    message(STATUS "vkm: using ccache at ${VKM_CCACHE_EXECUTABLE}")
+elseif (VKM_CCACHE_EXECUTABLE)
+    message(STATUS "vkm: ccache found but the ${CMAKE_GENERATOR} generator ignores compiler launchers; not enabled")
+endif()
+
 # Set output directories
 set(DEFAULT_CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
@@ -247,13 +261,9 @@ include_directories(dependencies/src/backward-cpp)
 include_directories(dependencies/src/vma/src)
 include_directories(dependencies/src/glfw/include)
 include_directories(dependencies/src/glm)
-include_directories(dependencies/src/glslang/glslang/Include)
 include_directories(dependencies/src/taskflow)
 include_directories(dependencies/src/stb)
 include_directories(dependencies/src/offsetAllocator)
-include_directories(dependencies/src/glslang)
-include_directories(dependencies/src/glslang/StandAlone)
-include_directories(dependencies/src/glslang/src)
 include_directories(dependencies/src/ImGuizmo/src)
 include_directories(dependencies/src/spdlog/include)
 include_directories(dependencies/src/json/include)
@@ -291,17 +301,12 @@ if (NOT EMSCRIPTEN)
     add_subdirectory(dependencies/src/glfw)
 endif()
 
-set(MESHOPT_BUILD_DEMO          OFF CACHE BOOL "")
-set(MESHOPT_BUILD_TOOLS         OFF CACHE BOOL "")
-set(MESHOPT_BUILD_SHARED_LIBS   OFF CACHE BOOL "")
-add_subdirectory(dependencies/src/meshoptimizer)
-
-set(ENABLE_GLSLANG_BINARIES  OFF  CACHE BOOL "")
-set(ENABLE_HLSL              OFF  CACHE BOOL "")
-set(ENABLE_CTEST             OFF  CACHE BOOL "")
-set(ENABLE_OPT               OFF  CACHE BOOL "")
-set(SKIP_GLSLANG_INSTALL      ON  CACHE BOOL "")
-add_subdirectory(dependencies/src/glslang)
+# meshoptimizer and glslang are fetched by bootstrap.py but deliberately not built:
+# nothing under src/, include/ or tests/ references either one (shader compilation
+# goes HLSL -> SPIR-V through dxc and SPIR-V -> MSL/WGSL through spirv-cross, never
+# through glslang). Building them cost ~100 extra translation units plus an 83 MB
+# libglslang.a linked into vkmcore for no symbols. Re-add the add_subdirectory calls
+# here if a runtime GLSL front end or mesh optimizer is ever actually needed.
 
 if (NOT EMSCRIPTEN)
     # volk is a Vulkan loader; there is no Vulkan ICD in a browser.
@@ -314,12 +319,16 @@ if (NOT EMSCRIPTEN)
     add_subdirectory(dependencies/src/volk)
 endif()
 
+# vkm-compiler only instantiates spirv_cross::CompilerMSL, which needs the core,
+# glsl and msl modules. The C++/reflection/util writers are unused, and each is an
+# extra target built from scratch in every build tree.
 set(SPIRV_CROSS_CLI             OFF CACHE BOOL "" FORCE)
 set(SPIRV_CROSS_ENABLE_TESTS    OFF CACHE BOOL "")
 set(SPIRV_CROSS_ENABLE_HLSL     OFF CACHE BOOL "")
 set(SPIRV_CROSS_ENABLE_MSL       ON CACHE BOOL "" FORCE)
-set(SPIRV_CROSS_ENABLE_CPP       ON CACHE BOOL "")
-set(SPIRV_CROSS_ENABLE_REFLECT   ON CACHE BOOL "")
+set(SPIRV_CROSS_ENABLE_CPP      OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_REFLECT  OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_UTIL     OFF CACHE BOOL "" FORCE)
 set(SPIRV_CROSS_ENABLE_C_API    OFF CACHE BOOL "")
 add_subdirectory(dependencies/src/spirv-cross)
 add_subdirectory(dependencies/src/spdlog)
@@ -348,13 +357,6 @@ if (NOT EMSCRIPTEN)
     set_property(TARGET volk PROPERTY FOLDER "ThirdPartyLibraries")
     set_property(TARGET mimalloc-static PROPERTY FOLDER "ThirdPartyLibraries")
 endif()
-set_property(TARGET meshoptimizer PROPERTY FOLDER "ThirdPartyLibraries")
-foreach(_vkm_glslang_target glslang OSDependent SPIRV SPVRemapper)
-    if (TARGET ${_vkm_glslang_target})
-        set_property(TARGET ${_vkm_glslang_target} PROPERTY FOLDER "ThirdPartyLibraries/glslang")
-    endif()
-endforeach()
-unset(_vkm_glslang_target)
 
 # ---------------------------------------------------------------------------
 # vkm-compiler tool + its dxc / Tint dependencies
@@ -367,13 +369,38 @@ if (NOT EMSCRIPTEN)
     # Locate (Windows/Linux: prebuilt archive) or build (Apple: from source)
     # the dxc HLSL->SPIR-V compiler that vkm-compiler shells out to.
     if (APPLE)
+        # Upstream ships no macOS dxc binary (releases carry Windows + Linux x86_64
+        # only), so it is built from source here. That build is a full LLVM/Clang
+        # fork (~4700 translation units), so it lives OUTSIDE the CMake binary dir:
+        # every backend gets its own build tree (build/metal, build/vulkan,
+        # build/host-tools, git worktrees) and rebuilding LLVM once per tree — and
+        # again after every scripts/run_clean.py — dwarfs the rest of the build.
+        # Sharing one out-of-tree directory means it is paid exactly once per
+        # dxc-macos-src revision. scripts/run_clean.py --dxc wipes it.
+        set(VKM_DXC_BUILD_DIR "${PROJECT_SOURCE_DIR}/dependencies/dxc-macos-build"
+            CACHE PATH "Shared out-of-tree build directory for the vendored DXC")
+        set(VKM_DXC_EXECUTABLE "${VKM_DXC_BUILD_DIR}/bin/dxc"
+            CACHE FILEPATH "dxc executable vkm-compiler shells out to; set this to reuse an existing dxc (e.g. the one in the Vulkan SDK) instead of building one")
+    endif()
+
+    if (APPLE AND EXISTS "${VKM_DXC_EXECUTABLE}")
+        message(STATUS "vkm: reusing prebuilt dxc at ${VKM_DXC_EXECUTABLE}")
+    elseif (APPLE)
         # DXC's CMake is a full LLVM fork with its own minimum-CMake-version and
         # global CACHE pollution, and a 30-60+ minute build — nest it via
         # ExternalProject (its own CMake invocation) rather than add_subdirectory.
         include(ExternalProject)
+        include(ProcessorCount)
         set(VKM_DXC_SOURCE_DIR "${PROJECT_SOURCE_DIR}/dependencies/src/dxc-macos-src")
-        set(VKM_DXC_BUILD_DIR "${CMAKE_BINARY_DIR}/dxc-build")
-        set(VKM_DXC_EXECUTABLE "${VKM_DXC_BUILD_DIR}/bin/dxc")
+        # The nested build is a separate cmake invocation, so the outer
+        # `cmake --build --parallel N` does NOT propagate into it: without an
+        # explicit --parallel the pinned Makefiles generator builds all of LLVM
+        # single-threaded.
+        ProcessorCount(VKM_DXC_BUILD_JOBS)
+        if (VKM_DXC_BUILD_JOBS EQUAL 0)
+            set(VKM_DXC_BUILD_JOBS 1)
+        endif()
+        message(STATUS "vkm: building dxc from source in ${VKM_DXC_BUILD_DIR} (${VKM_DXC_BUILD_JOBS} jobs)")
         ExternalProject_Add(dxc_build
             SOURCE_DIR "${VKM_DXC_SOURCE_DIR}"
             BINARY_DIR "${VKM_DXC_BUILD_DIR}"
@@ -399,6 +426,7 @@ if (NOT EMSCRIPTEN)
                 # don't have this diagnostic yet) from warning about it.
                 "-DCMAKE_CXX_FLAGS=-Wno-unknown-warning-option -Wno-invalid-specialization"
             BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target dxc
+                                           --parallel ${VKM_DXC_BUILD_JOBS}
             INSTALL_COMMAND ""
             BUILD_BYPRODUCTS "${VKM_DXC_EXECUTABLE}")
     elseif (WIN32)

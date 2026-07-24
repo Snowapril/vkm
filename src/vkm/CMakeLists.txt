@@ -353,7 +353,6 @@ target_include_directories(${target}
     PRIVATE
     ${PUBLIC_HDR_DIR}
     ${LIBRARY_DIR}/glfw/include
-    ${LIBRARY_DIR}/glslang
     ${LIBRARY_DIR}/vma/src
     ${LIBRARY_DIR}/cxxopts/include
     ${LIBRARY_DIR}
@@ -368,14 +367,13 @@ target_compile_options(${target}
 )
 
 # Link libraries
+# No shader-compilation libraries here on purpose: vkmcore only ever consumes
+# already-compiled .vfcache blobs. glslang/spirv-cross are build-time concerns of
+# the vkm-compiler host tool, which links them itself.
 target_link_libraries(${target}
     PUBLIC
     ${DEFAULT_LINKER_OPTIONS}
 	${DEFAULT_LIBRARIES}
-    PRIVATE
-    glslang
-    SPIRV
-    spirv-cross-core
 )
 
 if (VKM_ENABLE_IMGUI)
