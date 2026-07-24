@@ -169,11 +169,25 @@ line names it twice both before and after — and is left alone.
   minimal app menu (Hide / Hide Others / Show All / Quit) before `NSApplicationMain`;
   `applicationDidFinishLaunching` calls `[NSApp activate]` so the window is key on launch.
 - Side effect: as a foreground app the `CAMetalDisplayLink` is no longer throttled (5 s run
-  went from ~940 to ~2670 log lines), which makes the pre-existing shutdown race fire on every
-  exit — teardown never invalidates the display link or stops the detached render thread
-  (`applicationWillTerminate` only nils `_rendererCoordinator`, and the file is non-ARC), so
-  the render thread logs into spdlog after its statics are gone
-  (`[*** LOG ERROR #0001 ***] ... mutex lock failed`). Tracked in `TODO.md`; not fixed here.
+  went from ~940 to ~2670 log lines), which made the pre-existing shutdown race fire on every
+  exit — teardown never stopped the render thread, so it logged into spdlog after its statics
+  were gone (`[*** LOG ERROR #0001 ***] ... mutex lock failed`). Fixed below.
+
+## 2026-07-24 — macOS Metal shutdown path stops the render thread
+
+- The render thread was detached and ran `-[NSRunLoop run]`, which has no exit; nothing ever
+  invalidated the `CAMetalDisplayLink`. Since `-terminate:` exits the process directly (main()
+  never regains control on Metal, so `VkmApplication::destroy` never ran), the display-link
+  callback kept driving the engine and the logger through static destruction.
+- `RendererCoordinatorController` is now stoppable: the worker publishes its `CFRunLoopRef`
+  (handshake via a `dispatch_semaphore_t` so `-stop` cannot race thread startup) and runs
+  `CFRunLoopRun()`; the thread is `PTHREAD_CREATE_JOINABLE`. New `-stop` invalidates the display
+  link, calls `CFRunLoopStop`, and `pthread_join`s, so an in-flight callback is waited out.
+- `applicationWillTerminate:` now calls `-stop`, releases the coordinator (the file is non-ARC;
+  the previous `= nil` leaked it and the display link) and calls `_engine->destroy()`, matching
+  what the Vulkan path does in `VkmApplication::destroy`.
+- Verified with `MTL_DEBUG_LAYER=1` on all three quit paths (`--auto-close`, ESC, Quit menu
+  item, window close): no hang, no `mutex lock failed`, no validation errors.
 
 ## Deviations
 
