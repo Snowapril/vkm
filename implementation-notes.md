@@ -95,6 +95,70 @@ see `CLAUDE.md` §11 for the policy.
   `vkGetPhysicalDeviceSurfaceSupportKHR(graphicsFamily, surface)` — with two surfaces the
   hard-coded Graphics[0] present queue is verified per surface instead of assumed.
 
+## 2026-07-24 — Build time reduction
+
+Four independent causes of the long build, in order of impact:
+
+- **The vendored dxc build ran single-threaded on the critical path.** The nested
+  `ExternalProject_Add(dxc_build ...)` is a separate CMake invocation, so the outer
+  `cmake --build --parallel N` never reached it, and with the pinned `Unix Makefiles`
+  generator that meant `make -j1` over a full LLVM/Clang fork (~4700 translation units).
+  It is not optional work: `UnitTests` → `tests_triangle_shaders` → `vkm-compiler` →
+  `dxc_build`. Fixed by passing `--parallel ${VKM_DXC_BUILD_JOBS}` (from
+  `ProcessorCount`).
+- **That build was also repeated per build tree.** Its output lived in
+  `${CMAKE_BINARY_DIR}/dxc-build`, so `build/metal`, `build/vulkan`,
+  `build/host-tools`, every git worktree and every `run_clean` paid it again. Moved to
+  `dependencies/dxc-macos-build` (shared, out of tree) and the whole ExternalProject is
+  now skipped when `VKM_DXC_EXECUTABLE` already exists. That variable is a cache entry,
+  so `-DVKM_DXC_EXECUTABLE=<path>` also lets an externally supplied dxc (e.g. the one in
+  the Vulkan SDK) replace the source build outright. `run_clean.py --dxc` wipes it.
+- **glslang and meshoptimizer were built but unreferenced.** Nothing under `src/`,
+  `include/` or `tests/` names `glslang`, `ShaderLang`, `GlslangToSpv`, `TShader`,
+  `TProgram`, `EShLang` or `meshopt` — shader compilation goes HLSL → SPIR-V through dxc
+  and SPIR-V → MSL through spirv-cross, never through glslang. Together they were ~100
+  translation units, and `vkmcore` linked an 83 MB `libglslang.a` (Debug) plus a
+  2280-byte, i.e. empty, `libSPIRV.a` for no symbols. Both `add_subdirectory` calls and
+  the `vkmcore` link line are gone; the sources stay in `bootstrap.json` so re-enabling
+  is a CMake-only change. `vkmcore`'s `spirv-cross-core` link was dead for the same
+  reason (`spirv_cross` appears only in `vkm-compiler`) and was dropped too, along with
+  the unused spirv-cross C++/reflection/util writers.
+- **No compiler cache, and the slowest available generator.** The root CMakeLists now
+  enables ccache via `CMAKE_<LANG>_COMPILER_LAUNCHER` when it is installed, and
+  `run_tests.py`/`run_sample.py` select the Ninja generator when `ninja` is present, not
+  on Windows, and the build directory is fresh. Both are pure auto-detection: with
+  neither tool installed the build behaves exactly as before. The generator condition
+  matters for more than speed — compiler launchers are ignored by the Xcode generator,
+  so Ninja is what makes the ccache detection actually take effect.
+
+`.github/workflows/macos.yml` caches the dxc binary (keyed on the `dxc-macos-src`
+revision), the bootstrapped dependency sources, and the ccache store. The cached dxc
+entry covers `bin/` *and* `lib/libdxcompiler.dylib` — `bin/dxc` is a symlink to
+`dxc-3.7`, which loads the dylib through an `@executable_path/../lib` rpath and cannot
+run without it.
+
+Measured on an 11-core macOS host, Release, metal backend, Makefiles generator, no
+ccache (`cmake --build --target UnitTests --parallel 11`):
+
+| Scenario | Wall clock |
+| --- | --- |
+| Cold tree, dxc built from source | 4m27s (267s wall / 1667s CPU) |
+| Any later tree, dxc reused | 40s configure + build + run tests |
+| `--target triangle` after that | 4.8s incl. shader-cache regeneration |
+
+The 267s figure is the *whole* cold build; dxc is ~230s of it at a 6.2x parallel
+speedup. The equivalent single-threaded time is not measured here, but it is bounded
+below by dxc's own CPU time (~1520s ≈ 25min), which is what the old `-j1` nested build
+spent serially. Cold builds of a second and third backend tree drop from that same ~25
+minutes to roughly the 40s row, since dxc is no longer rebuilt per tree.
+
+Verified after the change: 84/84 doctest cases (16919 assertions) pass on the metal
+backend with Metal API Validation enabled and no validation diagnostics; the triangle
+sample builds its `.vfcache` shaders through the dxc → spirv-cross → metallib chain and
+renders without validation errors. The one `ld: warning: ignoring duplicate libraries:
+libspirv-cross-core.a` on the vkm-compiler link predates this work — the generated link
+line names it twice both before and after — and is left alone.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:
@@ -105,6 +169,32 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Did instead: <the conservative option taken>
 - Why: <the edge case that forced it>
 ```
+
+### 2026-07-24 — CI caches only the dxc binary, not its build tree
+- Planned: `actions/cache` on `dependencies/dxc-macos-build`.
+- Did instead: cached `dependencies/dxc-macos-build/bin` only.
+- Why: the full LLVM build tree passes 160 MB before it is even half done and ends up in
+  the gigabytes, which would dominate the repository's shared 10 GB cache budget. Since
+  the configure short-circuits on `EXISTS ${VKM_DXC_EXECUTABLE}`, restoring the binary
+  alone is sufficient to skip the whole ExternalProject — caching the object files buys
+  nothing.
+
+### 2026-07-24 — emsdk excluded from the CI dependency-source cache
+- Planned: cache `dependencies/src` keyed on a hash of `bootstrap.json`.
+- Did instead: same, but with `!dependencies/src/emsdk` excluded.
+- Why: emsdk alone is ~1.7 GB and would crowd out the far more valuable dxc entry.
+  Dropping its directory while keeping its `.bootstrap.json` state entry is safe:
+  bootstrap.py's cached-state check also requires `os.path.exists(lib_dir)`, so it
+  re-clones emsdk rather than assuming it is present.
+
+### 2026-07-24 — Ninja detection duplicated rather than shared between the two scripts
+- Planned: "a shared helper" appending `-G Ninja`, used by `run_tests.py` and
+  `run_sample.py`.
+- Did instead: an identical `generator_args()` defined separately in each script.
+- Why: `run_sample.py` already carries the comment "copied from run_tests.py to keep the
+  two scripts independent" over its own duplicated helpers. Introducing a shared module
+  would have reversed a deliberate existing decision, which is well outside the scope of
+  a build-time change.
 
 ### 2026-07-21 — render-graph capture bound to the scene window, not the ImGui window
 - Planned: the plan noted capture could bind to the ImGui window's execute (since the

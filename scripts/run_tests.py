@@ -49,6 +49,24 @@ def run_cmd(cmd: list, **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, **kwargs)
 
 
+def generator_args(build_dir: Path, system: str) -> list:
+    """Return ['-G', 'Ninja'] when Ninja can be used for this configure, else [].
+
+    Ninja parallelizes across targets (Makefiles serialize per-target) and, unlike the
+    Xcode generator, honours CMAKE_<LANG>_COMPILER_LAUNCHER, which is what makes the
+    root CMakeLists' ccache detection take effect. Three conditions must hold:
+      - ninja is actually installed (this is an optimization, never a requirement),
+      - not Windows, where the configure passes -DCMAKE_GENERATOR_PLATFORM=x64, which
+        only the Visual Studio generators accept,
+      - the build directory is fresh; CMake hard-errors when -G contradicts the
+        generator already recorded in an existing CMakeCache.txt."""
+    if system == "Windows" or shutil.which("ninja") is None:
+        return []
+    if (build_dir / "CMakeCache.txt").exists():
+        return []
+    return ["-G", "Ninja"]
+
+
 def vulkan_available() -> bool:
     """Return True when a Vulkan loader / SDK can be found on the system."""
     if os.environ.get("VULKAN_SDK"):
@@ -169,7 +187,7 @@ def cmake_configure(build_dir: Path, build_type: str,
         "-B", str(build_dir),
         f"-DCMAKE_BUILD_TYPE={build_type}",
         "-DBUILD_SAMPLES=OFF",
-    ]
+    ] + generator_args(build_dir, system)
     for key, value in cmake_flags.items():
         cmd.append(f"-D{key}={value}")
 
@@ -366,7 +384,7 @@ def run_webgpu_backend(build_dir: Path, build_type: str, jobs: int) -> str:
         "-B", str(build_dir),
         f"-DCMAKE_BUILD_TYPE={build_type}",
         "-DBUILD_SAMPLES=OFF",
-    ]
+    ] + generator_args(build_dir, platform.system())
     result = run_cmd(configure_cmd, env=env)
     if result.returncode != 0:
         print("[FAIL] CMake configuration failed for webgpu backend.")

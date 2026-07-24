@@ -24,8 +24,6 @@ cmake .. && cmake --build .
 *   [ImGuizmo](https://github.com/CedricGuillemet/ImGuizmo)
 *   [stb](https://github.com/nothings/stb)
 *   [taskflow](https://github.com/taskflow/taskflow)
-*   [meshoptimizer](https://github.com/zeux/meshoptimizer)
-*   [glslang](https://github.com/KhronosGroup/glslang)
 *   [doctest](https://github.com/doctest/doctest)
 
 ## Running Unit Tests
