@@ -27,9 +27,13 @@ namespace vkm
     inline constexpr uint32_t kVkmBindlessBufferCapacity      = 4096; // set 0, binding 1
     inline constexpr uint32_t kVkmBindlessIndexBufferCapacity = 4096; // set 0, binding 2
 
-    // Push constants: 8 bytes {uint32 vertexBufferIndex, uint32 indexBufferIndex},
-    // vertex stage, offset 0 (see VkmPipelineStateVulkan::createInner).
-    inline constexpr uint32_t kVkmBindlessPushConstantSize = sizeof(uint32_t) * 2;
+    // Push-constant range every pipeline declares: vertex stage, offset 0 (see
+    // VkmPipelineStateVulkan::createInner). Draws push only as much as their own shader
+    // struct needs -- at minimum {uint32 vertexBufferIndex, uint32 indexBufferIndex}, up to
+    // this size for shaders that also carry per-draw transforms (see the model_viewer
+    // sample). 128 bytes is the push-constant size Vulkan guarantees on every device, and
+    // it fits within the Metal/WebGPU push-constant ring's 256-byte entry stride.
+    inline constexpr uint32_t kVkmBindlessPushConstantSize = 128;
 
     // Metal (argument buffers Tier 2): [[buffer(0)]]/[[buffer(1)]] remain the vertex-stream
     // indices; the set-0 argument buffer and the push-constant buffer are pinned after them.

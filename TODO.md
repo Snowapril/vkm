@@ -31,3 +31,9 @@
 - Render graph capture records swapchain backbuffer outputs as metadata only (`CAMetalLayer.framebufferOnly` stays YES).
 - Render graph capture texture previews in ImGui are Metal-only (`getTextureID` returns 0 on Vulkan/WebGPU).
 - Programmatic .gputrace capture scopes only the Metal Graphics queue 0; Vulkan/WebGPU `requestGpuFrameCapture()` is a no-op (no RenderDoc integration).
+- glTF import covers geometry and material factors only: no textures, no samplers, no animation/skinning, no Draco/KTX2/`EXT_meshopt_compression`.
+- Imported vertices keep a zeroed `TANGENT` when the asset omits one (no MikkTSpace-style generator), and generated normals are area-weighted smooth rather than the spec's flat normals.
+- Texture upload has no path at all: no `copyBufferToTexture`/`uploadToTexture` on any backend, and the bindless texture array (set 0, binding 0) still has no `registerTexture`.
+- Sponza-scale scenes exceed the WebGPU bindless mega-buffers (16 MiB vertex / 8 MiB index, no growth), and `model_viewer`'s wasm build preloads no scene at all.
+- The Vulkan/WebGPU depth-attachment paths in `onBeginRenderPass` are exercised only by CI (no Vulkan ICD on the dev machine; WebGPU has no equivalent offscreen test).
+- Metal's render-pass depth attachment hardcodes `MTLLoadActionClear`/`MTLStoreActionStore` instead of honoring `VkmDepthStencilAttachmentDescriptor`'s load/store actions.

@@ -45,6 +45,9 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/gpu_offset_allocator.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/deferred_resource_reclaimer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/swapchain.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_model.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/scene/gltf_importer.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_model_gpu.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/engine.h
 )
 
@@ -81,6 +84,10 @@ set(SRCS
     ${LIBRARY_DIR}/offsetAllocator/offsetAllocator.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/deferred_resource_reclaimer.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/swapchain.cpp
+    ${SRC_DIR}/vkm/renderer/scene/scene_model.cpp
+    ${SRC_DIR}/vkm/renderer/scene/cgltf_impl.cpp
+    ${SRC_DIR}/vkm/renderer/scene/gltf_importer.cpp
+    ${SRC_DIR}/vkm/renderer/scene/scene_model_gpu.cpp
     ${SRC_DIR}/vkm/renderer/engine.cpp
 )
 
@@ -374,6 +381,8 @@ target_link_libraries(${target}
     PUBLIC
     ${DEFAULT_LINKER_OPTIONS}
 	${DEFAULT_LIBRARIES}
+    PRIVATE
+    meshoptimizer
 )
 
 if (VKM_ENABLE_IMGUI)

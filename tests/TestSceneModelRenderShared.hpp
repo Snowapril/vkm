@@ -1,0 +1,168 @@
+#ifndef TEST_SCENE_MODEL_RENDER_SHARED_HPP
+#define TEST_SCENE_MODEL_RENDER_SHARED_HPP
+
+// Backend-agnostic body of the glTF scene-rendering test, called from a Vulkan and a Metal
+// fixture the same way TestClipSpaceOrientationShared.hpp is.
+//
+// What this proves, end to end and without a window: a glTF file imports into
+// VkmSceneModel, VkmSceneModelGpu turns it into bindless vertex/index buffers, and the
+// model_viewer PSO draws it into an offscreen color target with a real depth attachment
+// bound -- the same path src/samples/model_viewer takes. The rendered pixel also carries
+// the material's base color, so a broken material or push-constant layout shows up as a
+// wrong color rather than as nothing at all.
+
+#include "UnitTestUtils.hpp"
+
+#include <vkm/renderer/backend/common/bindless_resource_manager.h>
+#include <vkm/renderer/backend/common/command_buffer.h>
+#include <vkm/renderer/backend/common/driver.h>
+#include <vkm/renderer/backend/common/pipeline_state_manager.h>
+#include <vkm/renderer/backend/common/pipeline_state_object.h>
+#include <vkm/renderer/backend/common/render_graph.h>
+#include <vkm/renderer/backend/common/render_pass.h>
+#include <vkm/renderer/backend/common/texture.h>
+#include <vkm/renderer/scene/gltf_importer.h>
+#include <vkm/renderer/scene/scene_model.h>
+#include <vkm/renderer/scene/scene_model_gpu.h>
+
+#include <glm/ext/matrix_transform.hpp>
+#include <glm/mat4x4.hpp>
+#include <glm/vec4.hpp>
+
+#include <cstdint>
+#include <string>
+
+namespace vkmtest
+{
+    // Mirrors PushConstants in src/samples/model_viewer/model_viewer.hlsl.
+    struct SceneModelPushConstants
+    {
+        glm::mat4 _modelViewProjection;
+        uint32_t _vertexBufferSlot;
+        uint32_t _indexBufferSlot;
+        float _pad0[2];
+        glm::vec4 _baseColor;
+        glm::vec4 _lightDirectionObjectSpace;
+    };
+
+    inline void runSceneModelRenderTest(vkm::VkmDriverBase* driver)
+    {
+        constexpr uint32_t kTargetSize = 64;
+
+        vkm::VkmGltfImportOptions importOptions;
+        importOptions._optimizeMeshes = false;
+
+        vkm::VkmSceneModel model;
+        std::string error;
+        REQUIRE(vkm::importGltfModel(std::string(RESOURCES_DIR) + "tests/gltf_triangle.gltf",
+                                     &model, &error, importOptions));
+        REQUIRE(model._meshes.size() == 1);
+        REQUIRE(model._materials.size() == 1);
+
+        vkm::VkmSceneModelGpu modelGpu;
+        REQUIRE(modelGpu.upload(driver, model, &error));
+        const vkm::VkmSceneModelGpu::MeshGpu& meshGpu = modelGpu.getMeshes()[0];
+        REQUIRE(meshGpu._indexCount == 3);
+
+        vkm::VkmPipelineStateManager manager(driver);
+        std::string psoError;
+        REQUIRE(manager.loadPipelineStatesFromDirectory(TEST_MODEL_VIEWER_SAMPLE_DIR, TEST_MODEL_VIEWER_SHADER_CACHE_DIR,
+                                                        vkm::VkmPipelineStateOrigin::User, &psoError));
+        vkm::VkmPipelineStateBase* pso = manager.getPipelineState("model_viewer_pso[default]",
+                                                                  vkm::VkmPipelineStateOrigin::User);
+        REQUIRE(pso != nullptr);
+
+        vkm::VkmTextureInfo colorInfo{};
+        colorInfo._flags = vkm::VkmResourceCreateInfo::AllowColorAttachment | vkm::VkmResourceCreateInfo::AllowTransferSrc;
+        colorInfo._extent = glm::uvec3(kTargetSize, kTargetSize, 1);
+        colorInfo._format = driver->getSwapChainColorFormat(); // what "swapchain" in the PSO resolves to
+        colorInfo._numMipLevels = 1;
+        colorInfo._numArrayLayers = 1;
+        colorInfo._debugName = "SceneModelColorTarget";
+        vkm::VkmTexture* colorTarget = driver->newTexture(colorInfo);
+        REQUIRE(colorTarget != nullptr);
+
+        vkm::VkmTextureInfo depthInfo{};
+        depthInfo._flags = vkm::VkmResourceCreateInfo::AllowDepthStencilAttachment;
+        depthInfo._extent = glm::uvec3(kTargetSize, kTargetSize, 1);
+        depthInfo._format = vkm::VkmFormat::D32_SFLOAT; // matches renderpass.json
+        depthInfo._numMipLevels = 1;
+        depthInfo._numArrayLayers = 1;
+        depthInfo._debugName = "SceneModelDepthTarget";
+        vkm::VkmTexture* depthTarget = driver->newTexture(depthInfo);
+        REQUIRE(depthTarget != nullptr);
+
+        vkm::VkmFrameBufferDescriptor fbDesc{};
+        fbDesc._width = kTargetSize;
+        fbDesc._height = kTargetSize;
+        fbDesc._renderPass._colorAttachmentCount = 1;
+        fbDesc._renderPass._colorAttachments[0]._attachmentId = 0;
+        fbDesc._renderPass._colorAttachments[0]._loadAction = vkm::VkmLoadAction::Clear;
+        fbDesc._renderPass._colorAttachments[0]._storeAction = vkm::VkmStoreAction::Store;
+        fbDesc._renderPass._colorAttachments[0]._clearColors[3] = 1.0f; // opaque black
+        fbDesc._colorAttachments[0] = colorTarget->getHandle();
+
+        vkm::VkmDepthStencilAttachmentDescriptor depthDesc{};
+        depthDesc._attachmentId = 0;
+        depthDesc._loadAction = vkm::VkmLoadAction::Clear;
+        depthDesc._storeAction = vkm::VkmStoreAction::Store;
+        depthDesc._clearDepth = 1.0f;
+        depthDesc._clearStencil = 0;
+        fbDesc._renderPass._depthStencilAttachment = depthDesc;
+        fbDesc._depthStencilAttachment = depthTarget->getHandle();
+
+        // The fixture triangle spans x,y in [0,1] at z = 0, so this maps it onto the lower
+        // left half of clip space at depth 0.5 (in front of the 1.0 depth clear), wound
+        // counter-clockwise in the engine's +Y-up convention -- i.e. front-facing for the
+        // PSO's back-face culling.
+        SceneModelPushConstants pushConstants{};
+        pushConstants._modelViewProjection = glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, -1.0f, 0.5f)) *
+                                             glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 2.0f, 1.0f));
+        pushConstants._vertexBufferSlot = meshGpu._vertexBufferSlot;
+        pushConstants._indexBufferSlot = meshGpu._indexBufferSlot;
+        pushConstants._baseColor = model._materials[0]._baseColorFactor; // 0.25, 0.5, 0.75, 1
+        // Head-on with the fixture's +Z normals, so the shading term saturates to 1.
+        pushConstants._lightDirectionObjectSpace = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
+
+        vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+        auto* subGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
+        subGraph->addReferencedResource(meshGpu._vertexBuffer);
+        subGraph->addReferencedResource(meshGpu._indexBuffer);
+        subGraph->setRenderCallback([pso, pushConstants, &meshGpu](vkm::VkmCommandBufferBase* commandBuffer) {
+            commandBuffer->bindPipeline(pso);
+            commandBuffer->setPushConstants(&pushConstants, sizeof(SceneModelPushConstants));
+            commandBuffer->draw(meshGpu._indexCount, 1, 0, 0);
+        });
+        renderGraph.compile();
+        renderGraph.execute();
+        renderGraph.ensureCompleted();
+
+        vkm::VkmTextureReadbackResult readback = driver->readbackTexture(colorTarget->getHandle());
+        REQUIRE(readback.pixels.size() == static_cast<size_t>(kTargetSize) * kTargetSize * 4);
+
+        const auto pixelAt = [&](uint32_t x, uint32_t y) {
+            return &readback.pixels[(static_cast<size_t>(y) * readback.width + x) * readback.channels];
+        };
+
+        // BGRA8: byte order B,G,R,A. The upper-right corner is outside the triangle, so it
+        // must still hold the clear color.
+        const uint8_t* outside = pixelAt(kTargetSize - 4, 3);
+        CHECK(outside[0] == 0);
+        CHECK(outside[1] == 0);
+        CHECK(outside[2] == 0);
+
+        // NDC (-0.5, -0.5) is inside the triangle; +Y-up clip space puts it in the lower
+        // half of the image, i.e. towards the last rows of the readback.
+        const uint8_t* inside = pixelAt(kTargetSize / 4, kTargetSize * 3 / 4);
+        // baseColorFactor is (0.25, 0.5, 0.75) with the shading term at 1.0, so the
+        // channels must come out strictly ordered blue > green > red > 0. Exact values are
+        // left alone: they depend on the target format's transfer function.
+        CHECK(inside[2] > 0);
+        CHECK(inside[1] > inside[2]);
+        CHECK(inside[0] > inside[1]);
+
+        modelGpu.destroy(driver);
+    }
+} // namespace vkmtest
+
+#endif // TEST_SCENE_MODEL_RENDER_SHARED_HPP

@@ -222,12 +222,13 @@ namespace vkm
 
         // Every pipeline shares the engine-global bindless set 0 (VkmBindlessResourceManagerVulkan)
         // plus a push-constant range carrying the current draw's bindless slot indices
-        // (vertexBufferIndex, indexBufferIndex). Sets 1-3 remain unreserved/deferred.
+        // (vertexBufferIndex, indexBufferIndex) and any further per-draw data the shader
+        // declares, up to kVkmBindlessPushConstantSize. Sets 1-3 remain unreserved/deferred.
         VkDescriptorSetLayout bindlessSetLayout = driverVulkan->getBindlessResourceManager()->getSetLayout();
         const VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
             .offset     = 0,
-            .size       = sizeof(uint32_t) * 2,
+            .size       = kVkmBindlessPushConstantSize,
         };
         const VkPipelineLayoutCreateInfo layoutCreateInfo{
             .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,

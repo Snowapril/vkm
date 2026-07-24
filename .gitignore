@@ -441,4 +441,8 @@ dependencies/dxc-macos-build/
 *.vfpipeline
 *.gputrace/
 
+# Sample scenes fetched by scripts/download_scenes.py
+resources/Scenes/*
+!resources/Scenes/.gitkeep
+
 .DS_Store
