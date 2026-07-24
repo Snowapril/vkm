@@ -17,6 +17,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/base/common.h
     ${PUBLIC_HDR_DIR}/vkm/base/logger.h
     ${PUBLIC_HDR_DIR}/vkm/base/memory.h
+    ${PUBLIC_HDR_DIR}/vkm/base/global_variable.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/renderer_common.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_graph.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_graph_capture.h
@@ -52,6 +53,7 @@ set(SRCS
     ${SRC_DIR}/vkm/base/common.cpp
     ${SRC_DIR}/vkm/base/logger.cpp
     ${SRC_DIR}/vkm/base/memory.cpp
+    ${SRC_DIR}/vkm/base/global_variable.cpp
     ${SRC_DIR}/vkm/platform/common/input_handler.cpp
     ${SRC_DIR}/vkm/platform/common/glfw_input.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/renderer_common.cpp
@@ -210,6 +212,52 @@ if (VKM_USE_METAL_API)
         list(APPEND SRCS
             ${SRC_DIR}/vkm/renderer/imgui/metal_imgui_renderer.mm
         )
+
+        # Precompile the ImGui MSL to a metallib and embed it as a byte array, so the
+        # runtime loads the shader library via -[MTLDevice newLibraryWithData:]. A
+        # source library compiled through MTL4Compiler does not serialize into Xcode GPU
+        # captures, which made .gputrace replay crash in newLibraryWithDescriptor:.
+        # -frecord-sources (gated on VKM_METAL_EMIT_MSL_SOURCE) embeds the MSL so the
+        # shader debugger shows source inside a capture, matching the vfcache pipeline.
+        find_program(VKM_XCRUN_EXECUTABLE xcrun)
+        if (NOT VKM_XCRUN_EXECUTABLE)
+            message(FATAL_ERROR "xcrun not found; required to precompile the ImGui Metal shader")
+        endif()
+        set(_imgui_metal_src ${SRC_DIR}/vkm/renderer/imgui/metal_imgui_shader.metal)
+        set(_imgui_gen_dir ${CMAKE_CURRENT_BINARY_DIR}/generated)
+        set(_imgui_metallib ${_imgui_gen_dir}/metal_imgui_shader.metallib)
+        set(_imgui_embed_hdr ${_imgui_gen_dir}/metal_imgui_shader_metallib.h)
+        set(_imgui_metal_flags "")
+        if (VKM_METAL_EMIT_MSL_SOURCE)
+            set(_imgui_metal_flags -frecord-sources -gline-tables-only)
+        endif()
+        add_custom_command(
+            OUTPUT ${_imgui_metallib}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${_imgui_gen_dir}
+            COMMAND ${VKM_XCRUN_EXECUTABLE} -sdk macosx metal ${_imgui_metal_flags}
+                    -o ${_imgui_metallib} ${_imgui_metal_src}
+            DEPENDS ${_imgui_metal_src}
+            COMMENT "metal: compiling ImGui shader -> metallib"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT ${_imgui_embed_hdr}
+            COMMAND ${CMAKE_COMMAND} -DINPUT=${_imgui_metallib} -DOUTPUT=${_imgui_embed_hdr}
+                    -DSYMBOL=kVkmImGuiShaderMetallib
+                    -P ${PROJECT_SOURCE_DIR}/buildscripts/EmbedBinary.cmake
+            DEPENDS ${_imgui_metallib} ${PROJECT_SOURCE_DIR}/buildscripts/EmbedBinary.cmake
+            COMMENT "embedding ImGui metallib -> header"
+            VERBATIM)
+        # Make the .mm depend on the generated header so it is produced first and
+        # triggers a recompile when the shader changes.
+        set_source_files_properties(
+            ${SRC_DIR}/vkm/renderer/imgui/metal_imgui_renderer.mm
+            PROPERTIES OBJECT_DEPENDS ${_imgui_embed_hdr})
+        # OBJECT_DEPENDS alone does not reliably re-run the metallib/header custom commands on an
+        # incremental `--target triangle` build (the chain is only checked when vkmcore's own
+        # objects are rebuilt). Bind the header to a custom target that vkmcore depends on so the
+        # .metal -> metallib -> header chain is always checked whenever vkmcore is built.
+        add_custom_target(vkm_imgui_metal_shader DEPENDS ${_imgui_embed_hdr})
+        set(VKM_IMGUI_METAL_GEN_DIR ${_imgui_gen_dir})
     endif()
 endif()
 
@@ -278,6 +326,12 @@ set_source_files_properties(${LIBRARY_DIR}/offsetAllocator/offsetAllocator.cpp P
 # Build library
 add_library(${target} ${SRCS} ${BACKWARD_ENABLE})
 
+# Ensure the ImGui metallib/header are regenerated (from metal_imgui_shader.metal) before vkmcore
+# builds, on incremental builds too -- see the vkm_imgui_metal_shader target above.
+if (TARGET vkm_imgui_metal_shader)
+    add_dependencies(${target} vkm_imgui_metal_shader)
+endif()
+
 if (NOT EMSCRIPTEN)
     # backward-cpp has no Emscripten/WASM stack-trace backend.
     add_backward(${target})
@@ -303,6 +357,7 @@ target_include_directories(${target}
     ${LIBRARY_DIR}/vma/src
     ${LIBRARY_DIR}/cxxopts/include
     ${LIBRARY_DIR}
+    ${VKM_IMGUI_METAL_GEN_DIR} # empty unless (Metal + ImGui); holds the generated ImGui metallib header
 )
 
 # Compile options

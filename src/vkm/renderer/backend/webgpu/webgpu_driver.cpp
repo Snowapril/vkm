@@ -216,6 +216,14 @@ namespace vkm
         return new VkmPipelineStateWebGPU(this);
     }
 
+    VkmFormat VkmDriverWebGPU::selectSwapChainColorFormat(bool enableHdr) const
+    {
+        // TODO(hdr): WebGPU HDR support is limited; use the non-HDR format for now. The surface's
+        // preferred format is typically BGRA8, so this stays consistent with createSwapChain.
+        (void)enableHdr;
+        return VkmFormat::BGRA8_UNORM;
+    }
+
     VkmSwapChainBase* VkmDriverWebGPU::newSwapChainInner()
     {
         return new VkmSwapChainWebGPU(this);

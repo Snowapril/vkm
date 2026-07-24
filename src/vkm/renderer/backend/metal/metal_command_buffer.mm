@@ -327,6 +327,18 @@ namespace vkm
         _mtlCommandBuffer.label = [NSString stringWithUTF8String:name];
     }
 
+    void VkmCommandBufferMetal::onPushDebugGroup(const char* name)
+    {
+        // Command-buffer scope (not encoder scope): the render/compute encoders are nil between
+        // passes, and this is called from VkmRenderGraph::execute() outside any render pass.
+        [_mtlCommandBuffer pushDebugGroup:[NSString stringWithUTF8String:name]];
+    }
+
+    void VkmCommandBufferMetal::onPopDebugGroup()
+    {
+        [_mtlCommandBuffer popDebugGroup];
+    }
+
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
     void VkmCommandBufferMetal::onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset)
     {

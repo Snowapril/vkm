@@ -36,6 +36,9 @@ namespace vkm
             { "d32_sfloat_s8_uint", VkmFormat::D32_SFLOAT_S8_UINT },
             { "bgra8_unorm", VkmFormat::BGRA8_UNORM },
             { "bgra8_srgb", VkmFormat::BGRA8_SRGB },
+            // Color-attachment sentinel: adopt the swapchain's format. Resolved to a concrete
+            // format in VkmDriverBase::newPipelineState(); only meaningful for color attachments.
+            { "swapchain", VkmFormat::Swapchain },
         };
 
         const std::unordered_map<std::string_view, VkmPrimitiveTopology> kPrimitiveTopologyTable = {

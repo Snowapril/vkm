@@ -16,6 +16,11 @@
 #import <Metal/MTLDevice.h>
 #import <Metal/MTLHeap.h>
 
+#include <TargetConditionals.h>
+#if TARGET_OS_OSX
+#import <AppKit/AppKit.h>
+#endif
+
 #if defined(VKM_GPU_CAPTURE)
 #import <Metal/MTLCaptureManager.h>
 #import <Metal/MTLCaptureScope.h>
@@ -309,5 +314,25 @@ namespace vkm
     VkmRenderResourcePool* VkmDriverMetal::newRenderResourcePoolInner()
     {
         return new VkmRenderResourcePoolMetal(this);
+    }
+
+    VkmFormat VkmDriverMetal::selectSwapChainColorFormat(bool enableHdr) const
+    {
+        // HDR only when requested AND the display can actually present extended dynamic range,
+        // otherwise the non-HDR 8-bit format (which matches how BGRA8 pipelines expect to write).
+        if (enableHdr)
+        {
+#if TARGET_OS_OSX
+            // Ensure AppKit is initialized before querying the screen (driver init runs before
+            // NSApplicationMain). A nil screen -> treat as no EDR (safe non-HDR fallback).
+            [NSApplication sharedApplication];
+            NSScreen* mainScreen = [NSScreen mainScreen];
+            if (mainScreen != nil && mainScreen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1.0)
+            {
+                return VkmFormat::R16G16B16A16_SFLOAT;
+            }
+#endif // TARGET_OS_OSX
+        }
+        return VkmFormat::BGRA8_UNORM;
     }
 }

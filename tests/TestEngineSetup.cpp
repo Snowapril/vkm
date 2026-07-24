@@ -220,6 +220,7 @@ protected:
     vkm::VkmCommandQueueBase* newCommandQueueInner() override { return new FakeCommandQueue(this); }
     vkm::VkmPipelineStateBase* newPipelineStateInner() override { return nullptr; }
     vkm::VkmRenderResourcePool* newRenderResourcePoolInner() override { return new vkm::VkmRenderResourcePool(this); }
+    vkm::VkmFormat selectSwapChainColorFormat(bool) const override { return vkm::VkmFormat::BGRA8_UNORM; }
 };
 
 class MockBuffer : public vkm::VkmBuffer {

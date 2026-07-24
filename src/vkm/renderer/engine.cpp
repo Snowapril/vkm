@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/render_graph_capture.h>
+#include <vkm/base/global_variable.h>
 #include <cxxopts.hpp>
 #include <iostream>
 
@@ -54,6 +55,10 @@ namespace vkm
             return false;
         }
         VKM_DEBUG_INFO("LoggerManager initialized");
+
+        // Apply command-line global-variable overrides staged during parseEngineLaunchOptions,
+        // now that the logger can report which ones matched or were rejected.
+        GlobalVariableManager::singleton().applyCommandLineOverrides();
 
         _appDelegate.reset(appDelegate);
         _engineOptions = options;
@@ -202,14 +207,10 @@ namespace vkm
         const bool result = swapChain->initialize(windowInfo);
         VKM_ASSERT(result, "Failed to create swapchain");
 
-        VkmFormat backBufferFormat = VkmFormat::Undefined;
-#if defined(VKM_USE_VULKAN_API)
-        backBufferFormat = fromVkFormat(static_cast<VkmSwapChainVulkan*>(swapChain)->getImageFormat());
-#elif defined(VKM_USE_METAL_API)
-        backBufferFormat = static_cast<VkmSwapChainMetal*>(swapChain)->getBackBufferFormat();
-#elif defined(VKM_USE_WEBGPU_API)
-        backBufferFormat = fromWGPUTextureFormat(static_cast<VkmSwapChainWebGPU*>(swapChain)->getSurfaceFormat());
-#endif
+        // The swapchain color format is engine-decided once at driver init (the single source of
+        // truth used for swapchain creation and "swapchain" pipeline-format resolution alike), so
+        // read it rather than re-deriving it per backend from the swapchain object.
+        const VkmFormat backBufferFormat = _driver->getSwapChainColorFormat();
 
         const uint32_t windowIndex = static_cast<uint32_t>(_windowContexts.size());
 
@@ -416,7 +417,9 @@ namespace vkm
             ("gpu-capture-start-frame", "Start the GPU capture N frames after it is requested",
                 cxxopts::value<uint32_t>()->default_value(std::to_string(DEFAULT_ENGINE_LAUNCH_OPTIONS.gpuCaptureStartFrame)))
             ("gpu-capture-frame-count", "Number of consecutive frames to record into the .gputrace",
-                cxxopts::value<uint32_t>()->default_value(std::to_string(DEFAULT_ENGINE_LAUNCH_OPTIONS.gpuCaptureFrameCount)));
+                cxxopts::value<uint32_t>()->default_value(std::to_string(DEFAULT_ENGINE_LAUNCH_OPTIONS.gpuCaptureFrameCount)))
+            ("enable-hdr", "Request an HDR swapchain (used only if the display supports it)",
+                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableHdr ? "true" : "false"));
 
         VkmEngineLaunchOptions launchOptions = DEFAULT_ENGINE_LAUNCH_OPTIONS;
         try
@@ -429,9 +432,15 @@ namespace vkm
             launchOptions.captureGpuFrameOnStartup = result["gpu-capture-frame"].as<bool>();
             launchOptions.gpuCaptureStartFrame = result["gpu-capture-start-frame"].as<uint32_t>();
             launchOptions.gpuCaptureFrameCount = result["gpu-capture-frame-count"].as<uint32_t>();
+            launchOptions.enableHdr = result["enable-hdr"].as<bool>();
             // The GPU frame capture scope only exists when enableGpuCapture is set --
             // a startup capture request implies it.
             launchOptions.enableGpuCapture |= launchOptions.captureGpuFrameOnStartup;
+
+            // Anything the engine did not recognize is offered to the global-variable manager
+            // as a "--<name>=<value>" override. Only stage here (the logger is not up yet);
+            // applyCommandLineOverrides() runs in initializeEngine once it can report matches.
+            GlobalVariableManager::singleton().setCommandLineOverrides(result.unmatched());
         }
         catch (const std::exception& e)
         {

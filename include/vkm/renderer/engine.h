@@ -53,8 +53,12 @@ namespace vkm
         bool captureGpuFrameOnStartup = false;
         uint32_t gpuCaptureStartFrame = 0;
         uint32_t gpuCaptureFrameCount = 1;
+        // Request an HDR swapchain. The engine still only uses an HDR format when the display
+        // actually supports it (see VkmDriverBase::selectSwapChainColorFormat); otherwise it
+        // falls back to the non-HDR format. Off by default -- HDR is opt-in.
+        bool enableHdr = false;
     };
-    constexpr const VkmEngineLaunchOptions DEFAULT_ENGINE_LAUNCH_OPTIONS = { true, false, false, false, false, 0, 1 };
+    constexpr const VkmEngineLaunchOptions DEFAULT_ENGINE_LAUNCH_OPTIONS = { true, false, false, false, false, 0, 1, false };
 
     /*
     * @brief Engine base class

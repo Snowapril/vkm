@@ -311,4 +311,32 @@ namespace vkm
         (void)name;
 #endif
     }
+
+    void VkmCommandBufferVulkan::onPushDebugGroup(const char* name)
+    {
+#ifdef VKM_DEBUG_NAME_ENABLED
+        // Requires VK_EXT_debug_utils (present with validation / a capturing tool like RenderDoc);
+        // the function pointer is null otherwise, so guard on it.
+        if (vkCmdBeginDebugUtilsLabelEXT != nullptr)
+        {
+            const VkDebugUtilsLabelEXT label{
+                .sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
+                .pLabelName = name,
+            };
+            vkCmdBeginDebugUtilsLabelEXT(_vkCommandBuffer, &label);
+        }
+#else
+        (void)name;
+#endif
+    }
+
+    void VkmCommandBufferVulkan::onPopDebugGroup()
+    {
+#ifdef VKM_DEBUG_NAME_ENABLED
+        if (vkCmdEndDebugUtilsLabelEXT != nullptr)
+        {
+            vkCmdEndDebugUtilsLabelEXT(_vkCommandBuffer);
+        }
+#endif
+    }
 } // namespace vkm

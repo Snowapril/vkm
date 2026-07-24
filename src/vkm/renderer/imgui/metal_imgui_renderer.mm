@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
 #include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
+#include <vkm/renderer/backend/metal/metal_util.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
@@ -14,7 +15,6 @@
 
 #import <Metal/Metal.h>
 #import <Metal/MTL4Compiler.h>
-#import <Metal/MTL4LibraryDescriptor.h>
 #import <Metal/MTL4LibraryFunctionDescriptor.h>
 #import <Metal/MTL4RenderPipeline.h>
 #import <Metal/MTL4PipelineState.h>
@@ -24,50 +24,16 @@
 #import <AppKit/AppKit.h>
 #import <Carbon/Carbon.h>
 
+// Precompiled ImGui shader metallib, embedded as kVkmImGuiShaderMetallib[] by
+// EmbedBinary.cmake (see src/vkm/CMakeLists.txt).
+#include "metal_imgui_shader_metallib.h"
+
 #include <cstring>
 
 namespace vkm
 {
     namespace
     {
-        // Vertex/fragment pair mirroring upstream imgui_impl_metal.mm's shader, retargeted to be
-        // compiled through MTL4Compiler and bind resources by plain buffer(N)/texture(N)/sampler(N)
-        // index (an MTL4ArgumentTable binds to the same indices; the shader syntax itself is unchanged).
-        const char* IMGUI_METAL4_SHADER_SOURCE = R"(
-            #include <metal_stdlib>
-            using namespace metal;
-
-            struct Uniforms { float4x4 projectionMatrix; };
-
-            struct VertexIn { float2 position; float2 texCoord; uchar4 color; };
-
-            struct VertexOut
-            {
-                float4 position [[position]];
-                float2 texCoord;
-                float4 color;
-            };
-
-            vertex VertexOut vkm_imgui_vertex(uint vertexID [[vertex_id]],
-                                               device const VertexIn* vertices [[buffer(0)]],
-                                               constant Uniforms& uniforms [[buffer(1)]])
-            {
-                VertexIn in = vertices[vertexID];
-                VertexOut out;
-                out.position = uniforms.projectionMatrix * float4(in.position, 0.0, 1.0);
-                out.texCoord = in.texCoord;
-                out.color = float4(in.color) / float4(255.0);
-                return out;
-            }
-
-            fragment float4 vkm_imgui_fragment(VertexOut in [[stage_in]],
-                                                texture2d<float> tex [[texture(0)]],
-                                                sampler texSampler [[sampler(0)]])
-            {
-                return in.color * tex.sample(texSampler, in.texCoord);
-            }
-        )";
-
         struct Uniforms
         {
             float projectionMatrix[16];
@@ -375,7 +341,9 @@ namespace vkm
 
     bool VkmImGuiRendererMetal::initializeInner(void* windowHandle, VkmFormat backBufferFormat)
     {
-        (void)backBufferFormat; // MTLPixelFormatRGBA16Float always, matches application.mm's CAMetalLayer setup
+        // The overlay renders into the swapchain backbuffer, so its pipeline's color format must
+        // match the engine-chosen swapchain format (backBufferFormat), not a hardcoded one.
+        const MTLPixelFormat backBufferPixelFormat = getMTLPixelFormat(backBufferFormat);
 
         VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
         _impl->device = driverMetal->getMTLDevice();
@@ -397,13 +365,16 @@ namespace vkm
             return false;
         }
 
-        MTL4LibraryDescriptor* libraryDesc = [[MTL4LibraryDescriptor alloc] init];
-        libraryDesc.source = [NSString stringWithUTF8String:IMGUI_METAL4_SHADER_SOURCE];
-        id<MTLLibrary> library = [compiler newLibraryWithDescriptor:libraryDesc error:&error];
-        [libraryDesc release];
+        // Load the precompiled metallib (not a runtime source compile): a binary library
+        // serializes into Xcode GPU captures so a .gputrace replays without crashing in
+        // newLibraryWithDescriptor:. DISPATCH_DATA_DESTRUCTOR_DEFAULT copies the bytes, so
+        // the static embedded array needs no lifetime management.
+        dispatch_data_t libraryData = dispatch_data_create(kVkmImGuiShaderMetallib,
+            kVkmImGuiShaderMetallibLen, dispatch_get_main_queue(), DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+        id<MTLLibrary> library = [_impl->device newLibraryWithData:libraryData error:&error];
         if (library == nil)
         {
-            VKM_DEBUG_ERROR(fmt::format("Failed to compile ImGui Metal4 shader library: {}", error.localizedDescription.UTF8String).c_str());
+            VKM_DEBUG_ERROR(fmt::format("Failed to load ImGui Metal4 shader library: {}", error.localizedDescription.UTF8String).c_str());
             return false;
         }
 
@@ -420,7 +391,7 @@ namespace vkm
         pipelineDesc.fragmentFunctionDescriptor = fragmentFuncDesc;
         pipelineDesc.rasterSampleCount = 1;
         pipelineDesc.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
-        pipelineDesc.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+        pipelineDesc.colorAttachments[0].pixelFormat = backBufferPixelFormat;
         pipelineDesc.colorAttachments[0].blendingState = MTL4BlendStateEnabled;
         pipelineDesc.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
         pipelineDesc.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;

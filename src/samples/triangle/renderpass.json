@@ -11,7 +11,7 @@
         "depth_write_enable": false
     },
     "color_attachments": [
-        { "format": "bgra8_unorm" }
+        { "format": "swapchain" }
     ],
     "shaders": {
         "vertex": { "filepath": "triangle.hlsl", "entry_point": "VSMain" },

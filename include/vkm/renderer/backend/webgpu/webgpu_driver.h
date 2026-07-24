@@ -44,6 +44,7 @@ namespace vkm
         virtual VkmCommandQueueBase* newCommandQueueInner() override final;
         virtual VkmPipelineStateBase* newPipelineStateInner() override final;
         virtual VkmRenderResourcePool* newRenderResourcePoolInner() override final;
+        virtual VkmFormat selectSwapChainColorFormat(bool enableHdr) const override final;
 
     private:
         WGPUInstance _instance{nullptr};

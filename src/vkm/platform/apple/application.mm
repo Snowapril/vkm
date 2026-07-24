@@ -532,11 +532,11 @@ namespace
     // Configure CoreAnimation letterboxing:
     _metalLayer.contentsGravity = kCAGravityResizeAspect;
     _metalLayer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
-    
-    // Prepare the layer for EDR rendering:
-    _metalLayer.pixelFormat = MTLPixelFormatRGBA16Float;
-    _metalLayer.wantsExtendedDynamicRangeContent = YES;
-    _metalLayer.colorspace = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearDisplayP3);
+
+    // NOTE: pixelFormat / wantsExtendedDynamicRangeContent / colorspace are set by
+    // VkmSwapChainMetal::createSwapChain (invoked from addSwapChain below) from the
+    // engine-chosen swapchain color format, so the layer, backbuffer, and pipelines agree.
+
     // Create a view and customize its layer to a MetalLayer where
     // the game can render Metal content:
     _view = [[NSView alloc] initWithFrame:_window.contentLayoutRect];
@@ -582,9 +582,11 @@ namespace
     _imguiMetalLayer.framebufferOnly = YES;
     _imguiMetalLayer.contentsGravity = kCAGravityResizeAspect;
     _imguiMetalLayer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
-    _imguiMetalLayer.pixelFormat = MTLPixelFormatRGBA16Float;
-    _imguiMetalLayer.wantsExtendedDynamicRangeContent = YES;
-    _imguiMetalLayer.colorspace = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearDisplayP3);
+
+    // NOTE: pixelFormat / wantsExtendedDynamicRangeContent / colorspace are set by
+    // VkmSwapChainMetal::createSwapChain (invoked from addSwapChain below) from the
+    // engine-chosen swapchain color format, so the layer, backbuffer, and the ImGui
+    // pipeline (which uses the passed backbuffer format) all agree.
 
     _imguiView = [[NSView alloc] initWithFrame:_imguiWindow.contentLayoutRect];
     _imguiView.layer = _imguiMetalLayer;

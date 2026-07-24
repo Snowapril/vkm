@@ -229,6 +229,15 @@ namespace vkm
         return new VkmPipelineStateVulkan(this);
     }
 
+    VkmFormat VkmDriverVulkan::selectSwapChainColorFormat(bool enableHdr) const
+    {
+        // TODO(hdr): Vulkan HDR needs an HDR color space (VK_EXT_swapchain_colorspace) and
+        // surface-format negotiation; not implemented yet. Always use the non-HDR format, which
+        // matches selectSwapSurfaceFormat()'s BGRA8_UNORM/SRGB_NONLINEAR preference.
+        (void)enableHdr;
+        return VkmFormat::BGRA8_UNORM;
+    }
+
     VkmSwapChainBase* VkmDriverVulkan::newSwapChainInner()
     {
         return new VkmSwapChainVulkan(this);

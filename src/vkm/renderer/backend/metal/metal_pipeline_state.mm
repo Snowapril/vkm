@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/metal/metal_util.h>
 #include <vkm/renderer/backend/common/shader_cache_loader.h>
 #include <vkm/renderer/backend/common/shader_cache_util.h>
+#include <vkm/base/global_variable.h>
 
 #import <Metal/MTLDevice.h>
 #import <Metal/MTLLibrary.h>
@@ -26,6 +27,13 @@ namespace vkm
 {
     namespace
     {
+        // Selects how a Metal pipeline state is built: true (default) uses the Metal 4 path
+        // (MTL4Compiler + MTL4RenderPipelineDescriptor); false uses the classic Metal 3 path
+        // ([device newRenderPipelineStateWithDescriptor:]). Both produce id<MTLRenderPipelineState>
+        // / id<MTLComputePipelineState>, which the MTL4 command encoder binds either way, so only
+        // creation forks -- not the command-recording path. Override: --gv_metal4_pso=0.
+        VKM_GLOBAL_VARIABLE(bool, gv_metal4_pso, true);
+
         MTLPrimitiveTopologyClass toMTLPrimitiveTopologyClass(VkmPrimitiveTopology topology)
         {
             switch (topology)
@@ -161,19 +169,18 @@ namespace vkm
             return stencilDescriptor;
         }
 
-        // Loads one stage's .vfcache file into a transient id<MTLLibrary> and returns a
-        // MTL4LibraryFunctionDescriptor referencing its entry point. Returns nil
-        // (+ *outError) on any failure.
+        // Loads one stage's .vfcache file into a transient id<MTLLibrary> (+ *outEntryPoint).
+        // Returns nil (+ *outError) on any failure.
         //
-        // MetalLib content (the default vkm-compiler output) is loaded as a precompiled
-        // binary via -[MTLDevice newLibraryWithData:], which -- unlike compiling Msl
-        // source through the MTL4 compiler -- serializes into Xcode GPU captures so a
-        // .gputrace replays without a source recompile. Msl source is still accepted as a
-        // fallback for caches produced without a Metal toolchain.
-        MTL4LibraryFunctionDescriptor* loadStageLibraryFunction(id<MTL4Compiler> compiler,
-            id<MTLDevice> device, const VkmShaderStageDescriptor& stageDesc,
-            const std::string& shaderCacheDir, const std::string& optionName,
-            VkmShaderCacheStage stage, std::string* outError)
+        // MetalLib content (the default vkm-compiler output) is loaded as a precompiled binary
+        // via -[MTLDevice newLibraryWithData:], which -- unlike compiling Msl source -- serializes
+        // into Xcode GPU captures so a .gputrace replays without a source recompile. Msl source is
+        // a fallback for caches built without a Metal toolchain: the Metal 4 path compiles it via
+        // the MTL4 compiler, the Metal 3 path via [device newLibraryWithSource:].
+        id<MTLLibrary> loadStageLibrary(id<MTLDevice> device, id<MTL4Compiler> compiler, bool useMetal4,
+            const VkmShaderStageDescriptor& stageDesc, const std::string& shaderCacheDir,
+            const std::string& optionName, VkmShaderCacheStage stage,
+            std::string* outEntryPoint, std::string* outError)
         {
             const std::string shaderStem = std::filesystem::path(stageDesc.filepath).stem().string();
             const std::string filename = buildShaderCacheFilename(shaderStem, optionName, stage, VkmShaderCacheBackend::Metal);
@@ -213,11 +220,17 @@ namespace vkm
                     return nil;
                 }
 
-                MTL4LibraryDescriptor* libraryDescriptor = [[MTL4LibraryDescriptor alloc] init];
-                libraryDescriptor.source = mslSource;
-
                 NSError* nsError = nil;
-                library = [compiler newLibraryWithDescriptor:libraryDescriptor error:&nsError];
+                if (useMetal4)
+                {
+                    MTL4LibraryDescriptor* libraryDescriptor = [[MTL4LibraryDescriptor alloc] init];
+                    libraryDescriptor.source = mslSource;
+                    library = [compiler newLibraryWithDescriptor:libraryDescriptor error:&nsError];
+                }
+                else
+                {
+                    library = [device newLibraryWithSource:mslSource options:nil error:&nsError];
+                }
                 if (library == nil)
                 {
                     std::string reason = nsError != nil ? std::string(nsError.localizedDescription.UTF8String) : std::string("unknown error");
@@ -231,160 +244,30 @@ namespace vkm
                 return nil;
             }
 
+            *outEntryPoint = loaded->entryPoint;
+            return library;
+        }
+
+        // Wraps a loaded library + entry point as a Metal 4 function descriptor.
+        MTL4LibraryFunctionDescriptor* makeMTL4FunctionDescriptor(id<MTLLibrary> library, const std::string& entryPoint)
+        {
             MTL4LibraryFunctionDescriptor* functionDescriptor = [[MTL4LibraryFunctionDescriptor alloc] init];
             functionDescriptor.library = library;
-            functionDescriptor.name = [NSString stringWithUTF8String:loaded->entryPoint.c_str()];
+            functionDescriptor.name = [NSString stringWithUTF8String:entryPoint.c_str()];
             return functionDescriptor;
         }
-    }
 
-    VkmPipelineStateMetal::VkmPipelineStateMetal(VkmDriverBase* driver)
-        : VkmPipelineStateBase(driver)
-    {
-    }
-
-    VkmPipelineStateMetal::~VkmPipelineStateMetal()
-    {
-    }
-
-    bool VkmPipelineStateMetal::createInner(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError)
-    {
-        auto setError = [outError](const std::string& message)
+        // Builds the shared MTLVertexDescriptor from the pipeline's vertex input layout, or nil
+        // when the pipeline declares no vertex input. Identical for both PSO paths (MTLVertexDescriptor
+        // is classic Metal and both descriptor types accept it via their .vertexDescriptor property).
+        MTLVertexDescriptor* buildVertexDescriptor(const VkmPipelineStateDescriptor& desc)
         {
-            if (outError != nullptr)
+            const VkmVertexInputLayoutDescriptor& vertexLayout = desc.vertexInputLayout;
+            if (!vertexLayout.perVertex.has_value() && !vertexLayout.perInstance.has_value())
             {
-                *outError = message;
-            }
-        };
-
-        // NOTE(pipeline-state): Point fill mode / FrontAndBack cull mode have no
-        // MTLTriangleFillMode / MTLCullMode equivalent (see pipeline_state.h).
-        if (desc.rasterizationState.fillMode == VkmFillMode::Point)
-        {
-            setError("Metal does not support VkmFillMode::Point (MTLTriangleFillMode has no point mode)");
-            return false;
-        }
-        if (desc.rasterizationState.cullMode == VkmCullMode::FrontAndBack)
-        {
-            setError("Metal does not support VkmCullMode::FrontAndBack (MTLCullMode has no combined front+back mode)");
-            return false;
-        }
-
-        id<MTLDevice> device = static_cast<VkmDriverMetal*>(_driver)->getMTLDevice();
-
-        MTL4CompilerDescriptor* compilerDescriptor = [[MTL4CompilerDescriptor alloc] init];
-        NSError* nsError = nil;
-        id<MTL4Compiler> compiler = [device newCompilerWithDescriptor:compilerDescriptor error:&nsError];
-        if (compiler == nil)
-        {
-            std::string reason = nsError != nil ? std::string(nsError.localizedDescription.UTF8String) : std::string("unknown error");
-            setError("Failed to create MTL4Compiler: " + reason);
-            return false;
-        }
-
-        if (desc.computeShader.has_value())
-        {
-            std::string loadError;
-            MTL4LibraryFunctionDescriptor* computeFunctionDescriptor = loadStageLibraryFunction(
-                compiler, device, desc.computeShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Compute, &loadError);
-            if (computeFunctionDescriptor == nil)
-            {
-                setError(loadError);
-                return false;
+                return nil;
             }
 
-            MTL4ComputePipelineDescriptor* computePipelineDescriptor = [[MTL4ComputePipelineDescriptor alloc] init];
-            computePipelineDescriptor.computeFunctionDescriptor = computeFunctionDescriptor;
-
-            NSError* pipelineError = nil;
-            _computePipelineState = [compiler newComputePipelineStateWithDescriptor:computePipelineDescriptor
-                                                                 compilerTaskOptions:nil
-                                                                               error:&pipelineError];
-            if (_computePipelineState == nil)
-            {
-                std::string reason = pipelineError != nil ? std::string(pipelineError.localizedDescription.UTF8String) : std::string("unknown error");
-                setError("Failed to create compute pipeline state: " + reason);
-                return false;
-            }
-
-            return true;
-        }
-
-        if (!desc.vertexShader.has_value())
-        {
-            setError("Graphics pipeline requires a vertex shader");
-            return false;
-        }
-
-        std::string loadError;
-        MTL4LibraryFunctionDescriptor* vertexFunctionDescriptor = loadStageLibraryFunction(
-            compiler, device, desc.vertexShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Vertex, &loadError);
-        if (vertexFunctionDescriptor == nil)
-        {
-            setError(loadError);
-            return false;
-        }
-
-        MTL4LibraryFunctionDescriptor* fragmentFunctionDescriptor = nil;
-        if (desc.fragmentShader.has_value())
-        {
-            fragmentFunctionDescriptor = loadStageLibraryFunction(
-                compiler, device, desc.fragmentShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Fragment, &loadError);
-            if (fragmentFunctionDescriptor == nil)
-            {
-                setError(loadError);
-                return false;
-            }
-        }
-
-        MTL4RenderPipelineDescriptor* renderPipelineDescriptor = [[MTL4RenderPipelineDescriptor alloc] init];
-        renderPipelineDescriptor.vertexFunctionDescriptor = vertexFunctionDescriptor;
-        if (fragmentFunctionDescriptor != nil)
-        {
-            renderPipelineDescriptor.fragmentFunctionDescriptor = fragmentFunctionDescriptor;
-        }
-        else
-        {
-            renderPipelineDescriptor.rasterizationEnabled = NO;
-        }
-
-        renderPipelineDescriptor.inputPrimitiveTopology = toMTLPrimitiveTopologyClass(desc.primitiveTopology);
-
-        for (size_t i = 0; i < desc.colorAttachments.size(); ++i)
-        {
-            const VkmColorBlendAttachmentState& attachment = desc.colorAttachments[i];
-            renderPipelineDescriptor.colorAttachments[i].pixelFormat = getMTLPixelFormat(attachment.format);
-            renderPipelineDescriptor.colorAttachments[i].blendingState = attachment.blendEnable ? MTL4BlendStateEnabled : MTL4BlendStateDisabled;
-            renderPipelineDescriptor.colorAttachments[i].sourceRGBBlendFactor = toMTLBlendFactor(attachment.srcColorBlendFactor);
-            renderPipelineDescriptor.colorAttachments[i].destinationRGBBlendFactor = toMTLBlendFactor(attachment.dstColorBlendFactor);
-            renderPipelineDescriptor.colorAttachments[i].rgbBlendOperation = toMTLBlendOperation(attachment.colorBlendOp);
-            renderPipelineDescriptor.colorAttachments[i].sourceAlphaBlendFactor = toMTLBlendFactor(attachment.srcAlphaBlendFactor);
-            renderPipelineDescriptor.colorAttachments[i].destinationAlphaBlendFactor = toMTLBlendFactor(attachment.dstAlphaBlendFactor);
-            renderPipelineDescriptor.colorAttachments[i].alphaBlendOperation = toMTLBlendOperation(attachment.alphaBlendOp);
-        }
-
-        // NOTE(pipeline-state): MTL4RenderPipelineDescriptor has no
-        // depthAttachmentPixelFormat/stencilAttachmentPixelFormat (unlike the classic
-        // MTLRenderPipelineDescriptor) -- confirmed against the macOS 26 SDK headers.
-        // Depth/stencil attachment formats are therefore only known at encoder/render-
-        // pass time (MTL4RenderPassDescriptor), not at pipeline-creation time. This means a
-        // mismatch between desc.depthStencilState.depthStencilFormat and the format actually
-        // bound in the render pass cannot be caught here; it can only surface (if at all) via
-        // Metal's own validation layer at draw time.
-        //
-        // Encoder-time validation was considered (compare against
-        // VkmCommandBufferMetal's bound PSO in VkmCommandEncoderMetal::beginRenderPass /
-        // metal_command_buffer.mm) but is not currently implementable without invasive
-        // plumbing: beginRenderPass() only receives a VkmFrameBufferDescriptor, no PSO
-        // reference (per the common VkmCommandBufferBase ordering, bindPipeline() is always
-        // called *after* beginRenderPass(), so no pipeline is bound yet at that point), and
-        // VkmCommandEncoderMetal does not retain the render pass's chosen depth/stencil pixel
-        // format as member state that a later onBindPipeline() call could compare against.
-        // Left as a documented limitation rather than adding that plumbing here.
-
-        const VkmVertexInputLayoutDescriptor& vertexLayout = desc.vertexInputLayout;
-        if (vertexLayout.perVertex.has_value() || vertexLayout.perInstance.has_value())
-        {
             constexpr NSUInteger kPerVertexBufferIndex = 0;
             constexpr NSUInteger kPerInstanceBufferIndex = 1;
 
@@ -426,13 +309,240 @@ namespace vkm
                 vertexDescriptor.layouts[kPerInstanceBufferIndex].stepFunction = MTLVertexStepFunctionPerInstance;
             }
 
-            renderPipelineDescriptor.vertexDescriptor = vertexDescriptor;
+            return vertexDescriptor;
+        }
+    }
+
+    VkmPipelineStateMetal::VkmPipelineStateMetal(VkmDriverBase* driver)
+        : VkmPipelineStateBase(driver)
+    {
+    }
+
+    VkmPipelineStateMetal::~VkmPipelineStateMetal()
+    {
+    }
+
+    bool VkmPipelineStateMetal::createInner(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError)
+    {
+        auto setError = [outError](const std::string& message)
+        {
+            if (outError != nullptr)
+            {
+                *outError = message;
+            }
+        };
+
+        // NOTE(pipeline-state): Point fill mode / FrontAndBack cull mode have no
+        // MTLTriangleFillMode / MTLCullMode equivalent (see pipeline_state.h).
+        if (desc.rasterizationState.fillMode == VkmFillMode::Point)
+        {
+            setError("Metal does not support VkmFillMode::Point (MTLTriangleFillMode has no point mode)");
+            return false;
+        }
+        if (desc.rasterizationState.cullMode == VkmCullMode::FrontAndBack)
+        {
+            setError("Metal does not support VkmCullMode::FrontAndBack (MTLCullMode has no combined front+back mode)");
+            return false;
         }
 
+        id<MTLDevice> device = static_cast<VkmDriverMetal*>(_driver)->getMTLDevice();
+        const bool useMetal4 = gv_metal4_pso.get();
+
+        // The MTL4 compiler is only needed by the Metal 4 path (and its MSL fallback); the
+        // Metal 3 path builds pipeline states directly on the device.
+        id<MTL4Compiler> compiler = nil;
+        if (useMetal4)
+        {
+            MTL4CompilerDescriptor* compilerDescriptor = [[MTL4CompilerDescriptor alloc] init];
+            NSError* compilerError = nil;
+            compiler = [device newCompilerWithDescriptor:compilerDescriptor error:&compilerError];
+            if (compiler == nil)
+            {
+                std::string reason = compilerError != nil ? std::string(compilerError.localizedDescription.UTF8String) : std::string("unknown error");
+                setError("Failed to create MTL4Compiler: " + reason);
+                return false;
+            }
+        }
+
+        // ---- Compute pipeline ----
+        if (desc.computeShader.has_value())
+        {
+            std::string computeEntry;
+            std::string loadError;
+            id<MTLLibrary> computeLibrary = loadStageLibrary(device, compiler, useMetal4,
+                desc.computeShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Compute, &computeEntry, &loadError);
+            if (computeLibrary == nil)
+            {
+                setError(loadError);
+                return false;
+            }
+
+            NSError* pipelineError = nil;
+            if (useMetal4)
+            {
+                MTL4ComputePipelineDescriptor* computePipelineDescriptor = [[MTL4ComputePipelineDescriptor alloc] init];
+                computePipelineDescriptor.computeFunctionDescriptor = makeMTL4FunctionDescriptor(computeLibrary, computeEntry);
+                _computePipelineState = [compiler newComputePipelineStateWithDescriptor:computePipelineDescriptor
+                                                                     compilerTaskOptions:nil
+                                                                                   error:&pipelineError];
+            }
+            else
+            {
+                id<MTLFunction> computeFunction = [computeLibrary newFunctionWithName:[NSString stringWithUTF8String:computeEntry.c_str()]];
+                if (computeFunction == nil)
+                {
+                    setError("Compute function '" + computeEntry + "' not found in library");
+                    return false;
+                }
+                _computePipelineState = [device newComputePipelineStateWithFunction:computeFunction error:&pipelineError];
+            }
+            if (_computePipelineState == nil)
+            {
+                std::string reason = pipelineError != nil ? std::string(pipelineError.localizedDescription.UTF8String) : std::string("unknown error");
+                setError("Failed to create compute pipeline state: " + reason);
+                return false;
+            }
+
+            return true;
+        }
+
+        // ---- Graphics pipeline ----
+        if (!desc.vertexShader.has_value())
+        {
+            setError("Graphics pipeline requires a vertex shader");
+            return false;
+        }
+
+        std::string loadError;
+        std::string vertexEntry;
+        id<MTLLibrary> vertexLibrary = loadStageLibrary(device, compiler, useMetal4,
+            desc.vertexShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Vertex, &vertexEntry, &loadError);
+        if (vertexLibrary == nil)
+        {
+            setError(loadError);
+            return false;
+        }
+
+        id<MTLLibrary> fragmentLibrary = nil;
+        std::string fragmentEntry;
+        if (desc.fragmentShader.has_value())
+        {
+            fragmentLibrary = loadStageLibrary(device, compiler, useMetal4,
+                desc.fragmentShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Fragment, &fragmentEntry, &loadError);
+            if (fragmentLibrary == nil)
+            {
+                setError(loadError);
+                return false;
+            }
+        }
+
+        MTLVertexDescriptor* vertexDescriptor = buildVertexDescriptor(desc);
+
         NSError* pipelineError = nil;
-        _renderPipelineState = [compiler newRenderPipelineStateWithDescriptor:renderPipelineDescriptor
-                                                            compilerTaskOptions:nil
-                                                                          error:&pipelineError];
+        if (useMetal4)
+        {
+            MTL4RenderPipelineDescriptor* renderPipelineDescriptor = [[MTL4RenderPipelineDescriptor alloc] init];
+            renderPipelineDescriptor.vertexFunctionDescriptor = makeMTL4FunctionDescriptor(vertexLibrary, vertexEntry);
+            if (fragmentLibrary != nil)
+            {
+                renderPipelineDescriptor.fragmentFunctionDescriptor = makeMTL4FunctionDescriptor(fragmentLibrary, fragmentEntry);
+            }
+            else
+            {
+                renderPipelineDescriptor.rasterizationEnabled = NO;
+            }
+
+            renderPipelineDescriptor.inputPrimitiveTopology = toMTLPrimitiveTopologyClass(desc.primitiveTopology);
+
+            for (size_t i = 0; i < desc.colorAttachments.size(); ++i)
+            {
+                const VkmColorBlendAttachmentState& attachment = desc.colorAttachments[i];
+                renderPipelineDescriptor.colorAttachments[i].pixelFormat = getMTLPixelFormat(attachment.format);
+                renderPipelineDescriptor.colorAttachments[i].blendingState = attachment.blendEnable ? MTL4BlendStateEnabled : MTL4BlendStateDisabled;
+                renderPipelineDescriptor.colorAttachments[i].sourceRGBBlendFactor = toMTLBlendFactor(attachment.srcColorBlendFactor);
+                renderPipelineDescriptor.colorAttachments[i].destinationRGBBlendFactor = toMTLBlendFactor(attachment.dstColorBlendFactor);
+                renderPipelineDescriptor.colorAttachments[i].rgbBlendOperation = toMTLBlendOperation(attachment.colorBlendOp);
+                renderPipelineDescriptor.colorAttachments[i].sourceAlphaBlendFactor = toMTLBlendFactor(attachment.srcAlphaBlendFactor);
+                renderPipelineDescriptor.colorAttachments[i].destinationAlphaBlendFactor = toMTLBlendFactor(attachment.dstAlphaBlendFactor);
+                renderPipelineDescriptor.colorAttachments[i].alphaBlendOperation = toMTLBlendOperation(attachment.alphaBlendOp);
+            }
+
+            // NOTE(pipeline-state): MTL4RenderPipelineDescriptor has no
+            // depthAttachmentPixelFormat/stencilAttachmentPixelFormat (unlike the classic
+            // MTLRenderPipelineDescriptor in the Metal 3 branch below) -- confirmed against the
+            // macOS 26 SDK headers. Depth/stencil attachment formats come from the render pass
+            // (MTL4RenderPassDescriptor) at encode time, so a mismatch with
+            // desc.depthStencilState.depthStencilFormat can only surface via Metal's validation
+            // layer at draw time, not here.
+
+            if (vertexDescriptor != nil)
+            {
+                renderPipelineDescriptor.vertexDescriptor = vertexDescriptor;
+            }
+
+            _renderPipelineState = [compiler newRenderPipelineStateWithDescriptor:renderPipelineDescriptor
+                                                                compilerTaskOptions:nil
+                                                                              error:&pipelineError];
+        }
+        else
+        {
+            MTLRenderPipelineDescriptor* renderPipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
+            renderPipelineDescriptor.vertexFunction = [vertexLibrary newFunctionWithName:[NSString stringWithUTF8String:vertexEntry.c_str()]];
+            if (renderPipelineDescriptor.vertexFunction == nil)
+            {
+                setError("Vertex function '" + vertexEntry + "' not found in library");
+                return false;
+            }
+            if (fragmentLibrary != nil)
+            {
+                renderPipelineDescriptor.fragmentFunction = [fragmentLibrary newFunctionWithName:[NSString stringWithUTF8String:fragmentEntry.c_str()]];
+                if (renderPipelineDescriptor.fragmentFunction == nil)
+                {
+                    setError("Fragment function '" + fragmentEntry + "' not found in library");
+                    return false;
+                }
+            }
+            else
+            {
+                renderPipelineDescriptor.rasterizationEnabled = NO;
+            }
+
+            renderPipelineDescriptor.inputPrimitiveTopology = toMTLPrimitiveTopologyClass(desc.primitiveTopology);
+
+            for (size_t i = 0; i < desc.colorAttachments.size(); ++i)
+            {
+                const VkmColorBlendAttachmentState& attachment = desc.colorAttachments[i];
+                renderPipelineDescriptor.colorAttachments[i].pixelFormat = getMTLPixelFormat(attachment.format);
+                renderPipelineDescriptor.colorAttachments[i].blendingEnabled = attachment.blendEnable ? YES : NO;
+                renderPipelineDescriptor.colorAttachments[i].sourceRGBBlendFactor = toMTLBlendFactor(attachment.srcColorBlendFactor);
+                renderPipelineDescriptor.colorAttachments[i].destinationRGBBlendFactor = toMTLBlendFactor(attachment.dstColorBlendFactor);
+                renderPipelineDescriptor.colorAttachments[i].rgbBlendOperation = toMTLBlendOperation(attachment.colorBlendOp);
+                renderPipelineDescriptor.colorAttachments[i].sourceAlphaBlendFactor = toMTLBlendFactor(attachment.srcAlphaBlendFactor);
+                renderPipelineDescriptor.colorAttachments[i].destinationAlphaBlendFactor = toMTLBlendFactor(attachment.dstAlphaBlendFactor);
+                renderPipelineDescriptor.colorAttachments[i].alphaBlendOperation = toMTLBlendOperation(attachment.alphaBlendOp);
+            }
+
+            // Unlike the MTL4 path, the classic descriptor bakes depth/stencil formats into the
+            // PSO, so set them from the pipeline's declared format when present (Undefined => none;
+            // stencil format only for depth-stencil combined formats).
+            const VkmFormat depthStencilFormat = desc.depthStencilState.depthStencilFormat;
+            if (depthStencilFormat != VkmFormat::Undefined)
+            {
+                renderPipelineDescriptor.depthAttachmentPixelFormat = getMTLPixelFormat(depthStencilFormat);
+                if (depthStencilFormat == VkmFormat::D24_UNORM_S8_UINT || depthStencilFormat == VkmFormat::D32_SFLOAT_S8_UINT)
+                {
+                    renderPipelineDescriptor.stencilAttachmentPixelFormat = getMTLPixelFormat(depthStencilFormat);
+                }
+            }
+
+            if (vertexDescriptor != nil)
+            {
+                renderPipelineDescriptor.vertexDescriptor = vertexDescriptor;
+            }
+
+            _renderPipelineState = [device newRenderPipelineStateWithDescriptor:renderPipelineDescriptor error:&pipelineError];
+        }
+
         if (_renderPipelineState == nil)
         {
             std::string reason = pipelineError != nil ? std::string(pipelineError.localizedDescription.UTF8String) : std::string("unknown error");
