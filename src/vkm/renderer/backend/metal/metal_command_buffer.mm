@@ -210,6 +210,11 @@ namespace vkm
                                           atStages:MTLRenderStageVertex | MTLRenderStageFragment];
             [argumentTable setAddress:bindlessManager->getArgumentBuffer().gpuAddress
                               atIndex:kVkmMetalBindlessArgumentBufferIndex];
+            // Set 1: this frame slot's camera constants. Bound for every pipeline, including
+            // shaders that never declare them -- an argument-table index no shader reads is
+            // inert, and this keeps the bind site free of per-PSO knowledge.
+            [argumentTable setAddress:static_cast<VkmDriverMetal*>(_driver)->getFrameConstantManager()->getActiveGpuAddress()
+                              atIndex:kVkmMetalFrameConstantBufferIndex];
         }
     }
 

@@ -4,6 +4,7 @@
 
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/webgpu/webgpu_bindless_resource_manager.h>
+#include <vkm/renderer/backend/webgpu/webgpu_frame_constant_manager.h>
 #include <webgpu/webgpu.h>
 
 namespace vkm
@@ -29,6 +30,13 @@ namespace vkm
         inline VkmBindlessResourceManagerWebGPU* getBindlessResourceManager() const
         {
             return static_cast<VkmBindlessResourceManagerWebGPU*>(_bindlessResourceManager.get());
+        }
+
+        // Shadows VkmDriverBase::getFrameConstantManager() with the WebGPU-typed manager, for
+        // the same reason as above.
+        inline VkmFrameConstantManagerWebGPU* getFrameConstantManager() const
+        {
+            return static_cast<VkmFrameConstantManagerWebGPU*>(_frameConstantManager.get());
         }
 
     protected:

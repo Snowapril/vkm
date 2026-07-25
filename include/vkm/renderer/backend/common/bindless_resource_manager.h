@@ -43,6 +43,12 @@ namespace vkm
     // [8192, 12288).
     inline constexpr uint32_t kVkmMetalBindlessArgumentBufferIndex = 2;
     inline constexpr uint32_t kVkmMetalPushConstantBufferIndex     = 3;
+    // Set 1's constant buffer (see common/frame_constants.h) follows them. vkm-compiler
+    // declares set 1 discrete, so this is a plain buffer binding rather than a second
+    // argument buffer. Kept here so the argument table's bind count stays derivable from the
+    // one buffer-index map.
+    inline constexpr uint32_t kVkmMetalFrameConstantBufferIndex   = 4;
+    inline constexpr uint32_t kVkmMetalArgumentTableBufferBindCount = kVkmMetalFrameConstantBufferIndex + 1;
     inline constexpr uint32_t kVkmMetalBindlessTextureIdBase     = 0;
     inline constexpr uint32_t kVkmMetalBindlessBufferIdBase      = kVkmBindlessTextureCapacity;
     inline constexpr uint32_t kVkmMetalBindlessIndexBufferIdBase = kVkmBindlessTextureCapacity + kVkmBindlessBufferCapacity;

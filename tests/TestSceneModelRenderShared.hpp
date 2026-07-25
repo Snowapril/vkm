@@ -13,12 +13,19 @@
 // bound -- the same path src/samples/model_viewer takes. The rendered pixel also carries
 // the material's base color, so a broken material or push-constant layout shows up as a
 // wrong color rather than as nothing at all.
+//
+// It is also the engine's only GPU-level check of descriptor set 1 (the per-frame camera
+// constants -- see renderer/backend/common/frame_constants.h): the transform that places the
+// triangle is split so set 1 supplies the view-projection half and the push constants supply
+// the model half, which means a set-1 binding that is unbound, mis-offset or transposed moves
+// the geometry off the sampled pixels instead of quietly still working.
 
 #include "UnitTestUtils.hpp"
 
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/driver.h>
+#include <vkm/renderer/backend/common/frame_constants.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/render_graph.h>
@@ -42,7 +49,7 @@ namespace vkmtest
     // Mirrors PushConstants in src/samples/model_viewer/model_viewer.hlsl.
     struct SceneModelPushConstants
     {
-        glm::mat4 _modelViewProjection;
+        glm::mat4 _model;
         uint32_t _vertexBufferSlot;
         uint32_t _indexBufferSlot;
         float _pad0[2];
@@ -51,21 +58,29 @@ namespace vkmtest
     };
 
     // Draws one mesh into `fbDesc`'s targets and asserts the material color reached the
-    // pixels.
+    // pixels. `viewProjection` goes through descriptor set 1 and `model` through the push
+    // constants, exactly as the sample does.
     inline void renderSceneModelAndCheckPixels(vkm::VkmDriverBase* driver,
                                                vkm::VkmPipelineStateBase* pso,
                                                const vkm::VkmSceneModelGpu::MeshGpu& meshGpu,
                                                const glm::vec4& baseColor,
-                                               const glm::mat4& modelViewProjection,
+                                               const glm::mat4& viewProjection,
+                                               const glm::mat4& model,
                                                const vkm::VkmFrameBufferDescriptor& fbDesc)
     {
         SceneModelPushConstants pushConstants{};
-        pushConstants._modelViewProjection = modelViewProjection;
+        pushConstants._model = model;
         pushConstants._vertexBufferSlot = meshGpu._vertexBufferSlot;
         pushConstants._indexBufferSlot = meshGpu._indexBufferSlot;
         pushConstants._baseColor = baseColor;
         // Head-on with the fixture's +Z normals, so the shading term saturates to 1.
         pushConstants._lightDirectionObjectSpace = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
+
+        // Frame slot 0, matching the render graph below. Only _viewProjection is read by this
+        // PSO; the rest stay identity.
+        vkm::VkmFrameConstants frameConstants{};
+        frameConstants._viewProjection = viewProjection;
+        driver->getFrameConstantManager()->update(/*frameIndex=*/0, frameConstants);
 
         vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
         auto* subGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
@@ -169,15 +184,18 @@ namespace vkmtest
         fbDesc._renderPass._depthStencilAttachment = depthDesc;
         fbDesc._depthStencilAttachment = depthTarget->getHandle();
 
-        // The fixture triangle spans x,y in [0,1] at z = 0, so this maps it onto the lower
-        // left half of clip space at depth 0.5 (in front of the 1.0 depth clear), wound
-        // counter-clockwise in the engine's +Y-up convention -- i.e. front-facing for the
-        // PSO's back-face culling.
-        const glm::mat4 modelViewProjection = glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, -1.0f, 0.5f)) *
-                                              glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 2.0f, 1.0f));
+        // The fixture triangle spans x,y in [0,1] at z = 0, so the product of these two maps
+        // it onto the lower left half of clip space at depth 0.5 (in front of the 1.0 depth
+        // clear), wound counter-clockwise in the engine's +Y-up convention -- i.e.
+        // front-facing for the PSO's back-face culling. Deliberately split across the two
+        // paths so neither is an identity that could mask a broken binding: the translate
+        // travels through descriptor set 1, the scale through the push constants.
+        const glm::mat4 viewProjection = glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, -1.0f, 0.5f));
+        const glm::mat4 modelMatrix = glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 2.0f, 1.0f));
         const glm::vec4 baseColor = model._materials[0]._baseColorFactor; // 0.25, 0.5, 0.75, 1
 
-        renderSceneModelAndCheckPixels(driver, pso, modelGpu.getMeshes()[0], baseColor, modelViewProjection, fbDesc);
+        renderSceneModelAndCheckPixels(driver, pso, modelGpu.getMeshes()[0], baseColor,
+                                       viewProjection, modelMatrix, fbDesc);
 
         // The bindless slot-recycling that the Scene Browser's scene-swap depends on is
         // covered headlessly by "slots are recycled after unregister" (TestMetalBindlessTriangle)

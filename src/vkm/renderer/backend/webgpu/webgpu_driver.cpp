@@ -144,11 +144,24 @@ namespace vkm
             return false;
         }
         _bindlessResourceManager = std::move(bindlessResourceManager);
+
+        auto frameConstantManager = std::make_unique<VkmFrameConstantManagerWebGPU>(this);
+        if (!frameConstantManager->initialize())
+        {
+            VKM_DEBUG_ERROR("Failed to initialize WebGPU frame constant manager");
+            return false;
+        }
+        _frameConstantManager = std::move(frameConstantManager);
         return true;
     }
 
     void VkmDriverWebGPU::destroyInner()
     {
+        if (_frameConstantManager)
+        {
+            _frameConstantManager->destroy();
+            _frameConstantManager.reset();
+        }
         if (_bindlessResourceManager)
         {
             _bindlessResourceManager->destroy();

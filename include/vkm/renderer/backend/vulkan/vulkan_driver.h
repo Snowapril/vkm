@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/gpu_offset_allocator.h>
 #include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
+#include <vkm/renderer/backend/vulkan/vulkan_frame_constant_manager.h>
 #include <volk.h>
 
 // Mirrors VMA's own VK_DEFINE_HANDLE(VmaAllocator) expansion (vk_mem_alloc.h), so this
@@ -40,6 +41,13 @@ namespace vkm
         inline VkmBindlessResourceManagerVulkan* getBindlessResourceManager() const
         {
             return static_cast<VkmBindlessResourceManagerVulkan*>(_bindlessResourceManager.get());
+        }
+
+        // Shadows VkmDriverBase::getFrameConstantManager() with the Vulkan-typed manager, for
+        // the same reason as above.
+        inline VkmFrameConstantManagerVulkan* getFrameConstantManager() const
+        {
+            return static_cast<VkmFrameConstantManagerVulkan*>(_frameConstantManager.get());
         }
         inline VkmGpuTimerVulkan* getGpuTimer() const { return _gpuTimer.get(); }
 

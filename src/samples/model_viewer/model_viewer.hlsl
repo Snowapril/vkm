@@ -2,13 +2,17 @@
 //
 // Bindless vertex-pulling glTF mesh shader. Like triangle.hlsl, the pipeline declares no
 // vertex input attributes: SV_VertexID indexes a bindless index buffer, whose value then
-// indexes a bindless vertex buffer, both reached through vkm_bindless.hlsli. On top of the
-// two slot indices, the push constants carry this draw's model-view-projection matrix, its
-// base color, and the light direction already rotated into object space -- shading happens
-// in object space so no per-draw normal matrix is needed, which keeps everything inside one
-// push-constant range (see kVkmBindlessPushConstantSize).
+// indexes a bindless vertex buffer, both reached through vkm_bindless.hlsli.
+//
+// The camera comes from descriptor set 1, which the engine rewrites once per frame
+// (vkm_frame_constants.hlsli), so the push constants only carry what is genuinely per-draw:
+// the two bindless slot indices, this draw's model matrix, its base color, and the light
+// direction already rotated into object space -- shading happens in object space so no
+// per-draw normal matrix is needed, which keeps everything inside one push-constant range
+// (see kVkmBindlessPushConstantSize).
 
 #include "vkm_bindless.hlsli"
+#include "vkm_frame_constants.hlsli"
 
 // Mirrors vkm::VkmSceneVertex (include/vkm/renderer/scene/scene_model.h): the padding is
 // part of the layout, not decoration.
@@ -25,7 +29,7 @@ struct VertexData
 
 struct PushConstants
 {
-    float4x4 modelViewProjection;
+    float4x4 model;
     uint     vertexBufferIndex;
     uint     indexBufferIndex;
     float2   _pad0;
@@ -35,6 +39,7 @@ struct PushConstants
 
 VKM_PUSH_CONSTANTS(PushConstants, g_PushConstants);
 VKM_BINDLESS_VERTEX_PULLING(VertexData);
+VKM_FRAME_CONSTANTS(g_VkmFrame);
 
 struct VSOutput
 {
@@ -50,7 +55,9 @@ VSOutput VSMain(uint vertexId : SV_VertexID)
     VertexData v = VKM_LOAD_VERTEX(g_PushConstants.vertexBufferIndex, index);
 
     VSOutput output;
-    output.position = mul(g_PushConstants.modelViewProjection, float4(v.position, 1.0));
+    // Two mat4 x vec4 products rather than folding VP*M per draw on the CPU: the camera is
+    // shared by every draw, so only the model matrix has to travel in the push constants.
+    output.position = mul(g_VkmFrame.viewProjection, mul(g_PushConstants.model, float4(v.position, 1.0)));
     output.normal = v.normal;
     output.lightDirection = g_PushConstants.lightDirectionObjectSpace.xyz;
     output.baseColor = g_PushConstants.baseColor;

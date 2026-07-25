@@ -238,14 +238,18 @@ namespace vkm
         WGPUDevice device = driverWebGPU->getDevice();
 
         // Every pipeline shares the engine-global bindless bind group 0 (see
-        // VkmBindlessResourceManagerWebGPU), mirroring Vulkan's hardcoded set-0-only
-        // pipeline layout in VkmPipelineStateVulkan::createInner. Groups 1-3 are deferred
-        // (same as Vulkan's sets 1-3, see TODO.md).
-        WGPUBindGroupLayout bindlessLayout = driverWebGPU->getBindlessResourceManager()->getBindGroupLayout();
+        // VkmBindlessResourceManagerWebGPU) and per-frame bind group 1 (see
+        // VkmFrameConstantManagerWebGPU), mirroring Vulkan's two-set pipeline layout in
+        // VkmPipelineStateVulkan::createInner. Both are declared even for shaders that use
+        // neither. Groups 2-3 remain reserved (see common/frame_constants.h).
+        const WGPUBindGroupLayout bindGroupLayouts[2]{
+            driverWebGPU->getBindlessResourceManager()->getBindGroupLayout(),
+            driverWebGPU->getFrameConstantManager()->getBindGroupLayout(),
+        };
         WGPUPipelineLayoutDescriptor pipelineLayoutDesc{};
         pipelineLayoutDesc.label = toWGPUStringView("VkmPipelineStateWebGPU BindlessLayout");
-        pipelineLayoutDesc.bindGroupLayoutCount = 1;
-        pipelineLayoutDesc.bindGroupLayouts = &bindlessLayout;
+        pipelineLayoutDesc.bindGroupLayoutCount = 2;
+        pipelineLayoutDesc.bindGroupLayouts = bindGroupLayouts;
 
         WGPUPipelineLayout pipelineLayout = wgpuDeviceCreatePipelineLayout(device, &pipelineLayoutDesc);
         if (pipelineLayout == nullptr)

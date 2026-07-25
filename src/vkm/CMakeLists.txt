@@ -45,10 +45,12 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/gpu_offset_allocator.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/deferred_resource_reclaimer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/swapchain.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/frame_constants.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/memory_report.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_model.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/gltf_importer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_model_gpu.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/camera.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/engine.h
 )
 
@@ -90,6 +92,7 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/scene/cgltf_impl.cpp
     ${SRC_DIR}/vkm/renderer/scene/gltf_importer.cpp
     ${SRC_DIR}/vkm/renderer/scene/scene_model_gpu.cpp
+    ${SRC_DIR}/vkm/renderer/camera.cpp
     ${SRC_DIR}/vkm/renderer/engine.cpp
 )
 
@@ -152,6 +155,7 @@ if (VKM_USE_VULKAN_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_pipeline_state.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_frame_constant_manager.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_timer.h
     )
     list(APPEND SRCS
@@ -169,6 +173,7 @@ if (VKM_USE_VULKAN_API)
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_pipeline_state.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_frame_constant_manager.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_timer.cpp
     )
     if (VKM_ENABLE_IMGUI)
@@ -198,6 +203,7 @@ if (VKM_USE_METAL_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_buffer_view.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_bindless_resource_manager.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_frame_constant_manager.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_driver.mm
@@ -215,6 +221,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_buffer_view.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_bindless_resource_manager.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_frame_constant_manager.mm
     )
     if (VKM_ENABLE_IMGUI)
         list(APPEND PUBLIC_HDRS
@@ -288,6 +295,7 @@ if (VKM_USE_WEBGPU_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_command_buffer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_pipeline_state.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_bindless_resource_manager.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_frame_constant_manager.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/wasm/application.cpp
@@ -305,6 +313,7 @@ if (VKM_USE_WEBGPU_API)
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_command_buffer.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_pipeline_state.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_bindless_resource_manager.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_frame_constant_manager.cpp
     )
     if (VKM_ENABLE_IMGUI)
         list(APPEND PUBLIC_HDRS

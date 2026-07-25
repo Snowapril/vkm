@@ -17,6 +17,7 @@ namespace vkm
     class VkmSwapChainBase;
     class VkmPipelineStateManager;
     class VkmRenderGraphCapture;
+    class VkmCamera;
 #if defined(VKM_ENABLE_IMGUI)
     class VkmImGuiRendererBase;
     class VkmRenderGraphInspector;
@@ -163,6 +164,18 @@ namespace vkm
         inline VkmInputHandler& getInputHandler() { return _inputHandler; }
 
         /*
+        * @brief Registers the camera whose matrices the engine publishes into descriptor set 1
+        * each frame (see renderer/backend/common/frame_constants.h). Non-owning: the camera
+        * must outlive the engine loop. Pass nullptr to stop publishing, which leaves set 1
+        * carrying identity matrices.
+        * @details The engine also drives the camera's viewport from the main swapchain's
+        * extent. There is one set-1 region per frame, engine-wide, so with several windows
+        * every window renders with the main swapchain's aspect ratio.
+        */
+        inline void setActiveCamera(VkmCamera* camera) { _activeCamera = camera; }
+        inline VkmCamera* getActiveCamera() const { return _activeCamera; }
+
+        /*
         * @brief engine loop exit condition. True once the input handler has received an exit request.
         */
         inline bool shouldExit() const { return _inputHandler.shouldExit(); }
@@ -195,6 +208,8 @@ namespace vkm
         double _lastUpdateTime;
 
         VkmInputHandler _inputHandler;
+
+        VkmCamera* _activeCamera {nullptr}; // non-owning, see setActiveCamera()
 
         // One entry per window; each owns its swapchain and per-frame-slot render graphs.
         std::vector<VkmWindowContext> _windowContexts;

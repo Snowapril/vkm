@@ -5,6 +5,8 @@
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/render_graph_capture.h>
+#include <vkm/renderer/backend/common/frame_constants.h>
+#include <vkm/renderer/camera.h>
 #include <vkm/renderer/memory_report.h>
 #include <vkm/base/global_variable.h>
 #include <cxxopts.hpp>
@@ -358,6 +360,24 @@ namespace vkm
                 // Acquire failed (e.g. surface lost/out-of-date). Only this window's slot was
                 // waited on and reset, so skip just this window this frame.
                 continue;
+            }
+
+            // Publish this frame slot's camera constants into descriptor set 1. Placed here
+            // because the write is a plain host write with no GPU synchronization: it has to
+            // follow this slot's ensureCompleted() above, and it has to follow acquire so a
+            // resize's new extent is the one the projection sees. There is a single set-1
+            // region per frame slot engine-wide, so only the primary window drives it -- see
+            // VkmEngine::setActiveCamera.
+            if (windowIndex == 0)
+            {
+                VkmFrameConstants frameConstants{}; // identity while no camera is registered
+                if (_activeCamera != nullptr)
+                {
+                    const glm::uvec2 cameraExtent = windowContext._swapChain->getExtent();
+                    _activeCamera->setViewportSize(cameraExtent.x, cameraExtent.y);
+                    _activeCamera->fillFrameConstants(frameConstants);
+                }
+                _driver->getFrameConstantManager()->update(_currentFrameIndex, frameConstants);
             }
 
             // A dedicated ImGui window renders ImGui only; any other window renders the app scene.

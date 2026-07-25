@@ -18,6 +18,7 @@ set(SRCS
     ${SRC_DIR}/TestPipelineStateManager.cpp
     ${SRC_DIR}/TestBindlessSlotAllocator.cpp
     ${SRC_DIR}/TestInputHandler.cpp
+    ${SRC_DIR}/TestCamera.cpp
     ${SRC_DIR}/TestClipSpaceOrientation.cpp
     ${SRC_DIR}/TestGlobalVariable.cpp
     ${SRC_DIR}/TestGltfImporter.cpp

@@ -16,6 +16,7 @@
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/gpu_crash_handler.h>
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
+#include <vkm/renderer/backend/common/frame_constants.h>
 
 #include <cstring>
 

@@ -20,6 +20,7 @@
 #include <spirv_msl.hpp>
 
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
+#include <vkm/renderer/backend/common/frame_constants.h>
 #include <vkm/renderer/backend/common/pipeline_state_parser.h>
 #include <vkm/renderer/backend/common/shader_cache.h>
 #include <vkm/renderer/backend/common/shader_cache_util.h>
@@ -379,6 +380,25 @@ namespace
                     resourceBinding.msl_buffer = kVkmMetalBindlessArgumentBufferIndex;
                     compiler.add_msl_resource_binding(resourceBinding);
                 }
+                // Set 1 (per-frame camera constants, see common/frame_constants.h) is an
+                // ordinary constant buffer, not a resource array, so it is declared *discrete*:
+                // spirv-cross then emits it as a plain `constant VkmFrameConstants&` buffer
+                // argument instead of wrapping it in a second Tier-2 argument buffer, which is
+                // what lets the runtime bind it with a single setAddress: (see
+                // VkmFrameConstantManagerMetal). Being discrete also keeps it out of the set-0
+                // padding walk that pad_argument_buffer_resources drives.
+                compiler.add_discrete_descriptor_set(kVkmFrameConstantSetIndex);
+                {
+                    spirv_cross::MSLResourceBinding resourceBinding;
+                    resourceBinding.stage = executionModel;
+                    resourceBinding.basetype = spirv_cross::SPIRType::Float;
+                    resourceBinding.desc_set = kVkmFrameConstantSetIndex;
+                    resourceBinding.binding = kVkmFrameConstantBinding;
+                    resourceBinding.count = 1;
+                    resourceBinding.msl_buffer = kVkmMetalFrameConstantBufferIndex;
+                    compiler.add_msl_resource_binding(resourceBinding);
+                }
+
                 // Pin the push-constant block (kPushConstDescSet is its own namespace,
                 // never involved in set-0 padding).
                 {

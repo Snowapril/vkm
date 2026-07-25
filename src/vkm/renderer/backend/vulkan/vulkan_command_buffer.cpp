@@ -7,11 +7,14 @@
 #include <vkm/renderer/backend/vulkan/vulkan_pipeline_state.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
+#include <vkm/renderer/backend/vulkan/vulkan_frame_constant_manager.h>
 #include <vkm/renderer/backend/vulkan/vulkan_gpu_timer.h>
 #include <vkm/renderer/backend/common/render_pass.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/driver.h>
+
+#include <array>
 
 namespace vkm
 {
@@ -225,12 +228,17 @@ namespace vkm
 
         _boundPipelineLayout = pipelineStateVulkan->getPipelineLayout();
 
-        // Set 0 is the same engine-global bindless set for every pipeline in this
-        // convention (see VkmPipelineStateVulkan::createInner), so bind it here rather than
-        // asking every draw call site to do so explicitly.
+        // Sets 0 and 1 are engine-global for every pipeline in this convention (see
+        // VkmPipelineStateVulkan::createInner), so bind them here rather than asking every
+        // draw call site to do so explicitly. Set 1 resolves to the frame slot the engine
+        // wrote this frame.
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
-        VkDescriptorSet bindlessSet = driverVulkan->getBindlessResourceManager()->getDescriptorSet();
-        vkCmdBindDescriptorSets(_vkCommandBuffer, bindPoint, _boundPipelineLayout, 0, 1, &bindlessSet, 0, nullptr);
+        const std::array<VkDescriptorSet, 2> descriptorSets{
+            driverVulkan->getBindlessResourceManager()->getDescriptorSet(),
+            driverVulkan->getFrameConstantManager()->getActiveDescriptorSet(),
+        };
+        vkCmdBindDescriptorSets(_vkCommandBuffer, bindPoint, _boundPipelineLayout, 0,
+                                static_cast<uint32_t>(descriptorSets.size()), descriptorSets.data(), 0, nullptr);
     }
 
     void VkmCommandBufferVulkan::onUnbindPipeline()

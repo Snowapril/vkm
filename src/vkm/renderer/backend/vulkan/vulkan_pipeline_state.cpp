@@ -4,6 +4,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_util.h>
 #include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
+#include <vkm/renderer/backend/vulkan/vulkan_frame_constant_manager.h>
 #include <vkm/renderer/backend/common/shader_cache_loader.h>
 #include <vkm/renderer/backend/common/shader_cache_util.h>
 
@@ -221,10 +222,16 @@ namespace vkm
         VkDevice device = driverVulkan->getDevice();
 
         // Every pipeline shares the engine-global bindless set 0 (VkmBindlessResourceManagerVulkan)
-        // plus a push-constant range carrying the current draw's bindless slot indices
-        // (vertexBufferIndex, indexBufferIndex) and any further per-draw data the shader
-        // declares, up to kVkmBindlessPushConstantSize. Sets 1-3 remain unreserved/deferred.
-        VkDescriptorSetLayout bindlessSetLayout = driverVulkan->getBindlessResourceManager()->getSetLayout();
+        // and per-frame set 1 (VkmFrameConstantManagerVulkan), plus a push-constant range carrying
+        // the current draw's bindless slot indices (vertexBufferIndex, indexBufferIndex) and any
+        // further per-draw data the shader declares, up to kVkmBindlessPushConstantSize. Both sets
+        // are declared even for shaders that use neither -- an unused set in a pipeline layout is
+        // valid and keeps every pipeline layout-compatible. Sets 2-3 remain reserved (see
+        // common/frame_constants.h).
+        const std::array<VkDescriptorSetLayout, 2> setLayouts{
+            driverVulkan->getBindlessResourceManager()->getSetLayout(),
+            driverVulkan->getFrameConstantManager()->getSetLayout(),
+        };
         const VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
             .offset     = 0,
@@ -232,8 +239,8 @@ namespace vkm
         };
         const VkPipelineLayoutCreateInfo layoutCreateInfo{
             .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount         = 1,
-            .pSetLayouts            = &bindlessSetLayout,
+            .setLayoutCount         = static_cast<uint32_t>(setLayouts.size()),
+            .pSetLayouts            = setLayouts.data(),
             .pushConstantRangeCount = 1,
             .pPushConstantRanges    = &pushConstantRange,
         };
