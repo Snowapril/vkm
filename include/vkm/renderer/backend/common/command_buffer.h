@@ -48,10 +48,25 @@ namespace vkm
         // recording but outside a render pass.
         void copyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size);
 
-        // Texture-to-buffer copy (e.g. render target -> readback staging). Copies mip 0 /
-        // layer 0 of an uncompressed color texture, tightly packed. Must be recorded while
-        // recording but outside a render pass.
-        void copyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset = 0);
+        // Texture-to-buffer copy (e.g. render target -> readback staging). Copies mip 0 of
+        // one array layer of an uncompressed color texture, tightly packed. Must be recorded
+        // while recording but outside a render pass.
+        void copyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset = 0,
+                                 uint32_t arrayLayer = 0);
+
+        /*
+        * @brief Buffer-to-texture copy (e.g. staging -> sampled texture). Copies one
+        * tightly-packed mip level of one array layer of an uncompressed color texture; a
+        * cubemap face is just arrayLayer 0..5. Must be recorded while recording but outside
+        * a render pass.
+        * @details Leaves the destination shader-readable, so a texture is ready to sample as
+        * soon as its copies have executed -- there is deliberately no separate "transition"
+        * entry point, mirroring how copyTextureToBuffer manages layout on the caller's
+        * behalf. Only backends reporting VkmDriverCapabilityFlags::TextureUpload implement
+        * this; the others log an error and record nothing.
+        */
+        void copyBufferToTexture(VkmResourceHandle srcBuffer, VkmResourceHandle dstTexture,
+                                 uint64_t srcOffset = 0, uint32_t mipLevel = 0, uint32_t arrayLayer = 0);
 
         // Full texture-to-texture copy of mip 0 / layer 0; src and dst must share format and
         // extent. Must be recorded while recording but outside a render pass. Only backends
@@ -127,7 +142,8 @@ namespace vkm
         virtual void onBindPipeline(VkmPipelineStateBase* pipelineState) = 0;
         virtual void onUnbindPipeline() = 0;
         virtual void onCopyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size) = 0;
-        virtual void onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset) = 0;
+        virtual void onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset, uint32_t arrayLayer) = 0;
+        virtual void onCopyBufferToTexture(VkmResourceHandle srcBuffer, VkmResourceHandle dstTexture, uint64_t srcOffset, uint32_t mipLevel, uint32_t arrayLayer) = 0;
         virtual void onCopyTexture(VkmResourceHandle srcTexture, VkmResourceHandle dstTexture) = 0;
         virtual void onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) = 0;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) = 0;

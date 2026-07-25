@@ -85,6 +85,9 @@ namespace vkm
 
         const VkImageCreateInfo imageCreateInfo{
             .sType       = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            // A cubemap is an ordinary 6-layer 2D image plus this flag; without it the
+            // cube-typed image view below is invalid.
+            .flags       = (info._type == VkmTextureType::Cube) ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0u,
             .imageType   = VK_IMAGE_TYPE_2D,
             .format      = toVkFormat(info._format),
             .extent      = {info._extent.x, info._extent.y, info._extent.z},
@@ -147,7 +150,7 @@ namespace vkm
         const VkImageViewCreateInfo viewCreateInfo{
             .sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .image            = _vkTexture,
-            .viewType         = (_textureInfo._numArrayLayers > 1) ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D,
+            .viewType         = toVkImageViewType(_textureInfo._type, _textureInfo._numArrayLayers),
             .format           = toVkFormat(_textureInfo._format),
             .subresourceRange = {
                 .aspectMask     = aspectMask,

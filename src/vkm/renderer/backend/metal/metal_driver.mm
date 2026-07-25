@@ -65,7 +65,7 @@ namespace vkm
             return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "Metal 4 requires macOS 26 / iOS 26 or later; this OS version is not supported."};
         }
 
-        _driverCapabilityFlags = VkmDriverCapabilityFlags::TextureContentCapture;
+        _driverCapabilityFlags = VkmDriverCapabilityFlags::TextureContentCapture | VkmDriverCapabilityFlags::TextureUpload;
         return VkmInitResult{VkmInitResultCode::Success, ""};
     }
 

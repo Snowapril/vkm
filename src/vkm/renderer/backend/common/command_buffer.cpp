@@ -108,14 +108,26 @@ namespace vkm
         onCopyTexture(srcTexture, dstTexture);
     }
 
-    void VkmCommandBufferBase::copyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset)
+    void VkmCommandBufferBase::copyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset,
+                                                  uint32_t arrayLayer)
     {
         if (!_isRecording || _isInRenderPass)
         {
             VKM_DEBUG_ERROR("copyTextureToBuffer must be called while recording and outside a render pass");
             return;
         }
-        onCopyTextureToBuffer(srcTexture, dstBuffer, dstOffset);
+        onCopyTextureToBuffer(srcTexture, dstBuffer, dstOffset, arrayLayer);
+    }
+
+    void VkmCommandBufferBase::copyBufferToTexture(VkmResourceHandle srcBuffer, VkmResourceHandle dstTexture,
+                                                   uint64_t srcOffset, uint32_t mipLevel, uint32_t arrayLayer)
+    {
+        if (!_isRecording || _isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("copyBufferToTexture must be called while recording and outside a render pass");
+            return;
+        }
+        onCopyBufferToTexture(srcBuffer, dstTexture, srcOffset, mipLevel, arrayLayer);
     }
 
     void VkmCommandBufferBase::draw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)

@@ -189,12 +189,30 @@ namespace vkm
         ForcePooled = 2,
     };
 
+    /*
+    * @brief How a texture (or a view of one) is addressed by the shader.
+    * @details Auto reproduces the inference every backend used before this enum existed --
+    * a plain 2D image, or a 2D array once _numArrayLayers > 1 -- so leaving it unset keeps
+    * existing behavior. Cube is the one case that inference cannot express, since a cubemap
+    * and a 6-layer 2D array are the same allocation described two different ways.
+    */
+    enum class VkmTextureType : uint8_t
+    {
+        Auto = 0, // 2D, or a 2D array when _numArrayLayers > 1
+        Cube = 1, // requires _numArrayLayers == 6, ordered +X, -X, +Y, -Y, +Z, -Z
+    };
+
+    // The face count and face order every cube texture uses. The order is the one Vulkan,
+    // Metal and D3D all agree on, and is what array layer N of a cube texture means.
+    inline constexpr uint32_t kVkmCubeFaceCount = 6;
+
     struct VkmTextureInfo : public VkmResourceInfo
     {
         glm::uvec3 _extent;
         uint32_t _numMipLevels;
         uint32_t _numArrayLayers;
         VkmFormat _format;
+        VkmTextureType _type = VkmTextureType::Auto;
         VkmMemoryPlacementHint _placementHint = VkmMemoryPlacementHint::Auto;
     };
 
@@ -278,6 +296,7 @@ namespace vkm
         uint32_t _numMipLevels = UINT32_MAX;
         uint32_t _baseArrayLayer = 0;
         uint32_t _numArrayLayers = UINT32_MAX;
+        VkmTextureType _type = VkmTextureType::Auto;
     };
 
     struct VkmBufferViewInfo : public VkmResourceInfo

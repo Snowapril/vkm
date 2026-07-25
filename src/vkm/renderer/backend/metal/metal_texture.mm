@@ -57,13 +57,18 @@ namespace vkm
         if ((info._flags & VkmResourceCreateInfo::DeferredCreation) == 0 &&
             (info._flags & VkmResourceCreateInfo::ExternalHandleOwner) == 0)
         {
+            const bool isCube = (info._type == VkmTextureType::Cube);
+
             MTLTextureDescriptor* descriptor = [[MTLTextureDescriptor alloc] init];
-            descriptor.textureType = (info._numArrayLayers > 1) ? MTLTextureType2DArray : MTLTextureType2D;
+            descriptor.textureType = isCube ? MTLTextureTypeCube
+                                            : ((info._numArrayLayers > 1) ? MTLTextureType2DArray : MTLTextureType2D);
             descriptor.pixelFormat = getMTLPixelFormat(info._format);
             descriptor.width = info._extent.x;
             descriptor.height = info._extent.y;
             descriptor.mipmapLevelCount = info._numMipLevels;
-            descriptor.arrayLength = info._numArrayLayers;
+            // MTLTextureTypeCube carries its 6 slices implicitly and counts arrayLength in
+            // whole cubes -- passing 6 here would ask for a 6-cube array instead.
+            descriptor.arrayLength = isCube ? 1 : info._numArrayLayers;
             descriptor.usage = getMTLTextureUsage(info._flags);
             descriptor.storageMode = MTLStorageModePrivate;
 

@@ -1,0 +1,23 @@
+{
+    "name": "skybox_pso",
+    "primitive_topology": "triangle_list",
+    "rasterization_state": {
+        "fill_mode": "solid",
+        "cull_mode": "none",
+        "front_face": "counter_clockwise"
+    },
+    "depth_stencil_state": {
+        "depth_test_enable": false,
+        "depth_write_enable": false
+    },
+    "color_attachments": [
+        { "format": "swapchain" }
+    ],
+    "shaders": {
+        "vertex": { "filepath": "skybox.hlsl", "entry_point": "VSMain" },
+        "fragment": { "filepath": "skybox.hlsl", "entry_point": "PSMain" }
+    },
+    "options": {
+        "default": {}
+    }
+}

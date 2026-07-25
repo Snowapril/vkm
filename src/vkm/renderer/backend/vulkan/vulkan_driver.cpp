@@ -636,7 +636,7 @@ namespace vkm
         };
         VKM_VK_CHECK_RESULT_MSG_RETURN(vmaCreateAllocator(&allocatorCreateInfo, &_vmaAllocator), "Failed to create VMA allocator");
 
-        _driverCapabilityFlags = VkmDriverCapabilityFlags::CommandBufferReusable;
+        _driverCapabilityFlags = VkmDriverCapabilityFlags::CommandBufferReusable | VkmDriverCapabilityFlags::TextureUpload;
 
         // Must exist before VkmEngine::initializeBackendDriver() loads engine PSOs, since
         // pipeline-layout creation (VkmPipelineStateVulkan::createInner) needs the bindless

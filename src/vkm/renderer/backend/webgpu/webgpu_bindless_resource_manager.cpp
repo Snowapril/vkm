@@ -215,6 +215,18 @@ namespace vkm
         (isVertexArray ? _bufferSlots : _indexBufferSlots).release(slot);
     }
 
+    uint32_t VkmBindlessResourceManagerWebGPU::registerTexture(VkmResourceHandle textureHandle)
+    {
+        // Pairs with onCopyBufferToTexture: see VkmDriverCapabilityFlags::TextureUpload.
+        VKM_DEBUG_ERROR("registerTexture is not implemented on the WebGPU backend");
+        return UINT32_MAX;
+    }
+
+    void VkmBindlessResourceManagerWebGPU::unregisterTexture(uint32_t slot)
+    {
+        // Nothing was ever registered, so there is no slot to release.
+    }
+
     uint32_t VkmBindlessResourceManagerWebGPU::writePushConstants(const void* data, uint32_t size)
     {
         VKM_ASSERT(size <= PUSH_CONSTANT_ENTRY_STRIDE, "Push constant data exceeds ring entry stride");

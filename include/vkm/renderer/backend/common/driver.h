@@ -38,6 +38,11 @@ namespace vkm
         // snapshot texture contents. (copyTextureToBuffer/readbackTexture are cross-backend
         // and not gated by this flag.)
         TextureContentCapture   = 0x00000002,
+        // Backend implements copyBufferToTexture, and therefore uploadToTexture and the
+        // bindless texture array. WebGPU does not: it has no unsized texture arrays to bind
+        // into (its bindless layer is mega-buffer emulation), so nothing there can sample a
+        // texture even once the pixels are uploaded.
+        TextureUpload           = 0x00000004,
     };
 
     inline VkmDriverCapabilityFlags operator|(VkmDriverCapabilityFlags lhs, VkmDriverCapabilityFlags rhs)
@@ -116,12 +121,12 @@ namespace vkm
         VkmStagingBuffer* newStagingBuffer(const VkmStagingBufferInfo& info);
 
         /*
-         * @brief Synchronous GPU texture -> CPU pixels readback of mip 0 / layer 0 of an
+         * @brief Synchronous GPU texture -> CPU pixels readback of mip 0 of one array layer of an
          * uncompressed color texture, via a transient readback staging buffer and a one-off
          * command buffer on the Graphics queue. Blocks until the copy completes -- intended
          * for tests and debugging, not per-frame use. Returns empty pixels on failure.
          */
-        VkmTextureReadbackResult readbackTexture(VkmResourceHandle textureHandle);
+        VkmTextureReadbackResult readbackTexture(VkmResourceHandle textureHandle, uint32_t arrayLayer = 0);
 
         /*
          * @brief Synchronously upload `size` bytes from `data` into `dstBuffer` at
@@ -131,6 +136,17 @@ namespace vkm
          * postDriverReady), not per-frame streaming.
          */
         bool uploadToBuffer(VkmResourceHandle dstBuffer, const void* data, uint64_t size, uint64_t dstOffset = 0);
+
+        /*
+         * @brief Synchronously upload `size` bytes of tightly-packed pixels into one mip
+         * level of one array layer of `dstTexture` -- the texture counterpart of
+         * uploadToBuffer, with the same transient-staging, one-off-command-buffer, blocking
+         * shape and the same setup-time-only intent. A cubemap is six calls, one per face,
+         * with arrayLayer running over VkmTextureInfo's +X, -X, +Y, -Y, +Z, -Z order.
+         * The texture is sampleable once this returns.
+         */
+        bool uploadToTexture(VkmResourceHandle dstTexture, const void* data, uint64_t size,
+                             uint32_t mipLevel = 0, uint32_t arrayLayer = 0);
 
         /*
          * @brief Create sampler with the given sampler info

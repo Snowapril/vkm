@@ -50,6 +50,11 @@ namespace vkm
         uint32_t registerBuffer(VkmResourceHandle bufferHandle, VkmBindlessArrayType arrayType) override final;
         void unregisterBuffer(uint32_t slot, VkmBindlessArrayType arrayType) override final;
 
+        // Unsupported here: WGSL has no runtime-sized texture arrays, so this backend's
+        // bind group models no texture array to publish into. Always returns UINT32_MAX.
+        uint32_t registerTexture(VkmResourceHandle textureHandle) override final;
+        void unregisterTexture(uint32_t slot) override final;
+
         // Writes `size` bytes into the next push-constant ring entry and returns its byte
         // offset, to be passed as the dynamic offset of bind group 0. The ring wraps after
         // PUSH_CONSTANT_ENTRY_COUNT allocations (see the Metal manager for the same caveat).

@@ -48,6 +48,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/memory_report.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_model.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/gltf_importer.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/scene/image_loader.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_model_gpu.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/engine.h
 )
@@ -89,7 +90,9 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/scene/scene_model.cpp
     ${SRC_DIR}/vkm/renderer/scene/cgltf_impl.cpp
     ${SRC_DIR}/vkm/renderer/scene/gltf_importer.cpp
+    ${SRC_DIR}/vkm/renderer/scene/image_loader.cpp
     ${SRC_DIR}/vkm/renderer/scene/scene_model_gpu.cpp
+    ${SRC_DIR}/vkm/renderer/scene/stb_image_impl.cpp
     ${SRC_DIR}/vkm/renderer/engine.cpp
 )
 

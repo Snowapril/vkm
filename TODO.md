@@ -31,9 +31,13 @@
 - Render graph capture records swapchain backbuffer outputs as metadata only (`CAMetalLayer.framebufferOnly` stays YES).
 - Render graph capture texture previews in ImGui are Metal-only (`getTextureID` returns 0 on Vulkan/WebGPU).
 - Programmatic .gputrace capture scopes only the Metal Graphics queue 0; Vulkan/WebGPU `requestGpuFrameCapture()` is a no-op (no RenderDoc integration).
-- glTF import covers geometry and material factors only: no textures, no samplers, no animation/skinning, no Draco/KTX2/`EXT_meshopt_compression`.
+- glTF import covers geometry and material factors only: no textures, no samplers, no animation/skinning, no Draco/KTX2/`EXT_meshopt_compression` (the texture upload/bindless path it would need now exists).
 - Imported vertices keep a zeroed `TANGENT` when the asset omits one (no MikkTSpace-style generator), and generated normals are area-weighted smooth rather than the spec's flat normals.
-- Texture upload has no path at all: no `copyBufferToTexture`/`uploadToTexture` on any backend, and the bindless texture array (set 0, binding 0) still has no `registerTexture`.
+- `copyBufferToTexture`/`uploadToTexture`, `registerTexture` and the set-0 sampler are Vulkan/Metal-only; WebGPU has error-logging stubs (WGSL has no runtime-sized texture arrays).
+- Set 0 has one fixed linear/clamp-to-edge sampler at binding 3 rather than a sampler array, so per-texture filter/address modes are not selectable in shaders.
+- Only one texture type may be declared at set 0 binding 0 per shader, and texture slots come from one allocator shared by all types (convention only, unenforced).
+- Texture upload has no mipmap generation: `uploadToTexture` writes one mip level per call and nothing downsamples.
+- `uploadToTexture` blocks per call, so a 6-face cubemap stalls the graphics queue six times at load.
 - Sponza-scale scenes exceed the WebGPU bindless mega-buffers (16 MiB vertex / 8 MiB index, no growth), and `model_viewer`'s wasm build preloads no scene at all.
 - The Vulkan/WebGPU depth-attachment paths in `onBeginRenderPass` have no unit-test coverage (the offscreen scene-model render test is Metal-only; the Vulkan fixture rendered black and crashed on lavapipe). They ship compile-verified only, validated via the model_viewer sample on real hardware.
 - Metal's render-pass depth attachment hardcodes `MTLLoadActionClear`/`MTLStoreActionStore` instead of honoring `VkmDepthStencilAttachmentDescriptor`'s load/store actions.

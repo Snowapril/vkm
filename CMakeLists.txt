@@ -488,4 +488,10 @@ if (BUILD_SAMPLES)
     add_subdirectory(src/samples/empty_screen)
     add_subdirectory(src/samples/triangle)
     add_subdirectory(src/samples/model_viewer)
+    if (NOT VKM_USE_WEBGPU_API)
+        # Excluded on WebGPU: skybox.hlsl declares an unsized TextureCube array, which has no
+        # WGSL equivalent, so Tint would fail the build rather than the sample failing at run
+        # time (see VkmDriverCapabilityFlags::TextureUpload).
+        add_subdirectory(src/samples/skybox)
+    endif()
 endif()

@@ -49,7 +49,9 @@ namespace vkm
             ? info._numArrayLayers
             : (parentInfo._numArrayLayers - info._baseArrayLayer);
 
-        const MTLTextureType textureType = (numArrayLayers > 1) ? MTLTextureType2DArray : MTLTextureType2D;
+        const MTLTextureType textureType = (info._type == VkmTextureType::Cube)
+            ? MTLTextureTypeCube
+            : ((numArrayLayers > 1) ? MTLTextureType2DArray : MTLTextureType2D);
 
         id<MTLTexture> parentMtlTexture = parentTexture->getInternalHandle();
         _mtlTextureView = [parentMtlTexture newTextureViewWithPixelFormat:getMTLPixelFormat(resolvedFormat)

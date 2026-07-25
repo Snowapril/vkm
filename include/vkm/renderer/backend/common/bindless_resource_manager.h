@@ -15,7 +15,7 @@ namespace vkm
     // mega-buffer emulation -- see each VkmBindlessResourceManager* implementation).
     enum class VkmBindlessArrayType : uint8_t
     {
-        Texture     = 0, // set 0, binding 0 (sampled image array) -- reserved, unused so far
+        Texture     = 0, // set 0, binding 0 (sampled image array) -- sampled textures
         Buffer      = 1, // set 0, binding 1 (storage buffer array) -- vertex-pulling data
         IndexBuffer = 2, // set 0, binding 2 (storage buffer array) -- index-pulling data
     };
@@ -26,6 +26,28 @@ namespace vkm
     inline constexpr uint32_t kVkmBindlessTextureCapacity     = 4096; // set 0, binding 0
     inline constexpr uint32_t kVkmBindlessBufferCapacity      = 4096; // set 0, binding 1
     inline constexpr uint32_t kVkmBindlessIndexBufferCapacity = 4096; // set 0, binding 2
+
+    /*
+    * @brief set 0, binding 3 -- the one engine-wide sampler, owned by the bindless manager.
+    * @details Binding 0 is a sampled-image array with no sampler attached (which is the shape
+    * HLSL wants: DXC always emits a separate texture and SamplerState, and spirv-cross
+    * outright refuses combined image samplers inside an argument-buffer runtime array).
+    * Rather than a sampler array nothing would index yet, there is a single
+    * linear/clamp-to-edge sampler -- what a cubemap wants, and enough for any texture the
+    * engine samples today.
+    */
+    inline constexpr uint32_t kVkmBindlessSamplerBinding = 3;
+
+    /*
+    * @brief Only ONE texture type may be declared at binding 0 per shader.
+    * @details Vulkan's VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE carries no dimensionality -- the
+    * shader's declaration does -- so different pipelines may legally declare binding 0 as
+    * TextureCube[] or Texture2D[] as they like, provided each only indexes slots holding
+    * views of the type it declared (slots come from one shared allocator, so that is a
+    * convention, not something the runtime enforces). Declaring *both* in a single shader is
+    * what breaks: spirv-cross aliases the second array onto the first and skips its argument-
+    * buffer padding, silently producing a structurally wrong MSL layout.
+    */
 
     // Push-constant range every pipeline declares: vertex stage, offset 0 (see
     // VkmPipelineStateVulkan::createInner). Draws push only as much as their own shader
@@ -40,14 +62,15 @@ namespace vkm
     // Within the Tier-2 argument buffer each resource occupies one 8-byte entry (GPU address
     // or MTLResourceID) at entry index = argument-buffer id; the three arrays are laid out
     // back-to-back: textures at ids [0, 4096), buffers at [4096, 8192), index buffers at
-    // [8192, 12288).
+    // [8192, 12288), and the single engine sampler at 12288.
     inline constexpr uint32_t kVkmMetalBindlessArgumentBufferIndex = 2;
     inline constexpr uint32_t kVkmMetalPushConstantBufferIndex     = 3;
     inline constexpr uint32_t kVkmMetalBindlessTextureIdBase     = 0;
     inline constexpr uint32_t kVkmMetalBindlessBufferIdBase      = kVkmBindlessTextureCapacity;
     inline constexpr uint32_t kVkmMetalBindlessIndexBufferIdBase = kVkmBindlessTextureCapacity + kVkmBindlessBufferCapacity;
-    inline constexpr uint32_t kVkmMetalBindlessArgumentEntryCount =
+    inline constexpr uint32_t kVkmMetalBindlessSamplerId =
         kVkmBindlessTextureCapacity + kVkmBindlessBufferCapacity + kVkmBindlessIndexBufferCapacity;
+    inline constexpr uint32_t kVkmMetalBindlessArgumentEntryCount = kVkmMetalBindlessSamplerId + 1;
 
     // Fixed-capacity slot allocator for one bindless array: LIFO free-list plus a monotonic
     // high-water mark (a plain free-list, not VkmOffsetAllocator's byte-range coalescing,
@@ -81,5 +104,17 @@ namespace vkm
         // publishes it at the returned slot. Returns UINT32_MAX if the array is exhausted.
         virtual uint32_t registerBuffer(VkmResourceHandle bufferHandle, VkmBindlessArrayType arrayType) = 0;
         virtual void unregisterBuffer(uint32_t slot, VkmBindlessArrayType arrayType) = 0;
+
+        /*
+        * @brief Publishes a texture into the bindless texture array (set 0, binding 0) and
+        * returns its slot, or UINT32_MAX when the array is exhausted.
+        * @details Takes the texture rather than a view: each backend publishes the texture's
+        * own default view/native object, which VkmTextureInfo::_type already gave the right
+        * dimensionality, so a cubemap needs no separate view object. The texture must have
+        * been uploaded (or otherwise made shader-readable) before a draw samples it.
+        * Backends without VkmDriverCapabilityFlags::TextureUpload return UINT32_MAX.
+        */
+        virtual uint32_t registerTexture(VkmResourceHandle textureHandle) = 0;
+        virtual void unregisterTexture(uint32_t slot) = 0;
     };
 } // namespace vkm
