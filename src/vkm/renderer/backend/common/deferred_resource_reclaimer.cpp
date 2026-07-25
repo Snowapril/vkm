@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/common/render_resource.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
+#include <vkm/base/cpu_profiler.h>
 
 #include <vector>
 
@@ -127,6 +128,15 @@ namespace vkm
             }
         }
 
+        if (ready.empty())
+        {
+            // Nothing became reclaimable. Deliberately not profiled: this is the common case on
+            // the worker's 4 ms poll, and recording it would bury the frame in idle zones.
+            return;
+        }
+
+        VKM_PROFILE_SCOPE("Reclaimer::releaseResources");
+
         // Release outside the lock: releaseResource() runs the resource's destructor, which
         // should never happen while holding _mutex.
         VkmRenderResourcePool* pool = _driver->getRenderResourcePool();
@@ -163,6 +173,8 @@ namespace vkm
 
     void VkmDeferredResourceReclaimer::workerLoop()
     {
+        VKM_PROFILE_SET_THREAD_NAME("ResourceReclaimer");
+
         while (_running.load(std::memory_order_relaxed))
         {
             {

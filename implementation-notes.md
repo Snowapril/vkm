@@ -355,6 +355,38 @@ line names it twice both before and after — and is left alone.
   skybox samples log "uploaded by direct host copy", confirming the fast path is the one
   actually taken rather than a silent fallback.
 
+## 2026-07-25 — Per-thread CPU profiler + ImGui flame chart
+
+- Nothing CPU-side existed to profile with: `getProcessCpuUsagePercent()` gives one
+  process-wide number, `VkmGpuTimerVulkan` times whole frames on the GPU, and the
+  `CHROME_TRACING`/`TASKFLOW_PROFILER` CMake options at `CMakeLists.txt:204-205` are read by
+  no source file. New `base/cpu_profiler.{h,cpp}` adds `VKM_PROFILE_SCOPE` /
+  `VKM_PROFILE_SCOPE_DYNAMIC` / `VKM_PROFILE_SET_THREAD_NAME` and a `VkmCpuProfiler` immortal
+  singleton that collects nested per-thread zones into a 240-frame ring.
+- Zones are wall-clock `steady_clock` intervals, not per-thread CPU time: a flame chart is
+  read to find where a frame went, and time blocked on a fence or a mutex is exactly what
+  needs to be visible there.
+- Locking is split so the hot path takes nothing shared: a thread's open-zone stack is
+  touched only by that thread, while its closed-zone buffer and name sit behind a small
+  per-thread mutex the collector takes once per frame. `ThreadState` objects are never
+  destroyed, so a thread exiting mid-capture cannot invalidate a buffer `beginFrame()` is
+  about to drain. While not capturing, a scope costs one relaxed atomic load.
+- A frame's span is the union of its zones rather than the frame driver's own bracket:
+  `VkmDeferredResourceReclaimer` polls on a 4 ms cadence that does not align to frame
+  boundaries, and clipping to the driver's bracket would drop its work off the chart.
+- Zone names are stored by pointer, so `VKM_PROFILE_SCOPE_DYNAMIC` interns its argument --
+  `VkmRenderSubGraph::getName()` is rebuilt every frame by `VkmRenderGraph::reset()` while
+  the ring holds the pointer for up to 240 frames.
+- New `renderer/imgui/cpu_profiler_inspector.{h,cpp}` (F7, or `--gv_cpu_profile=1`) draws a
+  clickable frame-time history strip over a per-thread flame chart with a time ruler,
+  wheel-zoom about the cursor, drag-pan and hover tooltips. Capture follows the window's
+  visibility, and clicking a history bar pins that frame *and* stops capture -- otherwise the
+  ring would keep rolling and drop the frame the user asked to look at.
+- Instrumented the whole engine frame path (`loopInner`/`update`/`render`, per-window
+  acquire/compile/execute/present, each subgraph's `commit()`, `CommandQueue::submit`) plus
+  the reclaimer's release pass; thread names are set where each thread starts, so macOS shows
+  `RenderThread` and the other platforms `MainThread`.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:
@@ -365,6 +397,26 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Did instead: <the conservative option taken>
 - Why: <the edge case that forced it>
 ```
+
+### 2026-07-25 — CPU profiler UI pins by frame number and pauses, and clear() resets numbering
+- Planned: pin the clicked history bar by its ring index, and keep `copyFrames()` as the one
+  UI read.
+- Did instead: pin by frame number and stop capture on pin; split the UI read into
+  `copyFrameSummaries()` (strip) plus `copyFrame(index)` (one frame); reset frame numbering
+  in `clear()`.
+- Why: the ring keeps rolling while capture is on, so a pinned ring index silently slides
+  onto a different frame and eventually falls off the end -- freezing the ring is the only
+  way a pinned frame stays the one the user clicked. Deep-copying all 240 frames every UI
+  frame just to draw a bar strip was ~MBs per frame of pure waste. Numbering was reset in
+  `clear()` so each capture's first frame reads as `#0` rather than continuing a discarded
+  capture's count.
+
+### 2026-07-25 — flame chart defers its initial zoom fit until a non-empty frame
+- Planned: fit zoom/pan to the displayed frame's span on first draw.
+- Did instead: keep the fit pending until a frame with a non-zero duration arrives.
+- Why: `beginFrame()` closes a frame nothing was recorded into yet, so a capture's first
+  frame always has zero duration; fitting to it left the chart at ~884000 px/ms with every
+  nested zone scrolled off-screen (observed in the triangle sample before the fix).
 
 ### 2026-07-24 — CI caches only the dxc binary, not its build tree
 - Planned: `actions/cache` on `dependencies/dxc-macos-build`.
