@@ -234,7 +234,72 @@ namespace vkm
         return true;
     }
 
-    VkmTextureReadbackResult VkmDriverBase::readbackTexture(VkmResourceHandle textureHandle)
+    bool VkmDriverBase::uploadToTexture(VkmResourceHandle dstTexture, const void* data, uint64_t size,
+                                        uint32_t mipLevel, uint32_t arrayLayer, VkmTextureUploadMode mode)
+    {
+        if ((getDriverCapabilityFlags() & VkmDriverCapabilityFlags::TextureUpload) == 0)
+        {
+            VKM_DEBUG_ERROR("uploadToTexture: this backend does not implement texture upload");
+            return false;
+        }
+
+        VkmTexture* texture = _renderResourcePool->getResource<VkmTexture>(dstTexture);
+        if (texture == nullptr)
+        {
+            VKM_DEBUG_ERROR("uploadToTexture: invalid texture handle");
+            return false;
+        }
+
+        // The destination's own memory decides what is possible; the mode only chooses among
+        // what that already made available.
+        const bool hostCopyAvailable = texture->isHostWritable();
+        if (mode == VkmTextureUploadMode::ForceHostCopy && !hostCopyAvailable)
+        {
+            VKM_DEBUG_WARN("uploadToTexture: ForceHostCopy requested but this texture's memory is not host-writable; using the staging path");
+        }
+        if (hostCopyAvailable && mode != VkmTextureUploadMode::ForceStaging)
+        {
+            // No staging buffer, no command buffer, no submit, no wait -- the CPU writes the
+            // texture's memory in place.
+            return texture->writeRegion(data, size, mipLevel, arrayLayer);
+        }
+
+        VkmStagingBufferInfo stagingInfo{};
+        stagingInfo._flags = VkmResourceCreateInfo::AllowTransferSrc;
+        stagingInfo._size = size;
+        stagingInfo._debugName = "UploadToTextureStaging";
+        VkmStagingBuffer* stagingBuffer = newStagingBuffer(stagingInfo);
+        if (stagingBuffer == nullptr)
+        {
+            VKM_DEBUG_ERROR("uploadToTexture: failed to create staging buffer");
+            return false;
+        }
+
+        void* mapped = stagingBuffer->map();
+        std::memcpy(mapped, data, size);
+        stagingBuffer->unmap();
+        stagingBuffer->flush(0, size);
+
+        VkmCommandQueueBase* commandQueue = getCommandQueue(VkmCommandQueueType::Graphics, 0);
+        VkmCommandBufferBase* commandBuffer = commandQueue->getCommandBufferPool()->allocate();
+        commandBuffer->beginCommandBuffer();
+        commandBuffer->copyBufferToTexture(stagingBuffer->getHandle(), dstTexture, 0, mipLevel, arrayLayer);
+        commandBuffer->endCommandBuffer();
+
+        CommandSubmitInfo submitInfo;
+        submitInfo.commandBuffers[0] = commandBuffer;
+        submitInfo.commandBufferCount = 1;
+        VkmGpuEventTimelineObject submitResult = commandQueue->submit(submitInfo);
+        if (submitResult._gpuEventTimeline != nullptr)
+        {
+            submitResult._gpuEventTimeline->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
+        }
+
+        _renderResourcePool->releaseResource(stagingBuffer->getHandle());
+        return true;
+    }
+
+    VkmTextureReadbackResult VkmDriverBase::readbackTexture(VkmResourceHandle textureHandle, uint32_t arrayLayer)
     {
         VkmTextureReadbackResult result{};
 
@@ -272,7 +337,7 @@ namespace vkm
         VkmCommandQueueBase* commandQueue = getCommandQueue(VkmCommandQueueType::Graphics, 0);
         VkmCommandBufferBase* commandBuffer = commandQueue->getCommandBufferPool()->allocate();
         commandBuffer->beginCommandBuffer();
-        commandBuffer->copyTextureToBuffer(textureHandle, stagingBuffer->getHandle(), 0);
+        commandBuffer->copyTextureToBuffer(textureHandle, stagingBuffer->getHandle(), 0, arrayLayer);
         commandBuffer->endCommandBuffer();
 
         CommandSubmitInfo submitInfo;

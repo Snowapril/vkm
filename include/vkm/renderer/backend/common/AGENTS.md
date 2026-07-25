@@ -34,11 +34,52 @@ virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) 
 virtual void onEndRenderPass() = 0;
 virtual void onBindPipeline(VkmPipelineStateBase* pipelineState) = 0;
 virtual void onUnbindPipeline() = 0;
+// Backends without VkmDriverCapabilityFlags::TextureUpload (WebGPU) still override this,
+// logging an error and recording nothing -- same shape as onCopyTexture.
+virtual void onCopyBufferToTexture(VkmResourceHandle srcBuffer, VkmResourceHandle dstTexture, uint64_t srcOffset, uint32_t mipLevel, uint32_t arrayLayer) = 0;
 virtual void onSetDebugName(const char* name) = 0;
 // Only when built with VKM_ENABLE_GPU_BREAD_CRUMBS (see "GPU Crash Handler" below):
 virtual void onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset) = 0;
 virtual void onEndCommandBuffer() = 0;
 ```
+
+### Texture upload: two paths, one entry point
+
+`VkmDriverBase::uploadToTexture` picks between a staging-buffer copy (allocate staging, record
+`copyBufferToTexture`, submit, block) and a direct CPU write into the texture's own memory
+(`VkmTexture::writeRegion` -- no staging, no command buffer, no submit, no wait).
+
+The choice is **the destination texture's**, not the caller's: `VkmTexture::isHostWritable()` is
+set at creation from what the backend actually allocated, and `VkmTextureUploadMode` only selects
+among what that made available. Two levels of gating:
+
+- `VkmDriverCapabilityFlags::TextureHostCopy` -- per *device*: the backend has the mechanism
+  (Metal `MTLStorageModeShared`; Vulkan `VK_EXT_host_image_copy`, since an OPTIMAL-tiled image
+  cannot be memcpy'd into) **and** unified memory makes it worth using.
+- `VkmTexture::isHostWritable()` -- per *texture*: it is a plain upload destination
+  (`AllowTransferDst`, not an attachment or presentable) and its allocation really did land in
+  CPU-reachable memory. On Vulkan that is re-checked after the fact with
+  `vmaGetAllocationMemoryProperties`, because adding `HOST_TRANSFER` usage can change the
+  image's memory-type requirements -- a request is not a guarantee.
+
+Both paths leave the texture shader-readable, so callers never branch on which one ran. A backend
+that reports neither flag needs no `writeRegion` override; the base default is the unreachable-case
+guard.
+
+### VkmBindlessResourceManagerBase (`bindless_resource_manager.h`)
+```cpp
+virtual uint32_t registerBuffer(VkmResourceHandle bufferHandle, VkmBindlessArrayType arrayType) = 0;
+virtual void unregisterBuffer(uint32_t slot, VkmBindlessArrayType arrayType) = 0;
+virtual uint32_t registerTexture(VkmResourceHandle textureHandle) = 0;  // UINT32_MAX on WebGPU
+virtual void unregisterTexture(uint32_t slot) = 0;
+```
+`registerTexture` takes the **texture**, not a view: each backend publishes the texture's own
+default view/native object, whose dimensionality already came from `VkmTextureInfo::_type`.
+Each backend's `initialize()` also creates the one engine sampler published at
+`kVkmBindlessSamplerBinding` -- created natively (`vkCreateSampler` /
+`newSamplerStateWithDescriptor`), **not** via `VkmDriverBase::newSampler()`, because the
+bindless manager is initialized from `initializeInner()`, before the render resource pool is
+initialized and therefore before any pooled resource can exist.
 
 ### VkmPipelineStateBase (`pipeline_state_object.h`)
 ```cpp
@@ -81,7 +122,11 @@ knows how each backend expresses bindless resources and push constants (real des
 indexing plus `[[vk::push_constant]]` on Vulkan/Metal, mega-buffers plus a slot table plus a
 dynamic-offset UBO on WebGPU). Sample and engine HLSL declares its resources through that
 header's macros — `VKM_PUSH_CONSTANTS`, `VKM_BINDLESS_VERTEX_PULLING`, `VKM_LOAD_INDEX`,
-`VKM_LOAD_VERTEX` — and must not test `VKM_BACKEND_*` itself. Changing a binding number or
+`VKM_LOAD_VERTEX`, plus `VKM_BINDLESS_TEXTURE_CUBE_ARRAY` / `VKM_BINDLESS_TEXTURE_2D_ARRAY`
+and `VKM_BINDLESS_SAMPLER` for sampled textures — and must not test `VKM_BACKEND_*` itself.
+The texture/sampler macros exist only in the non-WebGPU branch (WGSL has no runtime-sized
+texture arrays), so a shader that needs them is excluded from WebGPU builds in CMake rather
+than failing at shader-compile time. Changing a binding number or
 the slot-table layout means editing the header and `bindless_resource_manager.h` together,
 not every shader.
 

@@ -37,6 +37,11 @@ namespace vkm
         uint32_t registerBuffer(VkmResourceHandle bufferHandle, VkmBindlessArrayType arrayType) override final;
         void unregisterBuffer(uint32_t slot, VkmBindlessArrayType arrayType) override final;
 
+        // Writes the texture's default image view as an update-after-bind sampled image at
+        // the returned slot of binding 0.
+        uint32_t registerTexture(VkmResourceHandle textureHandle) override final;
+        void unregisterTexture(uint32_t slot) override final;
+
         inline VkDescriptorSetLayout getSetLayout() const { return _setLayout; }
         inline VkDescriptorSet getDescriptorSet() const { return _descriptorSet; }
 
@@ -50,6 +55,8 @@ namespace vkm
         VkDescriptorSetLayout _setLayout{VK_NULL_HANDLE};
         VkDescriptorPool _descriptorPool{VK_NULL_HANDLE};
         VkDescriptorSet _descriptorSet{VK_NULL_HANDLE};
+        // Immutable sampler baked into _setLayout at kVkmBindlessSamplerBinding.
+        VkSampler _defaultSampler{VK_NULL_HANDLE};
 
         VkmBindlessSlotAllocator _textureSlots{TEXTURE_CAPACITY};
         VkmBindlessSlotAllocator _bufferSlots{BUFFER_CAPACITY};

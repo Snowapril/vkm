@@ -9,6 +9,8 @@
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_staging_buffer.h>
 
+#include <algorithm>
+
 #import <Metal/MTL4CommandBuffer.h>
 #import <Metal/MTL4RenderCommandEncoder.h>
 #import <Metal/MTL4ComputeCommandEncoder.h>
@@ -281,7 +283,7 @@ namespace vkm
         _commandEncoder.commit();
     }
 
-    void VkmCommandBufferMetal::onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset)
+    void VkmCommandBufferMetal::onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset, uint32_t arrayLayer)
     {
         VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
         VkmTextureMetal* textureMetal = static_cast<VkmTextureMetal*>(renderResourcePool->getResource<VkmTexture>(srcTexture));
@@ -300,7 +302,7 @@ namespace vkm
                                    beforeStages:MTLStageBlit
                               visibilityOptions:MTL4VisibilityOptionDevice];
         [computeEncoder copyFromTexture:textureMetal->getInternalHandle()
-                            sourceSlice:0
+                            sourceSlice:arrayLayer
                             sourceLevel:0
                            sourceOrigin:MTLOriginMake(0, 0, 0)
                              sourceSize:MTLSizeMake(textureInfo._extent.x, textureInfo._extent.y, 1)
@@ -308,6 +310,42 @@ namespace vkm
                       destinationOffset:dstOffset
                  destinationBytesPerRow:bytesPerRow
                destinationBytesPerImage:0];
+        [computeEncoder barrierAfterStages:MTLStageBlit
+                         beforeQueueStages:MTLStageAll
+                         visibilityOptions:MTL4VisibilityOptionDevice];
+        _commandEncoder.commit();
+    }
+
+    void VkmCommandBufferMetal::onCopyBufferToTexture(VkmResourceHandle srcBuffer, VkmResourceHandle dstTexture,
+                                                      uint64_t srcOffset, uint32_t mipLevel, uint32_t arrayLayer)
+    {
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        VkmTextureMetal* textureMetal = static_cast<VkmTextureMetal*>(renderResourcePool->getResource<VkmTexture>(dstTexture));
+        id<MTLBuffer> mtlSrcBuffer = resolveMTLBuffer(renderResourcePool, srcBuffer);
+
+        const VkmTextureInfo& textureInfo = textureMetal->getTextureInfo();
+        const uint32_t mipWidth = std::max(1u, textureInfo._extent.x >> mipLevel);
+        const uint32_t mipHeight = std::max(1u, textureInfo._extent.y >> mipLevel);
+        const uint32_t bytesPerRow = mipWidth * vkmBytesPerTexel(textureInfo._format);
+
+        // Metal4 has no blit encoder -- texture copies live on the compute encoder, same
+        // per-call encoder rationale as onCopyBuffer above (setup-time upload, not per-frame).
+        // Metal tracks no image layouts, so unlike Vulkan there is nothing to transition:
+        // the barriers alone make the written texels visible to later encoders' sampling.
+        _commandEncoder.beginComputePass();
+        id<MTL4ComputeCommandEncoder> computeEncoder = _commandEncoder.getActiveComputeCommandEncoder();
+        [computeEncoder barrierAfterQueueStages:MTLStageAll
+                                   beforeStages:MTLStageBlit
+                              visibilityOptions:MTL4VisibilityOptionDevice];
+        [computeEncoder copyFromBuffer:mtlSrcBuffer
+                          sourceOffset:srcOffset
+                     sourceBytesPerRow:bytesPerRow
+                   sourceBytesPerImage:static_cast<NSUInteger>(bytesPerRow) * mipHeight
+                            sourceSize:MTLSizeMake(mipWidth, mipHeight, 1)
+                             toTexture:textureMetal->getInternalHandle()
+                      destinationSlice:arrayLayer
+                      destinationLevel:mipLevel
+                     destinationOrigin:MTLOriginMake(0, 0, 0)];
         [computeEncoder barrierAfterStages:MTLStageBlit
                          beforeQueueStages:MTLStageAll
                          visibilityOptions:MTL4VisibilityOptionDevice];

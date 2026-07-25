@@ -185,7 +185,7 @@ namespace vkm
         VKM_DEBUG_ERROR("copyTexture is not implemented on the WebGPU backend");
     }
 
-    void VkmCommandBufferWebGPU::onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset)
+    void VkmCommandBufferWebGPU::onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset, uint32_t arrayLayer)
     {
         VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
         VkmTextureWebGPU* textureWebGPU = static_cast<VkmTextureWebGPU*>(renderResourcePool->getResource<VkmTexture>(srcTexture));
@@ -198,6 +198,7 @@ namespace vkm
         WGPUTexelCopyTextureInfo source{};
         source.texture = textureWebGPU->getWGPUTexture();
         source.mipLevel = 0;
+        source.origin.z = arrayLayer;
         source.aspect = WGPUTextureAspect_All;
 
         WGPUTexelCopyBufferInfo destination{};
@@ -208,6 +209,16 @@ namespace vkm
 
         const WGPUExtent3D copySize{textureInfo._extent.x, textureInfo._extent.y, 1};
         wgpuCommandEncoderCopyTextureToBuffer(_encoder, &source, &destination, &copySize);
+    }
+
+    void VkmCommandBufferWebGPU::onCopyBufferToTexture(VkmResourceHandle srcBuffer, VkmResourceHandle dstTexture,
+                                                       uint64_t srcOffset, uint32_t mipLevel, uint32_t arrayLayer)
+    {
+        // Uploading the pixels would work here, but nothing could sample them: WGSL has no
+        // runtime-sized texture arrays, so this backend's bindless layer (mega-buffer
+        // emulation) models no texture array to register the result into. Left unimplemented
+        // as a pair with registerTexture -- see VkmDriverCapabilityFlags::TextureUpload.
+        VKM_DEBUG_ERROR("copyBufferToTexture is not implemented on the WebGPU backend");
     }
 
     void VkmCommandBufferWebGPU::onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)

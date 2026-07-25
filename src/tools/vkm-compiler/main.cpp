@@ -364,6 +364,22 @@ namespace
                                   spirv_cross::SPIRType::Float,
                                   kVkmMetalBindlessIndexBufferIdBase, 0);
 
+                // The single engine sampler, pinned right after the three arrays. Samplers
+                // are keyed by msl_sampler (not msl_texture), and this entry must exist even
+                // for shaders that never declare the sampler: pad_argument_buffer_resources
+                // walks every registered binding to synthesize the padding members, so an
+                // unregistered one would shift the whole argument-buffer layout.
+                {
+                    spirv_cross::MSLResourceBinding resourceBinding;
+                    resourceBinding.stage = executionModel;
+                    resourceBinding.basetype = spirv_cross::SPIRType::Sampler;
+                    resourceBinding.desc_set = 0;
+                    resourceBinding.binding = kVkmBindlessSamplerBinding;
+                    resourceBinding.count = 1;
+                    resourceBinding.msl_sampler = kVkmMetalBindlessSamplerId;
+                    compiler.add_msl_resource_binding(resourceBinding);
+                }
+
                 // Pin the set-0 argument buffer itself ([[buffer(0)]]/[[buffer(1)]] are
                 // reserved for the vertex-stream buffers). With padding enabled, every
                 // registered binding needs a valid basetype (UInt = buffer category); the
