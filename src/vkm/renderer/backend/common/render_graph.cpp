@@ -11,6 +11,7 @@
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/gpu_crash_handler.h>
 #include <vkm/renderer/backend/common/render_graph_capture.h>
+#include <vkm/base/cpu_profiler.h>
 
 namespace vkm
 {
@@ -76,6 +77,7 @@ namespace vkm
 
     void VkmRenderGraph::execute(const VkmRenderGraphCommitOptions& options)
     {
+        VKM_PROFILE_SCOPE("RenderGraph::execute");
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         VkmGpuCrashHandler* gpuCrashHandler = _driver->getGpuCrashHandler();
         const bool gpuCrashDumpEnabled = _driver->isGpuCrashDumpEnabled();
@@ -107,7 +109,13 @@ namespace vkm
             // collapsible scope (e.g. "TrianglePass", "EngineImGuiOverlay"). Self-gated on
             // enableGpuCapture; a no-op otherwise.
             commandBuffer->pushDebugGroup(subGraph->getName().c_str());
-            subGraph->commit(commandBuffer);
+            {
+                // Named after the subgraph, so the flame chart reads the same way the GPU debug
+                // group above does. Subgraph names come from a small fixed set, which is what
+                // makes interning them safe (see VkmCpuProfiler::internName).
+                VKM_PROFILE_SCOPE_DYNAMIC(subGraph->getName());
+                subGraph->commit(commandBuffer);
+            }
             commandBuffer->popDebugGroup();
 
             if (options.capture != nullptr)
@@ -139,7 +147,10 @@ namespace vkm
         submitInfo.frameIndex = _frameIndex;
         submitInfo.presentSwapChain = options.presentSwapChain;
 
-        _lastSubmitInfo = commandQueue->submit(submitInfo);
+        {
+            VKM_PROFILE_SCOPE("CommandQueue::submit");
+            _lastSubmitInfo = commandQueue->submit(submitInfo);
+        }
 
         // Hand the command buffer back for reuse. submit() and recordSubmission() have already
         // copied everything they keep, and beginCommandBuffer() resets the per-use state, so the

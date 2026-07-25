@@ -43,3 +43,7 @@
 - `getProcessMemoryStats()` reports no peak on wasm (`emscripten_get_heap_size()` has no high-water counterpart) and none on macOS kernels older than `TASK_VM_INFO_REV3`.
 - macOS sample bundles ship no `CFBundleIconFile`, so the Dock tile shows the generic icon.
 - Vulkan never frees the per-acquire `VkCommandBuffer` from `VkmCommandBufferPoolVulkan::getOrCreateRHICommandBuffer()` (Metal releases the previous one in `setRHICommandBuffer`, WebGPU releases its encoder in `submit`).
+- CPU profiler zones are wall-clock intervals, not per-thread CPU time (no thread-CPU-clock sampling on any platform).
+- The `CHROME_TRACING` / `TASKFLOW_PROFILER,` CMake options are still dead (no source reads them, and the latter has a stray comma in its name).
+- `VkmCpuProfiler` never destroys a thread's recording state, so a process that churns threads leaks one `ThreadState` per thread ever created.
+- The CPU profiler's flame chart shows only the frame-driver and reclaimer threads; nothing else in the engine is instrumented or threaded yet.
