@@ -53,6 +53,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE INTERNAL "")
 # Compile options
 include(buildscripts/CompileOptions.cmake)
 include(buildscripts/ShaderCompile.cmake)
+include(buildscripts/AppBundle.cmake)
 
 # Build type - Release by default
 message("CMake build type: " ${CMAKE_BUILD_TYPE})

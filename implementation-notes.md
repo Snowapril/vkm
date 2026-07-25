@@ -235,6 +235,32 @@ line names it twice both before and after — and is left alone.
 - Verified with `MTL_DEBUG_LAYER=1` on all three quit paths (`--auto-close`, ESC, Quit menu
   item, window close): no hang, no `mutex lock failed`, no validation errors.
 
+## 2026-07-25 — macOS leak tooling + per-frame command buffer / Metal object leaks
+
+- New `scripts/detect_leaks.py`: runs a sample under `MallocStackLogging=1` and snapshots it
+  with `leaks`/`heap` on an interval, reporting unreferenced leaks separately from
+  still-referenced heap growth. Each snapshot saves a `.memgraph`, and the last is compared to
+  the first with `leaks --diffFrom=` so only leaks that appeared while running are listed.
+  Driven by the `detect-leak` skill. `MTL_DEBUG_LAYER` is deliberately left off — the debug
+  layer retains command buffers and descriptors of its own and skews both numbers.
+- It found ~4700 leaks per 30 s in `model_viewer` (metal), one set per frame:
+  - `VkmCommandEncoderMetal::beginRenderPass` never released its `MTL4RenderPassDescriptor`
+    and `VkmCommandQueueMetal::submit` never released its `MTL4CommitOptions` (these sources
+    are non-ARC).
+  - `VkmCommandBufferPoolBase::release()` had no callers at all, so `allocate()` constructed a
+    new command buffer instance — and with it a new `MTL4CommandBuffer` — every frame, even
+    though the base class already resets per-use state for reuse. `VkmRenderGraph::execute()`
+    and the `uploadToBuffer`/`readbackTexture` one-off submits now return theirs to the pool.
+  - `VkmCommandBufferMetal` now owns the +1 reference that
+    `getOrCreateRHICommandBuffer()` hands over: it releases the previous use's command buffer
+    when the pool hands the slot out again (one frame later at the earliest) rather than
+    straight after commit.
+- After the fixes the sample's physical footprint is flat (213.2 MB -> 213.0 MB over 40 s,
+  was +14.2 MB per 30 s) and 2 new leaks (416 B) appear over a minute, none from vkm code.
+- Not fixed, logged in `TODO.md`: Vulkan's `getOrCreateRHICommandBuffer()` has the same shape
+  of leak (`vkAllocateCommandBuffers` per acquire, never freed); WebGPU already releases its
+  encoder in `submit()`.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:

@@ -33,6 +33,9 @@ set_target_properties(${target}
     PUBLIC_HEADER "${PUBLIC_HDRS}"
 )
 
+# macOS GUI apps have to be .app bundles (see buildscripts/AppBundle.cmake).
+vkm_configure_macos_app_bundle(${target})
+
 #Include directories
 target_include_directories(${target}
     PUBLIC

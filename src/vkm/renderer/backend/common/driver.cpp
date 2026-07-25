@@ -228,6 +228,7 @@ namespace vkm
         {
             submitResult._gpuEventTimeline->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
         }
+        commandQueue->getCommandBufferPool()->release(commandBuffer);
 
         _renderResourcePool->releaseResource(stagingBuffer->getHandle());
         return true;
@@ -282,6 +283,7 @@ namespace vkm
         {
             submitResult._gpuEventTimeline->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
         }
+        commandQueue->getCommandBufferPool()->release(commandBuffer);
 
         stagingBuffer->invalidate(0, byteSize);
         const void* mapped = stagingBuffer->map();

@@ -502,10 +502,10 @@ namespace
 }
 @end
 
-// An unbundled executable has no main menu of its own, so the menu bar stays empty once the app
-// registers as a regular UI app and Cmd+Q/Cmd+H do nothing. Build a minimal app menu (GLFW does the
-// same for its unbundled windows; see dependencies/src/glfw/src/cocoa_init.m). Must be installed
-// between +sharedApplication and -finishLaunching.
+// The samples ship no MainMenu nib, so the menu bar stays empty and Cmd+Q/Cmd+H do nothing unless
+// one is built by hand. Build a minimal app menu (GLFW does the same; see
+// dependencies/src/glfw/src/cocoa_init.m). Must be installed between +sharedApplication and
+// -finishLaunching.
 static void createMenuBar(const char* appName)
 {
     NSString* name = [NSString stringWithUTF8String:appName];
@@ -869,10 +869,10 @@ namespace vkm
         NSApplication* app = [NSApplication sharedApplication];
         [app setDelegate: (::VkmApplicationImpl*)_impl];
 
-        // The samples are plain executables, not .app bundles, so macOS would otherwise treat the
-        // process as an accessory app: no Dock tile, no menu bar and no Cmd-Tab entry. Registering
-        // the regular activation policy makes it a foreground UI app like the GLFW-backed Vulkan
-        // path already is (dependencies/src/glfw/src/cocoa_init.m).
+        // Samples build as .app bundles (buildscripts/AppBundle.cmake), which already makes them
+        // regular foreground apps. Kept explicit so a bare executable — an Xcode scheme or a
+        // hand-invoked Contents/MacOS binary copied out of the bundle — still gets a Dock tile,
+        // a menu bar and a Cmd-Tab entry instead of launching as an accessory process.
         [app setActivationPolicy:NSApplicationActivationPolicyRegular];
         createMenuBar(appDelegate->getAppName());
 
@@ -945,6 +945,12 @@ namespace vkm
             return -1;
         }
         glfwInitVulkanLoader(vkGetInstanceProcAddr);
+
+        // Now that the samples are .app bundles, GLFW's default would chdir the process into
+        // <bundle>/Contents/Resources during init. Nothing is staged there and every asset path
+        // the engine uses is absolute, so that would only move the cwd out from under relative
+        // paths (log files, imgui.ini) for no gain.
+        glfwInitHint(GLFW_COCOA_CHDIR_RESOURCES, GLFW_FALSE);
 
         VKM_ASSERT(glfwInit(), "Failed to initialize GLFW");
         VKM_ASSERT(glfwVulkanSupported(), "This system does not support Vulkan API");

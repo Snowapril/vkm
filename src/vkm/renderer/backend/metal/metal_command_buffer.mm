@@ -109,6 +109,11 @@ namespace vkm
 
         _mtlRenderCommandEncoder = [_mtlCommandBuffer renderCommandEncoderWithDescriptor:mtlRenderPassDescriptor];
         _currentEncoderType = VkmCommandEncoderType::Graphics;
+
+        // These sources are compiled without ARC (see the [release] pairs elsewhere in the
+        // Metal backend), and the encoder does not keep the descriptor -- without this the
+        // descriptor and its attachment sub-objects leak once per render pass, i.e. every frame.
+        [mtlRenderPassDescriptor release];
     }
 
     void VkmCommandEncoderMetal::beginComputePass()
@@ -146,12 +151,23 @@ namespace vkm
 
     VkmCommandBufferMetal::~VkmCommandBufferMetal()
     {
+        [_mtlCommandBuffer release];
+        _mtlCommandBuffer = nil;
     }
 
     void VkmCommandBufferMetal::setRHICommandBuffer(VKM_COMMAND_BUFFER_HANDLE handle)
     {
+        // getOrCreateRHICommandBuffer() hands over a +1 reference that the __bridge cast to
+        // VKM_COMMAND_BUFFER_HANDLE cannot carry, so this slot owns it. Release the one from
+        // the previous use rather than right after commit: by the time the pool hands this
+        // slot out again its submission is a frame older, while the number of live command
+        // buffers stays bounded by the pool size instead of growing every frame.
+        id<MTL4CommandBuffer> previousCommandBuffer = _mtlCommandBuffer;
+
         _mtlCommandBuffer = (__bridge id<MTL4CommandBuffer>)handle;
         _commandEncoder.setMTLCommandBuffer(_mtlCommandBuffer);
+
+        [previousCommandBuffer release];
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         // Command buffers are pooled/reused -- discard any writes queued during a previous use.
         _pendingMarkerWrites.clear();
