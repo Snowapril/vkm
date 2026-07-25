@@ -53,6 +53,16 @@ namespace vkm
         */
         inline bool isDeviceFaultExtensionEnabled() const { return _deviceFaultExtensionEnabled; }
 
+        /*
+        * @brief Whether VK_EXT_host_image_copy is enabled *and* its feature bit is on, so
+        * vkCopyMemoryToImage / vkTransitionImageLayoutEXT are valid to call.
+        */
+        inline bool isHostImageCopyEnabled() const { return _hostImageCopyEnabled; }
+
+        // Layout to hand vkCopyMemoryToImage as the destination (see initializeInner).
+        inline VkImageLayout getHostImageCopyDstLayout() const { return _hostImageCopyDstLayout; }
+
+
         uint32_t getQueueFamilyIndex(VkmCommandQueueType queueType) const;
 
         struct PooledBufferAllocation
@@ -114,5 +124,12 @@ namespace vkm
 
         VkPhysicalDeviceFaultFeaturesEXT _deviceFaultFeatures{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
         bool _deviceFaultExtensionEnabled{false};
+
+        VkPhysicalDeviceHostImageCopyFeatures _hostImageCopyFeatures{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES};
+        bool _hostImageCopyEnabled{false};
+        // Destination layout vkCopyMemoryToImage is called with; resolved at init from the
+        // device's supported list (see initializeInner).
+        VkImageLayout _hostImageCopyDstLayout{VK_IMAGE_LAYOUT_GENERAL};
     };
 }

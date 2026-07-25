@@ -85,6 +85,12 @@ function(vkm_add_shader_cache_target)
     set(_stamp_dir "${CMAKE_CURRENT_BINARY_DIR}/${SC_TARGET_NAME}.stamps")
     file(MAKE_DIRECTORY "${_stamp_dir}")
 
+    # The bindless binding convention is shader/runtime ABI: the generated MSL bakes in the
+    # argument-buffer ids from this header, so editing it invalidates every cache. Depending
+    # on it directly also covers the VKM_HOST_VKM_COMPILER path, where the prebuilt host
+    # binary is an opaque file rather than a target that would rebuild.
+    set(_abi_header "${PROJECT_SOURCE_DIR}/include/vkm/renderer/backend/common/bindless_resource_manager.h")
+
     set(_stamps "")
     set(_index 0)
     foreach (_pso IN LISTS SC_PSO_JSON_FILES)
@@ -99,7 +105,7 @@ function(vkm_add_shader_cache_target)
                     --include-dir "${_shader_include_dir}"
                     ${_emit_msl_arg}
             COMMAND ${CMAKE_COMMAND} -E touch "${_stamp}"
-            DEPENDS "${_pso}" ${SC_EXTRA_DEPENDS} ${_shader_include_headers} ${_compiler_dep}
+            DEPENDS "${_pso}" ${SC_EXTRA_DEPENDS} ${_shader_include_headers} ${_compiler_dep} "${_abi_header}"
             COMMENT "vkm-compiler: compiling shaders for ${_pso_name} (${_backend})"
             VERBATIM)
         list(APPEND _stamps "${_stamp}")

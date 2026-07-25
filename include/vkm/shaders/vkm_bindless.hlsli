@@ -77,6 +77,24 @@
 #define VKM_LOAD_VERTEX(vertexBufferSlot, elementIndex) \
     (g_VkmBindlessVertexBuffers[vertexBufferSlot][elementIndex])
 
+// Sampled textures (set 0 binding 0) and the one engine sampler (binding 3). Deliberately
+// absent from the WebGPU branch above: WGSL has no runtime-sized texture arrays, so that
+// backend's bindless layer models no texture array at all (see
+// VkmDriverCapabilityFlags::TextureUpload) and a shader needing these cannot build there --
+// such samples are excluded from WebGPU configurations in CMake rather than failing here.
+//
+// Binding 0 carries no dimensionality of its own -- the shader's declaration supplies it --
+// so a shader picks exactly one of these per translation unit and only indexes slots holding
+// views of that type. Declaring two would alias them onto one another in the generated MSL.
+#define VKM_BINDLESS_TEXTURE_CUBE_ARRAY(name) \
+    [[vk::binding(0, 0)]] TextureCube name[] : register(t0, space0)
+
+#define VKM_BINDLESS_TEXTURE_2D_ARRAY(name) \
+    [[vk::binding(0, 0)]] Texture2D name[] : register(t0, space0)
+
+#define VKM_BINDLESS_SAMPLER(name) \
+    [[vk::binding(3, 0)]] SamplerState name : register(s0, space0)
+
 #endif // VKM_BACKEND_WEBGPU
 
 #endif // VKM_BINDLESS_HLSLI

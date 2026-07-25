@@ -183,6 +183,15 @@ VkImageUsageFlags toVkImageUsageFlags(VkmResourceCreateInfo flags)
     return usage;
 }
 
+VkImageViewType toVkImageViewType(VkmTextureType type, uint32_t numArrayLayers)
+{
+    if (type == VkmTextureType::Cube)
+    {
+        return VK_IMAGE_VIEW_TYPE_CUBE;
+    }
+    return (numArrayLayers > 1) ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+}
+
 VkBufferUsageFlags toVkBufferUsageFlags(VkmResourceCreateInfo flags)
 {
     VkBufferUsageFlags usage = 0;

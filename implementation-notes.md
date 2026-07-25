@@ -285,6 +285,75 @@ line names it twice both before and after — and is left alone.
 - Not fixed, logged in `TODO.md`: Vulkan's `getOrCreateRHICommandBuffer()` has the same shape
   of leak (`vkAllocateCommandBuffers` per acquire, never freed); WebGPU already releases its
   encoder in `submit()`.
+## 2026-07-25 — Cubemap loading + skybox sample (first textured render path)
+
+- vkm had never sampled a texture: no image decoder, no upload path, no `registerTexture`, no
+  sampler bound anywhere. A cubemap is the first consumer of all four, so most of this change
+  is general texture infrastructure and only the last part is skybox-specific.
+- `VkmTextureType {Auto, Cube}` on `VkmTextureInfo`/`VkmTextureViewInfo`. `Auto` reproduces the
+  old `_numArrayLayers > 1` inference exactly, so no existing call site changes behavior. Cube
+  sets `VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT` + `VK_IMAGE_VIEW_TYPE_CUBE` on Vulkan, and
+  `MTLTextureTypeCube` with `arrayLength = 1` on Metal — Metal counts `arrayLength` in whole
+  cubes, so passing 6 there would create a 6-cube array. `initializeTextureCommon` asserts the
+  6-layers/square invariant once, centrally, rather than letting the two backends diverge.
+- `copyBufferToTexture` / `uploadToTexture` mirror `copyTextureToBuffer` / `uploadToBuffer`.
+  `copyTextureToBuffer` and `readbackTexture` gained an `arrayLayer` parameter at the same
+  time — without it a test can only ever see face 0, and face-order is the most likely bug in
+  a cubemap.
+- **Latent bug fixed:** `transitionImageLayout` hardcoded `subresourceRange = {aspect,0,1,0,1}`.
+  Every texture in the engine had been single-mip single-layer, so this never mattered; on a
+  6-layer cube it left layers 1-5 in `UNDEFINED` while `VkmTextureVulkan::_currentLayout` (one
+  scalar for the whole image) claimed otherwise. Now `VK_REMAINING_*`, which is identical for
+  every pre-existing caller.
+- Bindless `registerTexture` takes the **texture**, not a view — the default view already has
+  the right dimensionality thanks to `_type`, so no extra view object is needed on either
+  backend. Set 0 gained one engine sampler at binding 3 (linear, clamp-to-edge), as a Vulkan
+  `pImmutableSamplers` binding and a Metal argument-buffer entry at id 12288.
+- `vkm_add_shader_cache_target` now depends on `bindless_resource_manager.h`: the generated MSL
+  bakes in the argument-buffer ids, so editing that header must invalidate every `.vfcache`.
+  The `vkm-compiler` target dependency already covered the normal path, but not
+  `VKM_HOST_VKM_COMPILER` (wasm), where the compiler is an opaque prebuilt file.
+- The skybox is a generated fullscreen triangle — no vertex/index buffers at all, which suits
+  an engine where nothing ever binds one. The view ray is built in the vertex stage and
+  interpolated, because the fragment stage cannot read push constants (vertex-only range).
+- Verified: `run_tests.py` passes on all three backends. Metal 102/102 with
+  `MTL_DEBUG_LAYER=1`, Vulkan 103/103 with `VK_LAYER_KHRONOS_validation` active, WebGPU PASS
+  (stubs still compile). Zero validation errors on either backend. The skybox sample was run
+  on Metal and visually confirmed: +Z blue centered, +X red on the left, -X cyan on the right,
+  matching the right-handed `lookAtRH` convention.
+
+## 2026-07-25 — Host-copy texture upload on unified-memory devices
+
+- `uploadToTexture` had one implementation: staging buffer, one-off command buffer, submit,
+  block. Correct for a discrete GPU; on unified memory it copies the pixels twice through
+  memory the CPU can already write and stalls the queue once per call.
+- Now two paths behind one entry point. Which one runs is the *destination texture's*
+  property, not the caller's: `VkmTexture::isHostWritable()` is set at creation from what the
+  backend actually allocated, and `VkmTextureUploadMode` (Auto/ForceStaging/ForceHostCopy)
+  only selects among what that made available. Two levels of gating --
+  `VkmDriverCapabilityFlags::TextureHostCopy` per device, `isHostWritable()` per texture.
+- Metal: `MTLStorageModeShared` + `replaceRegion:`, the same mechanism the ImGui font atlas
+  already used. Vulkan: `VK_EXT_host_image_copy`, because an OPTIMAL-tiled image cannot be
+  memcpy'd into -- host-visible memory alone buys nothing. On Vulkan the outcome is re-checked
+  after allocation with `vmaGetAllocationMemoryProperties`, since adding `HOST_TRANSFER` usage
+  can change the image's memory-type requirements: a request is not a guarantee.
+- Only plain upload destinations are eligible (`AllowTransferDst`, not an attachment or
+  presentable). Render targets stay device-local; they are GPU-written and would only lose
+  bandwidth.
+- The host path does no queue work at all, so it does not block -- which removes the six
+  per-cubemap stalls previously recorded in `TODO.md` on any device that supports it.
+- **Debugging note.** A null `vkCopyMemoryToImage` (see the deviation below) surfaced as a
+  *hang* with mimalloc "heap corruption" assertions, not a stack trace: backward-cpp's signal
+  handler allocates while formatting the trace, so the abort re-entered mimalloc and recursed
+  forever. The mimalloc output was entirely a red herring. Bisecting the feature in two steps
+  (extension enabled but unused, then images created but never written) localized it in two
+  runs where reading the assertion text would have misled indefinitely. Logged in `TODO.md`.
+- Verified: Metal 102/102 with `MTL_DEBUG_LAYER=1`, Vulkan 103/103 with
+  `VK_LAYER_KHRONOS_validation`, WebGPU PASS. Zero validation errors on either backend. The
+  cubemap test uploads all six faces through *both* paths and asserts identical readback, with
+  the second pass writing different colors so a silently-no-op host copy cannot pass. Both
+  skybox samples log "uploaded by direct host copy", confirming the fast path is the one
+  actually taken rather than a silent fallback.
 
 ## 2026-07-25 — Per-thread CPU profiler + ImGui flame chart
 
@@ -636,3 +705,80 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
   marking `HEAD` would have made the next `/session-report` silently skip it. Rewinding
   the marker to the last reported state is the conservative option: worst case the next
   report re-describes a commit, never drops one.
+
+### 2026-07-25 — The skybox needs no `-fvk-invert-y` compensation
+- Planned: negate the `ndc.y` used for ray reconstruction under `#if defined(VKM_BACKEND_VULKAN)`,
+  on the theory that Vulkan's vertex-stage `-fvk-invert-y` would flip the emitted position but
+  not the separately-computed direction, mirroring the sky vertically on Vulkan only.
+- Did instead: no compensation at all, in shared HLSL.
+- Why: the premise was wrong. `-fvk-invert-y` is a store-time transform on the `Position`
+  builtin — it rewrites the value on the way out, after the shader body has run — so the
+  vertex and its interpolants move together and both backends land the same direction on the
+  same pixel. Adding the guarded negation would have *introduced* the mirroring it was meant
+  to prevent. This is now pinned by `runSkyboxRenderTest`, which renders offscreen and asserts
+  +Y is at the top and -Y at the bottom on Metal and Vulkan alike. (The real trap is nearby
+  and is documented in `skybox.hlsl`: reconstructing from `SV_Position` in the *pixel* shader
+  would be backend-dependent, because the fragment `SV_Position` is post-flip.)
+
+### 2026-07-25 — The engine sampler is created natively, not via `newSampler()`
+- Planned: the bindless manager creates its default sampler through `VkmDriverBase::newSampler()`.
+- Did instead: `vkCreateSampler` / `newSamplerStateWithDescriptor` directly, with the handle
+  owned by the bindless manager.
+- Why: `VkmDriverBase::initialize()` calls `initializeInner()` — which is where each backend
+  initializes its bindless manager — *before* `_renderResourcePool->initialize()`. A pooled
+  resource cannot be created at that point (on Metal the residency sets do not exist yet).
+  Creating the native object sidesteps the ordering entirely, and as a bonus avoids setting
+  `supportArgumentBuffers = YES` on every sampler the engine ever creates just to satisfy this
+  one; `metal_sampler.mm` is left untouched.
+
+### 2026-07-25 — Test FOV is deliberately wider than the sample's
+- Planned: the offscreen skybox test mirrors the sample camera, 60-degree FOV.
+- Did instead: 120 degrees in the test only.
+- Why: a cube face spans +/-45 degrees about its axis, so a 60-degree FOV on a square target
+  never leaves the +Z face and every pixel comes back blue — the test would assert nothing
+  about the other five faces. The first run failed exactly this way before the FOV was widened.
+
+### 2026-07-25 — Vulkan host image copy must use the EXT entry points
+- Planned: call `vkCopyMemoryToImage` / `vkTransitionImageLayoutEXT`.
+- Did instead: `vkCopyMemoryToImageEXT` for both, plus a null-pointer check on the exact
+  entry points before advertising `VkmDriverCapabilityFlags::TextureHostCopy`.
+- Why: `vkCopyMemoryToImage` is the Vulkan 1.4 *core* name, and volk only loads it on a 1.4+
+  device. MoltenVK here reports 1.3.334 and exposes the feature through
+  `VK_EXT_host_image_copy`, so the core pointer was null and the call crashed. The check had
+  to move after `volkLoadDevice` -- placed with the other feature checks it runs before the
+  device exists, when every pointer is still null and the capability would never enable.
+
+### 2026-07-25 — Both host-image-copy layout arrays are allocated, not just the one used
+- Planned: query `VkPhysicalDeviceHostImageCopyProperties` twice, filling only `pCopyDstLayouts`.
+- Did instead: size and point both `pCopySrcLayouts` and `pCopyDstLayouts` at real storage.
+- Why: leaving the src pointer null while its count stays non-zero from the first call is a
+  half-filled enumerate struct, which drivers handle inconsistently. The src list is unused
+  here; allocating it is cheaper than depending on that behavior. (This was investigated as a
+  corruption suspect and cleared -- the real fault was the null entry point above -- but the
+  defensive form was kept.)
+
+### 2026-07-25 — `writeRegion` is virtual with a default, not pure
+- Planned: a pure virtual on `VkmTexture`, overridden per backend.
+- Did instead: virtual with a base implementation that logs and returns false.
+- Why: a pure virtual made the existing `MockTexture` in `TestEngineSetup.cpp` abstract, and
+  more importantly a backend that never reports `isHostWritable()` has nothing meaningful to
+  implement. The default is the matching unreachable-case guard, and it let the WebGPU
+  override be dropped entirely rather than duplicated.
+
+### 2026-07-25 — Host image copy disabled on MoltenVK after a CI hang
+- Planned: enable `VK_EXT_host_image_copy` on any device advertising it with the feature bit set.
+- Did instead: additionally require `driverID != VK_DRIVER_ID_MOLTENVK`.
+- Why: the `macOS 26 + AppleClang (vulkan)` job hung for 67 minutes with **zero** output after
+  linking `UnitTests` (it takes ~2.5 min and runs 98/98 on `main`). stdout is block-buffered
+  through the runner's pipe and the run emits ~372 KB locally, so several flushes would have
+  appeared had it gotten far — the hang is very early, i.e. in Vulkan driver initialization,
+  which is exactly where the new code runs. It did not reproduce locally: the suite passes
+  against both the LunarG ICD (1.3.334) and brew's MoltenVK 1.4.1 (1.4.334, the version CI
+  installs), so the trigger is something about the runner's loader/layer combination that
+  cannot be replicated here.
+  The conservative option, and the one taken: MoltenVK emulates this extension on top of Metal,
+  and on macOS the engine's own Metal backend already provides the identical optimization
+  natively (verified, and its CI job passes). Vulkan-on-Metal therefore loses no real
+  capability by falling back to the staging path, which is always correct — whereas leaving it
+  on costs a 6-hour CI timeout per run with no diagnostics. Native Vulkan drivers keep the fast
+  path. Logged in `TODO.md`, including the resulting coverage gap.

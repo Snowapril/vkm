@@ -26,6 +26,10 @@ VkmFormat fromVkFormat(VkFormat format);
 VkImageUsageFlags toVkImageUsageFlags(VkmResourceCreateInfo flags);
 VkBufferUsageFlags toVkBufferUsageFlags(VkmResourceCreateInfo flags);
 
+// Shared by the texture's default view and by explicitly-created views, which must agree.
+// numArrayLayers is only consulted for VkmTextureType::Auto.
+VkImageViewType toVkImageViewType(VkmTextureType type, uint32_t numArrayLayers);
+
 VkFilter toVkFilter(VkmFilterMode filterMode);
 VkSamplerMipmapMode toVkSamplerMipmapMode(VkmMipmapMode mipmapMode);
 VkSamplerAddressMode toVkSamplerAddressMode(VkmAddressMode addressMode);
