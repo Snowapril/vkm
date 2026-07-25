@@ -235,6 +235,32 @@ line names it twice both before and after — and is left alone.
 - Verified with `MTL_DEBUG_LAYER=1` on all three quit paths (`--auto-close`, ESC, Quit menu
   item, window close): no hang, no `mutex lock failed`, no validation errors.
 
+## 2026-07-25 — Backend divergence moved out of user shaders into a common HLSL header
+
+- `triangle.hlsl` and `model_viewer.hlsl` each carried two byte-identical
+  `#if defined(VKM_BACKEND_WEBGPU)` blocks (resource declarations + the vertex/index fetch),
+  leaking the bindless binding numbers, the WebGPU push-constant emulation and the slot-table
+  layout into every sample. New `include/vkm/shaders/vkm_bindless.hlsli` is now the single
+  place that branches on the backend; samples use `VKM_PUSH_CONSTANTS`,
+  `VKM_BINDLESS_VERTEX_PULLING`, `VKM_LOAD_INDEX`, `VKM_LOAD_VERTEX` and contain no
+  `VKM_BACKEND_*` test at all.
+- Macros rather than HLSL 2021 templates: the WebGPU mega-buffer and the Vulkan/Metal
+  descriptor array are both `StructuredBuffer<VertexType>` declarations, and only a macro can
+  emit a *declaration* parameterized by the sample's vertex struct.
+- dxc was being invoked with no `-I` at all, so a shared header was previously impossible.
+  `vkm-compiler` gained `--include-dir`; `ShaderCompile.cmake` passes
+  `include/vkm/shaders` and globs its `*.hlsli` into every shader command's `DEPENDS`.
+  That glob is load-bearing — dxc emits no depfile here, so without it editing the header
+  would silently not rebuild any `.vfcache`.
+- Verified as a no-op at the ABI level rather than by inspection: MSL regenerated for both
+  samples diffs against the pre-change baseline only as resource renames plus a moved
+  `type_PushConstant_PushConstants` declaration (source order) — `[[id(4096)]]`,
+  `[[id(8192)]]`, `[[buffer(2)]]`, `[[buffer(3)]]` unchanged, fragment stages byte-identical.
+  For WebGPU (no local runtime, `VKM_COMPILER_ENABLE_WGSL=OFF`), old vs new SPIR-V
+  disassembly is identical once `OpName`s are dropped and ids normalized. All 12
+  backend × shader × stage dxc combinations compile. Metal suite 97/97 passed, and touching
+  the header regenerates all 6 caches.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:

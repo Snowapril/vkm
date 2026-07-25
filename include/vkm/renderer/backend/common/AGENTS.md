@@ -73,6 +73,23 @@ does not reach the Metal or WebGPU shaders. A Y-flip in *shared HLSL source* wit
 per-backend `#if` guard, however, would follow the geometry into every backend — so guard any
 source-level compensation on the backend define, or keep it in the per-backend compiler flags.
 
+## Shader-Side Bindless Contract
+
+`bindless_resource_manager.h` is the C++ side of the bindless set-0 layout;
+`include/vkm/shaders/vkm_bindless.hlsli` is its shader-side mirror and the only place that
+knows how each backend expresses bindless resources and push constants (real descriptor
+indexing plus `[[vk::push_constant]]` on Vulkan/Metal, mega-buffers plus a slot table plus a
+dynamic-offset UBO on WebGPU). Sample and engine HLSL declares its resources through that
+header's macros — `VKM_PUSH_CONSTANTS`, `VKM_BINDLESS_VERTEX_PULLING`, `VKM_LOAD_INDEX`,
+`VKM_LOAD_VERTEX` — and must not test `VKM_BACKEND_*` itself. Changing a binding number or
+the slot-table layout means editing the header and `bindless_resource_manager.h` together,
+not every shader.
+
+`buildscripts/ShaderCompile.cmake` passes `include/vkm/shaders` to `vkm-compiler` as
+`--include-dir` (which becomes dxc's `-I`) and adds every `.hlsli` there to each shader
+command's `DEPENDS`; dxc emits no depfile, so that list is what makes a header edit rebuild
+the shader caches.
+
 ## Constants
 
 - `FRAME_BUFFER_COUNT = 3` — triple-buffering, fixed. Do not parameterize.
