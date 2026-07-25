@@ -208,6 +208,15 @@ namespace vkm
         */
         inline VkmFormat getSwapChainColorFormat() const { return _swapChainColorFormat; }
 
+        /*
+        * @brief What the graphics API reports about device memory right now -- the "actual"
+        * counterpart to the per-resource totals in getRenderResourcePool()'s category usage.
+        * @details Backends that cannot introspect their memory (WebGPU) keep this default,
+        * which reports nothing rather than echoing the engine's own tracked numbers back as
+        * if they were measured.
+        */
+        virtual VkmGpuMemoryStats getGpuMemoryStats() const { return VkmGpuMemoryStats{}; }
+
 #if defined(VKM_GPU_CAPTURE)
         /*
         * @brief Frame-boundary hooks called by VkmEngine::loopInner() on the render thread,

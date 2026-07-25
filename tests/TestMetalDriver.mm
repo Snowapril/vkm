@@ -8,6 +8,8 @@
 #import <Metal/Metal.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_command_queue.h>
+#include <vkm/renderer/backend/common/buffer.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <glm/vec2.hpp>
 
@@ -59,6 +61,38 @@ TEST_CASE("VkmDriverMetal - graphics queue exposes a valid MTLCommandQueue") {
         f.driver->getCommandQueue(vkm::VkmCommandQueueType::Graphics, 0));
     REQUIRE(queue != nullptr);
     CHECK(queue->getMTLCommandQueue() != nil);
+}
+
+TEST_CASE("VkmDriverMetal - getGpuMemoryStats reports device allocation that grows with a real buffer") {
+    MetalDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+
+    const vkm::VkmGpuMemoryStats before = f.driver->getGpuMemoryStats();
+    REQUIRE(before._hasDeviceStats);
+    CHECK(before._deviceBudgetBytes > 0);
+
+    // 16 MiB is large enough that the device-reported figure has to move, without being big
+    // enough to matter on any Metal-capable machine.
+    constexpr uint64_t kBufferSize = 16ull * 1024 * 1024;
+    vkm::VkmBufferInfo bufferInfo{};
+    bufferInfo._flags = vkm::VkmResourceCreateInfo::AllowShaderWrite | vkm::VkmResourceCreateInfo::AllowTransferDst;
+    bufferInfo._size = kBufferSize;
+    bufferInfo._placementHint = vkm::VkmMemoryPlacementHint::ForceCommitted;
+    bufferInfo._debugName = "GpuMemoryStatsProbe";
+    vkm::VkmBuffer* buffer = f.driver->newBuffer(bufferInfo);
+    REQUIRE(buffer != nullptr);
+
+    const vkm::VkmGpuMemoryStats after = f.driver->getGpuMemoryStats();
+    CHECK(after._deviceAllocatedBytes >= before._deviceAllocatedBytes + kBufferSize);
+
+    // The engine's own tracked total must have moved too -- the two sides of the
+    // tracked-vs-actual comparison the memory inspector shows.
+    const vkm::VkmResourceCategoryUsage usage =
+        f.driver->getRenderResourcePool()->getCategoryMemoryUsage(vkm::VkmResourceType::Buffer);
+    CHECK(usage.totalRequestedBytes >= kBufferSize);
+    CHECK(after._deviceAllocatedBytes >= usage.totalAllocatedBytes);
+
+    f.driver->getRenderResourcePool()->releaseResource(buffer->getHandle());
 }
 
 TEST_CASE("VkmSwapChainMetal - created and initialized without a display surface") {

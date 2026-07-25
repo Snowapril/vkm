@@ -13,8 +13,10 @@
 #include <vkm/renderer/backend/common/texture_view.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/engine.h>
+#include <vkm/renderer/memory_report.h>
 #include <vkm/platform/common/app_delegate.h>
 
+#include <algorithm>
 #include <functional>
 
 #ifdef VKM_USE_VULKAN_API
@@ -349,6 +351,87 @@ TEST_CASE("VkmRenderResourcePool - tagResource tracks per-category memory usage 
 
     pool->releaseResource(h2);
     driver.destroy();
+}
+
+TEST_CASE("captureMemorySnapshot aggregates the CPU tracker and the GPU pool into one sample") {
+    FakeDriver driver;
+    REQUIRE(driver.initialize(nullptr).code == vkm::VkmInitResultCode::Success);
+    vkm::VkmRenderResourcePool* pool = driver.getRenderResourcePool();
+
+    vkm::VkmResourceHandle bufferHandle = pool->allocateBuffer(new MockBuffer(&driver));
+    vkm::VkmResourceHandle textureHandle = pool->allocateTexture(new MockTexture(&driver));
+    REQUIRE(bufferHandle.isValid());
+    REQUIRE(textureHandle.isValid());
+
+    vkm::VkmResourceMemoryTag bufferTag{};
+    bufferTag.requestedSize = 1000;
+    bufferTag.allocatedSize = 1024;
+    bufferTag.type = vkm::VkmResourceType::Buffer;
+    pool->tagResource(bufferHandle, bufferTag);
+
+    vkm::VkmResourceMemoryTag textureTag{};
+    textureTag.requestedSize = 4000;
+    textureTag.allocatedSize = 4096;
+    textureTag.type = vkm::VkmResourceType::Texture;
+    pool->tagResource(textureHandle, textureTag);
+
+    const vkm::VkmMemorySnapshot snapshot = vkm::captureMemorySnapshot(&driver);
+
+    // GPU side mirrors the pool's own totals, per category and summed.
+    const size_t bufferIndex = static_cast<size_t>(vkm::VkmResourceType::Buffer);
+    const size_t textureIndex = static_cast<size_t>(vkm::VkmResourceType::Texture);
+    CHECK(snapshot._gpuByCategory[bufferIndex].totalAllocatedBytes == 1024);
+    CHECK(snapshot._gpuByCategory[textureIndex].totalAllocatedBytes == 4096);
+    CHECK(snapshot._gpuTotal.totalAllocatedBytes == 1024 + 4096);
+    CHECK(snapshot._gpuTotal.totalRequestedBytes == 1000 + 4000);
+    CHECK(snapshot._gpuTotal.liveCount == 2);
+    // FakeDriver has no backing API, so it keeps VkmDriverBase's "nothing to report" default.
+    CHECK_FALSE(snapshot._gpu._hasDeviceStats);
+
+    // CPU side: the totals must be exactly the sum over the tags that were kept, and every
+    // kept tag must be live (fully-freed tags are dropped, not reported as zero rows).
+    uint64_t summedUsable = 0;
+    uint64_t summedRequested = 0;
+    uint64_t summedLive = 0;
+    for (const vkm::TaggedAllocationSummary& tag : snapshot._cpuTags)
+    {
+        CHECK(tag.liveCount > 0);
+        summedUsable += tag.usableBytes;
+        summedRequested += tag.requestedBytes;
+        summedLive += tag.liveCount;
+    }
+    CHECK(snapshot._cpuTrackedUsableBytes == summedUsable);
+    CHECK(snapshot._cpuTrackedRequestedBytes == summedRequested);
+    CHECK(snapshot._cpuTrackedLiveCount == summedLive);
+    CHECK(summedLive > 0); // this test's own allocations are in there
+
+    CHECK(std::is_sorted(snapshot._cpuTags.begin(), snapshot._cpuTags.end(),
+                         [](const vkm::TaggedAllocationSummary& lhs, const vkm::TaggedAllocationSummary& rhs) {
+                             return lhs.usableBytes > rhs.usableBytes;
+                         }));
+
+    // Drives every formatting branch of the shutdown dump (VkmEngine::destroy() calls this
+    // with a real driver), including the per-tag and per-category loops.
+    CHECK_NOTHROW(vkm::logMemoryReport(snapshot));
+
+    pool->releaseResource(bufferHandle);
+    pool->releaseResource(textureHandle);
+    driver.destroy();
+}
+
+TEST_CASE("captureMemorySnapshot tolerates a null driver") {
+    const vkm::VkmMemorySnapshot snapshot = vkm::captureMemorySnapshot(nullptr);
+
+    CHECK(snapshot._gpuTotal.liveCount == 0);
+    CHECK_FALSE(snapshot._gpu._hasDeviceStats);
+    CHECK(snapshot._cpuTrackedLiveCount > 0); // the CPU half is still filled in
+}
+
+TEST_CASE("formatByteSize picks a readable unit") {
+    CHECK(vkm::formatByteSize(512) == "512 B");
+    CHECK(vkm::formatByteSize(2048) == "2.0 KiB");
+    CHECK(vkm::formatByteSize(3ull * 1024 * 1024) == "3.0 MiB");
+    CHECK(vkm::formatByteSize(2ull * 1024 * 1024 * 1024) == "2.00 GiB");
 }
 
 TEST_CASE("VkmRenderResourcePool - releaseResource recycles the id with a new generation, rejecting the stale handle") {

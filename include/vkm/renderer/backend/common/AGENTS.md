@@ -201,6 +201,28 @@ tag's `allocatedSize`/`alignment`:
 - **Sampler / TextureView / BufferView** = always `0` (no independent GPU memory allocation of
   their own), via the base-class default — no override.
 
+### Device-reported memory (the "actual" side)
+
+Everything above is what the engine *asked for*. `VkmDriverBase::getGpuMemoryStats()` is the
+counterpart the API itself reports:
+```cpp
+struct VkmGpuMemoryStats { uint64_t _deviceAllocatedBytes, _deviceBudgetBytes,
+                           _poolReservedBytes, _poolUsedBytes;
+                           bool _hasDeviceStats, _hasPoolStats; };
+```
+- **Metal** = `[MTLDevice currentAllocatedSize]` / `recommendedMaxWorkingSetSize`, plus each
+  heap pool block's `MTLHeap.currentAllocatedSize` (reserved) vs `usedSize` (used).
+- **Vulkan** = `vmaGetHeapBudgets()` summed over device-local heaps (host-visible heaps are
+  skipped so they don't double-count against process RSS), plus `vmaCalculateStatistics()`'s
+  `blockBytes` vs `allocationBytes`.
+- **WebGPU** = the base-class default: both flags `false`. WebGPU exposes no memory
+  introspection, and echoing the engine's tracked numbers back would misrepresent them as
+  measured.
+
+`vkm::captureMemorySnapshot()` (`renderer/memory_report.h`) joins this with the CPU-side
+`MemoryTracker` and the OS's `getProcessMemoryStats()` into the sample the ImGui Memory
+Inspector (F8) and the shutdown log dump both render.
+
 ## Debug Naming (GPU Capture)
 
 `VkmEngineLaunchOptions::enableGpuCapture` (parsed from the `--enable-gpu-capture` CLI flag,

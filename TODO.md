@@ -31,4 +31,14 @@
 - Render graph capture records swapchain backbuffer outputs as metadata only (`CAMetalLayer.framebufferOnly` stays YES).
 - Render graph capture texture previews in ImGui are Metal-only (`getTextureID` returns 0 on Vulkan/WebGPU).
 - Programmatic .gputrace capture scopes only the Metal Graphics queue 0; Vulkan/WebGPU `requestGpuFrameCapture()` is a no-op (no RenderDoc integration).
+- glTF import covers geometry and material factors only: no textures, no samplers, no animation/skinning, no Draco/KTX2/`EXT_meshopt_compression`.
+- Imported vertices keep a zeroed `TANGENT` when the asset omits one (no MikkTSpace-style generator), and generated normals are area-weighted smooth rather than the spec's flat normals.
+- Texture upload has no path at all: no `copyBufferToTexture`/`uploadToTexture` on any backend, and the bindless texture array (set 0, binding 0) still has no `registerTexture`.
+- Sponza-scale scenes exceed the WebGPU bindless mega-buffers (16 MiB vertex / 8 MiB index, no growth), and `model_viewer`'s wasm build preloads no scene at all.
+- The Vulkan/WebGPU depth-attachment paths in `onBeginRenderPass` have no unit-test coverage (the offscreen scene-model render test is Metal-only; the Vulkan fixture rendered black and crashed on lavapipe). They ship compile-verified only, validated via the model_viewer sample on real hardware.
+- Metal's render-pass depth attachment hardcodes `MTLLoadActionClear`/`MTLStoreActionStore` instead of honoring `VkmDepthStencilAttachmentDescriptor`'s load/store actions.
+- `VkmDriverBase::getGpuMemoryStats()` reports nothing on WebGPU (no memory-introspection API exists), so the Memory Inspector's GPU "actual" column is blank there.
+- Sampling the Memory Inspector copies the whole tag table under `MemoryTracker`'s global mutex; the 2 Hz throttle hides but does not fix that cost.
+- The engine's shutdown memory report is only reachable through a graceful exit (ESC / window close), so a killed process leaves no report.
+- `getProcessMemoryStats()` reports no peak on wasm (`emscripten_get_heap_size()` has no high-water counterpart) and none on macOS kernels older than `TASK_VM_INFO_REV3`.
 - macOS samples are unbundled executables, so the Dock tile shows the target name with the generic icon (no `.app` bundle / custom icon / bundle ID).

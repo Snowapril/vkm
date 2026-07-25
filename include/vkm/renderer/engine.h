@@ -20,6 +20,7 @@ namespace vkm
 #if defined(VKM_ENABLE_IMGUI)
     class VkmImGuiRendererBase;
     class VkmRenderGraphInspector;
+    class VkmMemoryInspector;
 #endif
     struct VkmInitResult;
 
@@ -217,6 +218,7 @@ namespace vkm
 #if defined(VKM_ENABLE_IMGUI)
         double _fpsSmoothed {0.0}; // exponential moving average, used by renderDebugOverlay()
         std::unique_ptr<VkmRenderGraphInspector> _renderGraphInspector;
+        std::unique_ptr<VkmMemoryInspector> _memoryInspector;
 #endif
     };
 }

@@ -37,6 +37,9 @@ namespace vkm
         */
         id<MTLBuffer> allocateFromHeapPool(uint64_t sizeBytes, uint64_t alignment, uint64_t options);
 
+        // Device-reported allocation size/budget plus the heap pool's reserved-vs-used split.
+        virtual VkmGpuMemoryStats getGpuMemoryStats() const override final;
+
         // Shadows VkmDriverBase::getBindlessResourceManager() with the Metal-typed manager
         // (the base member always holds a VkmBindlessResourceManagerMetal for this driver).
         inline VkmBindlessResourceManagerMetal* getBindlessResourceManager() const

@@ -57,9 +57,40 @@ namespace vkm
             });
         }
 
+        WGPURenderPassDepthStencilAttachment depthStencilAttachment{};
+        WGPUTextureView depthStencilView = nullptr;
+        if (frameBufferDesc._depthStencilAttachment.has_value() &&
+            frameBufferDesc._renderPass._depthStencilAttachment.has_value())
+        {
+            VkmTextureWebGPU* depthTexture = static_cast<VkmTextureWebGPU*>(
+                renderResourcePool->getResource<VkmTexture>(frameBufferDesc._depthStencilAttachment.value()));
+            const VkmDepthStencilAttachmentDescriptor& depthDesc =
+                frameBufferDesc._renderPass._depthStencilAttachment.value();
+            const VkmFormat depthFormat = depthTexture->getTextureInfo()._format;
+
+            depthStencilView = wgpuTextureCreateView(depthTexture->getWGPUTexture(), nullptr);
+            depthStencilAttachment.view = depthStencilView;
+
+            // WebGPU rejects load/store ops for an aspect the attachment format doesn't
+            // have, so each aspect is only configured when the format actually carries it.
+            if (hasDepth(depthFormat))
+            {
+                depthStencilAttachment.depthLoadOp = toWGPULoadOp(depthDesc._loadAction);
+                depthStencilAttachment.depthStoreOp = toWGPUStoreOp(depthDesc._storeAction);
+                depthStencilAttachment.depthClearValue = depthDesc._clearDepth;
+            }
+            if (hasStencil(depthFormat))
+            {
+                depthStencilAttachment.stencilLoadOp = toWGPULoadOp(depthDesc._loadAction);
+                depthStencilAttachment.stencilStoreOp = toWGPUStoreOp(depthDesc._storeAction);
+                depthStencilAttachment.stencilClearValue = depthDesc._clearStencil;
+            }
+        }
+
         const WGPURenderPassDescriptor renderPassDesc{
-            .colorAttachmentCount = colorAttachments.size(),
-            .colorAttachments     = colorAttachments.data(),
+            .colorAttachmentCount   = colorAttachments.size(),
+            .colorAttachments       = colorAttachments.data(),
+            .depthStencilAttachment = depthStencilView != nullptr ? &depthStencilAttachment : nullptr,
         };
         _renderPassEncoder = wgpuCommandEncoderBeginRenderPass(_encoder, &renderPassDesc);
 
@@ -67,6 +98,10 @@ namespace vkm
         for (WGPUTextureView view : colorViews)
         {
             wgpuTextureViewRelease(view);
+        }
+        if (depthStencilView != nullptr)
+        {
+            wgpuTextureViewRelease(depthStencilView);
         }
     }
 

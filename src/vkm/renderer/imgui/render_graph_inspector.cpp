@@ -68,20 +68,6 @@ namespace vkm
             return "?";
         }
 
-        const char* resourceTypeToString(VkmResourceType type)
-        {
-            switch (type)
-            {
-                case VkmResourceType::Texture:       return "Texture";
-                case VkmResourceType::Buffer:        return "Buffer";
-                case VkmResourceType::StagingBuffer: return "StagingBuffer";
-                case VkmResourceType::Sampler:       return "Sampler";
-                case VkmResourceType::TextureView:   return "TextureView";
-                case VkmResourceType::BufferView:    return "BufferView";
-                default:                             return "Undefined";
-            }
-        }
-
         void drawAttachmentPreview(const VkmCapturedAttachment& attachment, VkmImGuiRendererBase* imGuiRenderer)
         {
             if (!attachment.snapshotTexture.isValid())
@@ -275,13 +261,13 @@ namespace vkm
                 {
                     if (resource.type == VkmResourceType::Texture)
                     {
-                        ImGui::BulletText("%s '%s' (%s, %ux%u)", resourceTypeToString(resource.type),
+                        ImGui::BulletText("%s '%s' (%s, %ux%u)", vkmResourceTypeName(resource.type),
                                           resource.debugName.c_str(), formatToString(resource.format),
                                           resource.extent.x, resource.extent.y);
                     }
                     else
                     {
-                        ImGui::BulletText("%s '%s' (%llu bytes)", resourceTypeToString(resource.type),
+                        ImGui::BulletText("%s '%s' (%llu bytes)", vkmResourceTypeName(resource.type),
                                           resource.debugName.c_str(),
                                           static_cast<unsigned long long>(resource.size));
                     }

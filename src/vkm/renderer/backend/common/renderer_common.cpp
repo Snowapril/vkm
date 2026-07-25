@@ -14,6 +14,20 @@ namespace vkm
         return static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs);
     };
 
+    const char* vkmResourceTypeName(VkmResourceType type)
+    {
+        switch (type)
+        {
+            case VkmResourceType::Texture:       return "Texture";
+            case VkmResourceType::Buffer:        return "Buffer";
+            case VkmResourceType::StagingBuffer: return "StagingBuffer";
+            case VkmResourceType::Sampler:       return "Sampler";
+            case VkmResourceType::TextureView:   return "TextureView";
+            case VkmResourceType::BufferView:    return "BufferView";
+            default:                             return "Undefined";
+        }
+    }
+
     uint32_t vkmBytesPerTexel(VkmFormat format)
     {
         switch (format)

@@ -43,6 +43,9 @@ namespace vkm
         }
         inline VkmGpuTimerVulkan* getGpuTimer() const { return _gpuTimer.get(); }
 
+        // VMA heap budgets (device allocated/budget) plus its block-vs-allocation split.
+        virtual VkmGpuMemoryStats getGpuMemoryStats() const override final;
+
         /*
         * @brief true if VK_EXT_device_fault was requested (enableGpuCrashDump) and the
         * GPU/driver actually supports it. Guards whether vkGetDeviceFaultInfoEXT() may be

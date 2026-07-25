@@ -301,12 +301,19 @@ if (NOT EMSCRIPTEN)
     add_subdirectory(dependencies/src/glfw)
 endif()
 
-# meshoptimizer and glslang are fetched by bootstrap.py but deliberately not built:
-# nothing under src/, include/ or tests/ references either one (shader compilation
-# goes HLSL -> SPIR-V through dxc and SPIR-V -> MSL/WGSL through spirv-cross, never
-# through glslang). Building them cost ~100 extra translation units plus an 83 MB
-# libglslang.a linked into vkmcore for no symbols. Re-add the add_subdirectory calls
-# here if a runtime GLSL front end or mesh optimizer is ever actually needed.
+# glslang is fetched by bootstrap.py but deliberately not built: nothing under src/,
+# include/ or tests/ references it (shader compilation goes HLSL -> SPIR-V through dxc
+# and SPIR-V -> MSL/WGSL through spirv-cross, never through glslang). Building it cost
+# ~100 extra translation units plus an 83 MB libglslang.a linked into vkmcore for no
+# symbols. Re-add the add_subdirectory call here if a runtime GLSL front end is ever
+# actually needed.
+
+# meshoptimizer IS built: the glTF scene importer uses it for vertex-cache/fetch
+# optimization (see src/vkm/renderer/scene/gltf_importer.cpp).
+set(MESHOPT_BUILD_DEMO          OFF CACHE BOOL "")
+set(MESHOPT_BUILD_TOOLS         OFF CACHE BOOL "")
+set(MESHOPT_BUILD_SHARED_LIBS   OFF CACHE BOOL "")
+add_subdirectory(dependencies/src/meshoptimizer)
 
 if (NOT EMSCRIPTEN)
     # volk is a Vulkan loader; there is no Vulkan ICD in a browser.
@@ -352,6 +359,7 @@ if (VKM_ENABLE_IMGUI)
 endif()
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+set_property(TARGET meshoptimizer PROPERTY FOLDER "ThirdPartyLibraries")
 if (NOT EMSCRIPTEN)
     set_property(TARGET glfw PROPERTY FOLDER "ThirdPartyLibraries")
     set_property(TARGET volk PROPERTY FOLDER "ThirdPartyLibraries")
@@ -478,4 +486,5 @@ option(BUILD_SAMPLES "Build samples" ON)
 if (BUILD_SAMPLES)
     add_subdirectory(src/samples/empty_screen)
     add_subdirectory(src/samples/triangle)
+    add_subdirectory(src/samples/model_viewer)
 endif()

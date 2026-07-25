@@ -40,7 +40,8 @@ namespace vkm
     // transition image layouts implicitly, unlike a legacy VkRenderPass -- so every attachment
     // needs an explicit barrier between whatever it was doing before and how this render pass
     // (or present) is about to use it.
-    static void transitionImageLayout(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout)
+    static void transitionImageLayout(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
+                                      VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_COLOR_BIT)
     {
         const VkImageMemoryBarrier2 barrier{
             .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -53,7 +54,7 @@ namespace vkm
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image               = image,
-            .subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
+            .subresourceRange    = { aspectMask, 0, 1, 0, 1 },
         };
         const VkDependencyInfo dependencyInfo{
             .sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -127,12 +128,54 @@ namespace vkm
             });
         }
 
+        VkRenderingAttachmentInfo depthAttachment{};
+        VkRenderingAttachmentInfo stencilAttachment{};
+        bool hasDepthAttachment = false;
+        bool hasStencilAttachment = false;
+        if (frameBufferDesc._depthStencilAttachment.has_value() &&
+            frameBufferDesc._renderPass._depthStencilAttachment.has_value())
+        {
+            VkmTextureVulkan* depthTextureVulkan = static_cast<VkmTextureVulkan*>(
+                renderResourcePool->getResource<VkmTexture>(frameBufferDesc._depthStencilAttachment.value()));
+            const VkmDepthStencilAttachmentDescriptor& depthAttachmentDesc =
+                frameBufferDesc._renderPass._depthStencilAttachment.value();
+            const VkmFormat depthFormat = depthTextureVulkan->getTextureInfo()._format;
+
+            hasDepthAttachment = hasDepth(depthFormat);
+            hasStencilAttachment = hasStencil(depthFormat);
+
+            const VkImageAspectFlags aspectMask =
+                (hasDepthAttachment ? VK_IMAGE_ASPECT_DEPTH_BIT : 0u) |
+                (hasStencilAttachment ? VK_IMAGE_ASPECT_STENCIL_BIT : 0u);
+
+            const VkImageLayout previousLayout = depthTextureVulkan->getCurrentLayout();
+            if (previousLayout != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+            {
+                transitionImageLayout(_vkCommandBuffer, depthTextureVulkan->getImage(), previousLayout,
+                                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, aspectMask);
+                depthTextureVulkan->setCurrentLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            }
+
+            const VkRenderingAttachmentInfo attachmentInfo{
+                .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .imageView   = depthTextureVulkan->getImageView(),
+                .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                .loadOp      = toVkAttachmentLoadOp(depthAttachmentDesc._loadAction),
+                .storeOp     = toVkAttachmentStoreOp(depthAttachmentDesc._storeAction),
+                .clearValue  = { .depthStencil = { depthAttachmentDesc._clearDepth, depthAttachmentDesc._clearStencil } },
+            };
+            depthAttachment = attachmentInfo;
+            stencilAttachment = attachmentInfo;
+        }
+
         const VkRenderingInfo renderingInfo{
             .sType                = VK_STRUCTURE_TYPE_RENDERING_INFO,
             .renderArea           = { {0, 0}, {frameBufferDesc._width, frameBufferDesc._height} },
             .layerCount           = 1,
             .colorAttachmentCount = (uint32_t)colorAttachments.size(),
             .pColorAttachments    = colorAttachments.data(),
+            .pDepthAttachment     = hasDepthAttachment ? &depthAttachment : nullptr,
+            .pStencilAttachment   = hasStencilAttachment ? &stencilAttachment : nullptr,
         };
         vkCmdBeginRendering(_vkCommandBuffer, &renderingInfo);
 
