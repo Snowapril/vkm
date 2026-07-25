@@ -65,7 +65,16 @@ namespace vkm
             return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "Metal 4 requires macOS 26 / iOS 26 or later; this OS version is not supported."};
         }
 
+        // Always true in practice given the MTLGPUFamilyApple9 gate above, but querying it
+        // rather than assuming keeps the texture storage-mode policy honest if that gate is
+        // ever relaxed (an Intel Mac with a discrete GPU reports false here).
+        _hasUnifiedMemory = [_mtlDevice hasUnifiedMemory];
+
         _driverCapabilityFlags = VkmDriverCapabilityFlags::TextureContentCapture | VkmDriverCapabilityFlags::TextureUpload;
+        if (_hasUnifiedMemory)
+        {
+            _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::TextureHostCopy;
+        }
         return VkmInitResult{VkmInitResultCode::Success, ""};
     }
 

@@ -43,6 +43,29 @@ virtual void onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResource
 virtual void onEndCommandBuffer() = 0;
 ```
 
+### Texture upload: two paths, one entry point
+
+`VkmDriverBase::uploadToTexture` picks between a staging-buffer copy (allocate staging, record
+`copyBufferToTexture`, submit, block) and a direct CPU write into the texture's own memory
+(`VkmTexture::writeRegion` -- no staging, no command buffer, no submit, no wait).
+
+The choice is **the destination texture's**, not the caller's: `VkmTexture::isHostWritable()` is
+set at creation from what the backend actually allocated, and `VkmTextureUploadMode` only selects
+among what that made available. Two levels of gating:
+
+- `VkmDriverCapabilityFlags::TextureHostCopy` -- per *device*: the backend has the mechanism
+  (Metal `MTLStorageModeShared`; Vulkan `VK_EXT_host_image_copy`, since an OPTIMAL-tiled image
+  cannot be memcpy'd into) **and** unified memory makes it worth using.
+- `VkmTexture::isHostWritable()` -- per *texture*: it is a plain upload destination
+  (`AllowTransferDst`, not an attachment or presentable) and its allocation really did land in
+  CPU-reachable memory. On Vulkan that is re-checked after the fact with
+  `vmaGetAllocationMemoryProperties`, because adding `HOST_TRANSFER` usage can change the
+  image's memory-type requirements -- a request is not a guarantee.
+
+Both paths leave the texture shader-readable, so callers never branch on which one ran. A backend
+that reports neither flag needs no `writeRegion` override; the base default is the unreachable-case
+guard.
+
 ### VkmBindlessResourceManagerBase (`bindless_resource_manager.h`)
 ```cpp
 virtual uint32_t registerBuffer(VkmResourceHandle bufferHandle, VkmBindlessArrayType arrayType) = 0;

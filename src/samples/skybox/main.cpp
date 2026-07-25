@@ -322,8 +322,13 @@ private:
             return;
         }
 
+        // Which upload path ran is invisible from the outside -- both produce the same
+        // pixels -- so report it, or a silent fall back to staging would look identical to
+        // the fast path working.
         VKM_DEBUG_LOG(("Loaded a " + std::to_string(faces[0]._width) + "x" + std::to_string(faces[0]._height) +
-                       " cubemap from " + sourceDescription).c_str());
+                       " cubemap from " + sourceDescription +
+                       (cubemap->isHostWritable() ? " (uploaded by direct host copy)"
+                                                  : " (uploaded through a staging buffer)")).c_str());
     }
 
 private:

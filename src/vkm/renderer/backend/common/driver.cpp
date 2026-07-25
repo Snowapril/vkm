@@ -235,12 +235,33 @@ namespace vkm
     }
 
     bool VkmDriverBase::uploadToTexture(VkmResourceHandle dstTexture, const void* data, uint64_t size,
-                                        uint32_t mipLevel, uint32_t arrayLayer)
+                                        uint32_t mipLevel, uint32_t arrayLayer, VkmTextureUploadMode mode)
     {
         if ((getDriverCapabilityFlags() & VkmDriverCapabilityFlags::TextureUpload) == 0)
         {
             VKM_DEBUG_ERROR("uploadToTexture: this backend does not implement texture upload");
             return false;
+        }
+
+        VkmTexture* texture = _renderResourcePool->getResource<VkmTexture>(dstTexture);
+        if (texture == nullptr)
+        {
+            VKM_DEBUG_ERROR("uploadToTexture: invalid texture handle");
+            return false;
+        }
+
+        // The destination's own memory decides what is possible; the mode only chooses among
+        // what that already made available.
+        const bool hostCopyAvailable = texture->isHostWritable();
+        if (mode == VkmTextureUploadMode::ForceHostCopy && !hostCopyAvailable)
+        {
+            VKM_DEBUG_WARN("uploadToTexture: ForceHostCopy requested but this texture's memory is not host-writable; using the staging path");
+        }
+        if (hostCopyAvailable && mode != VkmTextureUploadMode::ForceStaging)
+        {
+            // No staging buffer, no command buffer, no submit, no wait -- the CPU writes the
+            // texture's memory in place.
+            return texture->writeRegion(data, size, mipLevel, arrayLayer);
         }
 
         VkmStagingBufferInfo stagingInfo{};

@@ -322,6 +322,39 @@ line names it twice both before and after — and is left alone.
   on Metal and visually confirmed: +Z blue centered, +X red on the left, -X cyan on the right,
   matching the right-handed `lookAtRH` convention.
 
+## 2026-07-25 — Host-copy texture upload on unified-memory devices
+
+- `uploadToTexture` had one implementation: staging buffer, one-off command buffer, submit,
+  block. Correct for a discrete GPU; on unified memory it copies the pixels twice through
+  memory the CPU can already write and stalls the queue once per call.
+- Now two paths behind one entry point. Which one runs is the *destination texture's*
+  property, not the caller's: `VkmTexture::isHostWritable()` is set at creation from what the
+  backend actually allocated, and `VkmTextureUploadMode` (Auto/ForceStaging/ForceHostCopy)
+  only selects among what that made available. Two levels of gating --
+  `VkmDriverCapabilityFlags::TextureHostCopy` per device, `isHostWritable()` per texture.
+- Metal: `MTLStorageModeShared` + `replaceRegion:`, the same mechanism the ImGui font atlas
+  already used. Vulkan: `VK_EXT_host_image_copy`, because an OPTIMAL-tiled image cannot be
+  memcpy'd into -- host-visible memory alone buys nothing. On Vulkan the outcome is re-checked
+  after allocation with `vmaGetAllocationMemoryProperties`, since adding `HOST_TRANSFER` usage
+  can change the image's memory-type requirements: a request is not a guarantee.
+- Only plain upload destinations are eligible (`AllowTransferDst`, not an attachment or
+  presentable). Render targets stay device-local; they are GPU-written and would only lose
+  bandwidth.
+- The host path does no queue work at all, so it does not block -- which removes the six
+  per-cubemap stalls previously recorded in `TODO.md` on any device that supports it.
+- **Debugging note.** A null `vkCopyMemoryToImage` (see the deviation below) surfaced as a
+  *hang* with mimalloc "heap corruption" assertions, not a stack trace: backward-cpp's signal
+  handler allocates while formatting the trace, so the abort re-entered mimalloc and recursed
+  forever. The mimalloc output was entirely a red herring. Bisecting the feature in two steps
+  (extension enabled but unused, then images created but never written) localized it in two
+  runs where reading the assertion text would have misled indefinitely. Logged in `TODO.md`.
+- Verified: Metal 102/102 with `MTL_DEBUG_LAYER=1`, Vulkan 103/103 with
+  `VK_LAYER_KHRONOS_validation`, WebGPU PASS. Zero validation errors on either backend. The
+  cubemap test uploads all six faces through *both* paths and asserts identical readback, with
+  the second pass writing different colors so a silently-no-op host copy cannot pass. Both
+  skybox samples log "uploaded by direct host copy", confirming the fast path is the one
+  actually taken rather than a silent fallback.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:
@@ -652,3 +685,30 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Why: a cube face spans +/-45 degrees about its axis, so a 60-degree FOV on a square target
   never leaves the +Z face and every pixel comes back blue — the test would assert nothing
   about the other five faces. The first run failed exactly this way before the FOV was widened.
+
+### 2026-07-25 — Vulkan host image copy must use the EXT entry points
+- Planned: call `vkCopyMemoryToImage` / `vkTransitionImageLayoutEXT`.
+- Did instead: `vkCopyMemoryToImageEXT` for both, plus a null-pointer check on the exact
+  entry points before advertising `VkmDriverCapabilityFlags::TextureHostCopy`.
+- Why: `vkCopyMemoryToImage` is the Vulkan 1.4 *core* name, and volk only loads it on a 1.4+
+  device. MoltenVK here reports 1.3.334 and exposes the feature through
+  `VK_EXT_host_image_copy`, so the core pointer was null and the call crashed. The check had
+  to move after `volkLoadDevice` -- placed with the other feature checks it runs before the
+  device exists, when every pointer is still null and the capability would never enable.
+
+### 2026-07-25 — Both host-image-copy layout arrays are allocated, not just the one used
+- Planned: query `VkPhysicalDeviceHostImageCopyProperties` twice, filling only `pCopyDstLayouts`.
+- Did instead: size and point both `pCopySrcLayouts` and `pCopyDstLayouts` at real storage.
+- Why: leaving the src pointer null while its count stays non-zero from the first call is a
+  half-filled enumerate struct, which drivers handle inconsistently. The src list is unused
+  here; allocating it is cheaper than depending on that behavior. (This was investigated as a
+  corruption suspect and cleared -- the real fault was the null entry point above -- but the
+  defensive form was kept.)
+
+### 2026-07-25 — `writeRegion` is virtual with a default, not pure
+- Planned: a pure virtual on `VkmTexture`, overridden per backend.
+- Did instead: virtual with a base implementation that logs and returns false.
+- Why: a pure virtual made the existing `MockTexture` in `TestEngineSetup.cpp` abstract, and
+  more importantly a backend that never reports `isHostWritable()` has nothing meaningful to
+  implement. The default is the matching unreachable-case guard, and it let the WebGPU
+  override be dropped entirely rather than duplicated.

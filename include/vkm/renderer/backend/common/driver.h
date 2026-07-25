@@ -43,6 +43,13 @@ namespace vkm
         // into (its bindless layer is mega-buffer emulation), so nothing there can sample a
         // texture even once the pixels are uploaded.
         TextureUpload           = 0x00000004,
+        // Backend can write a texture's memory from the CPU, so uploadToTexture can skip the
+        // staging buffer and the queue submit entirely. Requires both the mechanism (Metal:
+        // MTLStorageModeShared; Vulkan: VK_EXT_host_image_copy) and a reason to use it
+        // (unified memory) -- see VkmTextureUploadMode. A texture still only takes that path
+        // when its own memory allows it: VkmTexture::isHostWritable is the per-texture answer,
+        // this flag is the per-device precondition.
+        TextureHostCopy         = 0x00000008,
     };
 
     inline VkmDriverCapabilityFlags operator|(VkmDriverCapabilityFlags lhs, VkmDriverCapabilityFlags rhs)
@@ -144,9 +151,16 @@ namespace vkm
          * shape and the same setup-time-only intent. A cubemap is six calls, one per face,
          * with arrayLayer running over VkmTextureInfo's +X, -X, +Y, -Y, +Z, -Z order.
          * The texture is sampleable once this returns.
+         *
+         * `mode` selects how the pixels get there; the default picks the direct CPU write
+         * when the destination texture's memory allows it and the staging copy otherwise
+         * (see VkmTextureUploadMode). The direct write does no queue work at all, so it does
+         * not block -- but it is only available where the memory type permits, which is why
+         * this stays a single entry point rather than two.
          */
         bool uploadToTexture(VkmResourceHandle dstTexture, const void* data, uint64_t size,
-                             uint32_t mipLevel = 0, uint32_t arrayLayer = 0);
+                             uint32_t mipLevel = 0, uint32_t arrayLayer = 0,
+                             VkmTextureUploadMode mode = VkmTextureUploadMode::Auto);
 
         /*
          * @brief Create sampler with the given sampler info
@@ -169,6 +183,16 @@ namespace vkm
         * @brief get driver capability flags
         */
         inline VkmDriverCapabilityFlags getDriverCapabilityFlags() const { return _driverCapabilityFlags; }
+
+        /*
+        * @brief Whether the CPU and GPU share one memory pool, so a texture placed in
+        * CPU-writable memory costs the GPU nothing to sample.
+        * @details Set by each backend during initializeInner (Metal: hasUnifiedMemory;
+        * Vulkan: a DEVICE_LOCAL|HOST_VISIBLE memory type exists). This is what gates the
+        * host-copy texture upload path -- see VkmTextureUploadMode and
+        * VkmTexture::isHostWritable. False on backends that never checked.
+        */
+        inline bool hasUnifiedMemory() const { return _hasUnifiedMemory; }
 
         // @brief get command dispatcher for the driver
         inline VkmCommandQueueBase* getCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex) const
@@ -318,6 +342,7 @@ namespace vkm
     protected:
         std::array<std::vector<VkmCommandQueueBase*>, (uint8_t)VkmCommandQueueType::Count> _commandQueues;
         VkmDriverCapabilityFlags _driverCapabilityFlags;
+        bool _hasUnifiedMemory = false;
         std::unique_ptr<VkmBindlessResourceManagerBase> _bindlessResourceManager;
 
     private:

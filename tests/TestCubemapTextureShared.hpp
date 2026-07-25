@@ -74,31 +74,83 @@ namespace vkmtest
         const vkm::VkmResourceHandle cubemapHandle = cubemap->getHandle();
         CHECK(cubemap->getTextureInfo()._type == vkm::VkmTextureType::Cube);
 
-        const size_t faceByteSize = static_cast<size_t>(kCubeFaceExtent) * kCubeFaceExtent * 4;
-        for (uint32_t face = 0; face < vkm::kVkmCubeFaceCount; ++face)
-        {
-            std::vector<uint8_t> pixels(faceByteSize);
+        // Uploads face `face` in the given color through the given path.
+        const auto uploadFace = [&](uint32_t face, const std::array<uint8_t, 4>& color, vkm::VkmTextureUploadMode mode) {
+            std::vector<uint8_t> pixels(static_cast<size_t>(kCubeFaceExtent) * kCubeFaceExtent * 4);
             for (size_t texel = 0; texel < pixels.size(); texel += 4)
             {
-                std::copy(kFaceColors[face].begin(), kFaceColors[face].end(), pixels.begin() + texel);
+                std::copy(color.begin(), color.end(), pixels.begin() + texel);
             }
-            CHECK(driver->uploadToTexture(cubemapHandle, pixels.data(), pixels.size(), 0, face));
+            return driver->uploadToTexture(cubemapHandle, pixels.data(), pixels.size(), 0, face, mode);
+        };
+        const auto checkFaceReadsBack = [&](uint32_t face, const std::array<uint8_t, 4>& color) {
+            const vkm::VkmTextureReadbackResult readback = driver->readbackTexture(cubemapHandle, face);
+            REQUIRE(readback.pixels.size() >= 4);
+            CHECK(readback.width == kCubeFaceExtent);
+            CHECK(readback.height == kCubeFaceExtent);
+
+            CAPTURE(face);
+            CHECK(readback.pixels[0] == color[0]);
+            CHECK(readback.pixels[1] == color[1]);
+            CHECK(readback.pixels[2] == color[2]);
+        };
+
+        for (uint32_t face = 0; face < vkm::kVkmCubeFaceCount; ++face)
+        {
+            CHECK(uploadFace(face, kFaceColors[face], vkm::VkmTextureUploadMode::Auto));
         }
 
         SUBCASE("every face reads back the color it was uploaded with")
         {
             for (uint32_t face = 0; face < vkm::kVkmCubeFaceCount; ++face)
             {
-                const vkm::VkmTextureReadbackResult readback = driver->readbackTexture(cubemapHandle, face);
-                REQUIRE(readback.pixels.size() >= 4);
-                CHECK(readback.width == kCubeFaceExtent);
-                CHECK(readback.height == kCubeFaceExtent);
-
-                CAPTURE(face);
-                CHECK(readback.pixels[0] == kFaceColors[face][0]);
-                CHECK(readback.pixels[1] == kFaceColors[face][1]);
-                CHECK(readback.pixels[2] == kFaceColors[face][2]);
+                checkFaceReadsBack(face, kFaceColors[face]);
             }
+        }
+
+        /*
+        * The assertion that matters for the host-copy path: whichever route the pixels take,
+        * the result must be indistinguishable. The second pass deliberately writes a
+        * *different* color per face (the face order reversed) so that a host copy which
+        * silently did nothing would leave the staging pass's colors behind and fail here,
+        * rather than passing by coincidence.
+        */
+        SUBCASE("the staging and host-copy paths produce identical results")
+        {
+            for (uint32_t face = 0; face < vkm::kVkmCubeFaceCount; ++face)
+            {
+                CHECK(uploadFace(face, kFaceColors[face], vkm::VkmTextureUploadMode::ForceStaging));
+            }
+            for (uint32_t face = 0; face < vkm::kVkmCubeFaceCount; ++face)
+            {
+                checkFaceReadsBack(face, kFaceColors[face]);
+            }
+
+            const auto reversedColor = [](uint32_t face) {
+                return kFaceColors[vkm::kVkmCubeFaceCount - 1 - face];
+            };
+            for (uint32_t face = 0; face < vkm::kVkmCubeFaceCount; ++face)
+            {
+                CHECK(uploadFace(face, reversedColor(face), vkm::VkmTextureUploadMode::ForceHostCopy));
+            }
+            for (uint32_t face = 0; face < vkm::kVkmCubeFaceCount; ++face)
+            {
+                checkFaceReadsBack(face, reversedColor(face));
+            }
+        }
+
+        SUBCASE("a plain upload destination is host-writable exactly when the device supports it")
+        {
+            // Guards against the whole feature silently degrading to staging everywhere: if
+            // the device advertises host copy, a plain AllowTransferDst texture like this one
+            // must actually get it, not merely be eligible in principle. Asserting against
+            // the capability rather than hasUnifiedMemory() keeps this correct on devices
+            // that are unified but lack the mechanism (e.g. no VK_EXT_host_image_copy).
+            const bool deviceSupportsHostCopy =
+                (driver->getDriverCapabilityFlags() & vkm::VkmDriverCapabilityFlags::TextureHostCopy) != 0;
+            CAPTURE(deviceSupportsHostCopy);
+            CAPTURE(driver->hasUnifiedMemory());
+            CHECK(cubemap->isHostWritable() == deviceSupportsHostCopy);
         }
 
         SUBCASE("the cubemap can be published into the bindless texture array")

@@ -206,6 +206,26 @@ namespace vkm
     // Metal and D3D all agree on, and is what array layer N of a cube texture means.
     inline constexpr uint32_t kVkmCubeFaceCount = 6;
 
+    /*
+    * @brief How VkmDriverBase::uploadToTexture moves pixels into a texture.
+    * @details Auto is what callers should use: it takes the direct CPU write when the
+    * destination's memory allows one (VkmTexture::isHostWritable, decided at creation from
+    * what the backend actually allocated) and the staging-buffer copy otherwise. On a
+    * unified-memory device the direct write skips the staging allocation, the command
+    * buffer, the queue submit and the wait entirely; elsewhere nothing changes.
+    *
+    * The explicit modes exist for benchmarking and for tests that need to exercise one
+    * specific path. ForceHostCopy on a texture whose memory cannot take one warns and falls
+    * back to staging rather than failing -- the resulting pixels are identical either way,
+    * so refusing would only make callers write their own fallback.
+    */
+    enum class VkmTextureUploadMode : uint8_t
+    {
+        Auto = 0,
+        ForceStaging = 1,
+        ForceHostCopy = 2,
+    };
+
     struct VkmTextureInfo : public VkmResourceInfo
     {
         glm::uvec3 _extent;
