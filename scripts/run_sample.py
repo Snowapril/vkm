@@ -237,8 +237,15 @@ def run_native_sample(backend: str, sample: str, build_type: str,
         print(f"[ERROR] Build failed for {backend}/{sample}.")
         return 1
 
-    binary_name = f"{sample}.exe" if system == "Windows" else sample
-    binary = backend_build_dir / "bin" / binary_name
+    if system == "Windows":
+        binary = backend_build_dir / "bin" / f"{sample}.exe"
+    elif system == "Darwin":
+        # Samples are .app bundles on macOS. Launch the executable inside the bundle
+        # rather than going through `open`, so stdout/stderr and the exit code stay
+        # attached to this process; macOS still resolves the enclosing bundle.
+        binary = backend_build_dir / "bin" / f"{sample}.app" / "Contents" / "MacOS" / sample
+    else:
+        binary = backend_build_dir / "bin" / sample
     if not binary.exists():
         print(f"[ERROR] Sample binary not found: {binary}")
         return 1
