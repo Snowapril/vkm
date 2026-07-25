@@ -106,7 +106,13 @@ cmake -S "$PROJECT_ROOT" -B "$BACKEND_BUILD_DIR" \
 echo "[INFO] Building $SAMPLE..."
 cmake --build "$BACKEND_BUILD_DIR" --target "$SAMPLE" --parallel "$JOBS"
 
-SAMPLE_BIN="$BACKEND_BUILD_DIR/bin/$SAMPLE"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    # Samples are .app bundles on macOS; run the executable inside the bundle so this
+    # shell keeps the sample's stdout/stderr and exit code.
+    SAMPLE_BIN="$BACKEND_BUILD_DIR/bin/$SAMPLE.app/Contents/MacOS/$SAMPLE"
+else
+    SAMPLE_BIN="$BACKEND_BUILD_DIR/bin/$SAMPLE"
+fi
 if [[ ! -x "$SAMPLE_BIN" ]]; then
     echo "[ERROR] Sample binary not found: $SAMPLE_BIN" >&2
     exit 1

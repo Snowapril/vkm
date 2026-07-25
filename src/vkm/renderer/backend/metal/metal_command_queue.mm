@@ -140,6 +140,11 @@ namespace vkm
         [_mtlCommandQueue commit:mtlCommandBuffers count:count options:commitOptions];
         [_mtlCommandQueue signalEvent:mtlSharedEvent value:lastSubmittedTimelineValue];
 
+        // commit: has taken what it needs from the options (including a copy of the feedback
+        // block), so drop our reference -- these sources are compiled without ARC and this
+        // object is created once per submit, i.e. every frame.
+        [commitOptions release];
+
         return timelineObject;
     }
 

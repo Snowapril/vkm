@@ -141,6 +141,12 @@ namespace vkm
 
         _lastSubmitInfo = commandQueue->submit(submitInfo);
 
+        // Hand the command buffer back for reuse. submit() and recordSubmission() have already
+        // copied everything they keep, and beginCommandBuffer() resets the per-use state, so the
+        // instance is free the moment it is submitted -- without this, allocate() constructs a
+        // new command buffer (and a new RHI command buffer with it) every single frame.
+        commandBufferPool->release(commandBuffer);
+
         // TODO(snowapril) : execute() itself only ever submits to the Graphics queue (see
         // getCommandQueue(Graphics, 0) above) -- once it dispatches subgraphs to multiple queue
         // types, this loop will automatically record the correct per-instance usage regardless,
