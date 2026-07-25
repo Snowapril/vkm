@@ -42,15 +42,14 @@
 - (nonnull instancetype)initWithMetalLayer:(nonnull CAMetalLayer *)metalLayer uiCanvasSize:(NSUInteger)uiCanvasSize;
 
 - (void)metalDisplayLink:(nonnull CAMetalDisplayLink *)link needsUpdate:(nonnull CAMetalDisplayLinkUpdate *)update;
+- (void)renderThreadLoop;
+- (void)stop;
 @end
 
 static void* renderWorker( void* _Nullable obj )
 {
     pthread_setname_np("RenderThread");
-    CAMetalDisplayLink* metalDisplayLink = (__bridge CAMetalDisplayLink *)obj;
-    [metalDisplayLink addToRunLoop:[NSRunLoop currentRunLoop]
-                           forMode:NSDefaultRunLoopMode];
-    [[NSRunLoop currentRunLoop] run];
+    [(__bridge RendererCoordinatorController *)obj renderThreadLoop];
     return nil;
 }
 
@@ -64,6 +63,10 @@ static void* renderWorker( void* _Nullable obj )
     // pulls a drawable for it each frame so both swapchains stay on the same frame cadence.
     CAMetalLayer*                   _imguiMetalLayer;
     vkm::VkmSwapChainMetal*         _imguiSwapChain;
+    // Render-thread handles kept so -stop can end the thread before the engine is torn down.
+    pthread_t                       _renderThread;
+    CFRunLoopRef                    _renderRunLoop;
+    dispatch_semaphore_t            _renderRunLoopReady;
 }
 
 - (nonnull instancetype)initWithMetalLayer:(nonnull CAMetalLayer *)metalLayer uiCanvasSize:(NSUInteger)uiCanvasSize
@@ -93,17 +96,25 @@ static void* renderWorker( void* _Nullable obj )
         res = pthread_attr_setschedparam( &attr, &param );
         NSAssert( res == 0, @"Unable to set thread attribute priority." );
         
-        // Enable the system to automatically clean up upon thread exit:
-        res = pthread_attr_setdetachstate( &attr, PTHREAD_CREATE_DETACHED );
-        NSAssert( res == 0, @"Unable set set thread attribute to run detached." );
-        
+        // Joinable, not detached: -stop waits out an in-flight display-link callback before the
+        // engine (which that callback drives) is destroyed.
+        res = pthread_attr_setdetachstate( &attr, PTHREAD_CREATE_JOINABLE );
+        NSAssert( res == 0, @"Unable set set thread attribute to run joinable." );
+
         // Create thread:
-        pthread_t tid;
-        res = pthread_create( &tid, &attr, renderWorker, (__bridge void *)_metalDisplayLink );
+        _renderRunLoopReady = dispatch_semaphore_create(0);
+        res = pthread_create( &_renderThread, &attr, renderWorker, (__bridge void *)self );
         NSAssert( res == 0, @"Unable to create render thread" );
-        
+
         // Clean up transient objects:
         pthread_attr_destroy( &attr );
+
+        // Wait until the worker published its run loop, so -stop can never race thread startup.
+        // NSAssert compiles out of release builds, so only wait when there is a worker to wait for.
+        if ( res == 0 )
+        {
+            dispatch_semaphore_wait( _renderRunLoopReady, DISPATCH_TIME_FOREVER );
+        }
     }
 
     return self;
@@ -111,6 +122,9 @@ static void* renderWorker( void* _Nullable obj )
 
 - (void)dealloc
 {
+    [self stop];
+    dispatch_release(_renderRunLoopReady);
+    [_metalDisplayLink release];
     self->_metalDisplayLink = nil;
     [super dealloc];
 }
@@ -118,7 +132,30 @@ static void* renderWorker( void* _Nullable obj )
 - (void)renderThreadLoop
 {
     [_metalDisplayLink addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
-    [[NSRunLoop currentRunLoop] run];
+
+    // Publish the run loop before signalling: -stop breaks the loop through this handle.
+    // CFRunLoopRun() returns once CFRunLoopStop() is called, which -[NSRunLoop run] does not.
+    _renderRunLoop = (CFRunLoopRef)CFRetain(CFRunLoopGetCurrent());
+    dispatch_semaphore_signal(_renderRunLoopReady);
+
+    CFRunLoopRun();
+}
+
+- (void)stop
+{
+    if (_renderRunLoop == NULL)
+    {
+        return;
+    }
+
+    // -invalidate removes the link from the run loop so no further callback starts; stopping the
+    // run loop then lets the worker return, and the join waits out a callback already in flight.
+    [_metalDisplayLink invalidate];
+    CFRunLoopStop(_renderRunLoop);
+    pthread_join(_renderThread, nullptr);
+
+    CFRelease(_renderRunLoop);
+    _renderRunLoop = NULL;
 }
 
 - (void)metalDisplayLink:(nonnull CAMetalDisplayLink *)link needsUpdate:(nonnull CAMetalDisplayLinkUpdate *)update
@@ -465,6 +502,39 @@ namespace
 }
 @end
 
+// An unbundled executable has no main menu of its own, so the menu bar stays empty once the app
+// registers as a regular UI app and Cmd+Q/Cmd+H do nothing. Build a minimal app menu (GLFW does the
+// same for its unbundled windows; see dependencies/src/glfw/src/cocoa_init.m). Must be installed
+// between +sharedApplication and -finishLaunching.
+static void createMenuBar(const char* appName)
+{
+    NSString* name = [NSString stringWithUTF8String:appName];
+
+    NSMenu* menuBar = [[NSMenu alloc] init];
+    NSMenuItem* appMenuItem = [menuBar addItemWithTitle:@"" action:NULL keyEquivalent:@""];
+    NSMenu* appMenu = [[NSMenu alloc] init];
+    [appMenuItem setSubmenu:appMenu]; // retains appMenu
+
+    [appMenu addItemWithTitle:[NSString stringWithFormat:@"Hide %@", name]
+                       action:@selector(hide:)
+                keyEquivalent:@"h"];
+    [[appMenu addItemWithTitle:@"Hide Others"
+                        action:@selector(hideOtherApplications:)
+                 keyEquivalent:@"h"]
+        setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
+    [appMenu addItemWithTitle:@"Show All"
+                       action:@selector(unhideAllApplications:)
+                keyEquivalent:@""];
+    [appMenu addItem:[NSMenuItem separatorItem]];
+    [appMenu addItemWithTitle:[NSString stringWithFormat:@"Quit %@", name]
+                       action:@selector(terminate:)
+                keyEquivalent:@"q"];
+
+    [NSApp setMainMenu:menuBar]; // retains menuBar
+    [appMenu release];
+    [menuBar release];
+}
+
 @implementation VkmApplicationImpl
 {
     id<MTLDevice>                   _mtlDevice;
@@ -643,13 +713,25 @@ namespace
     [self createGame];
     [self showImGuiWindow];
     [self showWindow];
+    // Launched from a terminal the app starts behind the shell; pull it to the front so the scene
+    // window is key and receives keyboard input without an extra click.
+    [NSApp activate];
     [self evaluateCommandLine];
     // [self updateMaxEDRValue];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification
 {
+    // -terminate: exits the process directly, so main() never regains control on this path: the
+    // render thread has to be stopped and the engine torn down here. Otherwise the display-link
+    // callback keeps driving the engine (and the logger) while the process runs its static
+    // destructors, which surfaces as spdlog "mutex lock failed" at exit.
+    [_rendererCoordinator stop];
+    [_rendererCoordinator release];
     self->_rendererCoordinator = nil;
+
+    // Release GPU resources deterministically, as VkmApplication::destroy does on the Vulkan path.
+    _engine->destroy();
 }
 
 - (void)updateWindowTitle:(nonnull NSWindow *) window
@@ -786,6 +868,14 @@ namespace vkm
 
         NSApplication* app = [NSApplication sharedApplication];
         [app setDelegate: (::VkmApplicationImpl*)_impl];
+
+        // The samples are plain executables, not .app bundles, so macOS would otherwise treat the
+        // process as an accessory app: no Dock tile, no menu bar and no Cmd-Tab entry. Registering
+        // the regular activation policy makes it a foreground UI app like the GLFW-backed Vulkan
+        // path already is (dependencies/src/glfw/src/cocoa_init.m).
+        [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+        createMenuBar(appDelegate->getAppName());
+
         return NSApplicationMain(argc, (const char**)argv);
     }
 

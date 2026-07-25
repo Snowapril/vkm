@@ -159,6 +159,36 @@ renders without validation errors. The one `ld: warning: ignoring duplicate libr
 libspirv-cross-core.a` on the vkm-compiler link predates this work — the generated link
 line names it twice both before and after — and is left alone.
 
+## 2026-07-24 — macOS Metal app registers as a foreground UI app
+
+- The samples are plain executables, not `.app` bundles, and the Metal path drives
+  `NSApplication` directly, so macOS registered the process as `type="BackgroundOnly"`
+  (verified with `lsappinfo`): no Dock tile, no menu bar, no Cmd-Tab entry. The Vulkan path
+  gets this for free from GLFW (`dependencies/src/glfw/src/cocoa_init.m:638`).
+- `VkmApplication::entryPoint` now sets `NSApplicationActivationPolicyRegular` and installs a
+  minimal app menu (Hide / Hide Others / Show All / Quit) before `NSApplicationMain`;
+  `applicationDidFinishLaunching` calls `[NSApp activate]` so the window is key on launch.
+- Side effect: as a foreground app the `CAMetalDisplayLink` is no longer throttled (5 s run
+  went from ~940 to ~2670 log lines), which made the pre-existing shutdown race fire on every
+  exit — teardown never stopped the render thread, so it logged into spdlog after its statics
+  were gone (`[*** LOG ERROR #0001 ***] ... mutex lock failed`). Fixed below.
+
+## 2026-07-24 — macOS Metal shutdown path stops the render thread
+
+- The render thread was detached and ran `-[NSRunLoop run]`, which has no exit; nothing ever
+  invalidated the `CAMetalDisplayLink`. Since `-terminate:` exits the process directly (main()
+  never regains control on Metal, so `VkmApplication::destroy` never ran), the display-link
+  callback kept driving the engine and the logger through static destruction.
+- `RendererCoordinatorController` is now stoppable: the worker publishes its `CFRunLoopRef`
+  (handshake via a `dispatch_semaphore_t` so `-stop` cannot race thread startup) and runs
+  `CFRunLoopRun()`; the thread is `PTHREAD_CREATE_JOINABLE`. New `-stop` invalidates the display
+  link, calls `CFRunLoopStop`, and `pthread_join`s, so an in-flight callback is waited out.
+- `applicationWillTerminate:` now calls `-stop`, releases the coordinator (the file is non-ARC;
+  the previous `= nil` leaked it and the display link) and calls `_engine->destroy()`, matching
+  what the Vulkan path does in `VkmApplication::destroy`.
+- Verified with `MTL_DEBUG_LAYER=1` on all three quit paths (`--auto-close`, ESC, Quit menu
+  item, window close): no hang, no `mutex lock failed`, no validation errors.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:
