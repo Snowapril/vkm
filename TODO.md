@@ -42,3 +42,4 @@
 - The engine's shutdown memory report is only reachable through a graceful exit (ESC / window close), so a killed process leaves no report.
 - `getProcessMemoryStats()` reports no peak on wasm (`emscripten_get_heap_size()` has no high-water counterpart) and none on macOS kernels older than `TASK_VM_INFO_REV3`.
 - macOS samples are unbundled executables, so the Dock tile shows the target name with the generic icon (no `.app` bundle / custom icon / bundle ID).
+- Vulkan never frees the per-acquire `VkCommandBuffer` from `VkmCommandBufferPoolVulkan::getOrCreateRHICommandBuffer()` (Metal releases the previous one in `setRHICommandBuffer`, WebGPU releases its encoder in `submit`).

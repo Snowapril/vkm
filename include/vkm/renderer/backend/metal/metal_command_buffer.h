@@ -79,7 +79,9 @@ namespace vkm
         inline id<MTL4ComputeCommandEncoder> getActiveComputeCommandEncoder() const { return _commandEncoder.getActiveComputeCommandEncoder(); }
 
     private:
-        id<MTL4CommandBuffer> _mtlCommandBuffer;
+        // Owned: setRHICommandBuffer() adopts the +1 reference handed over by
+        // VkmCommandBufferPoolMetal::getOrCreateRHICommandBuffer().
+        id<MTL4CommandBuffer> _mtlCommandBuffer = nullptr;
         VkmCommandEncoderMetal _commandEncoder;
 
         // Primitive type of the currently bound graphics pipeline, captured at
