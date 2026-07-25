@@ -712,3 +712,21 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
   more importantly a backend that never reports `isHostWritable()` has nothing meaningful to
   implement. The default is the matching unreachable-case guard, and it let the WebGPU
   override be dropped entirely rather than duplicated.
+
+### 2026-07-25 — Host image copy disabled on MoltenVK after a CI hang
+- Planned: enable `VK_EXT_host_image_copy` on any device advertising it with the feature bit set.
+- Did instead: additionally require `driverID != VK_DRIVER_ID_MOLTENVK`.
+- Why: the `macOS 26 + AppleClang (vulkan)` job hung for 67 minutes with **zero** output after
+  linking `UnitTests` (it takes ~2.5 min and runs 98/98 on `main`). stdout is block-buffered
+  through the runner's pipe and the run emits ~372 KB locally, so several flushes would have
+  appeared had it gotten far — the hang is very early, i.e. in Vulkan driver initialization,
+  which is exactly where the new code runs. It did not reproduce locally: the suite passes
+  against both the LunarG ICD (1.3.334) and brew's MoltenVK 1.4.1 (1.4.334, the version CI
+  installs), so the trigger is something about the runner's loader/layer combination that
+  cannot be replicated here.
+  The conservative option, and the one taken: MoltenVK emulates this extension on top of Metal,
+  and on macOS the engine's own Metal backend already provides the identical optimization
+  natively (verified, and its CI job passes). Vulkan-on-Metal therefore loses no real
+  capability by falling back to the staging path, which is always correct — whereas leaving it
+  on costs a 6-hour CI timeout per run with no diagnostics. Native Vulkan drivers keep the fast
+  path. Logged in `TODO.md`, including the resulting coverage gap.

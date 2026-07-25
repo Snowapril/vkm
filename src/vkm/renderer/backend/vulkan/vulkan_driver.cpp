@@ -503,8 +503,25 @@ namespace vkm
         // plain memcpy cannot do because the layout is swizzled. Without it, host-visible
         // texture memory would be useless and every upload has to go through a staging
         // buffer -- see shouldUseHostWritableTexture in vulkan_texture.cpp.
+        //
+        // Not on MoltenVK. It advertises the extension, but the feature is emulated on top of
+        // Metal rather than implemented by a real driver, and doing so hung the macOS Vulkan
+        // CI job indefinitely during initialization (no output, no crash -- see
+        // implementation-notes.md). Nothing is actually lost: on macOS the engine's own Metal
+        // backend is the primary path and provides this same optimization natively, so
+        // Vulkan-on-Metal falls back to the staging path, which is always correct.
+        VkPhysicalDeviceDriverProperties driverProperties{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES,
+        };
+        VkPhysicalDeviceProperties2 driverProps2{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+            .pNext = &driverProperties,
+        };
+        vkGetPhysicalDeviceProperties2(_physicalDevice, &driverProps2);
+
         const bool requestHostImageCopy =
-            isExtensionSupported(VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME, availableDeviceExtensions);
+            isExtensionSupported(VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME, availableDeviceExtensions) &&
+            driverProperties.driverID != VK_DRIVER_ID_MOLTENVK;
         if(requestHostImageCopy)
         {
             pNextChainPushFront(&_features11, &_hostImageCopyFeatures);

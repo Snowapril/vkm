@@ -40,6 +40,8 @@
 - `uploadToTexture` blocks per call on the staging path, so a 6-face cubemap stalls the graphics queue six times at load on any device without `VkmDriverCapabilityFlags::TextureHostCopy`.
 - Host-copy texture upload covers whole mip levels only; there is no partial-region (sub-rectangle) host write, so a texture-atlas update still rewrites a full level.
 - Whether a texture is host-writable is decided entirely by the backend policy (unified memory + a plain upload destination); callers cannot request or refuse it at creation.
+- Host-copy texture upload is disabled on MoltenVK: it advertises `VK_EXT_host_image_copy` but enabling it hung the macOS Vulkan CI job during initialization, and the cause was never isolated (the hang produces no output and did not reproduce locally against the same MoltenVK build).
+- The Vulkan host-copy path therefore has no CI coverage at all: MoltenVK is excluded, and lavapipe on the Ubuntu runners does not advertise the extension, so every CI Vulkan job takes the staging path.
 - `VkmMemoryPlacementHint` is still ignored by the Metal texture path, and now sits alongside a second, separate memory decision (host-writable storage) rather than being unified with it.
 - A crash inside `mi_malloc` recurses forever: backward-cpp's signal handler allocates while printing the trace, so an abort becomes a hang with misleading mimalloc assertions instead of a stack trace.
 - Sponza-scale scenes exceed the WebGPU bindless mega-buffers (16 MiB vertex / 8 MiB index, no growth), and `model_viewer`'s wasm build preloads no scene at all.
