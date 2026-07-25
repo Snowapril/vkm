@@ -320,6 +320,33 @@ line names it twice both before and after — and is left alone.
   (`OpDecorate %g_VkmFrame DescriptorSet 1 / Binding 0`); emitting WGSL needs a tint build no
   local or CI configuration provides (logged in `TODO.md`).
 
+## 2026-07-25 — Per-test time budgets in UnitTests
+
+- `UnitTests.cpp` now gives every registered test case a default budget
+  (`kDefaultTestTimeoutSeconds = 10`) by walking `doctest::detail::getRegisteredTests()` and
+  setting `m_timeout` where it is still 0, so doctest's own "exceeded time limit" failure
+  applies to all ~107 tests without decorating each one. A test that needs longer declares
+  `TEST_CASE("..." * doctest::timeout(seconds))`, which the pass leaves alone. The registry is a
+  `std::set` whose ordering is line/name/file/template-id only, so the in-place mutation cannot
+  break its invariant.
+- doctest's check is post-hoc, so it cannot help with a test that never returns -- exactly the
+  failure that had left 79 cases unrun. A `TestHangWatchdog` listener therefore tracks the
+  running test's deadline on its own thread and kills the process at
+  `max(budget * 3, budget + 5s)`, printing the test name and file:line. The two mechanisms don't
+  race: an overrun that returns is a normal failure and the run continues; only a stuck test
+  reaches the watchdog.
+- Budget chosen from measurement, not guesswork: with `--duration=true` the slowest test is
+  0.087 s on Metal (`Backbuffer readback - solid red`) and 0.333 s on Vulkan (`Vulkan clip space`),
+  so 10 s is ~30x the observed worst case.
+- `main()` now forwards `argc`/`argv` to `applyCommandLine`. It previously took no arguments, so
+  `--test-case=` and `--duration=` were silently ignored -- which is also what made it impossible
+  to re-run just the test the watchdog names.
+- New `tests/TestTimeBudget.cpp` guards the mechanism itself: one case asserts no test is left
+  unbudgeted, and one deliberately overruns a 0.05 s budget under `doctest::should_fail()` so the
+  enforcement is proven from inside a green suite.
+- Verified: Metal 107/107, Vulkan 108/108, wasm/WebGPU via headless Chrome all pass; a temporary
+  infinite-loop test was killed by the watchdog in 6 s with exit code 1 and correct attribution.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:
@@ -330,6 +357,15 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Did instead: <the conservative option taken>
 - Why: <the edge case that forced it>
 ```
+
+### 2026-07-25 — the test hang watchdog uses _Exit, not abort
+- Planned: `std::abort()` once a test overruns its budget by the grace factor.
+- Did instead: `std::_Exit(EXIT_FAILURE)` after flushing stdout/stderr by hand.
+- Why: `abort()` runs backward-cpp's SIGABRT handler, which tried to symbolize a stack trace from
+  the watchdog thread while the hung thread still held the malloc lock. Observed deadlocking
+  there — the message printed and then the process sat forever, i.e. exactly the wedged run the
+  watchdog exists to prevent. `_Exit` skips handlers and atexit entirely, and everything worth
+  reporting is already flushed.
 
 ### 2026-07-25 — set 1 on Metal is a discrete binding, not a second argument buffer
 - Planned: pin set 1's Tier-2 argument buffer at Metal buffer index 4 and have the runtime keep

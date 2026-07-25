@@ -4,6 +4,7 @@
 
 - Vulkan `UnitTests` in GitHub Actions CI still lack a software Vulkan ICD on the Windows and macOS runners (Ubuntu now installs lavapipe).
 - `MemoryTracker`'s global mutex serializes every allocation/deallocation across all threads.
+- The unit-test hang watchdog is native-only; the wasm build links no pthreads, so a hung test there is bounded only by `scripts/run_tests.py`'s 60 s Chrome timeout and is not attributed to a test.
 - Design and implement descriptor sets 2 (per-pass) and 3 (per-draw) of the engine/user resource-binding convention (sets 0 bindless and 1 per-frame are implemented on all backends).
 - Set 1 has one frame-constants region per frame slot engine-wide, so a second scene-rendering window would render with the main swapchain's aspect ratio and share that region unsynchronized.
 - The frame-constant buffers bypass `newBuffer()` (no `VkmBuffer` is host-writable), so they are absent from the memory tracker, like the bindless managers' own buffers.
