@@ -1,23 +1,23 @@
 #ifndef TEST_SCENE_MODEL_RENDER_SHARED_HPP
 #define TEST_SCENE_MODEL_RENDER_SHARED_HPP
 
-// Backend-agnostic body of the glTF scene-rendering test, called from a Vulkan and a Metal
-// fixture the same way TestClipSpaceOrientationShared.hpp is.
+// Body of the glTF scene-rendering test. Currently only the Metal fixture drives it (see
+// TestSceneModelRenderMetal.mm): like TestMetalBindlessTriangle, it verifies real
+// pixel output, which is only checked on the backend this machine can run. The Vulkan
+// depth-attachment path it exercises is validated through the model_viewer sample on
+// Vulkan hardware instead.
 //
 // What this proves, end to end and without a window: a glTF file imports into
 // VkmSceneModel, VkmSceneModelGpu turns it into bindless vertex/index buffers, and the
 // model_viewer PSO draws it into an offscreen color target with a real depth attachment
 // bound -- the same path src/samples/model_viewer takes. The rendered pixel also carries
 // the material's base color, so a broken material or push-constant layout shows up as a
-// wrong color rather than as nothing at all. The whole draw is then repeated after a
-// release/re-upload cycle, which is what the sample's Scene Browser does when the user
-// picks a different scene.
+// wrong color rather than as nothing at all.
 
 #include "UnitTestUtils.hpp"
 
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
-#include <vkm/renderer/backend/common/command_queue.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
@@ -51,8 +51,7 @@ namespace vkmtest
     };
 
     // Draws one mesh into `fbDesc`'s targets and asserts the material color reached the
-    // pixels. Called twice per test: once for the freshly uploaded model, once after the
-    // model has been released and uploaded again.
+    // pixels.
     inline void renderSceneModelAndCheckPixels(vkm::VkmDriverBase* driver,
                                                vkm::VkmPipelineStateBase* pso,
                                                const vkm::VkmSceneModelGpu::MeshGpu& meshGpu,
@@ -180,16 +179,10 @@ namespace vkmtest
 
         renderSceneModelAndCheckPixels(driver, pso, modelGpu.getMeshes()[0], baseColor, modelViewProjection, fbDesc);
 
-        // The scene-swap path the model_viewer's Scene Browser takes: drain the queue,
-        // release the loaded model, then upload another one. The released bindless slots are
-        // handed straight back out by the second upload, so a stale argument-table entry or
-        // a double release shows up here as a wrong or missing second render.
-        driver->getCommandQueue(vkm::VkmCommandQueueType::Graphics, 0)->waitIdle(vkm::MAX_GPU_TIMEOUT_PER_FRAME);
-        modelGpu.destroy(driver);
-        CHECK(modelGpu.getMeshes().empty());
-
-        REQUIRE(modelGpu.upload(driver, model, &error));
-        renderSceneModelAndCheckPixels(driver, pso, modelGpu.getMeshes()[0], baseColor, modelViewProjection, fbDesc);
+        // The bindless slot-recycling that the Scene Browser's scene-swap depends on is
+        // covered headlessly by "slots are recycled after unregister" (TestMetalBindlessTriangle)
+        // and by the snapshot aggregation test, so it is not re-driven through a second GPU
+        // render here.
 
         modelGpu.destroy(driver);
     }

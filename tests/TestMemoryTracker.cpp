@@ -127,10 +127,10 @@ TEST_CASE("getProcessMemoryStats reports the OS's own view of this process") {
 
     REQUIRE(stats._valid);
     CHECK(stats._residentBytes > 0);
-    if (stats._peakResidentBytes > 0)
-    {
-        CHECK(stats._peakResidentBytes >= stats._residentBytes);
-    }
+    // Deliberately no `peak >= resident` assertion: the peak and the current figure come
+    // from different OS counters (on Linux, ru_maxrss vs /proc/self/statm; on macOS, two
+    // ledger fields sampled separately), so they are not captured atomically and the
+    // ordering is not guaranteed at any instant -- this flaked green/red across CI runners.
 
     // The whole point of this API is that it sees memory the engine's own tracker cannot:
     // the binary, thread stacks and every third-party allocation. So the process figure must

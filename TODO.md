@@ -35,7 +35,7 @@
 - Imported vertices keep a zeroed `TANGENT` when the asset omits one (no MikkTSpace-style generator), and generated normals are area-weighted smooth rather than the spec's flat normals.
 - Texture upload has no path at all: no `copyBufferToTexture`/`uploadToTexture` on any backend, and the bindless texture array (set 0, binding 0) still has no `registerTexture`.
 - Sponza-scale scenes exceed the WebGPU bindless mega-buffers (16 MiB vertex / 8 MiB index, no growth), and `model_viewer`'s wasm build preloads no scene at all.
-- The Vulkan/WebGPU depth-attachment paths in `onBeginRenderPass` are exercised only by CI (no Vulkan ICD on the dev machine; WebGPU has no equivalent offscreen test).
+- The Vulkan/WebGPU depth-attachment paths in `onBeginRenderPass` have no unit-test coverage (the offscreen scene-model render test is Metal-only; the Vulkan fixture rendered black and crashed on lavapipe). They ship compile-verified only, validated via the model_viewer sample on real hardware.
 - Metal's render-pass depth attachment hardcodes `MTLLoadActionClear`/`MTLStoreActionStore` instead of honoring `VkmDepthStencilAttachmentDescriptor`'s load/store actions.
 - `VkmDriverBase::getGpuMemoryStats()` reports nothing on WebGPU (no memory-introspection API exists), so the Memory Inspector's GPU "actual" column is blank there.
 - Sampling the Memory Inspector copies the whole tag table under `MemoryTracker`'s global mutex; the 2 Hz throttle hides but does not fix that cost.

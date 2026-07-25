@@ -21,7 +21,6 @@ set(SRCS
     ${SRC_DIR}/TestClipSpaceOrientation.cpp
     ${SRC_DIR}/TestGlobalVariable.cpp
     ${SRC_DIR}/TestGltfImporter.cpp
-    ${SRC_DIR}/TestSceneModelRender.cpp
 )
 
 if (VKM_USE_METAL_API)
@@ -59,9 +58,12 @@ if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
         OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
         PSO_JSON_FILES "${ROOT_DIR}/src/samples/triangle/renderpass.json"
         EXTRA_DEPENDS  "${ROOT_DIR}/src/samples/triangle/triangle.hlsl")
+endif()
 
-    # Likewise for TestSceneModelRender*, which draws an imported glTF mesh with the
-    # model_viewer sample's PSO.
+# TestSceneModelRenderMetal draws an imported glTF mesh with the model_viewer sample's PSO.
+# It is Metal-only (real-pixel output is only verified on the backend this machine can run,
+# like TestMetalBindlessTriangle), so its shader cache is built only for the Metal backend.
+if (VKM_USE_METAL_API)
     vkm_add_shader_cache_target(
         TARGET_NAME   tests_model_viewer_shaders
         OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
@@ -116,11 +118,19 @@ target_compile_definitions(${target}
 )
 
 if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
-    add_dependencies(${target} tests_triangle_shaders tests_model_viewer_shaders)
+    add_dependencies(${target} tests_triangle_shaders)
     target_compile_definitions(${target}
         PRIVATE
         TEST_TRIANGLE_SAMPLE_DIR="${ROOT_DIR}/src/samples/triangle/"
         TEST_TRIANGLE_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
+    )
+endif()
+
+# TestSceneModelRenderMetal (Metal-only) needs the model_viewer PSO cache and its paths.
+if (VKM_USE_METAL_API)
+    add_dependencies(${target} tests_model_viewer_shaders)
+    target_compile_definitions(${target}
+        PRIVATE
         TEST_MODEL_VIEWER_SAMPLE_DIR="${ROOT_DIR}/src/samples/model_viewer/"
         TEST_MODEL_VIEWER_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
     )
