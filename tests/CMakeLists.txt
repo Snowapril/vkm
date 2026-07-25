@@ -23,6 +23,9 @@ set(SRCS
     ${SRC_DIR}/TestClipSpaceOrientation.cpp
     ${SRC_DIR}/TestGlobalVariable.cpp
     ${SRC_DIR}/TestGltfImporter.cpp
+    ${SRC_DIR}/TestCpuProfiler.cpp
+    ${SRC_DIR}/TestImageLoader.cpp
+    ${SRC_DIR}/TestCubemapTexture.cpp
 )
 
 if (VKM_USE_METAL_API)
@@ -33,6 +36,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestRenderGraphCapture.mm
         ${SRC_DIR}/TestClipSpaceOrientationMetal.mm
         ${SRC_DIR}/TestSceneModelRenderMetal.mm
+        ${SRC_DIR}/TestCubemapTextureMetal.mm
     )
 endif()
 
@@ -47,6 +51,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestRenderGraphCapture.mm
         ${SRC_DIR}/TestClipSpaceOrientationMetal.mm
         ${SRC_DIR}/TestSceneModelRenderMetal.mm
+        ${SRC_DIR}/TestCubemapTextureMetal.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++"
     )
 endif()
@@ -60,6 +65,18 @@ if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
         OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
         PSO_JSON_FILES "${ROOT_DIR}/src/samples/triangle/renderpass.json"
         EXTRA_DEPENDS  "${ROOT_DIR}/src/samples/triangle/triangle.hlsl")
+endif()
+
+# TestCubemapTexture* renders the skybox sample's PSO into an offscreen target and reads
+# the pixels back, on both backends -- that cross-backend comparison is the point, since it
+# is what pins the shared clip-space/ray-reconstruction convention (see the note on
+# -fvk-invert-y in skybox.hlsl).
+if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
+    vkm_add_shader_cache_target(
+        TARGET_NAME   tests_skybox_shaders
+        OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
+        PSO_JSON_FILES "${ROOT_DIR}/src/samples/skybox/renderpass.json"
+        EXTRA_DEPENDS  "${ROOT_DIR}/src/samples/skybox/skybox.hlsl")
 endif()
 
 # TestSceneModelRenderMetal draws an imported glTF mesh with the model_viewer sample's PSO.
@@ -125,6 +142,12 @@ if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
         PRIVATE
         TEST_TRIANGLE_SAMPLE_DIR="${ROOT_DIR}/src/samples/triangle/"
         TEST_TRIANGLE_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
+    )
+    add_dependencies(${target} tests_skybox_shaders)
+    target_compile_definitions(${target}
+        PRIVATE
+        TEST_SKYBOX_SAMPLE_DIR="${ROOT_DIR}/src/samples/skybox/"
+        TEST_SKYBOX_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
     )
 endif()
 

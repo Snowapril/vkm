@@ -18,6 +18,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/base/logger.h
     ${PUBLIC_HDR_DIR}/vkm/base/memory.h
     ${PUBLIC_HDR_DIR}/vkm/base/global_variable.h
+    ${PUBLIC_HDR_DIR}/vkm/base/cpu_profiler.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/renderer_common.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_graph.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_graph_capture.h
@@ -49,6 +50,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/memory_report.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_model.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/gltf_importer.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/scene/image_loader.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_model_gpu.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/camera.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/engine.h
@@ -60,6 +62,7 @@ set(SRCS
     ${SRC_DIR}/vkm/base/logger.cpp
     ${SRC_DIR}/vkm/base/memory.cpp
     ${SRC_DIR}/vkm/base/global_variable.cpp
+    ${SRC_DIR}/vkm/base/cpu_profiler.cpp
     ${SRC_DIR}/vkm/platform/common/input_handler.cpp
     ${SRC_DIR}/vkm/platform/common/glfw_input.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/renderer_common.cpp
@@ -91,8 +94,10 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/scene/scene_model.cpp
     ${SRC_DIR}/vkm/renderer/scene/cgltf_impl.cpp
     ${SRC_DIR}/vkm/renderer/scene/gltf_importer.cpp
+    ${SRC_DIR}/vkm/renderer/scene/image_loader.cpp
     ${SRC_DIR}/vkm/renderer/scene/scene_model_gpu.cpp
     ${SRC_DIR}/vkm/renderer/camera.cpp
+    ${SRC_DIR}/vkm/renderer/scene/stb_image_impl.cpp
     ${SRC_DIR}/vkm/renderer/engine.cpp
 )
 
@@ -101,11 +106,13 @@ if (VKM_ENABLE_IMGUI)
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/imgui_renderer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/render_graph_inspector.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/memory_inspector.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/cpu_profiler_inspector.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/imgui/imgui_renderer.cpp
         ${SRC_DIR}/vkm/renderer/imgui/render_graph_inspector.cpp
         ${SRC_DIR}/vkm/renderer/imgui/memory_inspector.cpp
+        ${SRC_DIR}/vkm/renderer/imgui/cpu_profiler_inspector.cpp
     )
 endif()
 

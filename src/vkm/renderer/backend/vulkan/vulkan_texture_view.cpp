@@ -66,7 +66,7 @@ namespace vkm
         const VkImageViewCreateInfo viewCreateInfo{
             .sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .image            = parentTexture->getImage(),
-            .viewType         = (effectiveArrayLayers > 1) ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D,
+            .viewType         = toVkImageViewType(info._type, effectiveArrayLayers),
             .format           = format,
             .subresourceRange = {
                 .aspectMask     = aspectMask,

@@ -22,6 +22,15 @@ namespace vkm
             return false;
         }
 
+        // Checked here rather than per backend: Metal deliberately decouples its arrayLength
+        // from _numArrayLayers for cubes, so the two backends would otherwise fail this
+        // differently (or not at all) when a caller gets it wrong.
+        if (info._type == VkmTextureType::Cube)
+        {
+            VKM_ASSERT(info._numArrayLayers == kVkmCubeFaceCount, "A cube texture must have exactly 6 array layers");
+            VKM_ASSERT(info._extent.x == info._extent.y, "A cube texture must have square faces");
+        }
+
         _textureInfo = info;
         return true;
     }

@@ -32,6 +32,7 @@ namespace vkm
         */
         inline id<MTLDevice> getMTLDevice() const { return _mtlDevice; }
 
+
         /*
         * @brief Suballocate a buffer from an existing (or newly grown) heap pool block.
         * Returns nil if allocation failed (e.g. size exceeds a single pool block).

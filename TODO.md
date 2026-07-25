@@ -35,9 +35,19 @@
 - Render graph capture records swapchain backbuffer outputs as metadata only (`CAMetalLayer.framebufferOnly` stays YES).
 - Render graph capture texture previews in ImGui are Metal-only (`getTextureID` returns 0 on Vulkan/WebGPU).
 - Programmatic .gputrace capture scopes only the Metal Graphics queue 0; Vulkan/WebGPU `requestGpuFrameCapture()` is a no-op (no RenderDoc integration).
-- glTF import covers geometry and material factors only: no textures, no samplers, no animation/skinning, no Draco/KTX2/`EXT_meshopt_compression`.
+- glTF import covers geometry and material factors only: no textures, no samplers, no animation/skinning, no Draco/KTX2/`EXT_meshopt_compression` (the texture upload/bindless path it would need now exists).
 - Imported vertices keep a zeroed `TANGENT` when the asset omits one (no MikkTSpace-style generator), and generated normals are area-weighted smooth rather than the spec's flat normals.
-- Texture upload has no path at all: no `copyBufferToTexture`/`uploadToTexture` on any backend, and the bindless texture array (set 0, binding 0) still has no `registerTexture`.
+- `copyBufferToTexture`/`uploadToTexture`, `registerTexture` and the set-0 sampler are Vulkan/Metal-only; WebGPU has error-logging stubs (WGSL has no runtime-sized texture arrays).
+- Set 0 has one fixed linear/clamp-to-edge sampler at binding 3 rather than a sampler array, so per-texture filter/address modes are not selectable in shaders.
+- Only one texture type may be declared at set 0 binding 0 per shader, and texture slots come from one allocator shared by all types (convention only, unenforced).
+- Texture upload has no mipmap generation: `uploadToTexture` writes one mip level per call and nothing downsamples.
+- `uploadToTexture` blocks per call on the staging path, so a 6-face cubemap stalls the graphics queue six times at load on any device without `VkmDriverCapabilityFlags::TextureHostCopy`.
+- Host-copy texture upload covers whole mip levels only; there is no partial-region (sub-rectangle) host write, so a texture-atlas update still rewrites a full level.
+- Whether a texture is host-writable is decided entirely by the backend policy (unified memory + a plain upload destination); callers cannot request or refuse it at creation.
+- Host-copy texture upload is disabled on MoltenVK: it advertises `VK_EXT_host_image_copy` but enabling it hung the macOS Vulkan CI job during initialization, and the cause was never isolated (the hang produces no output and did not reproduce locally against the same MoltenVK build).
+- The Vulkan host-copy path therefore has no CI coverage at all: MoltenVK is excluded, and lavapipe on the Ubuntu runners does not advertise the extension, so every CI Vulkan job takes the staging path.
+- `VkmMemoryPlacementHint` is still ignored by the Metal texture path, and now sits alongside a second, separate memory decision (host-writable storage) rather than being unified with it.
+- A crash inside `mi_malloc` recurses forever: backward-cpp's signal handler allocates while printing the trace, so an abort becomes a hang with misleading mimalloc assertions instead of a stack trace.
 - Sponza-scale scenes exceed the WebGPU bindless mega-buffers (16 MiB vertex / 8 MiB index, no growth), and `model_viewer`'s wasm build preloads no scene at all.
 - The Vulkan/WebGPU depth-attachment paths in `onBeginRenderPass` have no unit-test coverage (the offscreen scene-model render test is Metal-only; the Vulkan fixture rendered black and crashed on lavapipe). They ship compile-verified only, validated via the model_viewer sample on real hardware.
 - Metal's render-pass depth attachment hardcodes `MTLLoadActionClear`/`MTLStoreActionStore` instead of honoring `VkmDepthStencilAttachmentDescriptor`'s load/store actions.
@@ -47,3 +57,7 @@
 - `getProcessMemoryStats()` reports no peak on wasm (`emscripten_get_heap_size()` has no high-water counterpart) and none on macOS kernels older than `TASK_VM_INFO_REV3`.
 - macOS sample bundles ship no `CFBundleIconFile`, so the Dock tile shows the generic icon.
 - Vulkan never frees the per-acquire `VkCommandBuffer` from `VkmCommandBufferPoolVulkan::getOrCreateRHICommandBuffer()` (Metal releases the previous one in `setRHICommandBuffer`, WebGPU releases its encoder in `submit`).
+- CPU profiler zones are wall-clock intervals, not per-thread CPU time (no thread-CPU-clock sampling on any platform).
+- The `CHROME_TRACING` / `TASKFLOW_PROFILER,` CMake options are still dead (no source reads them, and the latter has a stray comma in its name).
+- `VkmCpuProfiler` never destroys a thread's recording state, so a process that churns threads leaks one `ThreadState` per thread ever created.
+- The CPU profiler's flame chart shows only the frame-driver and reclaimer threads; nothing else in the engine is instrumented or threaded yet.

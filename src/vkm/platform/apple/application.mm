@@ -29,6 +29,7 @@
 
 #include <vkm/platform/common/window.h>
 #include <vkm/platform/common/glfw_input.h>
+#include <vkm/base/cpu_profiler.h>
 
 #if defined(VKM_USE_METAL_API)
 @interface VkmWindowImpl : NSWindow
@@ -49,6 +50,7 @@
 static void* renderWorker( void* _Nullable obj )
 {
     pthread_setname_np("RenderThread");
+    VKM_PROFILE_SET_THREAD_NAME("RenderThread");
     [(__bridge RendererCoordinatorController *)obj renderThreadLoop];
     return nil;
 }
@@ -989,6 +991,10 @@ namespace vkm
         }
 
         installGlfwInputCallbacks(_window.getHandle(), &_engine);
+
+        // The Vulkan-on-macOS path drives the frame loop here on the main thread, unlike the
+        // Metal path's dedicated RenderThread.
+        VKM_PROFILE_SET_THREAD_NAME("MainThread");
 
         // The app quits when the main window closes; closing the ImGui window is vetoed so its
         // swapchain need not be torn down mid-run.

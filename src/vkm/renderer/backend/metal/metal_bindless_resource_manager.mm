@@ -3,11 +3,14 @@
 #include <vkm/renderer/backend/metal/metal_bindless_resource_manager.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_buffer.h>
+#include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 
 #import <Metal/MTLDevice.h>
 #import <Metal/MTLBuffer.h>
+#import <Metal/MTLSampler.h>
+#import <Metal/MTLTexture.h>
 #import <Metal/MTL4ArgumentTable.h>
 
 #include <cstring>
@@ -21,6 +24,16 @@ namespace vkm
 
     VkmBindlessResourceManagerMetal::~VkmBindlessResourceManagerMetal()
     {
+    }
+
+    void VkmBindlessResourceManagerMetal::writeResourceIdEntry(uint32_t entryIndex, MTLResourceID resourceId)
+    {
+        // MTLResourceID is an opaque struct, not an integer, so it is copied byte-wise into
+        // the flat 8-byte-per-entry table rather than assigned like a buffer's gpuAddress.
+        static_assert(sizeof(MTLResourceID) == sizeof(uint64_t),
+                      "The Tier-2 argument buffer models every entry as 8 bytes");
+        uint64_t* entries = static_cast<uint64_t*>(_argumentBuffer.contents);
+        std::memcpy(&entries[entryIndex], &resourceId, sizeof(resourceId));
     }
 
     bool VkmBindlessResourceManagerMetal::initialize()
@@ -47,6 +60,28 @@ namespace vkm
             return false;
         }
         _pushConstantRing.label = @"VkmPushConstantRing";
+
+        // Created natively rather than through VkmDriverBase::newSampler(): this runs from
+        // initializeInner(), before the render resource pool is initialized, so no pooled
+        // resource can exist yet. supportArgumentBuffers is what makes gpuResourceID valid
+        // inside the argument buffer, and is why this is not a plain VkmSampler.
+        MTLSamplerDescriptor* samplerDesc = [[MTLSamplerDescriptor alloc] init];
+        samplerDesc.minFilter = MTLSamplerMinMagFilterLinear;
+        samplerDesc.magFilter = MTLSamplerMinMagFilterLinear;
+        samplerDesc.mipFilter = MTLSamplerMipFilterLinear;
+        samplerDesc.sAddressMode = MTLSamplerAddressModeClampToEdge;
+        samplerDesc.tAddressMode = MTLSamplerAddressModeClampToEdge;
+        samplerDesc.rAddressMode = MTLSamplerAddressModeClampToEdge;
+        samplerDesc.supportArgumentBuffers = YES;
+        samplerDesc.label = @"VkmBindlessDefaultSampler";
+        _defaultSampler = [device newSamplerStateWithDescriptor:samplerDesc];
+        [samplerDesc release];
+        if (_defaultSampler == nil)
+        {
+            VKM_DEBUG_ERROR("Failed to create the bindless default sampler");
+            return false;
+        }
+        writeResourceIdEntry(kVkmMetalBindlessSamplerId, [_defaultSampler gpuResourceID]);
 
         // Neither buffer goes through newBuffer(), so neither joins a residency set on its
         // own; register them explicitly (same pattern as heap pool blocks in
@@ -76,6 +111,11 @@ namespace vkm
 
     void VkmBindlessResourceManagerMetal::destroy()
     {
+        if (_defaultSampler != nil)
+        {
+            [_defaultSampler release];
+            _defaultSampler = nil;
+        }
         if (_argumentTable != nil)
         {
             [_argumentTable release];
@@ -120,6 +160,36 @@ namespace vkm
         entries[idBase + slot] = bufferMetal->getBuffer().gpuAddress;
 
         return slot;
+    }
+
+    uint32_t VkmBindlessResourceManagerMetal::registerTexture(VkmResourceHandle textureHandle)
+    {
+        VkmTextureMetal* textureMetal = static_cast<VkmTextureMetal*>(
+            _driver->getRenderResourcePool()->getResource<VkmTexture>(textureHandle));
+        if (textureMetal == nullptr || textureMetal->getInternalHandle() == nil)
+        {
+            VKM_DEBUG_ERROR("registerTexture: invalid texture handle");
+            return UINT32_MAX;
+        }
+
+        const uint32_t slot = _textureSlots.allocate();
+        if (slot == UINT32_MAX)
+        {
+            VKM_DEBUG_ERROR("Bindless texture array is exhausted");
+            return UINT32_MAX;
+        }
+
+        // Textures created through newTexture() are already in the pool's residency set, so
+        // publishing the id here is all that is needed to make it samplable.
+        writeResourceIdEntry(kVkmMetalBindlessTextureIdBase + slot,
+                             [textureMetal->getInternalHandle() gpuResourceID]);
+        return slot;
+    }
+
+    void VkmBindlessResourceManagerMetal::unregisterTexture(uint32_t slot)
+    {
+        _textureSlots.release(slot);
+        static_cast<uint64_t*>(_argumentBuffer.contents)[kVkmMetalBindlessTextureIdBase + slot] = 0;
     }
 
     void VkmBindlessResourceManagerMetal::unregisterBuffer(uint32_t slot, VkmBindlessArrayType arrayType)

@@ -8,6 +8,7 @@
 #include <vkm/renderer/backend/common/frame_constants.h>
 #include <vkm/renderer/camera.h>
 #include <vkm/renderer/memory_report.h>
+#include <vkm/base/cpu_profiler.h>
 #include <vkm/base/global_variable.h>
 #include <cxxopts.hpp>
 #include <iostream>
@@ -36,11 +37,16 @@
 #include <vkm/platform/common/process_stats.h>
 #include <vkm/renderer/imgui/render_graph_inspector.h>
 #include <vkm/renderer/imgui/memory_inspector.h>
+#include <vkm/renderer/imgui/cpu_profiler_inspector.h>
 #include <imgui.h>
 #endif
 
 namespace vkm
 {
+    // Opens the CPU profiler window (and starts capturing) from frame 0, for profiling a
+    // startup path that is over before a hotkey could be pressed: ./triangle --gv_cpu_profile=1
+    VKM_GLOBAL_VARIABLE(bool, gv_cpu_profile, false);
+
     VkmEngine::VkmEngine(VkmDriverBase* driver)
         : _driver(driver), _lastUpdateTime(0.0)
     {
@@ -75,6 +81,12 @@ namespace vkm
 #if defined(VKM_ENABLE_IMGUI)
         _renderGraphInspector = std::make_unique<VkmRenderGraphInspector>();
         _memoryInspector = std::make_unique<VkmMemoryInspector>();
+        _cpuProfilerInspector = std::make_unique<VkmCpuProfilerInspector>();
+        if (gv_cpu_profile.get())
+        {
+            _cpuProfilerInspector->setVisible(true);
+            VkmCpuProfiler::singleton().setCapturing(true);
+        }
 #endif
 
         return true;
@@ -117,6 +129,11 @@ namespace vkm
 
     void VkmEngine::loopInner(const double currentUpdateTime)
     {
+        // Closes the previous frame's profile before anything of this frame is recorded, so a
+        // collected frame lines up with exactly one loopInner() call. No-op while not capturing.
+        VkmCpuProfiler::singleton().beginFrame();
+        VKM_PROFILE_SCOPE("Frame");
+
         const double deltaTime = currentUpdateTime - _lastUpdateTime;
         _lastUpdateTime = currentUpdateTime;
 
@@ -128,11 +145,15 @@ namespace vkm
 
         // Drains events pushed from platform callback threads and clears the previous frame's
         // edge/delta state before any update()/render() code queries input.
-        _inputHandler.beginFrame();
+        {
+            VKM_PROFILE_SCOPE("Input::beginFrame");
+            _inputHandler.beginFrame();
+        }
 
 #if defined(VKM_ENABLE_IMGUI)
         if (_imGuiRenderer)
         {
+            VKM_PROFILE_SCOPE("ImGui::newFrame");
             _imGuiRenderer->newFrame();
         }
 #endif
@@ -258,6 +279,7 @@ namespace vkm
 
     void VkmEngine::update(const double deltaTime)
     {
+        VKM_PROFILE_SCOPE("Engine::update");
 #if defined(VKM_ENABLE_IMGUI)
         if (_imGuiRenderer)
         {
@@ -265,9 +287,16 @@ namespace vkm
             // VkmImGuiRendererBase::renderDrawData() in render() below) -- ImGui::Begin/End
             // calls made after that point in the same frame would be dropped.
             // Sampled before the overlay so both windows show the same numbers this frame.
-            _memoryInspector->update(_driver, deltaTime);
+            {
+                VKM_PROFILE_SCOPE("MemoryInspector::update");
+                _memoryInspector->update(_driver, deltaTime);
+            }
             renderDebugOverlay(deltaTime);
 
+            if (ImGui::IsKeyPressed(ImGuiKey_F7, false))
+            {
+                _cpuProfilerInspector->toggleVisible();
+            }
             if (ImGui::IsKeyPressed(ImGuiKey_F8, false))
             {
                 _memoryInspector->toggleVisible();
@@ -282,11 +311,28 @@ namespace vkm
                 _driver->requestGpuFrameCapture(_engineOptions.gpuCaptureStartFrame, _engineOptions.gpuCaptureFrameCount);
             }
 #endif // VKM_GPU_CAPTURE
-            _renderGraphInspector->draw(*_renderGraphCapture, _driver, _imGuiRenderer.get());
-            _memoryInspector->draw();
+            {
+                VKM_PROFILE_SCOPE("Inspectors::draw");
+                _renderGraphInspector->draw(*_renderGraphCapture, _driver, _imGuiRenderer.get());
+                _memoryInspector->draw();
+                _cpuProfilerInspector->draw();
+            }
+
+            // Collection follows the window: closing it (with F7 or the title bar's close
+            // button) stops recording, so nothing is measured while nothing is looking. The
+            // inspector's own Start/Stop button can decouple the two within a session, which is
+            // why this only acts on a change of visibility rather than asserting every frame.
+            if (_cpuProfilerInspector->isVisible() != _cpuProfilerWasVisible)
+            {
+                _cpuProfilerWasVisible = _cpuProfilerInspector->isVisible();
+                VkmCpuProfiler::singleton().setCapturing(_cpuProfilerWasVisible);
+            }
         }
 #endif
-        _appDelegate->update(deltaTime);
+        {
+            VKM_PROFILE_SCOPE("App::update");
+            _appDelegate->update(deltaTime);
+        }
     }
 
 #if defined(VKM_ENABLE_IMGUI)
@@ -323,6 +369,7 @@ namespace vkm
                         formatByteSize(memory._gpu._deviceBudgetBytes).c_str());
         }
 
+        ImGui::Text("F7: CPU profiler");
         ImGui::Text("F8: memory inspector");
         ImGui::Text("F10: capture render graph");
 #if defined(VKM_USE_METAL_API) && defined(VKM_GPU_CAPTURE)
@@ -334,6 +381,7 @@ namespace vkm
 
     void VkmEngine::render(const double deltaTime)
     {
+        VKM_PROFILE_SCOPE("Engine::render");
         (void)deltaTime;
 
         // Each window is driven independently: its own frame-slot render graph is throttled and
@@ -351,10 +399,17 @@ namespace vkm
             // Throttle before acquiring: timeline-wait on this window's previous submit on this
             // frame slot and reset its graph. Must precede acquireNextImage() so this slot's
             // image-available semaphore is guaranteed free before it is reused.
-            renderGraph->ensureCompleted();
+            {
+                VKM_PROFILE_SCOPE("RenderGraph::ensureCompleted");
+                renderGraph->ensureCompleted();
+            }
             renderGraph->reset();
 
-            VkmResourceHandle currentBackBuffer = windowContext._swapChain->acquireNextImage();
+            VkmResourceHandle currentBackBuffer = VKM_INVALID_RESOURCE_HANDLE;
+            {
+                VKM_PROFILE_SCOPE("SwapChain::acquireNextImage");
+                currentBackBuffer = windowContext._swapChain->acquireNextImage();
+            }
             if (!currentBackBuffer.isValid())
             {
                 // Acquire failed (e.g. surface lost/out-of-date). Only this window's slot was
@@ -386,6 +441,7 @@ namespace vkm
             const bool appRendersHere = !windowContext._isImGuiWindow || soleWindow;
             if (appRendersHere)
             {
+                VKM_PROFILE_SCOPE("App::render");
                 _appDelegate->render(windowIndex, renderGraph, currentBackBuffer);
             }
 
@@ -411,6 +467,7 @@ namespace vkm
                 VkmRenderGraphicsSubGraph* imGuiSubGraph = renderGraph->beginGraphicsSubGraph(imGuiFrameBufferDesc, "EngineImGuiOverlay");
                 VkmImGuiRendererBase* imGuiRenderer = _imGuiRenderer.get();
                 imGuiSubGraph->setRenderCallback([imGuiRenderer](VkmCommandBufferBase* commandBuffer) {
+                    VKM_PROFILE_SCOPE("ImGui::renderDrawData");
                     imGuiRenderer->renderDrawData(commandBuffer);
                 });
 
@@ -428,7 +485,10 @@ namespace vkm
             }
 #endif
 
-            renderGraph->compile();
+            {
+                VKM_PROFILE_SCOPE("RenderGraph::compile");
+                renderGraph->compile();
+            }
 
             // Capture the primary (window 0) render graph so the inspector shows the app's scene
             // passes; the inspector UI itself is drawn on the ImGui window and samples the
@@ -445,7 +505,10 @@ namespace vkm
                 capture->finalize(_driver);
             }
 
-            windowContext._swapChain->present();
+            {
+                VKM_PROFILE_SCOPE("SwapChain::present");
+                windowContext._swapChain->present();
+            }
         }
     }
 

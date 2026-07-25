@@ -13,8 +13,8 @@
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/driver.h>
-
 #include <array>
+#include <algorithm>
 
 namespace vkm
 {
@@ -57,7 +57,10 @@ namespace vkm
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image               = image,
-            .subresourceRange    = { aspectMask, 0, 1, 0, 1 },
+            // Whole image: VkmTextureVulkan tracks one layout per texture, not per
+            // subresource, so a partial barrier would leave the tracker lying about the
+            // layers it skipped (a 6-face cubemap upload is the case that exposes this).
+            .subresourceRange    = { aspectMask, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS },
         };
         const VkDependencyInfo dependencyInfo{
             .sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -269,7 +272,7 @@ namespace vkm
         VKM_DEBUG_ERROR("copyTexture is not implemented on the Vulkan backend");
     }
 
-    void VkmCommandBufferVulkan::onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset)
+    void VkmCommandBufferVulkan::onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset, uint32_t arrayLayer)
     {
         VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
         VkmTextureVulkan* textureVulkan = static_cast<VkmTextureVulkan*>(renderResourcePool->getResource<VkmTexture>(srcTexture));
@@ -284,7 +287,7 @@ namespace vkm
             .bufferOffset      = dstOffset + dstBaseOffset,
             .bufferRowLength   = 0, // tightly packed
             .bufferImageHeight = 0,
-            .imageSubresource  = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+            .imageSubresource  = { VK_IMAGE_ASPECT_COLOR_BIT, 0, arrayLayer, 1 },
             .imageOffset       = { 0, 0, 0 },
             .imageExtent       = { textureInfo._extent.x, textureInfo._extent.y, 1 },
         };
@@ -301,6 +304,40 @@ namespace vkm
         {
             textureVulkan->setCurrentLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         }
+    }
+
+    void VkmCommandBufferVulkan::onCopyBufferToTexture(VkmResourceHandle srcBuffer, VkmResourceHandle dstTexture,
+                                                       uint64_t srcOffset, uint32_t mipLevel, uint32_t arrayLayer)
+    {
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        VkmTextureVulkan* textureVulkan = static_cast<VkmTextureVulkan*>(renderResourcePool->getResource<VkmTexture>(dstTexture));
+        uint64_t srcBaseOffset = 0;
+        VkBuffer srcVkBuffer = resolveVkBufferAndOffset(renderResourcePool, srcBuffer, &srcBaseOffset);
+
+        const VkmTextureInfo& textureInfo = textureVulkan->getTextureInfo();
+        transitionImageLayout(_vkCommandBuffer, textureVulkan->getImage(), textureVulkan->getCurrentLayout(),
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        const VkBufferImageCopy region{
+            .bufferOffset      = srcOffset + srcBaseOffset,
+            .bufferRowLength   = 0, // tightly packed
+            .bufferImageHeight = 0,
+            .imageSubresource  = { VK_IMAGE_ASPECT_COLOR_BIT, mipLevel, arrayLayer, 1 },
+            .imageOffset       = { 0, 0, 0 },
+            .imageExtent       = {
+                std::max(1u, textureInfo._extent.x >> mipLevel),
+                std::max(1u, textureInfo._extent.y >> mipLevel),
+                std::max(1u, textureInfo._extent.z >> mipLevel),
+            },
+        };
+        vkCmdCopyBufferToImage(_vkCommandBuffer, srcVkBuffer, textureVulkan->getImage(),
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+        // Leave it sampleable, which is what every caller wants next (see the contract on
+        // VkmCommandBufferBase::copyBufferToTexture).
+        transitionImageLayout(_vkCommandBuffer, textureVulkan->getImage(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        textureVulkan->setCurrentLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 
     void VkmCommandBufferVulkan::onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)

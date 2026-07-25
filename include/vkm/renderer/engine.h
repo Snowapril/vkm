@@ -22,6 +22,7 @@ namespace vkm
     class VkmImGuiRendererBase;
     class VkmRenderGraphInspector;
     class VkmMemoryInspector;
+    class VkmCpuProfilerInspector;
 #endif
     struct VkmInitResult;
 
@@ -234,6 +235,10 @@ namespace vkm
         double _fpsSmoothed {0.0}; // exponential moving average, used by renderDebugOverlay()
         std::unique_ptr<VkmRenderGraphInspector> _renderGraphInspector;
         std::unique_ptr<VkmMemoryInspector> _memoryInspector;
+        std::unique_ptr<VkmCpuProfilerInspector> _cpuProfilerInspector;
+        // Previous frame's profiler window visibility, so update() can start/stop capture on
+        // the edge instead of overriding the inspector's own Start/Stop button every frame.
+        bool _cpuProfilerWasVisible {false};
 #endif
     };
 }

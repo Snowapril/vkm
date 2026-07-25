@@ -499,6 +499,34 @@ namespace vkm
             pNextChainPushFront(&_features11, &_swapchainFeatures);
             deviceExtensions.push_back(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
         }
+        // Lets the CPU write an OPTIMAL-tiled image directly (vkCopyMemoryToImage), which a
+        // plain memcpy cannot do because the layout is swizzled. Without it, host-visible
+        // texture memory would be useless and every upload has to go through a staging
+        // buffer -- see shouldUseHostWritableTexture in vulkan_texture.cpp.
+        //
+        // Not on MoltenVK. It advertises the extension, but the feature is emulated on top of
+        // Metal rather than implemented by a real driver, and doing so hung the macOS Vulkan
+        // CI job indefinitely during initialization (no output, no crash -- see
+        // implementation-notes.md). Nothing is actually lost: on macOS the engine's own Metal
+        // backend is the primary path and provides this same optimization natively, so
+        // Vulkan-on-Metal falls back to the staging path, which is always correct.
+        VkPhysicalDeviceDriverProperties driverProperties{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES,
+        };
+        VkPhysicalDeviceProperties2 driverProps2{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+            .pNext = &driverProperties,
+        };
+        vkGetPhysicalDeviceProperties2(_physicalDevice, &driverProps2);
+
+        const bool requestHostImageCopy =
+            isExtensionSupported(VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME, availableDeviceExtensions) &&
+            driverProperties.driverID != VK_DRIVER_ID_MOLTENVK;
+        if(requestHostImageCopy)
+        {
+            pNextChainPushFront(&_features11, &_hostImageCopyFeatures);
+            deviceExtensions.push_back(VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME);
+        }
         // Opportunistic: only requested when the crash handler's breadcrumb recording was
         // opted into, and only enabled if the GPU/driver actually supports it (not every
         // vendor implements VK_EXT_device_fault). See isDeviceFaultExtensionEnabled().
@@ -525,6 +553,43 @@ namespace vkm
         // drivers expose VK_EXT_device_fault without the base deviceFault feature) --
         // vkGetDeviceFaultInfoEXT is only valid to call once this feature is actually enabled.
         _deviceFaultExtensionEnabled = requestDeviceFaultExtension && _deviceFaultFeatures.deviceFault == VK_TRUE;
+
+        // Same "name present but feature bit off" caveat as device fault above. When it is
+        // on, ask which layouts vkCopyMemoryToImage accepts as a destination: copying
+        // straight into SHADER_READ_ONLY_OPTIMAL means an upload needs no layout transition
+        // at all, so prefer it and fall back to GENERAL (which the spec guarantees).
+        _hostImageCopyEnabled = requestHostImageCopy && _hostImageCopyFeatures.hostImageCopy == VK_TRUE;
+        if (_hostImageCopyEnabled)
+        {
+            VkPhysicalDeviceHostImageCopyProperties hostImageCopyProperties{
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES,
+            };
+            VkPhysicalDeviceProperties2 hostCopyProps2{
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+                .pNext = &hostImageCopyProperties,
+            };
+            vkGetPhysicalDeviceProperties2(_physicalDevice, &hostCopyProps2);
+
+            // Both arrays are sized and pointed at real storage before the second call. The
+            // src list is not used here, but leaving its pointer null while its count stays
+            // non-zero is the kind of half-filled enumerate struct drivers handle
+            // inconsistently -- cheaper to allocate it than to rely on that.
+            std::vector<VkImageLayout> copySrcLayouts(hostImageCopyProperties.copySrcLayoutCount);
+            std::vector<VkImageLayout> copyDstLayouts(hostImageCopyProperties.copyDstLayoutCount);
+            hostImageCopyProperties.pCopySrcLayouts = copySrcLayouts.data();
+            hostImageCopyProperties.pCopyDstLayouts = copyDstLayouts.data();
+            vkGetPhysicalDeviceProperties2(_physicalDevice, &hostCopyProps2);
+
+            _hostImageCopyDstLayout = VK_IMAGE_LAYOUT_GENERAL;
+            for (const VkImageLayout layout : copyDstLayouts)
+            {
+                if (layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                {
+                    _hostImageCopyDstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    break;
+                }
+            }
+        }
 
         // maintenance5/6 are requested and activated opportunistically above when the driver
         // supports them, but are not required: MoltenVK does not expose either extension yet.
@@ -636,7 +701,43 @@ namespace vkm
         };
         VKM_VK_CHECK_RESULT_MSG_RETURN(vmaCreateAllocator(&allocatorCreateInfo, &_vmaAllocator), "Failed to create VMA allocator");
 
-        _driverCapabilityFlags = VkmDriverCapabilityFlags::CommandBufferReusable;
+        // Only now, after volkLoadDevice, do the device entry points exist. The core-1.4
+        // names (vkCopyMemoryToImage) are loaded only on a 1.4+ device, so on 1.3 +
+        // VK_EXT_host_image_copy only the EXT names are non-null -- checking the exact
+        // pointers writeRegion calls turns a loader/driver mismatch into a clean fall back to
+        // staging instead of a null call.
+        if (_hostImageCopyEnabled && (vkCopyMemoryToImageEXT == nullptr || vkTransitionImageLayoutEXT == nullptr))
+        {
+            VKM_DEBUG_WARN("VK_EXT_host_image_copy is enabled but its entry points did not load; host-copy texture upload is disabled");
+            _hostImageCopyEnabled = false;
+        }
+
+        // A memory type that is both DEVICE_LOCAL and HOST_VISIBLE means the CPU can reach
+        // GPU memory without a copy through a separate host heap. That property -- not
+        // VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU -- is what makes a host-side texture write
+        // worthwhile, and it also catches ReBAR-style discrete configurations correctly.
+        {
+            VkPhysicalDeviceMemoryProperties memoryProperties{};
+            vkGetPhysicalDeviceMemoryProperties(_physicalDevice, &memoryProperties);
+            constexpr VkMemoryPropertyFlags kUnifiedFlags =
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+            for (uint32_t typeIndex = 0; typeIndex < memoryProperties.memoryTypeCount; ++typeIndex)
+            {
+                if ((memoryProperties.memoryTypes[typeIndex].propertyFlags & kUnifiedFlags) == kUnifiedFlags)
+                {
+                    _hasUnifiedMemory = true;
+                    break;
+                }
+            }
+        }
+
+        _driverCapabilityFlags = VkmDriverCapabilityFlags::CommandBufferReusable | VkmDriverCapabilityFlags::TextureUpload;
+        // Both halves are required: the extension makes a host write to an OPTIMAL-tiled
+        // image correct, unified memory makes it worth doing.
+        if (_hostImageCopyEnabled && _hasUnifiedMemory)
+        {
+            _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::TextureHostCopy;
+        }
 
         // Both must exist before VkmEngine::initializeBackendDriver() loads engine PSOs, since
         // pipeline-layout creation (VkmPipelineStateVulkan::createInner) needs the bindless

@@ -3,6 +3,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_buffer.h>
+#include <vkm/renderer/backend/vulkan/vulkan_texture.h>
 #include <vkm/renderer/backend/vulkan/vulkan_util.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
@@ -24,7 +25,26 @@ namespace vkm
     {
         VkDevice device = _driver->getDevice();
 
-        const std::array<VkDescriptorSetLayoutBinding, 3> bindings{
+        // Created here rather than through VkmDriverBase::newSampler(): the bindless manager
+        // is initialized from initializeInner(), which runs before the render resource pool
+        // is initialized, so no pooled resource can be created yet.
+        const VkSamplerCreateInfo samplerCreateInfo{
+            .sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .magFilter    = VK_FILTER_LINEAR,
+            .minFilter    = VK_FILTER_LINEAR,
+            .mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+            .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .maxLod       = VK_LOD_CLAMP_NONE,
+        };
+        VkResult vkResult = vkCreateSampler(device, &samplerCreateInfo, nullptr, &_defaultSampler);
+        if (!VKM_VK_CHECK_RESULT_MSG(vkResult, "Failed to create the bindless default sampler"))
+        {
+            return false;
+        }
+
+        const std::array<VkDescriptorSetLayoutBinding, 4> bindings{
             VkDescriptorSetLayoutBinding{
                 .binding         = 0,
                 .descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
@@ -43,11 +63,21 @@ namespace vkm
                 .descriptorCount = INDEX_BUFFER_CAPACITY,
                 .stageFlags      = VK_SHADER_STAGE_ALL,
             },
+            // Immutable: baked into the layout, so it is never written and can never be the
+            // "descriptor never updated" failure the other three bindings have to avoid.
+            VkDescriptorSetLayoutBinding{
+                .binding            = kVkmBindlessSamplerBinding,
+                .descriptorType     = VK_DESCRIPTOR_TYPE_SAMPLER,
+                .descriptorCount    = 1,
+                .stageFlags         = VK_SHADER_STAGE_ALL,
+                .pImmutableSamplers = &_defaultSampler,
+            },
         };
 
         constexpr VkDescriptorBindingFlags kBindingFlags =
             VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-        const std::array<VkDescriptorBindingFlags, 3> bindingFlags{kBindingFlags, kBindingFlags, kBindingFlags};
+        // The immutable sampler needs no update-after-bind: it is never updated at all.
+        const std::array<VkDescriptorBindingFlags, 4> bindingFlags{kBindingFlags, kBindingFlags, kBindingFlags, 0};
 
         const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsCreateInfo{
             .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
@@ -63,16 +93,19 @@ namespace vkm
             .pBindings    = bindings.data(),
         };
 
-        VkResult vkResult = vkCreateDescriptorSetLayout(device, &layoutCreateInfo, nullptr, &_setLayout);
+        vkResult = vkCreateDescriptorSetLayout(device, &layoutCreateInfo, nullptr, &_setLayout);
         if (!VKM_VK_CHECK_RESULT_MSG(vkResult, "Failed to create bindless descriptor set layout"))
         {
             return false;
         }
 
-        const std::array<VkDescriptorPoolSize, 3> poolSizes{
+        // The immutable sampler still consumes pool capacity, so it needs a pool size like
+        // any other binding.
+        const std::array<VkDescriptorPoolSize, 4> poolSizes{
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, TEXTURE_CAPACITY},
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, BUFFER_CAPACITY},
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, INDEX_BUFFER_CAPACITY},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         };
         const VkDescriptorPoolCreateInfo poolCreateInfo{
             .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -122,6 +155,12 @@ namespace vkm
         {
             vkDestroyDescriptorSetLayout(device, _setLayout, nullptr);
             _setLayout = VK_NULL_HANDLE;
+        }
+        // After the layout that referenced it as an immutable sampler.
+        if (_defaultSampler != VK_NULL_HANDLE)
+        {
+            vkDestroySampler(device, _defaultSampler, nullptr);
+            _defaultSampler = VK_NULL_HANDLE;
         }
     }
 
@@ -174,6 +213,49 @@ namespace vkm
         vkUpdateDescriptorSets(_driver->getDevice(), 1, &write, 0, nullptr);
 
         return slot;
+    }
+
+    uint32_t VkmBindlessResourceManagerVulkan::registerTexture(VkmResourceHandle textureHandle)
+    {
+        VkmTextureVulkan* textureVulkan = static_cast<VkmTextureVulkan*>(
+            _driver->getRenderResourcePool()->getResource<VkmTexture>(textureHandle));
+        if (textureVulkan == nullptr)
+        {
+            VKM_DEBUG_ERROR("registerTexture: invalid texture handle");
+            return UINT32_MAX;
+        }
+
+        const uint32_t slot = _textureSlots.allocate();
+        if (slot == UINT32_MAX)
+        {
+            VKM_DEBUG_ERROR("Bindless texture array is exhausted");
+            return UINT32_MAX;
+        }
+
+        // The texture's own default view: created from VkmTextureInfo::_type, so a cube
+        // texture is already a VK_IMAGE_VIEW_TYPE_CUBE view here.
+        const VkDescriptorImageInfo imageInfo{
+            .imageView   = textureVulkan->getImageView(),
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        };
+
+        const VkWriteDescriptorSet write{
+            .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet          = _descriptorSet,
+            .dstBinding      = 0,
+            .dstArrayElement = slot,
+            .descriptorCount = 1,
+            .descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+            .pImageInfo      = &imageInfo,
+        };
+        vkUpdateDescriptorSets(_driver->getDevice(), 1, &write, 0, nullptr);
+
+        return slot;
+    }
+
+    void VkmBindlessResourceManagerVulkan::unregisterTexture(uint32_t slot)
+    {
+        _textureSlots.release(slot);
     }
 
     void VkmBindlessResourceManagerVulkan::unregisterBuffer(uint32_t slot, VkmBindlessArrayType arrayType)

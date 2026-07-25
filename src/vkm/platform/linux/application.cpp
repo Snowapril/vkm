@@ -2,6 +2,7 @@
 
 #include <vkm/platform/linux/application.h>
 #include <vkm/platform/common/glfw_input.h>
+#include <vkm/base/cpu_profiler.h>
 
 #include <GLFW/glfw3.h>
 
@@ -98,6 +99,10 @@ namespace vkm
         }
 
         installGlfwInputCallbacks(_window.getHandle(), &_engine);
+
+        // Linux drives the frame loop on the main thread (unlike Apple, which hands it to a
+        // dedicated render thread), so this is the thread the CPU profiler's frames come from.
+        VKM_PROFILE_SET_THREAD_NAME("MainThread");
 
         // The app quits when the main window closes; closing the ImGui window is vetoed so its
         // swapchain need not be torn down mid-run.

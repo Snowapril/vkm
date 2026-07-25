@@ -3,6 +3,7 @@
 #include <vkm/platform/wasm/application.h>
 #include <vkm/platform/common/app_delegate.h>
 #include <vkm/platform/common/glfw_input.h>
+#include <vkm/base/cpu_profiler.h>
 #include <vkm/renderer/backend/webgpu/webgpu_driver.h>
 
 #include <GLFW/glfw3.h>
@@ -65,6 +66,10 @@ namespace vkm
 
     int VkmApplication::entryPoint(AppDelegate* appDelegate, int argc, char* argv[])
     {
+        // WASM has no worker threads here at all: the browser callback loop, the engine and the
+        // deferred reclaimer's per-frame sweep all run on this one thread.
+        VKM_PROFILE_SET_THREAD_NAME("MainThread");
+
         _appDelegate = appDelegate;
 
         if ( _engine.initializeEngine( appDelegate, VkmEngine::parseEngineLaunchOptions(argc, argv)) == false )

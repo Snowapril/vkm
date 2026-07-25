@@ -8,7 +8,9 @@
 #include <cstdint>
 
 @protocol MTLBuffer;
+@protocol MTLSamplerState;
 @protocol MTL4ArgumentTable;
+struct MTLResourceID;
 
 namespace vkm
 {
@@ -39,6 +41,11 @@ namespace vkm
         uint32_t registerBuffer(VkmResourceHandle bufferHandle, VkmBindlessArrayType arrayType) override final;
         void unregisterBuffer(uint32_t slot, VkmBindlessArrayType arrayType) override final;
 
+        // Publishes the texture's MTLResourceID at the returned slot of the argument
+        // buffer's texture range.
+        uint32_t registerTexture(VkmResourceHandle textureHandle) override final;
+        void unregisterTexture(uint32_t slot) override final;
+
         // Copies `size` bytes into the next push-constant ring entry and returns that
         // entry's GPU address (to be bound at kVkmMetalPushConstantBufferIndex). The ring
         // wraps after PUSH_CONSTANT_ENTRY_COUNT allocations; entries are assumed retired
@@ -49,11 +56,15 @@ namespace vkm
         inline id<MTLBuffer> getArgumentBuffer() const { return _argumentBuffer; }
 
     private:
+        // Byte-wise write of an opaque MTLResourceID into one 8-byte argument-buffer entry.
+        void writeResourceIdEntry(uint32_t entryIndex, MTLResourceID resourceId);
+
         VkmDriverMetal* _driver;
 
         id<MTLBuffer> _argumentBuffer = nullptr;      // kVkmMetalBindlessArgumentEntryCount x 8 bytes, shared storage
         id<MTLBuffer> _pushConstantRing = nullptr;    // PUSH_CONSTANT_ENTRY_COUNT x PUSH_CONSTANT_ENTRY_STRIDE, shared storage
         id<MTL4ArgumentTable> _argumentTable = nullptr;
+        id<MTLSamplerState> _defaultSampler = nullptr; // published at kVkmMetalBindlessSamplerId
 
         uint32_t _pushConstantCursor = 0;
 
