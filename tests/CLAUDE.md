@@ -1,5 +1,37 @@
 # CLAUDE.md — tests/
 
+## Rule: every test case has a time budget
+
+`UnitTests.cpp` gives every registered test case a default budget (`kDefaultTestTimeoutSeconds`)
+and doctest fails any test that runs longer. A test that is legitimately slower declares its own
+budget **at the test**, and a declared budget always wins:
+
+```cpp
+TEST_CASE("imports a large scene" * doctest::timeout(20.0)) { ... }
+```
+
+Do not raise the default to accommodate one slow test — decorate that test instead, so the
+exception is visible where it applies.
+
+Two mechanisms, because they cover different failures:
+
+- **doctest's own check** is post-hoc: a test that overruns but *returns* is reported as an
+  ordinary failure and the run continues through the remaining tests.
+- **A watchdog thread** aborts the process once a test overruns by `kHangTimeoutFactor` (with a
+  `kMinHangGraceSeconds` floor), naming the test and its file:line. This is what stops a test
+  that never returns from hanging the whole run with no output — the failure mode that once left
+  79 test cases unrun.
+
+`TestTimeBudget.cpp` guards both: it asserts no test is left unbudgeted, and it deliberately
+overruns a tight budget under `doctest::should_fail()` to prove overruns really do fail.
+
+Current headroom: the slowest test is ~0.09 s on Metal and ~0.33 s on Vulkan, so the default is
+roughly 30x the measured worst case. If a slower CI runner trips it, the failure message names
+the test — give that one its own budget rather than relaxing the default.
+
+`UnitTests.cpp` passes `argc`/`argv` to doctest, so a single test can be re-run with
+`--test-case="<name>"` and durations printed with `--duration=true`.
+
 ## Rule: No direct graphics API calls in unit test code
 
 Unit tests must **never** call graphics-backend APIs (Metal, Vulkan, WebGPU, etc.) directly.

@@ -114,6 +114,45 @@ does not reach the Metal or WebGPU shaders. A Y-flip in *shared HLSL source* wit
 per-backend `#if` guard, however, would follow the geometry into every backend — so guard any
 source-level compensation on the backend define, or keep it in the per-backend compiler flags.
 
+## Descriptor Set Convention
+
+Sets are numbered by **update frequency**, so a set is rebound only as often as its contents
+change. `frame_constants.h` declares the indices; `bindless_resource_manager.h` owns set 0's
+layout.
+
+| Set | Contents | Rewritten | Status |
+|---|---|---|---|
+| 0 | bindless resource arrays | never, after registration | implemented on all backends |
+| 1 | per-frame camera constants (`VkmFrameConstants`) | once per frame | implemented on all backends |
+| 2 | per-pass | — | reserved, not in any pipeline layout |
+| 3 | per-draw | — | reserved, not in any pipeline layout |
+
+Per-draw data that fits travels as push constants rather than through set 3 (see
+`kVkmBindlessPushConstantSize`). Push constants are **vertex-stage only**; set 1 is readable
+from every stage, which is the reason it exists.
+
+Every pipeline layout declares sets 0 and 1 and every `bindPipeline` binds both, even for
+shaders that reference neither — an unused-but-declared set is valid on all three backends, and
+WebGPU in fact *requires* every declared bind group to be set before a draw. That is what keeps
+the bind sites free of per-PSO knowledge.
+
+Per-backend expression of set 1 (`VkmFrameConstantManager*`, reached via
+`VkmDriverBase::getFrameConstantManager()`): Vulkan a `UNIFORM_BUFFER` descriptor set per frame
+slot; WebGPU a bind group per frame slot at group 1; Metal a plain buffer binding at
+`kVkmMetalFrameConstantBufferIndex`, because vkm-compiler declares set 1 *discrete*
+(`add_discrete_descriptor_set`) so spirv-cross does not wrap it in a second argument buffer.
+
+Each manager owns a raw native uniform buffer rather than a `VkmBuffer`: no `VkmBuffer` is
+host-writable on any backend (device-local on Vulkan, `StorageModePrivate` on Metal) and no
+staging buffer can carry uniform usage (on WebGPU `MapWrite` only combines with `CopySrc`). This
+mirrors what the bindless managers already do for their argument/mega-buffers, and has the same
+consequence: these allocations bypass `newBuffer()`, so they do not appear in the memory tracker
+and the Metal one registers itself into the Default residency set explicitly.
+
+The buffer holds `FRAME_COUNT` regions at `kVkmFrameConstantStride`. Writes are plain host
+writes with no GPU synchronization, so `VkmEngine::render()` performs them only after that
+frame slot's `VkmRenderGraph::ensureCompleted()`.
+
 ## Shader-Side Bindless Contract
 
 `bindless_resource_manager.h` is the C++ side of the bindless set-0 layout;

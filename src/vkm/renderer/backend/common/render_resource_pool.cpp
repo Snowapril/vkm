@@ -50,6 +50,12 @@ namespace vkm
     
     void VkmRenderResourcePool::tagResource(VkmResourceHandle handle, VkmResourceMemoryTag tag)
     {
+        // Same guard as releaseResource(): Undefined == Count for both enums, so an invalid
+        // handle's poolType/type are one past the end of the arrays they would index.
+        if (!handle.isValid() || handle.poolType >= VkmResourcePoolType::Count ||
+            handle.type >= VkmResourceType::Count)
+            return;
+
         std::lock_guard<std::mutex> lock(_mutex);
         VkmDriverResourceSubPool& subPool = _subPools[(uint8_t)handle.poolType];
         if (handle.id < subPool._resources[(uint8_t)handle.type].size() &&
@@ -65,6 +71,11 @@ namespace vkm
 
     std::optional<VkmResourceMemoryTag> VkmRenderResourcePool::getResourceMemoryTag(VkmResourceHandle handle) const
     {
+        // See releaseResource() -- an invalid handle must not be used as an array index.
+        if (!handle.isValid() || handle.poolType >= VkmResourcePoolType::Count ||
+            handle.type >= VkmResourceType::Count)
+            return std::nullopt;
+
         std::lock_guard<std::mutex> lock(_mutex);
         const VkmDriverResourceSubPool& subPool = _subPools[(uint8_t)handle.poolType];
         if (handle.id < subPool._resources[(uint8_t)handle.type].size() &&

@@ -739,15 +739,22 @@ namespace vkm
             _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::TextureHostCopy;
         }
 
-        // Must exist before VkmEngine::initializeBackendDriver() loads engine PSOs, since
+        // Both must exist before VkmEngine::initializeBackendDriver() loads engine PSOs, since
         // pipeline-layout creation (VkmPipelineStateVulkan::createInner) needs the bindless
-        // set 0 layout.
+        // set 0 layout and the per-frame set 1 layout.
         auto bindlessResourceManager = std::make_unique<VkmBindlessResourceManagerVulkan>(this);
         if (!bindlessResourceManager->initialize())
         {
             return VkmInitResult{VkmInitResultCode::Failed, "Failed to initialize bindless resource manager"};
         }
         _bindlessResourceManager = std::move(bindlessResourceManager);
+
+        auto frameConstantManager = std::make_unique<VkmFrameConstantManagerVulkan>(this);
+        if (!frameConstantManager->initialize())
+        {
+            return VkmInitResult{VkmInitResultCode::Failed, "Failed to initialize frame constant manager"};
+        }
+        _frameConstantManager = std::move(frameConstantManager);
 
         _gpuTimer = std::make_unique<VkmGpuTimerVulkan>(this);
         if (!_gpuTimer->initialize())
@@ -766,6 +773,11 @@ namespace vkm
         {
             _gpuTimer->destroy();
             _gpuTimer.reset();
+        }
+        if (_frameConstantManager)
+        {
+            _frameConstantManager->destroy();
+            _frameConstantManager.reset();
         }
         if (_bindlessResourceManager)
         {

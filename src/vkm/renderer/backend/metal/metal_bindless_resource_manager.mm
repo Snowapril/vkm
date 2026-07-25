@@ -93,8 +93,9 @@ namespace vkm
 
         MTL4ArgumentTableDescriptor* argTableDesc = [[MTL4ArgumentTableDescriptor alloc] init];
         // Indices 0/1 stay reserved for the vertex-stream buffers; 2 = bindless argument
-        // buffer, 3 = push constants (see common/bindless_resource_manager.h).
-        argTableDesc.maxBufferBindCount = kVkmMetalPushConstantBufferIndex + 1;
+        // buffer, 3 = push constants, 4 = the set-1 frame constants
+        // (see common/bindless_resource_manager.h).
+        argTableDesc.maxBufferBindCount = kVkmMetalArgumentTableBufferBindCount;
         argTableDesc.label = @"VkmBindlessArgumentTable";
         NSError* error = nil;
         _argumentTable = [device newArgumentTableWithDescriptor:argTableDesc error:&error];

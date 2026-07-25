@@ -90,6 +90,14 @@ namespace vkm
         }
         _bindlessResourceManager = std::move(bindlessResourceManager);
 
+        auto frameConstantManager = std::make_unique<VkmFrameConstantManagerMetal>(this);
+        if (!frameConstantManager->initialize())
+        {
+            VKM_DEBUG_ERROR("Failed to initialize Metal frame constant manager");
+            return false;
+        }
+        _frameConstantManager = std::move(frameConstantManager);
+
 #if defined(VKM_GPU_CAPTURE)
         if (getLaunchOptions().enableGpuCapture)
         {
@@ -233,6 +241,12 @@ namespace vkm
             _captureScope = nil;
         }
 #endif // VKM_GPU_CAPTURE
+
+        if (_frameConstantManager)
+        {
+            _frameConstantManager->destroy();
+            _frameConstantManager.reset();
+        }
 
         if (_bindlessResourceManager)
         {

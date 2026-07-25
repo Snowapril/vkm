@@ -135,10 +135,17 @@ namespace vkm
         // Every graphics pipeline shares the engine-global bindless bind group 0; bind it
         // with a zero dynamic offset as a safe default so draws that never push constants
         // are still valid (mirrors VkmCommandBufferVulkan::onBindPipeline's set-0 bind).
-        VkmBindlessResourceManagerWebGPU* bindlessManager =
-            static_cast<VkmDriverWebGPU*>(_driver)->getBindlessResourceManager();
+        VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
         const uint32_t zeroOffset = 0;
-        wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, 0, bindlessManager->getBindGroup(), 1, &zeroOffset);
+        wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, 0,
+                                          driverWebGPU->getBindlessResourceManager()->getBindGroup(),
+                                          1, &zeroOffset);
+        // Group 1 is this frame slot's camera constants. Set unconditionally: WebGPU requires
+        // every group the pipeline layout declares to be set before a draw, whether or not the
+        // shader references it.
+        wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, 1,
+                                          driverWebGPU->getFrameConstantManager()->getActiveBindGroup(),
+                                          0, nullptr);
     }
 
     void VkmCommandBufferWebGPU::onUnbindPipeline()

@@ -4,6 +4,7 @@
 
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/metal/metal_bindless_resource_manager.h>
+#include <vkm/renderer/backend/metal/metal_frame_constant_manager.h>
 
 #include <memory>
 #include <string>
@@ -46,6 +47,13 @@ namespace vkm
         inline VkmBindlessResourceManagerMetal* getBindlessResourceManager() const
         {
             return static_cast<VkmBindlessResourceManagerMetal*>(_bindlessResourceManager.get());
+        }
+
+        // Shadows VkmDriverBase::getFrameConstantManager() with the Metal-typed manager, for
+        // the same reason as above.
+        inline VkmFrameConstantManagerMetal* getFrameConstantManager() const
+        {
+            return static_cast<VkmFrameConstantManagerMetal*>(_frameConstantManager.get());
         }
 
 #if defined(VKM_GPU_CAPTURE)

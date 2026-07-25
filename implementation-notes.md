@@ -387,6 +387,67 @@ line names it twice both before and after — and is left alone.
   the reclaimer's release pass; thread names are set where each thread starts, so macOS shows
   `RenderThread` and the other platforms `MainThread`.
 
+## 2026-07-25 — Camera into vkm + descriptor set 1 (per-frame constants)
+
+- New `VkmCamera` + `VkmOrbitCameraController` (`renderer/camera.{h,cpp}`), lifted from
+  `model_viewer`'s anonymous-namespace `OrbitCamera`. The controller **registers a listener** on
+  `VkmInputHandler` (`addListener`, previously used only by a test) instead of polling it, so it
+  needs no per-frame tick: listeners run from `beginFrame()`, which `loopInner()` calls before
+  `update()`/`render()`. It tracks left-drag state itself and derives cursor deltas from
+  consecutive `CursorMove` positions, dropping the tracked position on button-press because ImGui
+  may have owned the mouse in between and left it stale.
+- `frame()` takes center+radius rather than a `VkmSceneAABB`, keeping `renderer/camera.h` free of
+  a `renderer/scene/` dependency; the sample adapts in a 4-line helper.
+- Established the set convention in `common/frame_constants.h`: 0 bindless, 1 per-frame,
+  2 per-pass (reserved), 3 per-draw (reserved) — ascending update frequency. `VkmFrameConstants`
+  is 272 bytes (view, projection, viewProjection, inverseViewProjection, cameraPositionWorld).
+- Set 1 implemented on all three backends via `VkmFrameConstantManager*`, each owning a raw
+  native uniform buffer with `FRAME_COUNT` regions (Vulkan: host-visible + persistently mapped,
+  one descriptor set per slot; Metal: `StorageModeShared`, bound by GPU address at
+  `[[buffer(4)]]`; WebGPU: `Uniform|CopyDst` + `wgpuQueueWriteBuffer`, one bind group per slot).
+  `VkmEngine::render()` writes the slot after its `ensureCompleted()` and after acquire.
+- Metal: `add_discrete_descriptor_set(1)` in vkm-compiler is what keeps set 1 out of a second
+  Tier-2 argument buffer. Verified in the emitted MSL:
+  `constant type_ConstantBuffer_VkmFrameConstants& g_VkmFrame [[buffer(4)]]`, struct layout
+  matching the C++ one field for field. `maxBufferBindCount` bumped 4 -> 5.
+- `model_viewer` push constants now carry the model matrix, not the MVP; the shader composes
+  `viewProjection * model`. `TestSceneModelRenderShared.hpp` splits its placement transform
+  across set 1 (translate) and the push constants (scale) so neither path is an identity that
+  could mask a broken binding — that existing Metal offscreen test is now the GPU-level proof
+  that set 1 reaches the shader.
+- Verification: Metal 105/105 tests (17065 assertions), Vulkan 106/106 (678), both with
+  validation on and zero validation output; `model_viewer` and `triangle` run on both. WebGPU is
+  compile-verified (vkmcore + sample under emsdk) plus SPIR-V-verified
+  (`OpDecorate %g_VkmFrame DescriptorSet 1 / Binding 0`); emitting WGSL needs a tint build no
+  local or CI configuration provides (logged in `TODO.md`).
+
+## 2026-07-25 — Per-test time budgets in UnitTests
+
+- `UnitTests.cpp` now gives every registered test case a default budget
+  (`kDefaultTestTimeoutSeconds = 10`) by walking `doctest::detail::getRegisteredTests()` and
+  setting `m_timeout` where it is still 0, so doctest's own "exceeded time limit" failure
+  applies to all ~107 tests without decorating each one. A test that needs longer declares
+  `TEST_CASE("..." * doctest::timeout(seconds))`, which the pass leaves alone. The registry is a
+  `std::set` whose ordering is line/name/file/template-id only, so the in-place mutation cannot
+  break its invariant.
+- doctest's check is post-hoc, so it cannot help with a test that never returns -- exactly the
+  failure that had left 79 cases unrun. A `TestHangWatchdog` listener therefore tracks the
+  running test's deadline on its own thread and kills the process at
+  `max(budget * 3, budget + 5s)`, printing the test name and file:line. The two mechanisms don't
+  race: an overrun that returns is a normal failure and the run continues; only a stuck test
+  reaches the watchdog.
+- Budget chosen from measurement, not guesswork: with `--duration=true` the slowest test is
+  0.087 s on Metal (`Backbuffer readback - solid red`) and 0.333 s on Vulkan (`Vulkan clip space`),
+  so 10 s is ~30x the observed worst case.
+- `main()` now forwards `argc`/`argv` to `applyCommandLine`. It previously took no arguments, so
+  `--test-case=` and `--duration=` were silently ignored -- which is also what made it impossible
+  to re-run just the test the watchdog names.
+- New `tests/TestTimeBudget.cpp` guards the mechanism itself: one case asserts no test is left
+  unbudgeted, and one deliberately overruns a 0.05 s budget under `doctest::should_fail()` so the
+  enforcement is proven from inside a green suite.
+- Verified: Metal 107/107, Vulkan 108/108, wasm/WebGPU via headless Chrome all pass; a temporary
+  infinite-loop test was killed by the watchdog in 6 s with exit code 1 and correct attribution.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:
@@ -398,6 +459,45 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Why: <the edge case that forced it>
 ```
 
+### 2026-07-25 — the test hang watchdog uses _Exit, not abort
+- Planned: `std::abort()` once a test overruns its budget by the grace factor.
+- Did instead: `std::_Exit(EXIT_FAILURE)` after flushing stdout/stderr by hand.
+- Why: `abort()` runs backward-cpp's SIGABRT handler, which tried to symbolize a stack trace from
+  the watchdog thread while the hung thread still held the malloc lock. Observed deadlocking
+  there — the message printed and then the process sat forever, i.e. exactly the wedged run the
+  watchdog exists to prevent. `_Exit` skips handlers and atexit entirely, and everything worth
+  reporting is already flushed.
+
+### 2026-07-25 — set 1 on Metal is a discrete binding, not a second argument buffer
+- Planned: pin set 1's Tier-2 argument buffer at Metal buffer index 4 and have the runtime keep
+  a per-frame-slot 8-byte argument buffer holding the constant buffer's `gpuAddress`.
+- Did instead: `compiler.add_discrete_descriptor_set(kVkmFrameConstantSetIndex)`, so spirv-cross
+  emits the constant buffer directly as `constant VkmFrameConstants&` at `[[buffer(4)]]`.
+- Why: with `pad_argument_buffer_resources` on, spirv-cross's padding walk *throws* unless every
+  argument-buffer resource has a registered basetype, and the argument-buffer variant would have
+  cost FRAME_COUNT extra MTLBuffers plus their residency entries for one pointer each. Declaring
+  the set discrete sidesteps the padding walk entirely and makes the runtime a single
+  `setAddress:` — the same shape push constants already use at `[[buffer(3)]]`.
+
+### 2026-07-25 — frame-constant stride derived from the struct instead of hardcoded
+- Planned: `kVkmFrameConstantStride = 256`.
+- Did instead: `kVkmFrameConstantAlignment = 256` plus a stride computed as `sizeof` rounded up
+  to it (512 for the current 272-byte struct).
+- Why: the planned struct is 272 bytes, so a literal 256 stride would have overlapped the next
+  frame slot — caught by the `static_assert`. Deriving it means adding a member can never
+  silently reintroduce the overlap.
+
+### 2026-07-25 — pre-existing resource-pool out-of-bounds fixed to unblock the GPU tests
+- Planned: nothing; this file was not in scope.
+- Did instead: added the bounds guard that `VkmRenderResourcePool::releaseResource()` already
+  had to its three siblings — `tagResource()`, `getResourceMemoryTag()` and the templated
+  `getResource<>()` in `render_resource_pool.hpp`.
+- Why: `VKM_INVALID_RESOURCE_HANDLE` carries `poolType`/`type == Undefined`, which *equals*
+  `Count`, so passing one indexed `_subPools`/`_resources` one past the end. On clean `main` that
+  aborted `UnitTests` in `TestEngineSetup.cpp:265` and left 79 test cases unrun — including
+  `TestSceneModelRenderMetal`, the only GPU-level check of set 1. Verified pre-existing by
+  stashing this branch's work and reproducing the identical abort. Reusing the existing guard
+  verbatim was the conservative option; the whole suite now passes (105/105).
 ### 2026-07-25 — CPU profiler UI pins by frame number and pauses, and clear() resets numbering
 - Planned: pin the clicked history bar by its ring index, and keep `copyFrames()` as the one
   UI read.

@@ -4,7 +4,11 @@
 
 - Vulkan `UnitTests` in GitHub Actions CI still lack a software Vulkan ICD on the Windows and macOS runners (Ubuntu now installs lavapipe).
 - `MemoryTracker`'s global mutex serializes every allocation/deallocation across all threads.
-- Design and implement descriptor sets 1-3 of the engine/user resource-binding convention (set 0 bindless is implemented on all backends).
+- The unit-test hang watchdog is native-only; the wasm build links no pthreads, so a hung test there is bounded only by `scripts/run_tests.py`'s 60 s Chrome timeout and is not attributed to a test.
+- Design and implement descriptor sets 2 (per-pass) and 3 (per-draw) of the engine/user resource-binding convention (sets 0 bindless and 1 per-frame are implemented on all backends).
+- Set 1 has one frame-constants region per frame slot engine-wide, so a second scene-rendering window would render with the main swapchain's aspect ratio and share that region unsynchronized.
+- The frame-constant buffers bypass `newBuffer()` (no `VkmBuffer` is host-writable), so they are absent from the memory tracker, like the bindless managers' own buffers.
+- The WebGPU set-1 path is compile-verified only; emitting WGSL needs a `VKM_COMPILER_ENABLE_WGSL=ON` vkm-compiler (tint/dawn build) that no local or CI configuration provides yet.
 - The common command-buffer interface has no compute dispatch entry point; Metal's `beginComputePass` scaffolding is never invoked.
 - `MTL4RenderPipelineDescriptor` has no depth/stencil attachment format properties in Metal4; `VkmPipelineStateMetal` can't validate/set depth-stencil format at pipeline-creation time, only at render-pass/encoder time.
 - Migrate vkm's own engine shaders (scene_object/tonemap/etc.) from loose GLSL to HLSL+PSO json so `resources/Pipelines/Engine/` and the `vkm_engine_shaders` CMake target actually have something to compile.

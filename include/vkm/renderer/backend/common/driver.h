@@ -29,6 +29,7 @@ namespace vkm
     class VkmDeferredResourceReclaimer;
     class VkmGpuCrashHandler;
     class VkmBindlessResourceManagerBase;
+    class VkmFrameConstantManagerBase;
 
     enum class VkmDriverCapabilityFlags : uint32_t
     {
@@ -217,6 +218,14 @@ namespace vkm
         inline VkmBindlessResourceManagerBase* getBindlessResourceManager() const { return _bindlessResourceManager.get(); }
 
         /*
+        * @brief get the engine-global per-frame constant manager (set 1 convention -- see
+        * common/frame_constants.h). Created by each backend driver during initialization,
+        * next to the bindless manager. VkmEngine::render() writes one frame slot through it
+        * per frame; every pipeline bind publishes that slot.
+        */
+        inline VkmFrameConstantManagerBase* getFrameConstantManager() const { return _frameConstantManager.get(); }
+
+        /*
         * @brief get deferred resource reclaimer; VkmRenderGraph drives its per-frame
         * pollOnce() fallback on WASM through this accessor.
         */
@@ -344,6 +353,7 @@ namespace vkm
         VkmDriverCapabilityFlags _driverCapabilityFlags;
         bool _hasUnifiedMemory = false;
         std::unique_ptr<VkmBindlessResourceManagerBase> _bindlessResourceManager;
+        std::unique_ptr<VkmFrameConstantManagerBase> _frameConstantManager;
 
     private:
         std::unique_ptr<VkmRenderResourcePool> _renderResourcePool;

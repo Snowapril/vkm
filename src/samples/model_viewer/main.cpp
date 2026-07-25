@@ -1,8 +1,8 @@
 #include <cxxopts.hpp>
 
-#include <glm/ext/matrix_clip_space.hpp>
-#include <glm/ext/matrix_transform.hpp>
-#include <glm/gtc/matrix_inverse.hpp>
+#include <glm/geometric.hpp>
+#include <glm/mat3x3.hpp>
+#include <glm/matrix.hpp>
 
 #if defined(VKM_ENABLE_IMGUI)
 #include <imgui.h>
@@ -11,8 +11,6 @@
 #include <vkm/base/common.h>
 #include <vkm/base/global_variable.h>
 #include <vkm/platform/common/app_delegate.h>
-#include <vkm/platform/common/input_codes.h>
-#include <vkm/platform/common/input_handler.h>
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/command_queue.h>
@@ -23,6 +21,7 @@
 #include <vkm/renderer/backend/common/render_graph.h>
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/texture.h>
+#include <vkm/renderer/camera.h>
 #include <vkm/renderer/engine.h>
 #include <vkm/renderer/scene/gltf_importer.h>
 #include <vkm/renderer/scene/scene_model.h>
@@ -57,7 +56,7 @@ namespace
     // a 16-byte boundary, which is what the explicit padding is for).
     struct ModelViewerPushConstants
     {
-        glm::mat4 _modelViewProjection;
+        glm::mat4 _model;
         uint32_t _vertexBufferSlot;
         uint32_t _indexBufferSlot;
         float _pad0[2];
@@ -115,61 +114,14 @@ namespace
         return entries;
     }
 
-    // Orbit camera: left-drag rotates, scroll dollies in/out.
-    class OrbitCamera
+    // Points the orbit controller at a scene's bounds; an empty/invalid AABB falls back to a
+    // unit sphere at the origin so the camera still ends up somewhere sensible.
+    void frameCameraOnBounds(VkmOrbitCameraController& controller, const VkmSceneAABB& bounds)
     {
-    public:
-        void frame(const VkmSceneAABB& bounds)
-        {
-            _target = bounds._valid ? bounds.getCenter() : glm::vec3(0.0f);
-            const float radius = bounds._valid ? glm::length(bounds.getExtent()) * 0.5f : 1.0f;
-            _distance = std::max(radius * 2.5f, 0.001f);
-            _minDistance = _distance * 0.05f;
-            _maxDistance = _distance * 20.0f;
-        }
-
-        void update(VkmInputHandler& input)
-        {
-            if (input.isMouseButtonDown(VkmMouseButton::Left))
-            {
-                _yaw += static_cast<float>(input.getCursorDeltaX()) * 0.005f;
-                _pitch += static_cast<float>(input.getCursorDeltaY()) * 0.005f;
-                // Just short of the poles, where the up vector would degenerate.
-                _pitch = std::clamp(_pitch, -1.5f, 1.5f);
-            }
-
-            const double scroll = input.getScrollDeltaY();
-            if (scroll != 0.0)
-            {
-                _distance = std::clamp(_distance * std::pow(0.9f, static_cast<float>(scroll)), _minDistance, _maxDistance);
-            }
-        }
-
-        glm::mat4 getViewProjection(uint32_t width, uint32_t height) const
-        {
-            const glm::vec3 eye = _target + glm::vec3{
-                _distance * std::cos(_pitch) * std::sin(_yaw),
-                _distance * std::sin(_pitch),
-                _distance * std::cos(_pitch) * std::cos(_yaw),
-            };
-            const glm::mat4 view = glm::lookAtRH(eye, _target, glm::vec3(0.0f, 1.0f, 0.0f));
-
-            const float aspect = height > 0 ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
-            // *_ZO: the engine's clip space is +Y-up with a [0,1] depth range on every
-            // backend (the Vulkan backend's -fvk-invert-y handles its inverted NDC).
-            const glm::mat4 projection = glm::perspectiveRH_ZO(glm::radians(50.0f), aspect,
-                                                               _distance * 0.01f, _distance * 10.0f);
-            return projection * view;
-        }
-
-    private:
-        glm::vec3 _target{ 0.0f };
-        float _distance = 3.0f;
-        float _minDistance = 0.1f;
-        float _maxDistance = 100.0f;
-        float _yaw = 0.6f;
-        float _pitch = 0.3f;
-    };
+        const glm::vec3 center = bounds._valid ? bounds.getCenter() : glm::vec3(0.0f);
+        const float radius = bounds._valid ? glm::length(bounds.getExtent()) * 0.5f : 1.0f;
+        controller.frame(center, radius);
+    }
 } // namespace
 
 class ModelViewerApplication : public AppDelegate
@@ -181,6 +133,8 @@ public:
     virtual void postDriverReady(VkmEngine* engine) override final
     {
         _engine = engine;
+        _cameraController.registerTo(engine->getInputHandler());
+        engine->setActiveCamera(&_camera);
 
         VkmPipelineStateManager* manager = engine->getPipelineStateManager();
         std::string err;
@@ -209,8 +163,10 @@ public:
 
     virtual void preShutdown() override final
     {
+        _cameraController.unregister();
         if (_engine != nullptr)
         {
+            _engine->setActiveCamera(nullptr); // the camera dies with this delegate
             _modelGpu.destroy(_engine->getDriver());
         }
     }
@@ -218,7 +174,6 @@ public:
     virtual void update(const double deltaTime) override final
     {
         (void)deltaTime;
-        _camera.update(_engine->getInputHandler());
         updateDepthTexture();
 
 #if defined(VKM_ENABLE_IMGUI)
@@ -272,8 +227,6 @@ public:
             return; // still a valid frame: the clear alone runs.
         }
 
-        const glm::mat4 viewProjection = _camera.getViewProjection(extent.x, extent.y);
-
         std::vector<ModelViewerPushConstants> draws;
         draws.reserve(_drawList.size());
         std::vector<uint32_t> indexCounts;
@@ -296,7 +249,9 @@ public:
                                             : kFallbackBaseColor;
 
             ModelViewerPushConstants pushConstants{};
-            pushConstants._modelViewProjection = viewProjection * item._worldTransform;
+            // The camera half lives in descriptor set 1, which the engine rewrites once per
+            // frame from the active camera, so only the model matrix is per-draw now.
+            pushConstants._model = item._worldTransform;
             pushConstants._vertexBufferSlot = meshGpu._vertexBufferSlot;
             pushConstants._indexBufferSlot = meshGpu._indexBufferSlot;
             pushConstants._baseColor = baseColor;
@@ -365,7 +320,7 @@ private:
 
         _model = std::move(model);
         _drawList = _model.buildDrawList();
-        _camera.frame(_model.computeWorldBounds());
+        frameCameraOnBounds(_cameraController, _model.computeWorldBounds());
         _currentScenePath = path;
         _loadError.clear();
         _modelReady = true;
@@ -424,7 +379,7 @@ private:
                         _drawList.size());
             if (ImGui::Button("Reframe camera"))
             {
-                _camera.frame(_model.computeWorldBounds());
+                frameCameraOnBounds(_cameraController, _model.computeWorldBounds());
             }
         }
         else
@@ -489,7 +444,8 @@ private:
     VkmSceneModel _model;
     VkmSceneModelGpu _modelGpu;
     std::vector<VkmSceneModel::DrawItem> _drawList;
-    OrbitCamera _camera;
+    VkmCamera _camera;
+    VkmOrbitCameraController _cameraController{&_camera};
     std::vector<SceneEntry> _sceneEntries;
     std::string _currentScenePath;
     std::string _pendingScenePath; // set by the browser, consumed at the end of update()
