@@ -75,6 +75,13 @@ function(vkm_add_shader_cache_target)
         set(_compiler_dep vkm-compiler)
     endif()
 
+    # The engine's shared HLSL headers, passed to dxc as an include path and added to every
+    # command's DEPENDS. dxc emits no depfile here, so without this an edit to a .hlsli would
+    # not rebuild any shader cache. Handled centrally rather than per-caller EXTRA_DEPENDS so
+    # new samples get it for free.
+    set(_shader_include_dir "${PROJECT_SOURCE_DIR}/include/vkm/shaders")
+    file(GLOB _shader_include_headers CONFIGURE_DEPENDS "${_shader_include_dir}/*.hlsli")
+
     set(_stamp_dir "${CMAKE_CURRENT_BINARY_DIR}/${SC_TARGET_NAME}.stamps")
     file(MAKE_DIRECTORY "${_stamp_dir}")
 
@@ -89,9 +96,10 @@ function(vkm_add_shader_cache_target)
                     --pso "${_pso}"
                     --output-dir "${SC_OUTPUT_DIR}"
                     --backend ${_backend}
+                    --include-dir "${_shader_include_dir}"
                     ${_emit_msl_arg}
             COMMAND ${CMAKE_COMMAND} -E touch "${_stamp}"
-            DEPENDS "${_pso}" ${SC_EXTRA_DEPENDS} ${_compiler_dep}
+            DEPENDS "${_pso}" ${SC_EXTRA_DEPENDS} ${_shader_include_headers} ${_compiler_dep}
             COMMENT "vkm-compiler: compiling shaders for ${_pso_name} (${_backend})"
             VERBATIM)
         list(APPEND _stamps "${_stamp}")

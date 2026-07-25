@@ -133,6 +133,7 @@ namespace
                         const StageInfo& info,
                         VkmShaderCacheBackend backend,
                         const fs::path& source,
+                        const fs::path& includeDir,
                         const fs::path& spvOut)
     {
         std::vector<std::string> args = {
@@ -142,6 +143,13 @@ namespace
             "-D", backendDefine(backend),
             "-D", "VKM_BINDLESS_BUFFER_CAPACITY=" + std::to_string(kVkmBindlessBufferCapacity),
         };
+        if (!includeDir.empty())
+        {
+            // Where the engine's shared .hlsli headers (include/vkm/shaders) are found.
+            // Without this dxc only resolves #include relative to the including file.
+            args.push_back("-I");
+            args.push_back(includeDir.string());
+        }
         if (backend == VkmShaderCacheBackend::Vulkan && info.stage == VkmShaderCacheStage::Vertex)
         {
             // Negate SV_Position.y so the engine's +Y-up clip space (the HLSL/D3D convention,
@@ -261,6 +269,7 @@ namespace
                       VkmShaderCacheBackend backend,
                       const std::string& optionName,
                       const fs::path& shaderRoot,
+                      const fs::path& includeDir,
                       const fs::path& outputDir,
                       bool emitMsl)
     {
@@ -275,7 +284,7 @@ namespace
         const fs::path spvTmp =
             outputDir / (baseName + "." + info.shortName + ".tmp.spv");
 
-        if (!compileToSpirv(desc, info, backend, source, spvTmp))
+        if (!compileToSpirv(desc, info, backend, source, includeDir, spvTmp))
         {
             return false;
         }
@@ -470,6 +479,9 @@ int main(int argc, char** argv)
         ("shader-root", "Root directory for resolving shader filepaths "
                         "(default: directory containing --pso)",
          cxxopts::value<std::string>()->default_value(""))
+        ("include-dir", "Additional #include search directory passed to dxc "
+                        "(the engine's shared .hlsli headers)",
+         cxxopts::value<std::string>()->default_value(""))
         ("emit-msl", "Metal only: keep the intermediate .metal source beside each "
                      ".vfcache and embed it in the metallib (-frecord-sources) so Xcode "
                      "GPU captures show shader source",
@@ -511,6 +523,8 @@ int main(int argc, char** argv)
         shaderRoot = psoPath.parent_path();
     }
 
+    const fs::path includeDir = parsed["include-dir"].as<std::string>();
+
     std::string parseError;
     std::optional<VkmPipelineStateDescriptor> pso =
         parsePipelineStateFromFile(psoPath.string(), &parseError);
@@ -550,17 +564,17 @@ int main(int argc, char** argv)
         if (variant.vertexShader.has_value())
         {
             allOk &= compileStage(*variant.vertexShader, vertexInfo, backend,
-                                  variant.optionName, shaderRoot, outputDir, emitMsl);
+                                  variant.optionName, shaderRoot, includeDir, outputDir, emitMsl);
         }
         if (variant.fragmentShader.has_value())
         {
             allOk &= compileStage(*variant.fragmentShader, fragmentInfo, backend,
-                                  variant.optionName, shaderRoot, outputDir, emitMsl);
+                                  variant.optionName, shaderRoot, includeDir, outputDir, emitMsl);
         }
         if (variant.computeShader.has_value())
         {
             allOk &= compileStage(*variant.computeShader, computeInfo, backend,
-                                  variant.optionName, shaderRoot, outputDir, emitMsl);
+                                  variant.optionName, shaderRoot, includeDir, outputDir, emitMsl);
         }
     }
 

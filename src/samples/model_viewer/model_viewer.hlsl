@@ -2,14 +2,13 @@
 //
 // Bindless vertex-pulling glTF mesh shader. Like triangle.hlsl, the pipeline declares no
 // vertex input attributes: SV_VertexID indexes a bindless index buffer, whose value then
-// indexes a bindless vertex buffer. On top of the two slot indices, the push constants
-// carry this draw's model-view-projection matrix, its base color, and the light direction
-// already rotated into object space -- shading happens in object space so no per-draw
-// normal matrix is needed, which keeps everything inside one push-constant range (see
-// kVkmBindlessPushConstantSize).
-//
-// The push-constant range is vertex-stage only (VkmPipelineStateVulkan::createInner), so
-// everything the fragment stage needs travels as an interpolant.
+// indexes a bindless vertex buffer, both reached through vkm_bindless.hlsli. On top of the
+// two slot indices, the push constants carry this draw's model-view-projection matrix, its
+// base color, and the light direction already rotated into object space -- shading happens
+// in object space so no per-draw normal matrix is needed, which keeps everything inside one
+// push-constant range (see kVkmBindlessPushConstantSize).
+
+#include "vkm_bindless.hlsli"
 
 // Mirrors vkm::VkmSceneVertex (include/vkm/renderer/scene/scene_model.h): the padding is
 // part of the layout, not decoration.
@@ -34,18 +33,8 @@ struct PushConstants
     float4   lightDirectionObjectSpace; // xyz: normalized, points towards the light
 };
 
-#if defined(VKM_BACKEND_WEBGPU)
-// See triangle.hlsl for why the WebGPU backend needs this separate binding shape.
-[[vk::binding(0, 0)]] ConstantBuffer<PushConstants>  g_PushConstants     : register(b0, space0);
-[[vk::binding(1, 0)]] StructuredBuffer<VertexData>   g_MegaVertexBuffer  : register(t0, space0);
-[[vk::binding(2, 0)]] StructuredBuffer<uint>         g_MegaIndexBuffer   : register(t1, space0);
-[[vk::binding(3, 0)]] StructuredBuffer<uint>         g_BindlessSlotTable : register(t2, space0);
-#else
-[[vk::binding(1, 0)]] StructuredBuffer<VertexData> g_BindlessVertexBuffers[] : register(t0, space0);
-[[vk::binding(2, 0)]] StructuredBuffer<uint>       g_BindlessIndexBuffers[]  : register(t1, space0);
-
-[[vk::push_constant]] PushConstants g_PushConstants;
-#endif
+VKM_PUSH_CONSTANTS(PushConstants, g_PushConstants);
+VKM_BINDLESS_VERTEX_PULLING(VertexData);
 
 struct VSOutput
 {
@@ -57,15 +46,8 @@ struct VSOutput
 
 VSOutput VSMain(uint vertexId : SV_VertexID)
 {
-#if defined(VKM_BACKEND_WEBGPU)
-    uint indexBase = g_BindlessSlotTable[VKM_BINDLESS_BUFFER_CAPACITY + g_PushConstants.indexBufferIndex];
-    uint index = g_MegaIndexBuffer[indexBase + vertexId];
-    uint vertexBase = g_BindlessSlotTable[g_PushConstants.vertexBufferIndex];
-    VertexData v = g_MegaVertexBuffer[vertexBase + index];
-#else
-    uint index = g_BindlessIndexBuffers[g_PushConstants.indexBufferIndex][vertexId];
-    VertexData v = g_BindlessVertexBuffers[g_PushConstants.vertexBufferIndex][index];
-#endif
+    uint index = VKM_LOAD_INDEX(g_PushConstants.indexBufferIndex, vertexId);
+    VertexData v = VKM_LOAD_VERTEX(g_PushConstants.vertexBufferIndex, index);
 
     VSOutput output;
     output.position = mul(g_PushConstants.modelViewProjection, float4(v.position, 1.0));
