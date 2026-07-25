@@ -30,6 +30,19 @@ namespace vkm
         bool initialize(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError = nullptr);
         void destroy();
 
+        /*
+        * @brief Rebuild this pipeline from `desc` in place, keeping the object's address so
+        * every cached raw VkmPipelineStateBase* stays valid -- samples, render-graph render
+        * callbacks and VkmCommandBufferBase's bound-pipeline history all hold non-owning
+        * pointers with no invalidation hook. On failure the previous descriptor is rebuilt so
+        * the pipeline is left usable, and false is returned with *outError set.
+        *
+        * The caller must ensure no in-flight GPU work still references this pipeline
+        * (destroyInner() is synchronous) -- VkmPipelineStateManager does this by calling
+        * VkmDriverBase::waitIdle() once per reload batch.
+        */
+        bool reload(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError = nullptr);
+
         inline const VkmPipelineStateDescriptor& getDescriptor() const { return _descriptor; }
         inline bool isCompute() const { return _descriptor.computeShader.has_value(); }
         inline const std::string& getName() const { return _descriptor.name; } // includes "[option]" suffix

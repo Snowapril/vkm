@@ -35,4 +35,17 @@ namespace vkm
         return VkmShaderCacheBackend::WebGPU;
 #endif
     }
+
+    // The spelling vkm-compiler's --backend option expects. Kept here alongside the filename
+    // builder for the same reason: producer and consumer must not drift on it.
+    inline const char* vkmShaderCacheBackendName(VkmShaderCacheBackend backend)
+    {
+        switch (backend)
+        {
+            case VkmShaderCacheBackend::Vulkan: return "vulkan";
+            case VkmShaderCacheBackend::Metal:  return "metal";
+            case VkmShaderCacheBackend::WebGPU: return "webgpu";
+        }
+        return "";
+    }
 } // namespace vkm

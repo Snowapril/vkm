@@ -261,6 +261,12 @@ namespace vkm
             _renderGraphCapture->releaseResources(_driver);
         }
 #if defined(VKM_ENABLE_IMGUI)
+        if (_renderGraphInspector)
+        {
+            _renderGraphInspector->releaseResources(_driver);
+        }
+#endif
+#if defined(VKM_ENABLE_IMGUI)
         if (_imGuiRenderer)
         {
             _imGuiRenderer->shutdown();
@@ -343,8 +349,15 @@ namespace vkm
                 VKM_PROFILE_SCOPE("MemoryInspector::update");
                 _memoryInspector->update(_driver, deltaTime);
             }
+            // Same cadence: flags PSO json/shader edits (and auto-reloads them when enabled)
+            // at a quiescent point, before render() records anything this frame.
+            _pipelineStateManager->pollSourceChanges(deltaTime);
             renderDebugOverlay(deltaTime);
 
+            if (ImGui::IsKeyPressed(ImGuiKey_F5, false))
+            {
+                _renderGraphInspector->toggleVisible();
+            }
             if (ImGui::IsKeyPressed(ImGuiKey_F6, false))
             {
                 _gpuProfilerInspector->toggleVisible();
@@ -369,7 +382,8 @@ namespace vkm
 #endif // VKM_GPU_CAPTURE
             {
                 VKM_PROFILE_SCOPE("Inspectors::draw");
-                _renderGraphInspector->draw(*_renderGraphCapture, _driver, _imGuiRenderer.get());
+                _renderGraphInspector->draw(*_renderGraphCapture, _driver, _imGuiRenderer.get(),
+                                            _pipelineStateManager.get());
                 _memoryInspector->draw();
                 _cpuProfilerInspector->draw();
                 _gpuProfilerInspector->draw(_driver->getGpuProfiler());
@@ -434,6 +448,7 @@ namespace vkm
                         formatByteSize(memory._gpu._deviceBudgetBytes).c_str());
         }
 
+        ImGui::Text("F5: render graph inspector");
         ImGui::Text("F6: GPU profiler");
         ImGui::Text("F7: CPU profiler");
         ImGui::Text("F8: memory inspector");
@@ -563,6 +578,12 @@ namespace vkm
                     {
                         imGuiSubGraph->addReferencedResource(snapshotHandle);
                     }
+                }
+                // Same reasoning for the textures the inspector previewed directly out of the
+                // resource pool (the texture browser, and live input previews in a capture).
+                for (VkmResourceHandle sampledHandle : _renderGraphInspector->getTexturesSampledLastDraw())
+                {
+                    imGuiSubGraph->addReferencedResource(sampledHandle);
                 }
             }
 #endif

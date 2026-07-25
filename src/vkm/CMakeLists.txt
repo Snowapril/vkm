@@ -67,6 +67,7 @@ set(SRCS
     ${SRC_DIR}/vkm/base/common.cpp
     ${SRC_DIR}/vkm/base/logger.cpp
     ${SRC_DIR}/vkm/base/memory.cpp
+    ${SRC_DIR}/vkm/base/subprocess.cpp
     ${SRC_DIR}/vkm/base/global_variable.cpp
     ${SRC_DIR}/vkm/base/cpu_profiler.cpp
     ${SRC_DIR}/vkm/platform/common/input_handler.cpp
@@ -117,6 +118,7 @@ if (VKM_ENABLE_IMGUI)
     list(APPEND PUBLIC_HDRS
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/imgui_renderer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/render_graph_inspector.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/texture_browser.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/memory_inspector.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/cpu_profiler_inspector.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/gpu_profiler_inspector.h
@@ -124,6 +126,7 @@ if (VKM_ENABLE_IMGUI)
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/imgui/imgui_renderer.cpp
         ${SRC_DIR}/vkm/renderer/imgui/render_graph_inspector.cpp
+        ${SRC_DIR}/vkm/renderer/imgui/texture_browser.cpp
         ${SRC_DIR}/vkm/renderer/imgui/memory_inspector.cpp
         ${SRC_DIR}/vkm/renderer/imgui/profiler_chart_common.h
         ${SRC_DIR}/vkm/renderer/imgui/cpu_profiler_inspector.cpp
@@ -474,8 +477,22 @@ endif()
 target_compile_definitions(${target}
     PRIVATE
     RESOURCES_DIR="${VKM_CORE_RESOURCES_DIR}"
+    VKM_SHADER_INCLUDE_DIR="${PROJECT_SOURCE_DIR}/include/vkm/shaders"
     ${DEFAULT_COMPILE_DEFINITIONS}
 )
+
+# Runtime PSO reload recompiles shaders by invoking the same vkm-compiler the build uses
+# (see VkmPipelineStateManager::reloadSource). Bake its path in only when this build
+# actually has one -- an Emscripten or installed build has none, and the reload UI then
+# falls back to json-only reloads rather than failing opaquely. The two-way selection
+# mirrors ShaderCompile.cmake's. The in-tree vkm-compiler target is added *after* this
+# directory (it links vkmcore), so that branch is applied from the top-level CMakeLists.
+if (VKM_HOST_VKM_COMPILER)
+    target_compile_definitions(${target} PRIVATE VKM_COMPILER_EXECUTABLE="${VKM_HOST_VKM_COMPILER}")
+endif()
+if (VKM_METAL_EMIT_MSL_SOURCE)
+    target_compile_definitions(${target} PRIVATE VKM_COMPILER_EMIT_MSL=1)
+endif()
 
 # The --preload-file arguments a wasm executable needs so VkmEngine finds the engine PSO json and
 # its compiled shader cache. Deliberately just these two subdirectories rather than all of

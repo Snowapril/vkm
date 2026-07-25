@@ -334,6 +334,10 @@ namespace vkm
     * introspection API of their own to compute this).
     */
     // Bytes per texel for uncompressed formats; 0 for Undefined/unknown.
+    // Display name for a pixel format, shared by the render graph inspector and the texture
+    // browser.
+    const char* vkmFormatName(VkmFormat format);
+
     uint32_t vkmBytesPerTexel(VkmFormat format);
 
     uint64_t computeTextureByteSize(const VkmTextureInfo& info);

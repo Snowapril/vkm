@@ -2,40 +2,20 @@
 
 #include <vkm/renderer/imgui/render_graph_inspector.h>
 #include <vkm/renderer/imgui/imgui_renderer.h>
+#include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/render_graph_capture.h>
 #include <vkm/renderer/backend/common/render_graph.h>
 
 #include <imgui.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <string>
 
 namespace vkm
 {
     namespace
     {
-        const char* formatToString(VkmFormat format)
-        {
-            switch (format)
-            {
-                case VkmFormat::R8G8B8A8_UNORM:      return "R8G8B8A8_UNORM";
-                case VkmFormat::R8G8B8A8_SRGB:       return "R8G8B8A8_SRGB";
-                case VkmFormat::R8G8B8A8_UINT:       return "R8G8B8A8_UINT";
-                case VkmFormat::R8G8B8A8_SNORM:      return "R8G8B8A8_SNORM";
-                case VkmFormat::R8G8B8A8_SINT:       return "R8G8B8A8_SINT";
-                case VkmFormat::R16G16B16A16_UNORM:  return "R16G16B16A16_UNORM";
-                case VkmFormat::R16G16B16A16_SFLOAT: return "R16G16B16A16_SFLOAT";
-                case VkmFormat::R32G32B32A32_SFLOAT: return "R32G32B32A32_SFLOAT";
-                case VkmFormat::D32_SFLOAT:          return "D32_SFLOAT";
-                case VkmFormat::D24_UNORM_S8_UINT:   return "D24_UNORM_S8_UINT";
-                case VkmFormat::D32_SFLOAT_S8_UINT:  return "D32_SFLOAT_S8_UINT";
-                case VkmFormat::BGRA8_UNORM:         return "BGRA8_UNORM";
-                case VkmFormat::BGRA8_SRGB:          return "BGRA8_SRGB";
-                case VkmFormat::Undefined:
-                default:                             return "Undefined";
-            }
-        }
-
         const char* loadActionToString(VkmLoadAction action)
         {
             switch (action)
@@ -68,26 +48,43 @@ namespace vkm
             return "?";
         }
 
-        void drawAttachmentPreview(const VkmCapturedAttachment& attachment, VkmImGuiRendererBase* imGuiRenderer)
+        /*
+        * @brief Preview one captured texture. Prefers the capture's own frame-accurate
+        * snapshot; falls back to the live texture when there is none, which is the case for
+        * cube/array/depth sources and on backends without copyTexture. `unavailableReason` is
+        * shown when neither is displayable.
+        */
+        void drawTexturePreview(const VkmCapturedResourceInfo& info, VkmImGuiRendererBase* imGuiRenderer,
+                                const char* unavailableReason)
         {
-            if (!attachment.snapshotTexture.isValid())
+            const bool isSnapshot = info.snapshotTexture.isValid();
+            // A cube or array texture cannot be bound to ImGui's texture2d pipeline, so
+            // without a snapshot there is nothing safe to draw -- the Textures tab is where
+            // those are inspected face by face.
+            if (!isSnapshot && (info.textureType == VkmTextureType::Cube || info.numArrayLayers > 1))
             {
-                ImGui::TextDisabled(attachment.isPresentTarget ? "(swapchain back buffer -- not captured)"
-                                                               : "(content preview unavailable)");
-                return;
-            }
-            const uint64_t textureID = imGuiRenderer->getTextureID(attachment.snapshotTexture);
-            if (textureID == 0)
-            {
-                ImGui::TextDisabled("(content preview unavailable on this backend)");
+                ImGui::TextDisabled("(%s -- inspect it face by face in the Textures tab)",
+                                    info.textureType == VkmTextureType::Cube ? "cubemap" : "texture array");
                 return;
             }
 
-            const float srcWidth = static_cast<float>(attachment.info.extent.x);
-            const float srcHeight = static_cast<float>(attachment.info.extent.y);
+            const uint64_t textureID =
+                imGuiRenderer->getTextureID(isSnapshot ? info.snapshotTexture : info.handle);
+            if (textureID == 0)
+            {
+                ImGui::TextDisabled("%s", unavailableReason);
+                return;
+            }
+
+            const float srcWidth = static_cast<float>(info.extent.x);
+            const float srcHeight = static_cast<float>(info.extent.y);
             const float maxPreviewWidth = 384.0f;
             const float scale = (srcWidth > maxPreviewWidth) ? maxPreviewWidth / srcWidth : 1.0f;
             ImGui::Image(static_cast<ImTextureID>(textureID), ImVec2(srcWidth * scale, srcHeight * scale));
+            if (!isSnapshot)
+            {
+                ImGui::TextDisabled("(live contents -- not the captured frame)");
+            }
         }
 
         void drawBufferHexView(const VkmCapturedBuffer& buffer)
@@ -127,24 +124,69 @@ namespace vkm
     }
 
     void VkmRenderGraphInspector::draw(VkmRenderGraphCapture& capture, VkmDriverBase* driver,
-                                       VkmImGuiRendererBase* imGuiRenderer)
+                                       VkmImGuiRendererBase* imGuiRenderer,
+                                       VkmPipelineStateManager* pipelineStateManager)
     {
-        (void)driver;
+        if (!_visible)
+        {
+            return;
+        }
 
+        ImGui::SetNextWindowSize(ImVec2(820, 560), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Render Graph Inspector (F7)", &_visible))
+        {
+            ImGui::End();
+            return;
+        }
+
+        if (pipelineStateManager == nullptr)
+        {
+            ImGui::TextDisabled("Pipeline state manager is not available yet.");
+            ImGui::End();
+            return;
+        }
+
+        if (ImGui::BeginTabBar("InspectorTabs"))
+        {
+            if (ImGui::BeginTabItem("Capture"))
+            {
+                drawCaptureTab(capture, imGuiRenderer, pipelineStateManager);
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Pipelines"))
+            {
+                drawPipelinesTab(pipelineStateManager);
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Textures"))
+            {
+                _textureBrowser.draw(driver, imGuiRenderer);
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
+
+        ImGui::End();
+    }
+
+    void VkmRenderGraphInspector::drawCaptureTab(VkmRenderGraphCapture& capture,
+                                                 VkmImGuiRendererBase* imGuiRenderer,
+                                                 VkmPipelineStateManager* pipelineStateManager)
+    {
         if (capture.getState() == VkmRenderGraphCapture::State::Pending)
         {
-            ImGui::Begin("Render Graph Inspector");
             ImGui::TextUnformatted("Capturing...");
-            ImGui::End();
             return;
         }
         if (capture.getState() != VkmRenderGraphCapture::State::Ready)
         {
+            ImGui::TextDisabled("No capture yet.");
+            if (ImGui::Button("Capture (F10)"))
+            {
+                capture.arm();
+            }
             return;
         }
-
-        ImGui::SetNextWindowSize(ImVec2(760, 480), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Render Graph Inspector");
 
         ImGui::Text("Captured frame slot %u -- %zu passes", capture.getCapturedFrameIndex(), capture.getPasses().size());
         ImGui::SameLine();
@@ -207,6 +249,18 @@ namespace vkm
                 for (const std::string& pipelineName : pass.pipelineNames)
                 {
                     ImGui::BulletText("%s", pipelineName.c_str());
+                    const size_t sourceIndex = pipelineStateManager->findSourceIndexOfPipelineState(pipelineName);
+                    if (sourceIndex == std::string::npos)
+                    {
+                        continue;
+                    }
+                    ImGui::SameLine();
+                    ImGui::PushID(pipelineName.c_str());
+                    if (ImGui::SmallButton("Reload"))
+                    {
+                        reloadSource(pipelineStateManager, sourceIndex);
+                    }
+                    ImGui::PopID();
                 }
             }
 
@@ -221,11 +275,13 @@ namespace vkm
                     if (ImGui::TreeNodeEx(header.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
                     {
                         ImGui::Text("%s, %ux%u, load %s / store %s",
-                                    formatToString(attachment.info.format),
+                                    vkmFormatName(attachment.info.format),
                                     attachment.info.extent.x, attachment.info.extent.y,
                                     loadActionToString(attachment.loadAction),
                                     storeActionToString(attachment.storeAction));
-                        drawAttachmentPreview(attachment, imGuiRenderer);
+                        drawTexturePreview(attachment.info, imGuiRenderer,
+                            attachment.isPresentTarget ? "(swapchain back buffer -- not captured)"
+                                                       : "(content preview unavailable on this backend)");
                         ImGui::TreePop();
                     }
                     ImGui::PopID();
@@ -238,7 +294,7 @@ namespace vkm
                     if (ImGui::TreeNodeEx(header.c_str()))
                     {
                         ImGui::Text("%s, %ux%u, load %s / store %s (metadata only)",
-                                    formatToString(attachment.info.format),
+                                    vkmFormatName(attachment.info.format),
                                     attachment.info.extent.x, attachment.info.extent.y,
                                     loadActionToString(attachment.loadAction),
                                     storeActionToString(attachment.storeAction));
@@ -257,20 +313,32 @@ namespace vkm
                 {
                     ImGui::TextDisabled("(none declared)");
                 }
-                for (const VkmCapturedResourceInfo& resource : pass.referencedResources)
+                for (size_t i = 0; i < pass.referencedResources.size(); ++i)
                 {
-                    if (resource.type == VkmResourceType::Texture)
-                    {
-                        ImGui::BulletText("%s '%s' (%s, %ux%u)", vkmResourceTypeName(resource.type),
-                                          resource.debugName.c_str(), formatToString(resource.format),
-                                          resource.extent.x, resource.extent.y);
-                    }
-                    else
+                    const VkmCapturedResourceInfo& resource = pass.referencedResources[i];
+                    if (resource.type != VkmResourceType::Texture)
                     {
                         ImGui::BulletText("%s '%s' (%llu bytes)", vkmResourceTypeName(resource.type),
                                           resource.debugName.c_str(),
                                           static_cast<unsigned long long>(resource.size));
+                        continue;
                     }
+
+                    ImGui::PushID(static_cast<int>(i));
+                    const std::string header = "Texture " + std::to_string(i) +
+                        (resource.debugName.empty() ? "" : " -- " + resource.debugName);
+                    if (ImGui::TreeNodeEx(header.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+                    {
+                        const std::string layers = resource.numArrayLayers > 1
+                            ? " x " + std::to_string(resource.numArrayLayers) + " layers"
+                            : std::string();
+                        ImGui::Text("%s, %ux%u%s", vkmFormatName(resource.format),
+                                    resource.extent.x, resource.extent.y, layers.c_str());
+                        drawTexturePreview(resource, imGuiRenderer,
+                                           "(content preview unavailable on this backend)");
+                        ImGui::TreePop();
+                    }
+                    ImGui::PopID();
                 }
             }
 
@@ -302,7 +370,126 @@ namespace vkm
             }
         }
         ImGui::EndChild();
+    }
 
-        ImGui::End();
+    void VkmRenderGraphInspector::reloadSource(VkmPipelineStateManager* pipelineStateManager, size_t sourceIndex)
+    {
+        const bool recompile = _recompileShadersOnReload && VkmPipelineStateManager::isShaderRecompilationAvailable();
+        std::string error;
+        _reloadFailed = !pipelineStateManager->reloadSource(sourceIndex, recompile, &error);
+        // A successful reload can still report something worth reading (a variant the edit
+        // removed), so show whatever came back either way.
+        _reloadStatus = error.empty() ? (_reloadFailed ? "Reload failed." : "Reloaded.") : error;
+    }
+
+    void VkmRenderGraphInspector::drawPipelinesTab(VkmPipelineStateManager* pipelineStateManager)
+    {
+        const bool recompileAvailable = VkmPipelineStateManager::isShaderRecompilationAvailable();
+
+        if (ImGui::Button("Reload All"))
+        {
+            const bool recompile = _recompileShadersOnReload && recompileAvailable;
+            std::string error;
+            _reloadFailed = !pipelineStateManager->reloadAllSources(recompile, &error);
+            _reloadStatus = error.empty() ? (_reloadFailed ? "Reload failed." : "Reloaded all sources.") : error;
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!recompileAvailable);
+        ImGui::Checkbox("Recompile shaders", &_recompileShadersOnReload);
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        bool autoReload = pipelineStateManager->isAutoReloadOnChange();
+        if (ImGui::Checkbox("Auto-reload on change", &autoReload))
+        {
+            pipelineStateManager->setAutoReloadOnChange(autoReload);
+        }
+
+        if (!recompileAvailable)
+        {
+            ImGui::TextDisabled("vkm-compiler is not available in this build -- Reload re-applies "
+                                "json render state only, shader edits need a rebuild.");
+        }
+        ImGui::Separator();
+
+        const std::vector<VkmPipelineStateSource>& sources = pipelineStateManager->getSources();
+        if (sources.empty())
+        {
+            ImGui::TextDisabled("(no pipeline state json loaded)");
+            return;
+        }
+
+        if (ImGui::BeginTable("PipelineSources", 4,
+                ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp))
+        {
+            ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Variants", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableHeadersRow();
+
+            for (size_t i = 0; i < sources.size(); ++i)
+            {
+                const VkmPipelineStateSource& source = sources[i];
+                ImGui::TableNextRow();
+                ImGui::PushID(static_cast<int>(i));
+
+                ImGui::TableNextColumn();
+                if (source.jsonPath.empty())
+                {
+                    ImGui::TextDisabled("(registered from a descriptor)");
+                }
+                else
+                {
+                    ImGui::TextUnformatted(std::filesystem::path(source.jsonPath).filename().string().c_str());
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::SetTooltip("%s", source.jsonPath.c_str());
+                    }
+                }
+
+                ImGui::TableNextColumn();
+                std::string variants;
+                for (const std::string& name : source.variantNames)
+                {
+                    variants += (variants.empty() ? "" : ", ") + name;
+                }
+                ImGui::TextUnformatted(variants.c_str());
+
+                ImGui::TableNextColumn();
+                if (source.stale)
+                {
+                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "stale");
+                }
+                else
+                {
+                    ImGui::TextDisabled("up to date");
+                }
+
+                ImGui::TableNextColumn();
+                ImGui::BeginDisabled(source.jsonPath.empty());
+                if (ImGui::SmallButton("Reload"))
+                {
+                    reloadSource(pipelineStateManager, i);
+                }
+                ImGui::EndDisabled();
+
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+
+        // Compiler stderr is multi-line and is the whole point of showing this, so give it a
+        // scrollable box rather than a single truncated line.
+        const std::string& status = pipelineStateManager->getLastReloadError().empty()
+            ? _reloadStatus : pipelineStateManager->getLastReloadError();
+        if (!status.empty())
+        {
+            ImGui::Separator();
+            ImGui::TextColored(_reloadFailed ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f) : ImVec4(0.6f, 0.9f, 0.6f, 1.0f),
+                               "Last reload");
+            ImGui::BeginChild("ReloadStatus", ImVec2(0, 120), ImGuiChildFlags_Borders);
+            ImGui::TextWrapped("%s", status.c_str());
+            ImGui::EndChild();
+        }
     }
 }

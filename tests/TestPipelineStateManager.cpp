@@ -7,6 +7,7 @@
 #include <vkm/renderer/backend/common/shader_cache.h>
 #include <vkm/renderer/backend/common/shader_cache_util.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -356,6 +357,341 @@ TEST_CASE("VkmPipelineStateManager - loading a name that collides with the other
     // Engine entry must be untouched.
     CHECK(manager.getPipelineState("shared_pso", vkm::VkmPipelineStateOrigin::User) == nullptr);
     CHECK(manager.getPipelineState("shared_pso", vkm::VkmPipelineStateOrigin::Engine) != nullptr);
+
+    fs::remove_all(tempDir, ec);
+}
+
+namespace
+{
+    // A PSO json equivalent to resources/tests/pso_with_options.json, with the default
+    // option's fill mode and the option set parameterized so a reload test can rewrite it.
+    std::string makeReloadablePsoJson(const std::string& defaultFillMode, bool includeWireframeOption)
+    {
+        std::string json =
+            "{\n"
+            "    \"name\": \"triangle_pso\",\n"
+            "    \"rasterization_state\": { \"fill_mode\": \"" + defaultFillMode + "\", \"cull_mode\": \"back\" },\n"
+            "    \"color_attachments\": [ { \"format\": \"bgra8_unorm\" } ],\n"
+            "    \"shaders\": {\n"
+            "        \"vertex\":   { \"filepath\": \"triangle.vert\" },\n"
+            "        \"fragment\": { \"filepath\": \"triangle.frag\" }\n"
+            "    },\n"
+            "    \"options\": {\n"
+            "        \"default\": {}";
+        if (includeWireframeOption)
+        {
+            json +=
+                ",\n"
+                "        \"wireframe\": { \"rasterization_state\": { \"fill_mode\": \"wireframe\" } }";
+        }
+        json +=
+            "\n    }\n"
+            "}\n";
+        return json;
+    }
+
+    void writeTextFile(const fs::path& path, const std::string& contents)
+    {
+        std::ofstream out(path, std::ios::trunc);
+        REQUIRE(out.is_open());
+        out << contents;
+    }
+} // namespace
+
+TEST_CASE("VkmPipelineStateManager - reloading a source applies json edits in place")
+{
+    VulkanDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+
+    const fs::path tempDir = fs::temp_directory_path() / "vkm_test_pso_reload";
+    std::error_code ec;
+    fs::remove_all(tempDir, ec);
+    fs::create_directories(tempDir, ec);
+    REQUIRE_FALSE(ec);
+
+    const fs::path jsonPath = tempDir / "reloadable.json";
+    writeTextFile(jsonPath, makeReloadablePsoJson("solid", /*includeWireframeOption=*/true));
+    writeStageCacheFiles(tempDir, "triangle", "default");
+    writeStageCacheFiles(tempDir, "triangle", "wireframe");
+
+    vkm::VkmPipelineStateManager manager(f.driver.get());
+    std::string outError;
+    REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(
+        tempDir.string(), tempDir.string(), vkm::VkmPipelineStateOrigin::User, &outError), outError);
+
+    REQUIRE(manager.getSources().size() == 1);
+    CHECK(manager.getSources()[0].jsonPath == jsonPath.string());
+    CHECK(manager.getSources()[0].shaderCacheDir == tempDir.string());
+    CHECK(manager.getSources()[0].variantNames.size() == 2);
+    CHECK_FALSE(manager.getSources()[0].stale);
+
+    vkm::VkmPipelineStateBase* pso = manager.getPipelineState("triangle_pso[default]", vkm::VkmPipelineStateOrigin::User);
+    REQUIRE(pso != nullptr);
+    CHECK(pso->getDescriptor().rasterizationState.cullMode == vkm::VkmCullMode::Back);
+
+    // Edit the render state and reload without a shader recompile (the .vfcache files on
+    // disk are already what this descriptor needs).
+    writeTextFile(jsonPath, makeReloadablePsoJson("solid", /*includeWireframeOption=*/true)
+        .replace(makeReloadablePsoJson("solid", true).find("\"cull_mode\": \"back\""),
+                 std::string("\"cull_mode\": \"back\"").size(), "\"cull_mode\": \"none\""));
+
+    std::string reloadError;
+    REQUIRE_MESSAGE(manager.reloadSource(0, /*recompileShaders=*/false, &reloadError), reloadError);
+
+    // The pointer must survive: samples and render-graph callbacks cache it with no
+    // invalidation hook.
+    CHECK(manager.getPipelineState("triangle_pso[default]", vkm::VkmPipelineStateOrigin::User) == pso);
+    CHECK(pso->getDescriptor().rasterizationState.cullMode == vkm::VkmCullMode::None);
+
+    fs::remove_all(tempDir, ec);
+}
+
+TEST_CASE("VkmPipelineStateManager - a failed reload rolls back to the working pipeline")
+{
+    VulkanDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+
+    const fs::path tempDir = fs::temp_directory_path() / "vkm_test_pso_reload_rollback";
+    std::error_code ec;
+    fs::remove_all(tempDir, ec);
+    fs::create_directories(tempDir, ec);
+    REQUIRE_FALSE(ec);
+
+    const fs::path jsonPath = tempDir / "reloadable.json";
+    writeTextFile(jsonPath, makeReloadablePsoJson("solid", /*includeWireframeOption=*/false));
+    writeStageCacheFiles(tempDir, "triangle", "default");
+
+    vkm::VkmPipelineStateManager manager(f.driver.get());
+    std::string outError;
+    REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(
+        tempDir.string(), tempDir.string(), vkm::VkmPipelineStateOrigin::User, &outError), outError);
+
+    vkm::VkmPipelineStateBase* pso = manager.getPipelineState("triangle_pso[default]", vkm::VkmPipelineStateOrigin::User);
+    REQUIRE(pso != nullptr);
+
+    // An unparseable json must leave everything untouched -- nothing is destroyed until
+    // every fallible step has passed.
+    writeTextFile(jsonPath, "{ this is not valid json");
+    std::string reloadError;
+    CHECK_FALSE(manager.reloadSource(0, /*recompileShaders=*/false, &reloadError));
+    CHECK_FALSE(reloadError.empty());
+    CHECK(manager.getPipelineState("triangle_pso[default]", vkm::VkmPipelineStateOrigin::User) == pso);
+    CHECK(pso->getDescriptor().rasterizationState.fillMode == vkm::VkmFillMode::Solid);
+
+    // A parseable json whose shaders have no .vfcache on disk gets past parse/expand and
+    // fails inside createInner -- the rollback must leave the pipeline usable.
+    writeTextFile(jsonPath, makeReloadablePsoJson("solid", /*includeWireframeOption=*/false)
+        .replace(makeReloadablePsoJson("solid", false).find("triangle.vert"),
+                 std::string("triangle.vert").size(), "missing.vert"));
+    reloadError.clear();
+    CHECK_FALSE(manager.reloadSource(0, /*recompileShaders=*/false, &reloadError));
+    CHECK_FALSE(reloadError.empty());
+    CHECK(manager.getPipelineState("triangle_pso[default]", vkm::VkmPipelineStateOrigin::User) == pso);
+    CHECK(pso->getDescriptor().vertexShader->filepath == "triangle.vert");
+
+    // Restoring a good json must succeed, proving the rolled-back object is still live.
+    writeTextFile(jsonPath, makeReloadablePsoJson("wireframe", /*includeWireframeOption=*/false));
+    reloadError.clear();
+    REQUIRE_MESSAGE(manager.reloadSource(0, /*recompileShaders=*/false, &reloadError), reloadError);
+    CHECK(pso->getDescriptor().rasterizationState.fillMode == vkm::VkmFillMode::Wireframe);
+
+    fs::remove_all(tempDir, ec);
+}
+
+TEST_CASE("VkmPipelineStateManager - reload adds new variants and keeps removed ones alive")
+{
+    VulkanDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+
+    const fs::path tempDir = fs::temp_directory_path() / "vkm_test_pso_reload_variants";
+    std::error_code ec;
+    fs::remove_all(tempDir, ec);
+    fs::create_directories(tempDir, ec);
+    REQUIRE_FALSE(ec);
+
+    const fs::path jsonPath = tempDir / "reloadable.json";
+    writeTextFile(jsonPath, makeReloadablePsoJson("solid", /*includeWireframeOption=*/false));
+    writeStageCacheFiles(tempDir, "triangle", "default");
+    writeStageCacheFiles(tempDir, "triangle", "wireframe");
+
+    vkm::VkmPipelineStateManager manager(f.driver.get());
+    std::string outError;
+    REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(
+        tempDir.string(), tempDir.string(), vkm::VkmPipelineStateOrigin::User, &outError), outError);
+    CHECK(manager.getPipelineState("triangle_pso[wireframe]", vkm::VkmPipelineStateOrigin::User) == nullptr);
+
+    vkm::VkmPipelineStateBase* defaultPso = manager.getPipelineState("triangle_pso[default]", vkm::VkmPipelineStateOrigin::User);
+    REQUIRE(defaultPso != nullptr);
+
+    // Adding an option registers the new variant without disturbing the existing one.
+    writeTextFile(jsonPath, makeReloadablePsoJson("solid", /*includeWireframeOption=*/true));
+    std::string reloadError;
+    REQUIRE_MESSAGE(manager.reloadSource(0, /*recompileShaders=*/false, &reloadError), reloadError);
+    CHECK(manager.getPipelineState("triangle_pso[default]", vkm::VkmPipelineStateOrigin::User) == defaultPso);
+    vkm::VkmPipelineStateBase* wireframePso = manager.getPipelineState("triangle_pso[wireframe]", vkm::VkmPipelineStateOrigin::User);
+    REQUIRE(wireframePso != nullptr);
+    CHECK(manager.getSources()[0].variantNames.size() == 2);
+
+    // Removing it again keeps the pipeline registered -- callers hold raw pointers to it --
+    // and reports that as a warning.
+    writeTextFile(jsonPath, makeReloadablePsoJson("solid", /*includeWireframeOption=*/false));
+    reloadError.clear();
+    REQUIRE_MESSAGE(manager.reloadSource(0, /*recompileShaders=*/false, &reloadError), reloadError);
+    CHECK(manager.getPipelineState("triangle_pso[wireframe]", vkm::VkmPipelineStateOrigin::User) == wireframePso);
+    CHECK(reloadError.find("wireframe") != std::string::npos);
+
+    fs::remove_all(tempDir, ec);
+}
+
+TEST_CASE("VkmPipelineStateManager - staleness tracks the json and its shader sources")
+{
+    VulkanDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+
+    const fs::path tempDir = fs::temp_directory_path() / "vkm_test_pso_staleness";
+    std::error_code ec;
+    fs::remove_all(tempDir, ec);
+    fs::create_directories(tempDir, ec);
+    REQUIRE_FALSE(ec);
+
+    const fs::path jsonPath = tempDir / "reloadable.json";
+    writeTextFile(jsonPath, makeReloadablePsoJson("solid", /*includeWireframeOption=*/false));
+    // The shader sources the json names must exist to be watched at all.
+    writeTextFile(tempDir / "triangle.vert", "// placeholder\n");
+    writeTextFile(tempDir / "triangle.frag", "// placeholder\n");
+    writeStageCacheFiles(tempDir, "triangle", "default");
+
+    vkm::VkmPipelineStateManager manager(f.driver.get());
+    std::string outError;
+    REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(
+        tempDir.string(), tempDir.string(), vkm::VkmPipelineStateOrigin::User, &outError), outError);
+
+    REQUIRE(manager.getSources().size() == 1);
+    // json + both shader sources (plus any shared *.hlsli the engine ships).
+    CHECK(manager.getSources()[0].watchedFiles.size() >= 3);
+    CHECK_FALSE(manager.refreshStaleness());
+    CHECK_FALSE(manager.getSources()[0].stale);
+
+    // Touching a shader source, not the json, must still mark the source stale.
+    fs::last_write_time(tempDir / "triangle.frag",
+        fs::last_write_time(tempDir / "triangle.frag") + std::chrono::seconds(10), ec);
+    REQUIRE_FALSE(ec);
+    CHECK(manager.refreshStaleness());
+    CHECK(manager.getSources()[0].stale);
+
+    // Reloading re-stamps the watched files and clears the flag.
+    std::string reloadError;
+    REQUIRE_MESSAGE(manager.reloadSource(0, /*recompileShaders=*/false, &reloadError), reloadError);
+    CHECK_FALSE(manager.getSources()[0].stale);
+    CHECK_FALSE(manager.refreshStaleness());
+
+    fs::remove_all(tempDir, ec);
+}
+
+TEST_CASE("VkmPipelineStateManager - a descriptor-registered pipeline reports as non-reloadable")
+{
+    VulkanDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+
+    const fs::path tempDir = fs::temp_directory_path() / "vkm_test_pso_no_json";
+    std::error_code ec;
+    fs::remove_all(tempDir, ec);
+    fs::create_directories(tempDir, ec);
+    REQUIRE_FALSE(ec);
+    writeStageCacheFiles(tempDir, "shared", "");
+
+    vkm::VkmPipelineStateDescriptor desc{};
+    desc.name = "descriptor_only_pso";
+    desc.colorAttachments.push_back({});
+    desc.colorAttachments[0].format = vkm::VkmFormat::BGRA8_UNORM;
+    desc.vertexShader = vkm::VkmShaderStageDescriptor{};
+    desc.vertexShader->filepath = "shared.vert";
+    desc.fragmentShader = vkm::VkmShaderStageDescriptor{};
+    desc.fragmentShader->filepath = "shared.frag";
+
+    vkm::VkmPipelineStateManager manager(f.driver.get());
+    std::string outError;
+    REQUIRE_MESSAGE(manager.loadPipelineState(desc, tempDir.string(), vkm::VkmPipelineStateOrigin::User, &outError), outError);
+
+    REQUIRE(manager.getSources().size() == 1);
+    CHECK(manager.getSources()[0].jsonPath.empty());
+    CHECK(manager.getSources()[0].watchedFiles.empty());
+    CHECK(manager.findSourceIndexOfPipelineState("descriptor_only_pso") == 0);
+    CHECK(manager.findSourceIndexOfPipelineState("no_such_pso") == std::string::npos);
+
+    std::string reloadError;
+    CHECK_FALSE(manager.reloadSource(0, /*recompileShaders=*/false, &reloadError));
+    CHECK(reloadError.find("cannot be reloaded") != std::string::npos);
+
+    fs::remove_all(tempDir, ec);
+}
+
+TEST_CASE("VkmPipelineStateManager - reloading with recompile runs vkm-compiler on the real shader")
+{
+    VulkanDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+
+    // Only a build that baked in a vkm-compiler path can recompile at run time (an installed
+    // or Emscripten build cannot); there is nothing to test otherwise.
+    if (!vkm::VkmPipelineStateManager::isShaderRecompilationAvailable())
+    {
+        MESSAGE("Skipping: this build has no vkm-compiler path baked in");
+        return;
+    }
+
+    const fs::path tempDir = fs::temp_directory_path() / "vkm_test_pso_recompile";
+    std::error_code ec;
+    fs::remove_all(tempDir, ec);
+    fs::create_directories(tempDir, ec);
+    REQUIRE_FALSE(ec);
+
+    // A real HLSL source (the triangle sample's), with an explicit color format -- the
+    // sample's own "swapchain" sentinel has nothing to resolve against on a headless driver.
+    fs::copy_file(fs::path(TEST_TRIANGLE_SAMPLE_DIR) / "triangle.hlsl",
+        tempDir / "triangle.hlsl", fs::copy_options::overwrite_existing, ec);
+    REQUIRE_FALSE(ec);
+
+    const fs::path jsonPath = tempDir / "recompile.json";
+    writeTextFile(jsonPath,
+        "{\n"
+        "    \"name\": \"recompile_pso\",\n"
+        "    \"color_attachments\": [ { \"format\": \"bgra8_unorm\" } ],\n"
+        "    \"shaders\": {\n"
+        "        \"vertex\":   { \"filepath\": \"triangle.hlsl\", \"entry_point\": \"VSMain\" },\n"
+        "        \"fragment\": { \"filepath\": \"triangle.hlsl\", \"entry_point\": \"PSMain\" }\n"
+        "    }\n"
+        "}\n");
+
+    // Placeholder caches so the initial load succeeds; the reload replaces them with what
+    // vkm-compiler actually produces from triangle.hlsl.
+    writeStageCacheFiles(tempDir, "triangle", "");
+    const fs::path vertCache = tempDir / vkm::buildShaderCacheFilename(
+        "triangle", "", vkm::VkmShaderCacheStage::Vertex, vkm::VkmShaderCacheBackend::Vulkan);
+    const uintmax_t placeholderSize = fs::file_size(vertCache, ec);
+    REQUIRE_FALSE(ec);
+
+    vkm::VkmPipelineStateManager manager(f.driver.get());
+    std::string outError;
+    REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(
+        tempDir.string(), tempDir.string(), vkm::VkmPipelineStateOrigin::User, &outError), outError);
+    vkm::VkmPipelineStateBase* pso = manager.getPipelineState("recompile_pso", vkm::VkmPipelineStateOrigin::User);
+    REQUIRE(pso != nullptr);
+
+    std::string reloadError;
+    REQUIRE_MESSAGE(manager.reloadSource(0, /*recompileShaders=*/true, &reloadError), reloadError);
+
+    // The compiler really ran: the cache is no longer the hand-written placeholder, and the
+    // pipeline was rebuilt in place from it.
+    CHECK(fs::file_size(vertCache, ec) != placeholderSize);
+    CHECK(manager.getPipelineState("recompile_pso", vkm::VkmPipelineStateOrigin::User) == pso);
+
+    // A shader that does not compile must fail the reload with the compiler's own output,
+    // and must leave the working pipeline in place.
+    writeTextFile(tempDir / "triangle.hlsl", "this is not valid HLSL\n");
+    reloadError.clear();
+    CHECK_FALSE(manager.reloadSource(0, /*recompileShaders=*/true, &reloadError));
+    CHECK(reloadError.find("vkm-compiler failed") != std::string::npos);
+    CHECK(manager.getPipelineState("recompile_pso", vkm::VkmPipelineStateOrigin::User) == pso);
 
     fs::remove_all(tempDir, ec);
 }

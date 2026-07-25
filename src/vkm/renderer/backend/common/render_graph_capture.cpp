@@ -31,6 +31,8 @@ namespace vkm
                 info.debugName = textureInfo._debugName != nullptr ? textureInfo._debugName : "";
                 info.format = textureInfo._format;
                 info.extent = textureInfo._extent;
+                info.numArrayLayers = textureInfo._numArrayLayers;
+                info.textureType = textureInfo._type;
             }
             return info;
         }
@@ -67,7 +69,76 @@ namespace vkm
         _capturedFrameIndex = frameIndex;
         _hasContentCapture =
             (driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::TextureContentCapture) != 0;
+        _snapshotBytes = 0;
         _state = State::Pending;
+    }
+
+    VkmResourceHandle VkmRenderGraphCapture::takeTextureSnapshot(VkmDriverBase* driver,
+        VkmCommandBufferBase* commandBuffer, VkmResourceHandle source, std::string debugName)
+    {
+        if (!_hasContentCapture)
+        {
+            return VKM_INVALID_RESOURCE_HANDLE; // copyTexture is Metal-only today
+        }
+
+        VkmTexture* sourceTexture = driver->getRenderResourcePool()->getResource<VkmTexture>(source);
+        if (sourceTexture == nullptr)
+        {
+            return VKM_INVALID_RESOURCE_HANDLE;
+        }
+        const VkmTextureInfo& sourceInfo = sourceTexture->getTextureInfo();
+
+        // Swapchain back buffers are framebufferOnly drawables on Metal and cannot be copy
+        // sources. Depth/stencil is metadata only, matching the existing depth-attachment
+        // rule -- the ImGui preview pipeline samples a color texture2d. A 3D texture has no
+        // single-slice destination shaped like this one.
+        //
+        // Note there is deliberately no AllowTransferSrc requirement: a sampled input texture
+        // is typically AllowShaderRead|AllowTransferDst, and demanding the flag would exclude
+        // exactly the textures this is for. Metal, the only backend that reaches here, imposes
+        // no usage restriction on a blit source.
+        if ((sourceInfo._flags & VkmResourceCreateInfo::AllowPresent) != 0 ||
+            hasDepth(sourceInfo._format) || hasStencil(sourceInfo._format) ||
+            vkmBytesPerTexel(sourceInfo._format) == 0 ||
+            sourceInfo._extent.z > 1)
+        {
+            return VKM_INVALID_RESOURCE_HANDLE;
+        }
+
+        const uint64_t snapshotBytes = static_cast<uint64_t>(sourceInfo._extent.x) *
+            sourceInfo._extent.y * vkmBytesPerTexel(sourceInfo._format);
+        if (_snapshotBytes + snapshotBytes > kMaxSnapshotBytes)
+        {
+            VKM_DEBUG_INFO(("Render graph capture: snapshot budget exhausted, skipping '" + debugName + "'").c_str());
+            return VKM_INVALID_RESOURCE_HANDLE;
+        }
+
+        _snapshotNames.push_back(std::move(debugName));
+
+        // A cube or array source is copied slice 0 only -- copyTexture is defined as mip 0 /
+        // layer 0. The texture browser is where whole cubes are inspected face by face.
+        VkmTextureInfo snapshotInfo{};
+        snapshotInfo._flags = VkmResourceCreateInfo::AllowTransferSrc |
+                              VkmResourceCreateInfo::AllowTransferDst |
+                              VkmResourceCreateInfo::AllowShaderRead;
+        snapshotInfo._extent = sourceInfo._extent;
+        snapshotInfo._numMipLevels = 1;
+        snapshotInfo._numArrayLayers = 1;
+        snapshotInfo._format = sourceInfo._format;
+        snapshotInfo._debugName = _snapshotNames.back().c_str();
+
+        VkmTexture* snapshotTexture = driver->newTexture(snapshotInfo);
+        if (snapshotTexture == nullptr)
+        {
+            VKM_DEBUG_ERROR("Render graph capture: failed to allocate snapshot texture");
+            _snapshotNames.pop_back();
+            return VKM_INVALID_RESOURCE_HANDLE;
+        }
+
+        commandBuffer->copyTexture(source, snapshotTexture->getHandle());
+        _snapshotTextures.push_back(snapshotTexture->getHandle());
+        _snapshotBytes += snapshotBytes;
+        return snapshotTexture->getHandle();
     }
 
     void VkmRenderGraphCapture::recordSubGraph(VkmDriverBase* driver, VkmCommandBufferBase* commandBuffer,
@@ -105,35 +176,9 @@ namespace vkm
                 VkmTexture* attachmentTexture = pool->getResource<VkmTexture>(frameBufferDesc._colorAttachments[i]);
                 attachment.isPresentTarget = attachmentTexture != nullptr &&
                     (attachmentTexture->getTextureInfo()._flags & VkmResourceCreateInfo::AllowPresent) != 0;
-                // Swapchain back buffers (AllowPresent) are framebufferOnly drawables on
-                // Metal and cannot be copy sources -- metadata only.
-                const bool snapshotable = _hasContentCapture && attachmentTexture != nullptr && !attachment.isPresentTarget;
-                if (snapshotable)
-                {
-                    const VkmTextureInfo& srcInfo = attachmentTexture->getTextureInfo();
-                    _snapshotNames.push_back("GraphCapture." + pass.name + ".color" + std::to_string(i));
-
-                    VkmTextureInfo snapshotInfo{};
-                    snapshotInfo._flags = VkmResourceCreateInfo::AllowTransferSrc |
-                                          VkmResourceCreateInfo::AllowTransferDst |
-                                          VkmResourceCreateInfo::AllowShaderRead;
-                    snapshotInfo._extent = srcInfo._extent;
-                    snapshotInfo._numMipLevels = 1;
-                    snapshotInfo._numArrayLayers = 1;
-                    snapshotInfo._format = srcInfo._format;
-                    snapshotInfo._debugName = _snapshotNames.back().c_str();
-                    VkmTexture* snapshotTexture = driver->newTexture(snapshotInfo);
-                    if (snapshotTexture != nullptr)
-                    {
-                        commandBuffer->copyTexture(frameBufferDesc._colorAttachments[i], snapshotTexture->getHandle());
-                        attachment.snapshotTexture = snapshotTexture->getHandle();
-                        _snapshotTextures.push_back(snapshotTexture->getHandle());
-                    }
-                    else
-                    {
-                        VKM_DEBUG_ERROR("Render graph capture: failed to allocate snapshot texture");
-                    }
-                }
+                attachment.info.snapshotTexture = takeTextureSnapshot(driver, commandBuffer,
+                    frameBufferDesc._colorAttachments[i],
+                    "GraphCapture." + pass.name + ".color" + std::to_string(i));
                 pass.colorAttachments.push_back(std::move(attachment));
             }
 
@@ -179,7 +224,10 @@ namespace vkm
             }
             else if (handle.type == VkmResourceType::Texture)
             {
-                pass.referencedResources.push_back(makeTextureResourceInfo(pool, handle));
+                VkmCapturedResourceInfo info = makeTextureResourceInfo(pool, handle);
+                info.snapshotTexture = takeTextureSnapshot(driver, commandBuffer, handle,
+                    "GraphCapture." + pass.name + ".input" + std::to_string(pass.referencedResources.size()));
+                pass.referencedResources.push_back(std::move(info));
             }
             else
             {

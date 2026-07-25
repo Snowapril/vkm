@@ -141,6 +141,31 @@ namespace vkm
         return result;
     }
 
+    std::vector<VkmResourceHandle> VkmRenderResourcePool::getAllResourceHandles(VkmResourceType type) const
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        std::vector<VkmResourceHandle> result;
+        for (uint8_t poolType = 0; poolType < (uint8_t)VkmResourcePoolType::Count; ++poolType)
+        {
+            // A non-null unique_ptr is the liveness truth: releaseResource() resets it, bumps
+            // the generation and frees the id. Reading _resources rather than _memoryTags also
+            // covers resources that were never tagged (externally-owned swapchain images).
+            const std::vector<std::unique_ptr<VkmDriverResourceBase>>& resources =
+                _subPools[poolType]._resources[(uint8_t)type];
+            const std::vector<VkmResourceHandle::GenerationType>& generations =
+                _subPools[poolType]._generations[(uint8_t)type];
+            for (size_t id = 0; id < resources.size(); ++id)
+            {
+                if (resources[id] != nullptr)
+                {
+                    result.push_back(VkmResourceHandle{ static_cast<VkmResourceHandle::IdType>(id),
+                        (VkmResourcePoolType)poolType, type, generations[id] });
+                }
+            }
+        }
+        return result;
+    }
+
     VkmResourceHandle VkmRenderResourcePool::allocateTexture(VkmTexture* texture, VkmResourcePoolType poolType)
     {
         std::lock_guard<std::mutex> lock(_mutex);

@@ -477,6 +477,13 @@ if (NOT EMSCRIPTEN)
     add_subdirectory(src/tools/vkm-compiler)
 endif()
 
+# Runtime PSO reload spawns vkm-compiler to recompile shaders. Applied here rather than in
+# src/vkm/CMakeLists.txt because the target does not exist yet at that point; the
+# VKM_HOST_VKM_COMPILER (prebuilt host binary) branch is handled there.
+if (TARGET vkm-compiler AND NOT VKM_HOST_VKM_COMPILER)
+    target_compile_definitions(vkmcore PRIVATE VKM_COMPILER_EXECUTABLE="$<TARGET_FILE:vkm-compiler>")
+endif()
+
 option(BUILD_SAMPLES "Build samples" ON)
 if (BUILD_SAMPLES)
     add_subdirectory(src/samples/empty_screen)

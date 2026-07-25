@@ -40,6 +40,29 @@ namespace vkm
         }
     }
 
+    const char* vkmFormatName(VkmFormat format)
+    {
+        switch (format)
+        {
+            case VkmFormat::R8G8B8A8_UNORM:      return "R8G8B8A8_UNORM";
+            case VkmFormat::R8G8B8A8_SRGB:       return "R8G8B8A8_SRGB";
+            case VkmFormat::R8G8B8A8_UINT:       return "R8G8B8A8_UINT";
+            case VkmFormat::R8G8B8A8_SNORM:      return "R8G8B8A8_SNORM";
+            case VkmFormat::R8G8B8A8_SINT:       return "R8G8B8A8_SINT";
+            case VkmFormat::R16G16B16A16_UNORM:  return "R16G16B16A16_UNORM";
+            case VkmFormat::R16G16B16A16_SFLOAT: return "R16G16B16A16_SFLOAT";
+            case VkmFormat::R32G32B32A32_SFLOAT: return "R32G32B32A32_SFLOAT";
+            case VkmFormat::D32_SFLOAT:          return "D32_SFLOAT";
+            case VkmFormat::D24_UNORM_S8_UINT:   return "D24_UNORM_S8_UINT";
+            case VkmFormat::D32_SFLOAT_S8_UINT:  return "D32_SFLOAT_S8_UINT";
+            case VkmFormat::BGRA8_UNORM:         return "BGRA8_UNORM";
+            case VkmFormat::BGRA8_SRGB:          return "BGRA8_SRGB";
+            case VkmFormat::Swapchain:           return "Swapchain";
+            case VkmFormat::Undefined:
+            default:                             return "Undefined";
+        }
+    }
+
     uint32_t vkmBytesPerTexel(VkmFormat format)
     {
         switch (format)

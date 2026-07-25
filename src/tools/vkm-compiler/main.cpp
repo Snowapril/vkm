@@ -25,7 +25,7 @@
 #include <vkm/renderer/backend/common/shader_cache.h>
 #include <vkm/renderer/backend/common/shader_cache_util.h>
 
-#include "subprocess.h"
+#include <vkm/base/subprocess.h>
 
 #include <cstdint>
 #include <cstring>
