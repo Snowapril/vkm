@@ -5,6 +5,7 @@
 
 #include <glm/gtc/type_ptr.hpp>
 
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -26,10 +27,30 @@ vkm::VkmGltfImportOptions unoptimizedOptions()
     return options;
 }
 
+vkm::VkmGltfImportOptions unoptimizedOptions(vkm::VkmVertexLayoutPreset preset)
+{
+    vkm::VkmGltfImportOptions options = unoptimizedOptions();
+    options._vertexLayout = preset;
+    return options;
+}
+
 std::vector<char> readFileBytes(const std::string& filepath)
 {
     std::ifstream file(filepath, std::ios::binary);
     return std::vector<char>((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+}
+
+// Vertices are interleaved bytes in the mesh's own layout, so tests read them the same way the
+// engine does rather than reaching into a fixed struct.
+std::vector<float> readAttribute(const vkm::VkmSceneMesh& mesh,
+                                 uint32_t vertexIndex,
+                                 vkm::VkmVertexSemantic semantic,
+                                 uint32_t componentCount)
+{
+    std::vector<float> out(componentCount, 0.0f);
+    vkm::vkmReadVertexAttribute(mesh._vertexData.data() + static_cast<size_t>(vertexIndex) * mesh._layout._stride,
+                                mesh._layout, semantic, out.data(), componentCount);
+    return out;
 }
 } // namespace
 
@@ -41,14 +62,16 @@ TEST_CASE("importGltfModel - imports meshes, materials and the node hierarchy of
 
     REQUIRE(model._meshes.size() == 1);
     const vkm::VkmSceneMesh& mesh = model._meshes[0];
-    CHECK(mesh._vertices.size() == 3);
+    CHECK(mesh._vertexCount == 3);
     CHECK(mesh._indices.size() == 3);
     CHECK(mesh._materialIndex == 0);
+    CHECK(mesh._layout._preset == vkm::VkmVertexLayoutPreset::StandardPBR);
+    CHECK(mesh._vertexData.size() == 3 * mesh._layout._stride);
 
-    CHECK(mesh._vertices[1]._position[0] == doctest::Approx(1.0f));
-    CHECK(mesh._vertices[2]._position[1] == doctest::Approx(1.0f));
-    CHECK(mesh._vertices[0]._normal[2] == doctest::Approx(1.0f));
-    CHECK(mesh._vertices[1]._uv0[0] == doctest::Approx(1.0f));
+    CHECK(readAttribute(mesh, 1, vkm::VkmVertexSemantic::Position, 3)[0] == doctest::Approx(1.0f));
+    CHECK(readAttribute(mesh, 2, vkm::VkmVertexSemantic::Position, 3)[1] == doctest::Approx(1.0f));
+    CHECK(readAttribute(mesh, 0, vkm::VkmVertexSemantic::Normal, 3)[2] == doctest::Approx(1.0f));
+    CHECK(readAttribute(mesh, 1, vkm::VkmVertexSemantic::UV0, 2)[0] == doctest::Approx(1.0f));
 
     CHECK(mesh._bounds._valid);
     CHECK(mesh._bounds._min.x == doctest::Approx(0.0f));
@@ -110,16 +133,93 @@ TEST_CASE("importGltfModel - reads a binary .glb and generates the missing norma
 
     REQUIRE(model._meshes.size() == 1);
     const vkm::VkmSceneMesh& mesh = model._meshes[0];
-    REQUIRE(mesh._vertices.size() == 3);
+    REQUIRE(mesh._vertexCount == 3);
     CHECK(mesh._materialIndex == vkm::INVALID_VALUE32);
 
     // A CCW triangle in the XY plane must produce a unit +Z normal on every vertex.
-    for (const vkm::VkmSceneVertex& vertex : mesh._vertices)
+    for (uint32_t i = 0; i < mesh._vertexCount; ++i)
     {
-        CHECK(vertex._normal[0] == doctest::Approx(0.0f));
-        CHECK(vertex._normal[1] == doctest::Approx(0.0f));
-        CHECK(vertex._normal[2] == doctest::Approx(1.0f));
+        const std::vector<float> normal = readAttribute(mesh, i, vkm::VkmVertexSemantic::Normal, 3);
+        CHECK(normal[0] == doctest::Approx(0.0f));
+        CHECK(normal[1] == doctest::Approx(0.0f));
+        CHECK(normal[2] == doctest::Approx(1.0f));
     }
+}
+
+TEST_CASE("importGltfModel - packs into the requested vertex layout preset") {
+    SUBCASE("PositionOnly drops the shading attributes and skips normal generation") {
+        vkm::VkmSceneModel model;
+        std::string error;
+        REQUIRE(vkm::importGltfModel(kGlbPath, &model, &error,
+                                     unoptimizedOptions(vkm::VkmVertexLayoutPreset::PositionOnly)));
+
+        REQUIRE(model._meshes.size() == 1);
+        const vkm::VkmSceneMesh& mesh = model._meshes[0];
+        CHECK(mesh._layout._preset == vkm::VkmVertexLayoutPreset::PositionOnly);
+        CHECK(mesh._layout._stride == 16);
+        CHECK(mesh._vertexCount == 3);
+        CHECK(mesh._vertexData.size() == 3 * 16);
+        CHECK(vkm::vkmFindVertexAttribute(mesh._layout, vkm::VkmVertexSemantic::Normal) == nullptr);
+
+        // Positions survive; the .glb has no normals, and this layout has nowhere to put the
+        // generated ones, so generateNormals must be a no-op rather than a buffer overrun.
+        CHECK(readAttribute(mesh, 1, vkm::VkmVertexSemantic::Position, 3)[0] == doctest::Approx(1.0f));
+        CHECK(readAttribute(mesh, 2, vkm::VkmVertexSemantic::Position, 3)[1] == doctest::Approx(1.0f));
+        // Bounds are computed from positions, so they are unaffected by the dropped attributes.
+        CHECK(mesh._bounds._max.x == doctest::Approx(1.0f));
+        CHECK(mesh._bounds._max.y == doctest::Approx(1.0f));
+    }
+
+    SUBCASE("Compact quantizes the normal and uv but keeps the position exact") {
+        vkm::VkmSceneModel model;
+        std::string error;
+        REQUIRE(vkm::importGltfModel(kGltfPath, &model, &error,
+                                     unoptimizedOptions(vkm::VkmVertexLayoutPreset::Compact)));
+
+        REQUIRE(model._meshes.size() == 1);
+        const vkm::VkmSceneMesh& mesh = model._meshes[0];
+        CHECK(mesh._layout._preset == vkm::VkmVertexLayoutPreset::Compact);
+        CHECK(mesh._layout._stride == 32);
+        CHECK(mesh._vertexCount == 3);
+        CHECK(mesh._vertexData.size() == 3 * 32);
+
+        CHECK(readAttribute(mesh, 1, vkm::VkmVertexSemantic::Position, 3)[0] == doctest::Approx(1.0f));
+        // Snorm8x4 grid step is ~1/127, so 0.01 is comfortably outside the quantization error.
+        CHECK(readAttribute(mesh, 0, vkm::VkmVertexSemantic::Normal, 3)[2] == doctest::Approx(1.0f).epsilon(0.01));
+        // Float16x2 holds ~3 decimal digits.
+        CHECK(readAttribute(mesh, 1, vkm::VkmVertexSemantic::UV0, 2)[0] == doctest::Approx(1.0f).epsilon(0.001));
+    }
+}
+
+/*
+* meshopt_optimizeVertexFetch reorders the vertex bytes using the layout's stride, so a
+* non-StandardPBR preset going through the optimizer is the case most likely to mis-sort.
+*/
+TEST_CASE("importGltfModel - optimized import of a non-default layout keeps the geometry intact") {
+    vkm::VkmGltfImportOptions options;
+    options._vertexLayout = vkm::VkmVertexLayoutPreset::Compact;
+
+    vkm::VkmSceneModel model;
+    std::string error;
+    REQUIRE(vkm::importGltfModel(kGltfPath, &model, &error, options));
+
+    REQUIRE(model._meshes.size() == 1);
+    const vkm::VkmSceneMesh& mesh = model._meshes[0];
+    CHECK(mesh._vertexCount == 3);
+    CHECK(mesh._indices.size() == 3);
+    CHECK(mesh._vertexData.size() == static_cast<size_t>(mesh._vertexCount) * mesh._layout._stride);
+
+    // The triangle's three corners must still be present, whatever order the optimizer chose.
+    bool sawUnitX = false;
+    bool sawUnitY = false;
+    for (uint32_t i = 0; i < mesh._vertexCount; ++i)
+    {
+        const std::vector<float> position = readAttribute(mesh, i, vkm::VkmVertexSemantic::Position, 3);
+        sawUnitX = sawUnitX || position[0] == doctest::Approx(1.0f);
+        sawUnitY = sawUnitY || position[1] == doctest::Approx(1.0f);
+    }
+    CHECK(sawUnitX);
+    CHECK(sawUnitY);
 }
 
 TEST_CASE("importGltfModel - optimized import keeps the geometry intact") {
@@ -128,7 +228,7 @@ TEST_CASE("importGltfModel - optimized import keeps the geometry intact") {
     REQUIRE(vkm::importGltfModel(kGltfPath, &model, &error, vkm::VkmGltfImportOptions{}));
 
     REQUIRE(model._meshes.size() == 1);
-    CHECK(model._meshes[0]._vertices.size() == 3);
+    CHECK(model._meshes[0]._vertexCount == 3);
     CHECK(model._meshes[0]._indices.size() == 3);
 }
 

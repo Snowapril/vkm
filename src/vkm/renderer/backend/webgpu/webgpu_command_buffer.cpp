@@ -126,6 +126,14 @@ namespace vkm
                 _computePassEncoder = wgpuCommandEncoderBeginComputePass(_encoder, nullptr);
             }
             wgpuComputePassEncoderSetPipeline(_computePassEncoder, pipelineStateWebGPU->getComputePipeline());
+
+            // The compute stage reaches the same engine-global bind group 0 the graphics stages do,
+            // with a zero dynamic offset as a safe default (overwritten per setPushConstants call).
+            VkmBindlessResourceManagerWebGPU* computeBindlessManager =
+                static_cast<VkmDriverWebGPU*>(_driver)->getBindlessResourceManager();
+            const uint32_t computeZeroOffset = 0;
+            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, 0, computeBindlessManager->getBindGroup(),
+                                               1, &computeZeroOffset);
             return;
         }
 
@@ -242,7 +250,46 @@ namespace vkm
         VkmBindlessResourceManagerWebGPU* bindlessManager =
             static_cast<VkmDriverWebGPU*>(_driver)->getBindlessResourceManager();
         const uint32_t dynamicOffset = bindlessManager->writePushConstants(data, size);
+        // A compute pass has its own encoder; the render-pass encoder is null there.
+        if (_computePassEncoder != nullptr)
+        {
+            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, 0, bindlessManager->getBindGroup(), 1, &dynamicOffset);
+            return;
+        }
         wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, 0, bindlessManager->getBindGroup(), 1, &dynamicOffset);
+    }
+
+    void VkmCommandBufferWebGPU::onDrawIndirectCount(VkmIndirectArgumentLayout layout,
+                                                     VkmResourceHandle argumentBuffer, uint64_t argumentOffset,
+                                                     VkmResourceHandle countBuffer, uint64_t countOffset,
+                                                     uint32_t maxDrawCount)
+    {
+        // Core WebGPU's drawIndirect issues exactly one draw and has no GPU-side count, so this
+        // encodes one per candidate slot and relies on all-zero argument records being no-ops --
+        // see VkmCommandBufferBase::drawIndirectCount for the compaction contract. The worst case
+        // therefore matches a plain draw per object; it is never worse.
+        (void)countBuffer;
+        (void)countOffset;
+
+        const uint64_t argumentStride = vkmGetIndirectArgumentStride(layout);
+        WGPUBuffer wgpuArgumentBuffer = resolveWGPUBuffer(_driver->getRenderResourcePool(), argumentBuffer);
+        for (uint32_t i = 0; i < maxDrawCount; ++i)
+        {
+            wgpuRenderPassEncoderDrawIndirect(_renderPassEncoder, wgpuArgumentBuffer,
+                                             argumentOffset + static_cast<uint64_t>(i) * argumentStride);
+        }
+    }
+
+    void VkmCommandBufferWebGPU::onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
+    {
+        wgpuComputePassEncoderDispatchWorkgroups(_computePassEncoder, groupCountX, groupCountY, groupCountZ);
+    }
+
+    void VkmCommandBufferWebGPU::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)
+    {
+        (void)buffer;
+        // WebGPU has no explicit barriers: writes from one pass are visible to the next by
+        // specification, and the scene's copies, culling dispatch and draws are all separate passes.
     }
 
     void VkmCommandBufferWebGPU::onSetDebugName(const char* name)

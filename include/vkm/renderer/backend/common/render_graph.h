@@ -92,21 +92,45 @@ namespace vkm
     class VkmRenderComputeSubGraph : public VkmRenderSubGraph
     {
     public:
-        // Frame buffer key for the compute subgraph
         VkmRenderComputeSubGraph(uint32_t subGraphId) : VkmRenderSubGraph(VkmRenderSubGraphType::Compute, subGraphId) {}
         ~VkmRenderComputeSubGraph() override = default;
 
         void commit(VkmCommandBufferBase* commandBuffer) override final;
 
+        /*
+        * @brief Callback invoked during commit(), with no render pass open, so it may bind a compute
+        * pipeline and dispatch. The backing compute pass is opened by that bindPipeline() and closed
+        * by unbindPipeline(), so a callback that dispatches must do both.
+        *
+        * Subgraphs commit in insertion order into one command buffer, so a compute subgraph added
+        * before a graphics subgraph publishes its writes ahead of the draws that read them.
+        */
+        using VkmComputeCallback = std::function<void(VkmCommandBufferBase*)>;
+        void setComputeCallback(VkmComputeCallback callback) { _computeCallback = std::move(callback); }
+
+    private:
+        VkmComputeCallback _computeCallback;
     };
     class VkmRenderTransferSubGraph : public VkmRenderSubGraph
     {
     public:
-        // Frame buffer key for the transfer subgraph
         VkmRenderTransferSubGraph(uint32_t subGraphId) : VkmRenderSubGraph(VkmRenderSubGraphType::Transfer, subGraphId) {}
         ~VkmRenderTransferSubGraph() override = default;
 
         void commit(VkmCommandBufferBase* commandBuffer) override final;
+
+        /*
+        * @brief Callback invoked during commit(), with no render pass open, so it may record the
+        * copies that a render pass forbids (VkmCommandBufferBase::copyBuffer and friends).
+        *
+        * Subgraphs commit in insertion order into one command buffer, so a transfer subgraph added
+        * before a graphics subgraph publishes its writes ahead of the draws that read them.
+        */
+        using VkmTransferCallback = std::function<void(VkmCommandBufferBase*)>;
+        void setTransferCallback(VkmTransferCallback callback) { _transferCallback = std::move(callback); }
+
+    private:
+        VkmTransferCallback _transferCallback;
     };
     
     struct VkmRenderGraphCompileOptions

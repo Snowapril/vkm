@@ -119,10 +119,39 @@ TEST_CASE("VkmPipelineStateDescriptor - unknown enum string fails to parse") {
     CHECK(outError.find("cull_mode") != std::string::npos);
 }
 
-TEST_CASE("VkmPipelineStateDescriptor - missing required vertex shader fails to parse") {
+// A pipeline with neither a vertex nor a compute stage has no entry point at all.
+TEST_CASE("VkmPipelineStateDescriptor - a fragment-only pipeline fails to parse") {
     const std::string filepath = std::string(RESOURCES_DIR) + "tests/pso_missing_vertex.json";
     std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromFile(filepath);
     CHECK_FALSE(result.has_value());
+}
+
+/*
+* Compute-only pipelines have no vertex stage. Until the GPU-driven scene path needed one, the
+* parser required 'shaders.vertex' unconditionally while expandPipelineStateOptions rejected
+* vertex+compute together, so no PSO JSON on disk could produce a compute pipeline at all.
+*/
+TEST_CASE("VkmPipelineStateDescriptor - a compute-only pipeline parses and expands") {
+    const std::string filepath = std::string(RESOURCES_DIR) + "tests/pso_compute_only.json";
+    std::string outError;
+    std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromFile(filepath, &outError);
+    REQUIRE(result.has_value());
+    CHECK(outError.empty());
+
+    CHECK(result->name == "test_compute_pso");
+    CHECK_FALSE(result->vertexShader.has_value());
+    CHECK_FALSE(result->fragmentShader.has_value());
+    REQUIRE(result->computeShader.has_value());
+    CHECK(result->computeShader->filepath == "test_shader.comp");
+    CHECK(result->computeShader->entryPoint == "CSMain");
+
+    std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> variants =
+        vkm::expandPipelineStateOptions(*result, vkm::VkmShaderCacheBackend::Metal, &outError);
+    REQUIRE(variants.has_value());
+    REQUIRE(variants->size() == 1);
+    CHECK((*variants)[0].name == "test_compute_pso[default]");
+    REQUIRE((*variants)[0].computeShader.has_value());
+    CHECK_FALSE((*variants)[0].vertexShader.has_value());
 }
 
 TEST_CASE("VkmPipelineStateDescriptor - malformed JSON text fails to parse") {

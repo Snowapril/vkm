@@ -48,11 +48,13 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/swapchain.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/frame_constants.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/memory_report.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/scene/vertex_layout.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_model.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/gltf_importer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/image_loader.h
-    ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_model_gpu.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/camera.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_geometry_pool.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/engine.h
 )
 
@@ -91,13 +93,15 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/backend/common/deferred_resource_reclaimer.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/swapchain.cpp
     ${SRC_DIR}/vkm/renderer/memory_report.cpp
+    ${SRC_DIR}/vkm/renderer/scene/vertex_layout.cpp
     ${SRC_DIR}/vkm/renderer/scene/scene_model.cpp
     ${SRC_DIR}/vkm/renderer/scene/cgltf_impl.cpp
     ${SRC_DIR}/vkm/renderer/scene/gltf_importer.cpp
     ${SRC_DIR}/vkm/renderer/scene/image_loader.cpp
-    ${SRC_DIR}/vkm/renderer/scene/scene_model_gpu.cpp
     ${SRC_DIR}/vkm/renderer/camera.cpp
     ${SRC_DIR}/vkm/renderer/scene/stb_image_impl.cpp
+    ${SRC_DIR}/vkm/renderer/scene/scene_geometry_pool.cpp
+    ${SRC_DIR}/vkm/renderer/scene/scene.cpp
     ${SRC_DIR}/vkm/renderer/engine.cpp
 )
 
@@ -442,30 +446,58 @@ if (VKM_PLATFORM_APPLE)
 endif()
 
 # Compile definitions
+if (EMSCRIPTEN)
+    # Inside the WASM sandbox the on-disk resources path does not exist. vkmcore's only use of
+    # RESOURCES_DIR is the engine PSO/shader-cache directory VkmEngine loads at startup, so it
+    # points at the MEMFS mount every wasm executable preloads those two subdirectories into
+    # (see VKM_WASM_ENGINE_RESOURCE_PRELOAD below).
+    set(VKM_CORE_RESOURCES_DIR "/resources/")
+else()
+    set(VKM_CORE_RESOURCES_DIR "${RESOURCES_DIR}")
+endif()
+
 target_compile_definitions(${target}
     PRIVATE
-    RESOURCES_DIR="${RESOURCES_DIR}"
+    RESOURCES_DIR="${VKM_CORE_RESOURCES_DIR}"
     ${DEFAULT_COMPILE_DEFINITIONS}
 )
 
-# Engine shader cache. Wired up to glob resources/Pipelines/Engine/*.json, but that
-# directory is still empty (vkm's own engine shaders -- scene_object/tonemap/etc. -- are
-# still loose GLSL with no PSO json), so VKM_ENGINE_PSO_JSON_FILES stays empty and the
-# target remains a no-op until real engine PSO json is authored. Guard the dependency
-# wiring on the target actually existing.
+# The --preload-file arguments a wasm executable needs so VkmEngine finds the engine PSO json and
+# its compiled shader cache. Deliberately just these two subdirectories rather than all of
+# resources/: resources/Scenes is fetched separately and runs to tens of megabytes.
+#
+# The cache directory has to exist at link time or emscripten's file_packager errors out, and under
+# the Emscripten toolchain vkm_add_shader_cache_target produces nothing unless a native
+# VKM_HOST_VKM_COMPILER was supplied -- so create it up front, exactly as the samples do for their
+# own ShaderCache directories.
+file(MAKE_DIRECTORY "${RESOURCES_DIR}Shaders/ShaderCache")
+set(VKM_WASM_ENGINE_RESOURCE_PRELOAD
+    "SHELL:--preload-file ${RESOURCES_DIR}Pipelines@/resources/Pipelines"
+    "SHELL:--preload-file ${RESOURCES_DIR}Shaders/ShaderCache@/resources/Shaders/ShaderCache"
+    CACHE INTERNAL "MEMFS preload arguments for the engine's own resources")
+
+# Engine shader cache, globbing resources/Pipelines/Engine/*.json. The scene's GPU-driven
+# compute passes (scene_cull / scene_emit_draws) are the first real engine PSOs; the older
+# loose-GLSL engine shaders (scene_object/tonemap/etc.) still have no PSO json. Guard the
+# dependency wiring on the target actually existing.
 file(GLOB VKM_ENGINE_PSO_JSON_FILES CONFIGURE_DEPENDS
     "${RESOURCES_DIR}/Pipelines/Engine/*.json")
 file(GLOB_RECURSE VKM_ENGINE_SHADER_SOURCES CONFIGURE_DEPENDS
-    "${RESOURCES_DIR}/Shaders/*.hlsl")
+    "${RESOURCES_DIR}/Shaders/*.hlsl" "${RESOURCES_DIR}/Shaders/*.hlsli")
 
 vkm_add_shader_cache_target(
     TARGET_NAME vkm_engine_shaders
     OUTPUT_DIR "${RESOURCES_DIR}/Shaders/ShaderCache"
+    # Engine PSO json and engine HLSL live in different directories, unlike the samples' where the
+    # two sit side by side, so the shader-filepath resolution has to be pointed at the HLSL.
+    SHADER_ROOT "${RESOURCES_DIR}/Shaders"
     PSO_JSON_FILES ${VKM_ENGINE_PSO_JSON_FILES}
     EXTRA_DEPENDS ${VKM_ENGINE_SHADER_SOURCES})
-if (TARGET vkm_engine_shaders)
-    add_dependencies(${target} vkm_engine_shaders)
-endif()
+# Deliberately NOT a dependency of vkmcore: vkm-compiler links vkmcore, so making the library
+# wait on its own shader cache is a dependency cycle (vkmcore -> vkm_engine_shaders ->
+# vkm-compiler -> vkmcore). The cache is a runtime resource rather than a build input, so the
+# executables that load it depend on it instead -- see src/samples/*/CMakeLists.txt and
+# tests/CMakeLists.txt.
 
 # Install
 install(TARGETS

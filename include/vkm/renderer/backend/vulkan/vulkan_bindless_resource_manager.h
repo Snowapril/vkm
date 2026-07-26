@@ -36,6 +36,7 @@ namespace vkm
         // the array is exhausted.
         uint32_t registerBuffer(VkmResourceHandle bufferHandle, VkmBindlessArrayType arrayType) override final;
         void unregisterBuffer(uint32_t slot, VkmBindlessArrayType arrayType) override final;
+        bool setSingletonBuffer(VkmBindlessSingletonBuffer which, VkmResourceHandle bufferHandle) override final;
 
         // Writes the texture's default image view as an update-after-bind sampled image at
         // the returned slot of binding 0.

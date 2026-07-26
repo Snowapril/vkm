@@ -1,0 +1,9 @@
+{
+    "name": "scene_cull_pso",
+    "shaders": {
+        "compute": { "filepath": "scene_cull.hlsl", "entry_point": "CSMain" }
+    },
+    "options": {
+        "default": {}
+    }
+}

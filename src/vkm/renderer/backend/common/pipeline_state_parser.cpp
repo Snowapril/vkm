@@ -670,18 +670,24 @@ namespace vkm
             }
             const Json& shaders = root.at("shaders");
 
-            if (!shaders.contains("vertex"))
+            // A graphics pipeline needs a vertex stage; a compute-only pipeline has no graphics
+            // stage at all (expandPipelineStateOptions rejects mixing the two).
+            if (!shaders.contains("vertex") && !shaders.contains("compute"))
             {
-                state.fail("Missing required field 'shaders.vertex'");
+                state.fail("Missing required field 'shaders.vertex' (a pipeline state needs either a vertex or a compute stage)");
                 return false;
             }
-            VkmShaderStageDescriptor vertexShader{};
-            parseShaderStage(state, shaders.at("vertex"), "shaders.vertex", vertexShader);
-            if (state.failed())
+
+            if (shaders.contains("vertex"))
             {
-                return false;
+                VkmShaderStageDescriptor vertexShader{};
+                parseShaderStage(state, shaders.at("vertex"), "shaders.vertex", vertexShader);
+                if (state.failed())
+                {
+                    return false;
+                }
+                desc.vertexShader = vertexShader;
             }
-            desc.vertexShader = vertexShader;
 
             if (shaders.contains("fragment"))
             {

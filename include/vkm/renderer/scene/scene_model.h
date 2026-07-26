@@ -3,36 +3,18 @@
 #pragma once
 
 #include <vkm/base/common.h>
+#include <vkm/renderer/scene/vertex_layout.h>
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace vkm
 {
-    /*
-    * @brief Interleaved vertex layout every imported mesh is converted to.
-    *
-    * The explicit padding reproduces the std430-like layout DXC emits for storage-buffer
-    * structs on -spirv targets (a float3 is 16-byte aligned, a float2 8-byte), so shaders
-    * can index this array straight out of the bindless buffer array without a repack. Any
-    * change here must be mirrored in the shader-side VertexData struct.
-    */
-    struct VkmSceneVertex
-    {
-        float _position[3];  // offset 0
-        float _pad0;         // offset 12
-        float _normal[3];    // offset 16
-        float _pad1;         // offset 28
-        float _uv0[2];       // offset 32
-        float _pad2[2];      // offset 40
-        float _tangent[4];   // offset 48, xyz = tangent, w = bitangent sign
-    };
-    static_assert(sizeof(VkmSceneVertex) == 64, "VkmSceneVertex must match the shader-side std430 layout");
-
     struct VkmSceneAABB
     {
         glm::vec3 _min{ 0.0f, 0.0f, 0.0f };
@@ -51,13 +33,19 @@ namespace vkm
     };
 
     /*
-    * @brief One glTF primitive: the smallest unit the renderer draws, owning its own
-    * vertex/index arrays so it maps 1:1 onto a pair of bindless buffers.
+    * @brief One glTF primitive: the smallest unit the renderer draws.
+    *
+    * Vertices are raw interleaved bytes in `_layout`'s format rather than a fixed struct, so one
+    * importer can produce any of the engine's vertex layout presets. Use
+    * vkmRead/WriteVertexAttribute to touch them -- nothing should index `_vertexData` with a
+    * hand-written offset.
     */
     struct VkmSceneMesh
     {
-        std::vector<VkmSceneVertex> _vertices;
+        std::vector<uint8_t> _vertexData; // _vertexCount * _layout._stride bytes
         std::vector<uint32_t> _indices;
+        VkmVertexLayout _layout{};
+        uint32_t _vertexCount = 0;
         uint32_t _materialIndex = INVALID_VALUE32;
         VkmSceneAABB _bounds;
     };

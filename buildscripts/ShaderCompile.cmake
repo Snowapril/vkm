@@ -19,7 +19,7 @@
 function(vkm_add_shader_cache_target)
     cmake_parse_arguments(SC
         ""
-        "TARGET_NAME;OUTPUT_DIR"
+        "TARGET_NAME;OUTPUT_DIR;SHADER_ROOT"
         "PSO_JSON_FILES;EXTRA_DEPENDS"
         ${ARGN})
 
@@ -85,6 +85,15 @@ function(vkm_add_shader_cache_target)
     set(_stamp_dir "${CMAKE_CURRENT_BINARY_DIR}/${SC_TARGET_NAME}.stamps")
     file(MAKE_DIRECTORY "${_stamp_dir}")
 
+    # vkm-compiler resolves a PSO's shader filepaths against the PSO json's own directory by
+    # default, which is what the samples rely on (their .hlsl sits next to renderpass.json). The
+    # engine keeps its PSO json in resources/Pipelines/Engine/ and its HLSL in resources/Shaders/,
+    # so it passes SHADER_ROOT to point the resolution at the latter.
+    set(_shader_root_arg "")
+    if (SC_SHADER_ROOT)
+        set(_shader_root_arg --shader-root "${SC_SHADER_ROOT}")
+    endif()
+
     # The bindless binding convention is shader/runtime ABI: the generated MSL bakes in the
     # argument-buffer ids from this header, so editing it invalidates every cache. Depending
     # on it directly also covers the VKM_HOST_VKM_COMPILER path, where the prebuilt host
@@ -102,6 +111,7 @@ function(vkm_add_shader_cache_target)
                     --pso "${_pso}"
                     --output-dir "${SC_OUTPUT_DIR}"
                     --backend ${_backend}
+                    ${_shader_root_arg}
                     --include-dir "${_shader_include_dir}"
                     ${_emit_msl_arg}
             COMMAND ${CMAKE_COMMAND} -E touch "${_stamp}"

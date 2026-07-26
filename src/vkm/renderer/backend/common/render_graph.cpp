@@ -27,10 +27,22 @@ namespace vkm
 
     void VkmRenderComputeSubGraph::commit(VkmCommandBufferBase* commandBuffer)
     {
+        // No render pass is opened: a compute pass rides on the pipeline bind/unbind inside the
+        // callback (see VkmRenderComputeSubGraph::setComputeCallback).
+        if (_computeCallback)
+        {
+            _computeCallback(commandBuffer);
+        }
     }
 
     void VkmRenderTransferSubGraph::commit(VkmCommandBufferBase* commandBuffer)
     {
+        // No render pass is opened: the point of a transfer subgraph is to record the copies a
+        // render pass forbids.
+        if (_transferCallback)
+        {
+            _transferCallback(commandBuffer);
+        }
     }
 
     VkmRenderGraphicsSubGraph* VkmRenderGraph::beginGraphicsSubGraph(const VkmFrameBufferDescriptor& desc, const char* name)

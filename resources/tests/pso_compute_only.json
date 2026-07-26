@@ -1,0 +1,9 @@
+{
+    "name": "test_compute_pso",
+    "shaders": {
+        "compute": { "filepath": "test_shader.comp", "entry_point": "CSMain" }
+    },
+    "options": {
+        "default": {}
+    }
+}

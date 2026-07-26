@@ -62,6 +62,21 @@
 #define VKM_LOAD_VERTEX(vertexBufferSlot, elementIndex) \
     (g_VkmVertexMegaBuffer[g_VkmBindlessSlotTable[(vertexBufferSlot)] + (elementIndex)])
 
+// Fixed singleton buffers (set 0, bindings kVkmBindlessFirstSingletonBinding..). These need no
+// emulation -- WGSL has ordinary storage bindings -- so only the numbers differ from the native
+// branch, shifted by one for the push-constant ring this backend keeps at b0.
+#define VKM_BINDLESS_OBJECT_DATA(ObjectType, name) \
+    [[vk::binding(5, 0)]] StructuredBuffer<ObjectType> name : register(t3, space0)
+
+#define VKM_BINDLESS_FRAME_DATA(FrameType, name) \
+    [[vk::binding(6, 0)]] StructuredBuffer<FrameType> name : register(t4, space0)
+
+#define VKM_BINDLESS_INDIRECT_ARGUMENTS(name) \
+    [[vk::binding(7, 0)]] RWStructuredBuffer<uint> name : register(u0, space0)
+
+#define VKM_BINDLESS_VISIBLE_LIST(name) \
+    [[vk::binding(8, 0)]] RWStructuredBuffer<uint> name : register(u1, space0)
+
 #else
 
 #define VKM_PUSH_CONSTANTS(PushConstantType, name) \
@@ -94,6 +109,29 @@
 
 #define VKM_BINDLESS_SAMPLER(name) \
     [[vk::binding(3, 0)]] SamplerState name : register(s0, space0)
+
+/*
+* Fixed singleton buffers, set 0 bindings kVkmBindlessFirstSingletonBinding.. -- one per
+* VkmBindlessSingletonBuffer, in that enum's order. Unlike the arrays above they carry no slot
+* index: the GPU-driven scene draw path pushes no constants at all, so a shader has to reach them
+* without one.
+*
+* The two read-write ones are COMPUTE-ONLY on purpose. WebGPU forbids writable storage in the
+* vertex stage, and a buffer used as writable storage inside a render pass's usage scope may not
+* also be fetched as an indirect buffer in that scope -- which is exactly what the draw does. A
+* render pipeline's shader must therefore never declare them.
+*/
+#define VKM_BINDLESS_OBJECT_DATA(ObjectType, name) \
+    [[vk::binding(4, 0)]] StructuredBuffer<ObjectType> name : register(t3, space0)
+
+#define VKM_BINDLESS_FRAME_DATA(FrameType, name) \
+    [[vk::binding(5, 0)]] StructuredBuffer<FrameType> name : register(t4, space0)
+
+#define VKM_BINDLESS_INDIRECT_ARGUMENTS(name) \
+    [[vk::binding(6, 0)]] RWStructuredBuffer<uint> name : register(u0, space0)
+
+#define VKM_BINDLESS_VISIBLE_LIST(name) \
+    [[vk::binding(7, 0)]] RWStructuredBuffer<uint> name : register(u1, space0)
 
 #endif // VKM_BACKEND_WEBGPU
 

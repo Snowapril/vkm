@@ -364,7 +364,6 @@ namespace
                 addSetZeroBinding(2, kVkmBindlessIndexBufferCapacity,
                                   spirv_cross::SPIRType::Float,
                                   kVkmMetalBindlessIndexBufferIdBase, 0);
-
                 // The single engine sampler, pinned right after the three arrays. Samplers
                 // are keyed by msl_sampler (not msl_texture), and this entry must exist even
                 // for shaders that never declare the sampler: pad_argument_buffer_resources
@@ -379,6 +378,17 @@ namespace
                     resourceBinding.count = 1;
                     resourceBinding.msl_sampler = kVkmMetalBindlessSamplerId;
                     compiler.add_msl_resource_binding(resourceBinding);
+                }
+
+                // The single-descriptor singleton buffers follow the sampler, one id each (see
+                // VkmBindlessSingletonBuffer). Registered even in shaders that don't declare them:
+                // with padding enabled the walk needs a basetype for every set-0 binding it may
+                // step over.
+                for (uint32_t i = 0; i < static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count); ++i)
+                {
+                    addSetZeroBinding(kVkmBindlessFirstSingletonBinding + i, 1,
+                                      spirv_cross::SPIRType::Float,
+                                      kVkmMetalBindlessSingletonIdBase + i, 0);
                 }
 
                 // Pin the set-0 argument buffer itself ([[buffer(0)]]/[[buffer(1)]] are

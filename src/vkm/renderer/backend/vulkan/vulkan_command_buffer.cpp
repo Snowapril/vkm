@@ -345,9 +345,88 @@ namespace vkm
         vkCmdDraw(_vkCommandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
     }
 
+    void VkmCommandBufferVulkan::onDrawIndirectCount(VkmIndirectArgumentLayout layout,
+                                                     VkmResourceHandle argumentBuffer, uint64_t argumentOffset,
+                                                     VkmResourceHandle countBuffer, uint64_t countOffset,
+                                                     uint32_t maxDrawCount)
+    {
+        const uint32_t argumentStride = vkmGetIndirectArgumentStride(layout);
+
+        VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        VkmBufferVulkan* argumentBufferVulkan =
+            static_cast<VkmBufferVulkan*>(renderResourcePool->getResource<VkmBuffer>(argumentBuffer));
+        if (argumentBufferVulkan == nullptr)
+        {
+            VKM_DEBUG_ERROR("drawIndirectCount was given a handle that is not a live buffer");
+            return;
+        }
+        // Small buffers may be sub-allocated into a shared VkBuffer, so the pool offset counts.
+        const VkDeviceSize argumentBase = argumentBufferVulkan->getBufferOffset() + argumentOffset;
+
+        if (driverVulkan->isDrawIndirectCountSupported())
+        {
+            VkmBufferVulkan* countBufferVulkan =
+                static_cast<VkmBufferVulkan*>(renderResourcePool->getResource<VkmBuffer>(countBuffer));
+            if (countBufferVulkan != nullptr)
+            {
+                vkCmdDrawIndirectCount(_vkCommandBuffer,
+                                       argumentBufferVulkan->getBuffer(), argumentBase,
+                                       countBufferVulkan->getBuffer(),
+                                       countBufferVulkan->getBufferOffset() + countOffset,
+                                       maxDrawCount, argumentStride);
+                return;
+            }
+        }
+
+        // Fallback for drivers without the drawIndirectCount feature (MoltenVK): issue the whole
+        // range. This is correct rather than merely close, because the producing pass compacts
+        // survivors to the front and zeroes the tail, and an all-zero record draws nothing.
+        vkCmdDrawIndirect(_vkCommandBuffer, argumentBufferVulkan->getBuffer(), argumentBase,
+                          maxDrawCount, argumentStride);
+    }
+
+    void VkmCommandBufferVulkan::onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
+    {
+        vkCmdDispatch(_vkCommandBuffer, groupCountX, groupCountY, groupCountZ);
+    }
+
+    void VkmCommandBufferVulkan::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)
+    {
+        VkmBufferVulkan* bufferVulkan =
+            static_cast<VkmBufferVulkan*>(_driver->getRenderResourcePool()->getResource<VkmBuffer>(buffer));
+        if (bufferVulkan == nullptr)
+        {
+            VKM_DEBUG_ERROR("barrierIndirectArgumentBuffer was given a handle that is not a live buffer");
+            return;
+        }
+
+        // Deliberately one coarse barrier used at both sites the scene needs (the clear copy before
+        // the culling dispatch, and that dispatch before the indirect fetch) rather than two
+        // narrower variants: this is the engine's only buffer barrier, and a per-frame handful of
+        // them is not worth splitting until something measures it.
+        const VkBufferMemoryBarrier barrier{
+            .sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask       = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+                                   VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .buffer              = bufferVulkan->getBuffer(),
+            .offset              = bufferVulkan->getBufferOffset(),
+            .size                = bufferVulkan->getBufferInfo()._size,
+        };
+        vkCmdPipelineBarrier(_vkCommandBuffer,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                             0, 0, nullptr, 1, &barrier, 0, nullptr);
+    }
+
     void VkmCommandBufferVulkan::onSetPushConstants(const void* data, uint32_t size, uint32_t offset)
     {
-        vkCmdPushConstants(_vkCommandBuffer, _boundPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, offset, size, data);
+        // Must name the same stages the range was declared with (VUID-vkCmdPushConstants-offset-01795).
+        vkCmdPushConstants(_vkCommandBuffer, _boundPipelineLayout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT, offset, size, data);
     }
 
     void VkmCommandBufferVulkan::writeGpuTimestampBegin()

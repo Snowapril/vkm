@@ -60,6 +60,9 @@ namespace vkm
         * called from vulkan_util.cpp's device-lost handling.
         */
         inline bool isDeviceFaultExtensionEnabled() const { return _deviceFaultExtensionEnabled; }
+        // False on drivers without VkPhysicalDeviceVulkan12Features::drawIndirectCount (MoltenVK):
+        // GPU-driven draws then issue the whole argument range instead of a GPU-supplied count.
+        inline bool isDrawIndirectCountSupported() const { return _drawIndirectCountSupported; }
 
         /*
         * @brief Whether VK_EXT_host_image_copy is enabled *and* its feature bit is on, so
@@ -132,6 +135,7 @@ namespace vkm
 
         VkPhysicalDeviceFaultFeaturesEXT _deviceFaultFeatures{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
         bool _deviceFaultExtensionEnabled{false};
+        bool _drawIndirectCountSupported{false};
 
         VkPhysicalDeviceHostImageCopyFeatures _hostImageCopyFeatures{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES};

@@ -186,6 +186,62 @@ line names it twice both before and after — and is left alone.
   `TestSceneModelRenderShared.hpp` render an imported mesh offscreen through the
   model_viewer PSO with a depth attachment and assert the material color reached the pixels.
 
+## 2026-07-25 — Scene rework: vertex layouts, geometry pools, GPU-driven groundwork
+
+- **Vertex layouts.** `VkmSceneVertex` (fixed 64 B) is gone. `renderer/scene/vertex_layout.{h,cpp}`
+  describes a layout as attributes + stride and provides three presets — `PositionOnly` (16 B),
+  `StandardPBR` (64 B, byte-identical to the old struct so the shader ABI is unchanged) and
+  `Compact` (32 B, snorm8x4 normal/tangent + f16x2 uv). `vkmRead/WriteVertexAttribute` is the only
+  place a storage format is decoded, and packing uses meshoptimizer's own `quantizeHalf` /
+  `quantizeSnorm` rather than hand-rolled bit twiddling. `VkmSceneMesh` now holds interleaved bytes
+  plus its layout; the glTF importer packs into whichever preset `VkmGltfImportOptions` names and
+  skips normal generation for a layout that has nowhere to put one.
+- **Geometry pools.** New `VkmSceneGeometryPool`: one mega vertex + index buffer per layout preset,
+  so a scene costs two bindless slots per layout instead of two per primitive. Both are published
+  as untyped u32 word arrays, which is what lets one pool hold any stride.
+- **Scene layer.** New `VkmScene` replaces `VkmSceneModelGpu`: it aggregates imported models as
+  placed objects (honouring the node hierarchy, which the old per-mesh path bypassed), sorts them
+  by (pipeline, layout, material) into draw batches, and publishes `VkmObjectData` /
+  `VkmFrameData` through three new fixed bindless singleton bindings. The device-side ObjectData
+  buffer is a single buffer so an object index is frame-invariant; the per-frame ring lives on the
+  staging side instead.
+- **Draw path.** `model_viewer.hlsl` pushes no constants at all: `SV_InstanceID` is the object
+  index (passed as `firstInstance`), and everything else hangs off ObjectData/FrameData. One
+  permutation per layout preset comes from the PSO JSON `options`. Shading moved to world space,
+  which is what makes `_normalTransform` load-bearing.
+- **WebGPU bug fixed.** `VERTEX_ELEMENT_STRIDE = 32` was mis-addressing every scene mesh past the
+  first (scene vertices were 64 B). Both mega-buffers are now `array<u32>` with word offsets in the
+  slot table, which also brings WebGPU in line with Vulkan/Metal's opaque byte-range treatment.
+- **Compute enablement.** Compute-only PSOs can now be authored in JSON (the parser required a
+  vertex stage while option expansion rejected vertex+compute, so no compute PSO was reachable);
+  `dispatch()`, `drawIndirectCount()` and `barrierIndirectArgumentBuffer()` exist on all three
+  backends; push constants work in a compute pass; Metal opens/closes the compute pass on pipeline
+  bind/unbind and binds the bindless argument table there; WebGPU binds bind group 0 for compute
+  and routes push constants to the compute encoder. `VkmRenderComputeSubGraph` and
+  `VkmRenderTransferSubGraph` finally have callbacks, so they can record anything at all.
+- **GPU-driven draws.** `VkmScene::recordCull()` records two dispatches into one compute pass:
+  `resources/Shaders/scene_cull.hlsl` (shared by every backend) frustum-tests each object's
+  world-space bounding sphere and compacts the survivors into a per-batch index list with
+  `InterlockedAdd`; `scene_emit_draws.hlsl` turns that into `VkmDrawIndirectArguments`, zeroing the
+  slots past the visible count. `recordDrawBatches()` then issues one `drawIndirectCount()` per
+  batch instead of one draw per object. Closing and reopening the compute pass between the two
+  dispatches is what orders the emit's reads after the cull's writes. A new `VisibleList` bindless
+  singleton carries the handoff, and the batch bounds travel as compute push constants.
+- These are the first real engine PSOs, which surfaced two pieces of latent build wiring: a
+  dependency cycle (`vkmcore` -> `vkm_engine_shaders` -> `vkm-compiler` -> `vkmcore`, fixed by
+  having the executables that load the cache depend on it rather than the library) and the fact
+  that engine PSO json and engine HLSL live in different directories, which needed a `SHADER_ROOT`
+  option on `vkm_add_shader_cache_target`. Under Emscripten `vkmcore`'s `RESOURCES_DIR` now points
+  at `/resources/` and each wasm executable preloads the engine PSO and shader-cache directories.
+- Testing culling needed care: the frustum planes come from the same view-projection the rasterizer
+  clips against, so anything culling rejects would have been clipped anyway and the rendered pixels
+  cannot tell the two apart. The test reads the visible count back instead and asserts 1 -> 0 -> 1
+  as the object leaves the frustum and returns. That immediately found a real bug -- thread 0 of the
+  emit pass returned early when nothing was visible, leaving the argument buffer's count word
+  holding the previous frame's value.
+- Still to come (see TODO.md): the Metal-only emit variant that fills an
+  `MTLIndirectCommandBuffer` from MSL, and WebGPU render-bundle caching.
+
 ## 2026-07-24 — CPU/GPU memory statistics + ImGui Memory Inspector
 
 - The engine tracked memory but never showed it, and the two "actual" numbers were missing
@@ -517,6 +573,15 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Why: `beginFrame()` closes a frame nothing was recorded into yet, so a capture's first
   frame always has zero duration; fitting to it left the chart at ~884000 px/ms with every
   nested zone scrolled off-screen (observed in the triangle sample before the fix).
+### 2026-07-25 — geometry pool indices stay mesh-local instead of being rebased
+- Planned: `VkmSceneGeometryPool::appendMesh` would rebase each mesh's indices onto the pool's
+  own vertex numbering.
+- Did instead: indices are appended unchanged, and `MeshRange::_vertexWordOffset` (copied into
+  `VkmObjectData::_vertexWordOffset`) supplies the base in-shader.
+- Why: the agreed shader ABI computes `base = obj.vertexWordOffset + index * VERTEX_STRIDE_WORDS`,
+  so rebasing on the CPU would add the pool base twice. Keeping indices mesh-local is also the
+  conservative option for overflow: index values stay bounded by their own mesh's vertex count
+  rather than growing with the pool.
 
 ### 2026-07-24 — CI caches only the dxc binary, not its build tree
 - Planned: `actions/cache` on `dependencies/dxc-macos-build`.

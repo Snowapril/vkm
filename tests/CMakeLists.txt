@@ -22,6 +22,10 @@ set(SRCS
     ${SRC_DIR}/TestCamera.cpp
     ${SRC_DIR}/TestClipSpaceOrientation.cpp
     ${SRC_DIR}/TestGlobalVariable.cpp
+    ${SRC_DIR}/TestVertexLayout.cpp
+    ${SRC_DIR}/TestObjectDataLayout.cpp
+    ${SRC_DIR}/TestSceneGeometryPool.cpp
+    ${SRC_DIR}/TestSceneBatching.cpp
     ${SRC_DIR}/TestGltfImporter.cpp
     ${SRC_DIR}/TestCpuProfiler.cpp
     ${SRC_DIR}/TestImageLoader.cpp
@@ -151,6 +155,13 @@ if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
     )
 endif()
 
+# The engine PSO cache holds the scene's culling / emit compute pipelines, which VkmEngine loads at
+# startup on EVERY backend -- a missing cache makes initializeBackendDriver fail outright, so this
+# dependency must not be scoped to one backend.
+if (TARGET vkm_engine_shaders)
+    add_dependencies(${target} vkm_engine_shaders)
+endif()
+
 # TestSceneModelRenderMetal (Metal-only) needs the model_viewer PSO cache and its paths.
 if (VKM_USE_METAL_API)
     add_dependencies(${target} tests_model_viewer_shaders)
@@ -158,6 +169,8 @@ if (VKM_USE_METAL_API)
         PRIVATE
         TEST_MODEL_VIEWER_SAMPLE_DIR="${ROOT_DIR}/src/samples/model_viewer/"
         TEST_MODEL_VIEWER_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
+        TEST_ENGINE_PIPELINE_DIR="${ROOT_DIR}/resources/Pipelines/Engine/"
+        TEST_ENGINE_SHADER_CACHE_DIR="${ROOT_DIR}/resources/Shaders/ShaderCache/"
     )
 endif()
 

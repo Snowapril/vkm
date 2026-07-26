@@ -223,17 +223,19 @@ namespace vkm
 
         // Every pipeline shares the engine-global bindless set 0 (VkmBindlessResourceManagerVulkan)
         // and per-frame set 1 (VkmFrameConstantManagerVulkan), plus a push-constant range carrying
-        // the current draw's bindless slot indices (vertexBufferIndex, indexBufferIndex) and any
-        // further per-draw data the shader declares, up to kVkmBindlessPushConstantSize. Both sets
-        // are declared even for shaders that use neither -- an unused set in a pipeline layout is
-        // valid and keeps every pipeline layout-compatible. Sets 2-3 remain reserved (see
+        // whatever per-invocation data the shader declares, up to kVkmBindlessPushConstantSize.
+        // The range covers the vertex and compute stages: the scene's culling pass pushes its batch
+        // bounds there. The fragment stage still cannot read push constants -- everything it needs
+        // travels as an interpolant, which is part of why set 1 exists. Both sets are declared even
+        // for shaders that use neither -- an unused set in a pipeline layout is valid and keeps
+        // every pipeline layout-compatible. Sets 2-3 remain reserved (see
         // common/frame_constants.h).
         const std::array<VkDescriptorSetLayout, 2> setLayouts{
             driverVulkan->getBindlessResourceManager()->getSetLayout(),
             driverVulkan->getFrameConstantManager()->getSetLayout(),
         };
         const VkPushConstantRange pushConstantRange{
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
             .offset     = 0,
             .size       = kVkmBindlessPushConstantSize,
         };

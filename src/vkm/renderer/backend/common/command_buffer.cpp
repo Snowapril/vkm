@@ -2,6 +2,7 @@
 
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/driver.h>
+#include <vkm/renderer/backend/common/pipeline_state_object.h>
 
 namespace vkm
 {
@@ -140,11 +141,71 @@ namespace vkm
         onDraw(vertexCount, instanceCount, firstVertex, firstInstance);
     }
 
-    void VkmCommandBufferBase::setPushConstants(const void* data, uint32_t size, uint32_t offset)
+    void VkmCommandBufferBase::drawIndirectCount(VkmIndirectArgumentLayout layout,
+                                                 VkmResourceHandle argumentBuffer, uint64_t argumentOffset,
+                                                 VkmResourceHandle countBuffer, uint64_t countOffset,
+                                                 uint32_t maxDrawCount)
     {
         if (!_isRecording || !_isInRenderPass || _boundPipelineState == nullptr)
         {
-            VKM_DEBUG_ERROR("setPushConstants requires an active render pass with a bound pipeline");
+            VKM_DEBUG_ERROR("drawIndirectCount requires an active render pass with a bound pipeline");
+            return;
+        }
+        if (layout != VkmIndirectArgumentLayout::NonIndexed)
+        {
+            // Rejected in one place so no backend has to carry an unreachable branch. Lifting this
+            // needs an index-buffer binding path first -- the engine has none, because indices are
+            // pulled in the vertex shader out of a bindless storage buffer.
+            VKM_DEBUG_ERROR("drawIndirectCount only supports NonIndexed arguments: the engine has no bound index buffer");
+            return;
+        }
+        if (maxDrawCount == 0)
+        {
+            return; // An empty batch is not an error; there is simply nothing to encode.
+        }
+        onDrawIndirectCount(layout, argumentBuffer, argumentOffset, countBuffer, countOffset, maxDrawCount);
+    }
+
+    void VkmCommandBufferBase::dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
+    {
+        if (!_isRecording || _isInRenderPass || _boundPipelineState == nullptr)
+        {
+            VKM_DEBUG_ERROR("dispatch requires a bound pipeline and must be recorded outside a render pass");
+            return;
+        }
+        if (!_boundPipelineState->isCompute())
+        {
+            VKM_DEBUG_ERROR("dispatch requires a compute pipeline to be bound");
+            return;
+        }
+        if (groupCountX == 0 || groupCountY == 0 || groupCountZ == 0)
+        {
+            return; // Nothing to dispatch; Metal rejects a zero-sized threadgroup grid outright.
+        }
+        onDispatch(groupCountX, groupCountY, groupCountZ);
+    }
+
+    void VkmCommandBufferBase::barrierIndirectArgumentBuffer(VkmResourceHandle buffer)
+    {
+        if (!_isRecording || _isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("barrierIndirectArgumentBuffer must be recorded while recording and outside a render pass");
+            return;
+        }
+        onBarrierIndirectArgumentBuffer(buffer);
+    }
+
+    void VkmCommandBufferBase::setPushConstants(const void* data, uint32_t size, uint32_t offset)
+    {
+        if (!_isRecording || _boundPipelineState == nullptr)
+        {
+            VKM_DEBUG_ERROR("setPushConstants requires a bound pipeline");
+            return;
+        }
+        // A compute pipeline pushes from outside a render pass; a graphics one only inside.
+        if (!_boundPipelineState->isCompute() && !_isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("setPushConstants for a graphics pipeline requires an active render pass");
             return;
         }
         onSetPushConstants(data, size, offset);
