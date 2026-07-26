@@ -44,7 +44,13 @@ namespace vkm
             return false;
         }
 
-        const std::array<VkDescriptorSetLayoutBinding, 4> bindings{
+        // Bindings 0-2 are the runtime-sized arrays, 3 the immutable sampler, and
+        // kVkmBindlessFirstSingletonBinding onwards the single-descriptor singleton buffers, one
+        // per VkmBindlessSingletonBuffer in that enum's order.
+        constexpr uint32_t kSingletonCount = static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count);
+        constexpr uint32_t kBindingCount = kVkmBindlessFirstSingletonBinding + kSingletonCount;
+
+        std::array<VkDescriptorSetLayoutBinding, kBindingCount> bindings{
             VkDescriptorSetLayoutBinding{
                 .binding         = 0,
                 .descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
@@ -73,11 +79,22 @@ namespace vkm
                 .pImmutableSamplers = &_defaultSampler,
             },
         };
+        for (uint32_t i = 0; i < kSingletonCount; ++i)
+        {
+            bindings[kVkmBindlessFirstSingletonBinding + i] = VkDescriptorSetLayoutBinding{
+                .binding         = kVkmBindlessFirstSingletonBinding + i,
+                .descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags      = VK_SHADER_STAGE_ALL,
+            };
+        }
 
         constexpr VkDescriptorBindingFlags kBindingFlags =
             VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+        std::array<VkDescriptorBindingFlags, kBindingCount> bindingFlags{};
+        bindingFlags.fill(kBindingFlags);
         // The immutable sampler needs no update-after-bind: it is never updated at all.
-        const std::array<VkDescriptorBindingFlags, 4> bindingFlags{kBindingFlags, kBindingFlags, kBindingFlags, 0};
+        bindingFlags[kVkmBindlessSamplerBinding] = 0;
 
         const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsCreateInfo{
             .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
@@ -101,11 +118,12 @@ namespace vkm
 
         // The immutable sampler still consumes pool capacity, so it needs a pool size like
         // any other binding.
-        const std::array<VkDescriptorPoolSize, 4> poolSizes{
+        const std::array<VkDescriptorPoolSize, 5> poolSizes{
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, TEXTURE_CAPACITY},
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, BUFFER_CAPACITY},
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, INDEX_BUFFER_CAPACITY},
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kSingletonCount},
         };
         const VkDescriptorPoolCreateInfo poolCreateInfo{
             .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -266,5 +284,44 @@ namespace vkm
             case VkmBindlessArrayType::IndexBuffer: _indexBufferSlots.release(slot); break;
             case VkmBindlessArrayType::Texture:     _textureSlots.release(slot); break;
         }
+    }
+
+    bool VkmBindlessResourceManagerVulkan::setSingletonBuffer(VkmBindlessSingletonBuffer which, VkmResourceHandle bufferHandle)
+    {
+        VKM_ASSERT(which < VkmBindlessSingletonBuffer::Count, "Unknown VkmBindlessSingletonBuffer");
+
+        // The binding is declared PARTIALLY_BOUND, so leaving it unwritten is legal as long as no
+        // shader reads it -- there is nothing to undo on an unbind.
+        if (bufferHandle == VKM_INVALID_RESOURCE_HANDLE)
+        {
+            return true;
+        }
+
+        VkmBufferVulkan* bufferVulkan = static_cast<VkmBufferVulkan*>(
+            _driver->getRenderResourcePool()->getResource<VkmBuffer>(bufferHandle));
+        if (bufferVulkan == nullptr)
+        {
+            VKM_DEBUG_ERROR("setSingletonBuffer was given a handle that is not a live buffer");
+            return false;
+        }
+
+        // Same pooled-sub-allocation caveat as registerBuffer().
+        const VkDescriptorBufferInfo bufferInfo{
+            .buffer = bufferVulkan->getBuffer(),
+            .offset = bufferVulkan->getBufferOffset(),
+            .range  = bufferVulkan->getBufferInfo()._size,
+        };
+
+        const VkWriteDescriptorSet write{
+            .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet          = _descriptorSet,
+            .dstBinding      = kVkmBindlessFirstSingletonBinding + static_cast<uint32_t>(which),
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo     = &bufferInfo,
+        };
+        vkUpdateDescriptorSets(_driver->getDevice(), 1, &write, 0, nullptr);
+        return true;
     }
 } // namespace vkm

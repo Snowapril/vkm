@@ -118,6 +118,9 @@ namespace vkm
         AllowPresent = 0x00000040,
         ExternalHandleOwner = 0x00000080,
         DeferredCreation = 0x00000100,
+        // Draw/dispatch argument buffer: the GPU-driven scene path has a compute pass write
+        // VkmDrawIndirectArguments records that the draw then fetches from this same buffer.
+        AllowIndirectBuffer = 0x00000200,
 
         AllowShaderReadWrite = AllowShaderRead | AllowShaderWrite,
     };
@@ -128,6 +131,71 @@ namespace vkm
     enum class VkmResourceUsageBits : uint32_t
     {
     };
+
+    // Threadgroup width every engine compute shader declares as [numthreads(N, 1, 1)]. It is an
+    // engine constant rather than PSO state because Metal needs threadsPerThreadgroup at dispatch
+    // time and MTLComputePipelineState cannot be asked what the shader declared.
+    inline constexpr uint32_t kVkmComputeThreadGroupSizeX = 64;
+
+    /*
+    * @brief One non-indexed indirect draw record.
+    *
+    * Byte-identical to VkDrawIndirectCommand, MTLDrawPrimitivesIndirectArguments and WebGPU's
+    * non-indexed indirect layout, so the culling compute shader writes one format for every
+    * backend. An all-zero record draws nothing on all three, which is what culled slots become
+    * on the backends that have no GPU-side draw count (see
+    * VkmCommandBufferBase::drawIndirectCount).
+    */
+    struct VkmDrawIndirectArguments
+    {
+        uint32_t _vertexCount = 0;
+        uint32_t _instanceCount = 0;
+        uint32_t _firstVertex = 0;
+        // Carries the VkmObjectData index rather than a real instance offset; the vertex shader
+        // reads it back as SV_InstanceID, which is what lets the draw path push no constants.
+        uint32_t _firstInstance = 0;
+    };
+    static_assert(sizeof(VkmDrawIndirectArguments) == 16, "VkmDrawIndirectArguments must match the native indirect argument layouts");
+
+    /*
+    * @brief One indexed indirect draw record.
+    *
+    * Byte-identical to VkDrawIndexedIndirectCommand, MTLDrawIndexedPrimitivesIndirectArguments and
+    * WebGPU's indexed indirect layout. Note that _vertexOffset is SIGNED on all three -- it is the
+    * one field a mirror written as five uint32s gets wrong.
+    *
+    * Nothing in the engine draws with this layout yet: an indexed draw needs a bound index buffer,
+    * and the engine deliberately has none (indices are pulled in the vertex shader out of a
+    * bindless storage buffer -- see VkmCommandBufferBase::drawIndirectCount). The record lives here
+    * beside its non-indexed sibling because it is what a producing compute shader would write, and
+    * because both layouts have to be describable before a draw call can say which one it is given.
+    */
+    struct VkmDrawIndexedIndirectArguments
+    {
+        uint32_t _indexCount = 0;
+        uint32_t _instanceCount = 0;
+        uint32_t _firstIndex = 0;
+        int32_t _vertexOffset = 0; // signed: added to every index before the vertex fetch
+        uint32_t _firstInstance = 0;
+    };
+    static_assert(sizeof(VkmDrawIndexedIndirectArguments) == 20,
+                  "VkmDrawIndexedIndirectArguments must match the native indexed indirect argument layouts");
+
+    /*
+    * @brief Which record layout an indirect argument buffer holds.
+    *
+    * Supplied alongside the buffer to VkmCommandBufferBase::drawIndirectCount so the record stride
+    * is derived from a layout the caller declared rather than assumed independently by each
+    * backend.
+    */
+    enum class VkmIndirectArgumentLayout : uint8_t
+    {
+        NonIndexed = 0, // VkmDrawIndirectArguments
+        Indexed = 1,    // VkmDrawIndexedIndirectArguments
+    };
+
+    // Byte step between consecutive records of `layout`.
+    uint32_t vkmGetIndirectArgumentStride(VkmIndirectArgumentLayout layout);
 
     struct VkmResourceInfo
     {

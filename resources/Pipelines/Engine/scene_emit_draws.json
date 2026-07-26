@@ -1,0 +1,9 @@
+{
+    "name": "scene_emit_draws_pso",
+    "shaders": {
+        "compute": { "filepath": "scene_emit_draws.hlsl", "entry_point": "CSMain" }
+    },
+    "options": {
+        "default": {}
+    }
+}

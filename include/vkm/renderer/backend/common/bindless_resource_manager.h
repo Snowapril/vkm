@@ -20,6 +20,29 @@ namespace vkm
         IndexBuffer = 2, // set 0, binding 2 (storage buffer array) -- index-pulling data
     };
 
+    /*
+    * @brief Engine-global buffers that occupy a fixed binding rather than an array slot.
+    *
+    * These are not array entries for two reasons. Shaders must reach them without a runtime slot
+    * index, because the GPU-driven scene draw path pushes no constants at all -- an indirect draw
+    * carries only its object index, in firstInstance. And the indirect-argument buffer needs a
+    * read-write storage binding, which WebGPU cannot combine with a vertex-visible one (a WebGPU
+    * binding has exactly one type, and writable storage is not allowed in the vertex stage), so it
+    * physically cannot share a binding with the read-only pools.
+    *
+    * Each occupies set 0 binding kVkmBindlessFirstSingletonBinding + its enum value.
+    */
+    enum class VkmBindlessSingletonBuffer : uint8_t
+    {
+        ObjectData       = 0, // StructuredBuffer<ObjectData>, read-only,  VS + CS
+        FrameData        = 1, // StructuredBuffer<FrameData>,  read-only,  VS/PS + CS
+        IndirectArgument = 2, // RWStructuredBuffer<uint>,     read-write, CS only
+        // The culling pass's output and the emit pass's input: a per-batch visible count followed
+        // by that batch's compacted object indices.
+        VisibleList      = 3, // RWStructuredBuffer<uint>,     read-write, CS only
+        Count            = 4,
+    };
+
     // Engine-global bindless binding convention. These constants are the single source of
     // truth shared by the shader compiler (vkm-compiler MSL/WGSL generation) and every
     // backend runtime; changing one side without the other breaks shader/runtime ABI.
@@ -37,6 +60,10 @@ namespace vkm
     * engine samples today.
     */
     inline constexpr uint32_t kVkmBindlessSamplerBinding = 3;
+
+    // set 0, bindings 4.. -- one per VkmBindlessSingletonBuffer, in that enum's order. Derived from
+    // the sampler binding so adding another fixed binding above only has to move one constant.
+    inline constexpr uint32_t kVkmBindlessFirstSingletonBinding = kVkmBindlessSamplerBinding + 1;
 
     /*
     * @brief Only ONE texture type may be declared at binding 0 per shader.
@@ -76,7 +103,11 @@ namespace vkm
     inline constexpr uint32_t kVkmMetalBindlessIndexBufferIdBase = kVkmBindlessTextureCapacity + kVkmBindlessBufferCapacity;
     inline constexpr uint32_t kVkmMetalBindlessSamplerId =
         kVkmBindlessTextureCapacity + kVkmBindlessBufferCapacity + kVkmBindlessIndexBufferCapacity;
-    inline constexpr uint32_t kVkmMetalBindlessArgumentEntryCount = kVkmMetalBindlessSamplerId + 1;
+    // The singleton buffers follow the sampler entry, one 8-byte entry each, in
+    // VkmBindlessSingletonBuffer order.
+    inline constexpr uint32_t kVkmMetalBindlessSingletonIdBase = kVkmMetalBindlessSamplerId + 1;
+    inline constexpr uint32_t kVkmMetalBindlessArgumentEntryCount =
+        kVkmMetalBindlessSingletonIdBase + static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count);
 
     // Fixed-capacity slot allocator for one bindless array: LIFO free-list plus a monotonic
     // high-water mark (a plain free-list, not VkmOffsetAllocator's byte-range coalescing,
@@ -122,5 +153,14 @@ namespace vkm
         */
         virtual uint32_t registerTexture(VkmResourceHandle textureHandle) = 0;
         virtual void unregisterTexture(uint32_t slot) = 0;
+
+        /*
+        * @brief Publishes a storage buffer at one of the fixed singleton bindings, or unbinds it
+        * when passed VKM_INVALID_RESOURCE_HANDLE.
+        *
+        * Called at scene build/teardown time rather than per frame: on WebGPU a bind group is
+        * immutable, so this recreates bind group 0.
+        */
+        virtual bool setSingletonBuffer(VkmBindlessSingletonBuffer which, VkmResourceHandle bufferHandle) = 0;
     };
 } // namespace vkm

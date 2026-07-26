@@ -28,6 +28,18 @@ namespace vkm
         }
     }
 
+    uint32_t vkmGetIndirectArgumentStride(VkmIndirectArgumentLayout layout)
+    {
+        switch (layout)
+        {
+            case VkmIndirectArgumentLayout::NonIndexed: return sizeof(VkmDrawIndirectArguments);
+            case VkmIndirectArgumentLayout::Indexed:    return sizeof(VkmDrawIndexedIndirectArguments);
+            default:
+                VKM_ASSERT(false, "Unhandled VkmIndirectArgumentLayout");
+                return sizeof(VkmDrawIndirectArguments);
+        }
+    }
+
     uint32_t vkmBytesPerTexel(VkmFormat format)
     {
         switch (format)

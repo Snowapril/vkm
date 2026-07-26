@@ -616,6 +616,16 @@ namespace vkm
             return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "This GPU/driver does not support required descriptor-indexing features (see VkPhysicalDeviceVulkan12Features)."};
         }
 
+        // Optional, not required: the GPU-driven scene path prefers vkCmdDrawIndirectCount (core in
+        // 1.2) so the draw count comes from GPU memory, but falls back to issuing the whole
+        // maxDrawCount range where it is unavailable (MoltenVK). That fallback is correct because
+        // the culling pass compacts survivors to the front and zeroes the tail.
+        _drawIndirectCountSupported = (_features12.drawIndirectCount == VK_TRUE);
+        if (!_drawIndirectCountSupported)
+        {
+            VKM_DEBUG_INFO("vkCmdDrawIndirectCount is unavailable; GPU-driven draws will issue the full argument range");
+        }
+
         // Query queue families
         uint32_t queueFamilyCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(_physicalDevice, &queueFamilyCount, nullptr);

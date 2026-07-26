@@ -213,6 +213,31 @@ namespace vkm
         static_cast<uint64_t*>(_argumentBuffer.contents)[idBase + slot] = 0;
     }
 
+    bool VkmBindlessResourceManagerMetal::setSingletonBuffer(VkmBindlessSingletonBuffer which, VkmResourceHandle bufferHandle)
+    {
+        VKM_ASSERT(which < VkmBindlessSingletonBuffer::Count, "Unknown VkmBindlessSingletonBuffer");
+
+        const uint32_t entryIndex = kVkmMetalBindlessSingletonIdBase + static_cast<uint32_t>(which);
+        uint64_t* entries = static_cast<uint64_t*>(_argumentBuffer.contents);
+
+        if (bufferHandle == VKM_INVALID_RESOURCE_HANDLE)
+        {
+            entries[entryIndex] = 0;
+            return true;
+        }
+
+        VkmBufferMetal* bufferMetal = static_cast<VkmBufferMetal*>(
+            _driver->getRenderResourcePool()->getResource<VkmBuffer>(bufferHandle));
+        if (bufferMetal == nullptr)
+        {
+            VKM_DEBUG_ERROR("setSingletonBuffer was given a handle that is not a live buffer");
+            return false;
+        }
+
+        entries[entryIndex] = bufferMetal->getBuffer().gpuAddress;
+        return true;
+    }
+
     uint64_t VkmBindlessResourceManagerMetal::allocatePushConstantSlot(const void* data, uint32_t size)
     {
         VKM_ASSERT(size <= PUSH_CONSTANT_ENTRY_STRIDE, "Push constant data exceeds ring entry stride");

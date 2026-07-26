@@ -24,8 +24,8 @@
 #include <vkm/renderer/camera.h>
 #include <vkm/renderer/engine.h>
 #include <vkm/renderer/scene/gltf_importer.h>
+#include <vkm/renderer/scene/scene.h>
 #include <vkm/renderer/scene/scene_model.h>
-#include <vkm/renderer/scene/scene_model_gpu.h>
 
 #if defined(VKM_PLATFORM_WINDOWS)
 #include <vkm/platform/windows/application.h>
@@ -38,6 +38,7 @@
 #endif // defined(VKM_PLATFORM_WINDOWS)
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -52,23 +53,8 @@ VKM_GLOBAL_VARIABLE(std::string, gv_model_path,
 
 namespace
 {
-    // Mirrors PushConstants in model_viewer.hlsl (HLSL cbuffer packing: a float4 starts on
-    // a 16-byte boundary, which is what the explicit padding is for).
-    struct ModelViewerPushConstants
-    {
-        glm::mat4 _model;
-        uint32_t _vertexBufferSlot;
-        uint32_t _indexBufferSlot;
-        float _pad0[2];
-        glm::vec4 _baseColor;
-        glm::vec4 _lightDirectionObjectSpace;
-    };
-    static_assert(sizeof(ModelViewerPushConstants) <= kVkmBindlessPushConstantSize,
-                  "The push constants must fit the engine-global push-constant range");
-
     constexpr VkmFormat kDepthFormat = VkmFormat::D32_SFLOAT;
     constexpr glm::vec3 kWorldLightDirection{ 0.4f, 0.8f, 0.45f }; // towards the light
-    constexpr glm::vec4 kFallbackBaseColor{ 0.8f, 0.8f, 0.8f, 1.0f };
 
     // One loadable file found under resources/Scenes/.
     struct SceneEntry
@@ -143,8 +129,15 @@ public:
             VKM_DEBUG_ERROR(("Failed to load sample pipeline states: " + err).c_str());
             return;
         }
-        _pso = manager->getPipelineState("model_viewer_pso[default]", VkmPipelineStateOrigin::User);
-        VKM_ASSERT(_pso != nullptr, "Failed to create model_viewer_pso[default]");
+        // One PSO permutation per vertex layout preset; a scene only binds the ones its pools use.
+        for (uint8_t i = 0; i < static_cast<uint8_t>(VkmVertexLayoutPreset::Count); ++i)
+        {
+            const std::string psoName =
+                std::string("model_viewer_pso[") +
+                vkmVertexLayoutPresetName(static_cast<VkmVertexLayoutPreset>(i)) + "]";
+            _layoutPipelines[i] = manager->getPipelineState(psoName, VkmPipelineStateOrigin::User);
+            VKM_ASSERT(_layoutPipelines[i] != nullptr, ("Failed to create " + psoName).c_str());
+        }
 
         _sceneEntries = scanSceneDirectory();
 
@@ -167,7 +160,7 @@ public:
         if (_engine != nullptr)
         {
             _engine->setActiveCamera(nullptr); // the camera dies with this delegate
-            _modelGpu.destroy(_engine->getDriver());
+            _scene.destroy(_engine->getDriver());
         }
     }
 
@@ -221,58 +214,56 @@ public:
             frameBufferDesc._depthStencilAttachment = _depthTexture;
         }
 
+        if (!_sceneReady)
+        {
+            // Still a valid frame: the clear alone runs.
+            renderGraph->beginGraphicsSubGraph(frameBufferDesc, "ModelViewerPass");
+            return;
+        }
+
+        VkmFrameData frameData;
+        // The camera itself travels through descriptor set 1, which the engine rewrites for the
+        // active camera each frame; the scene only needs the frustum planes derived from it.
+        vkmExtractFrustumPlanes(_camera.getViewProjection(), frameData._frustumPlanes);
+        // World space now that the draw path pushes no per-object constants: the shader rotates the
+        // normal by the object's normalTransform instead of pre-rotating the light per draw.
+        frameData._lightDirection = glm::vec4(glm::normalize(kWorldLightDirection), 0.0f);
+
+        std::vector<VkmResourceHandle> referenced;
+        _scene.collectReferencedResources(&referenced);
+
+        // The per-frame copies have to be recorded outside a render pass, and subgraphs commit in
+        // insertion order, so this publishes them ahead of the draws that read them.
+        auto updateSubGraph = renderGraph->beginTransferSubGraph("SceneUpdate");
+        for (VkmResourceHandle handle : referenced)
+        {
+            updateSubGraph->addReferencedResource(handle);
+        }
+        // The graph is the per-frame-slot object, so it already knows which slot this is.
+        const uint32_t frameIndex = renderGraph->frameIndex();
+        updateSubGraph->setTransferCallback([this, frameIndex, frameData](VkmCommandBufferBase* commandBuffer) {
+            _scene.recordUpdate(commandBuffer, frameIndex, frameData);
+        });
+
+        // Frustum culling and the emit pass that writes this frame's indirect draw arguments.
+        auto cullSubGraph = renderGraph->beginComputeSubGraph("SceneCull");
+        for (VkmResourceHandle handle : referenced)
+        {
+            cullSubGraph->addReferencedResource(handle);
+        }
+        cullSubGraph->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
+            _scene.recordCull(commandBuffer);
+        });
+
         auto graphicsSubGraph = renderGraph->beginGraphicsSubGraph(frameBufferDesc, "ModelViewerPass");
-        if (!_modelReady || _pso == nullptr)
+        for (VkmResourceHandle handle : referenced)
         {
-            return; // still a valid frame: the clear alone runs.
+            graphicsSubGraph->addReferencedResource(handle);
         }
-
-        std::vector<ModelViewerPushConstants> draws;
-        draws.reserve(_drawList.size());
-        std::vector<uint32_t> indexCounts;
-        indexCounts.reserve(_drawList.size());
-
-        for (const VkmSceneModel::DrawItem& item : _drawList)
-        {
-            const VkmSceneModelGpu::MeshGpu& meshGpu = _modelGpu.getMeshes()[item._meshIndex];
-            if (meshGpu._indexCount == 0)
-            {
-                continue;
-            }
-
-            graphicsSubGraph->addReferencedResource(meshGpu._vertexBuffer);
-            graphicsSubGraph->addReferencedResource(meshGpu._indexBuffer);
-
-            const uint32_t materialIndex = _model._meshes[item._meshIndex]._materialIndex;
-            const glm::vec4 baseColor = materialIndex < _model._materials.size()
-                                            ? _model._materials[materialIndex]._baseColorFactor
-                                            : kFallbackBaseColor;
-
-            ModelViewerPushConstants pushConstants{};
-            // The camera half lives in descriptor set 1, which the engine rewrites once per
-            // frame from the active camera, so only the model matrix is per-draw now.
-            pushConstants._model = item._worldTransform;
-            pushConstants._vertexBufferSlot = meshGpu._vertexBufferSlot;
-            pushConstants._indexBufferSlot = meshGpu._indexBufferSlot;
-            pushConstants._baseColor = baseColor;
-            // Shading happens in object space, so the light -- not the normal -- is what
-            // gets transformed: dot(inverseTranspose(M) * n, l) == dot(n, inverse(M) * l).
-            pushConstants._lightDirectionObjectSpace = glm::vec4(
-                glm::normalize(glm::inverse(glm::mat3(item._worldTransform)) * kWorldLightDirection), 0.0f);
-
-            draws.push_back(pushConstants);
-            indexCounts.push_back(meshGpu._indexCount);
-        }
-
-        VkmPipelineStateBase* pso = _pso;
-        graphicsSubGraph->setRenderCallback([pso, draws = std::move(draws), indexCounts = std::move(indexCounts)]
-                                            (VkmCommandBufferBase* commandBuffer) {
-            commandBuffer->bindPipeline(pso);
-            for (size_t i = 0; i < draws.size(); ++i)
-            {
-                commandBuffer->setPushConstants(&draws[i], sizeof(ModelViewerPushConstants));
-                commandBuffer->draw(indexCounts[i], 1, 0, 0);
-            }
+        graphicsSubGraph->setRenderCallback([this](VkmCommandBufferBase* commandBuffer) {
+            _scene.recordDrawBatches(commandBuffer, [this](const VkmScene::DrawBatch& batch) {
+                return _layoutPipelines[static_cast<size_t>(batch._layout)];
+            });
         });
     }
 
@@ -300,34 +291,35 @@ private:
             return;
         }
 
-        // The old model's buffers are still referenced by frames in flight, and its bindless
-        // slots would be handed straight back out by the upload below. Draining the queue is
+        // The old scene's buffers are still referenced by frames in flight, and its bindless
+        // slots would be handed straight back out by the build below. Draining the queue is
         // the honest way to make both safe, and this path is already a stall.
         driver->getCommandQueue(VkmCommandQueueType::Graphics, 0)->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
-        _modelReady = false;
-        _drawList.clear();
-        _modelGpu.destroy(driver);
+        _sceneReady = false;
+        _scene.destroy(driver);
 
-        if (!_modelGpu.upload(driver, model, &error))
+        if (!_scene.addModel(model, &error) ||
+            !_scene.build(driver, _engine->getPipelineStateManager(), &error))
         {
             _loadError = error;
-            VKM_DEBUG_ERROR(("Failed to upload the model: " + error).c_str());
+            VKM_DEBUG_ERROR(("Failed to build the scene: " + error).c_str());
             // Unlike a failed import, this already tore the previous scene down.
-            _model = VkmSceneModel{};
+            _scene.destroy(driver);
             _currentScenePath.clear();
             return;
         }
 
-        _model = std::move(model);
-        _drawList = _model.buildDrawList();
-        frameCameraOnBounds(_cameraController, _model.computeWorldBounds());
+        _meshCount = model._meshes.size();
+        _vertexCount = model.getTotalVertexCount();
+        frameCameraOnBounds(_cameraController, _scene.computeWorldBounds());
         _currentScenePath = path;
         _loadError.clear();
-        _modelReady = true;
+        _sceneReady = true;
 
         VKM_DEBUG_LOG(("Imported '" + path + "': " +
-                       std::to_string(_model._meshes.size()) + " meshes, " +
-                       std::to_string(_model.getTotalVertexCount()) + " vertices").c_str());
+                       std::to_string(_meshCount) + " meshes, " +
+                       std::to_string(_vertexCount) + " vertices, " +
+                       std::to_string(_scene.getDrawBatches().size()) + " draw batches").c_str());
     }
 
 #if defined(VKM_ENABLE_IMGUI)
@@ -370,16 +362,17 @@ private:
         }
 
         ImGui::Separator();
-        if (_modelReady)
+        if (_sceneReady)
         {
             ImGui::Text("Loaded: %s", _currentScenePath.c_str());
-            ImGui::Text("%zu meshes, %llu vertices, %zu draws",
-                        _model._meshes.size(),
-                        static_cast<unsigned long long>(_model.getTotalVertexCount()),
-                        _drawList.size());
+            ImGui::Text("%zu meshes, %llu vertices, %zu objects in %zu batch(es)",
+                        _meshCount,
+                        static_cast<unsigned long long>(_vertexCount),
+                        _scene.getObjects().size(),
+                        _scene.getDrawBatches().size());
             if (ImGui::Button("Reframe camera"))
             {
-                frameCameraOnBounds(_cameraController, _model.computeWorldBounds());
+                frameCameraOnBounds(_cameraController, _scene.computeWorldBounds());
             }
         }
         else
@@ -440,17 +433,20 @@ private:
 
 private:
     VkmEngine* _engine{nullptr};
-    VkmPipelineStateBase* _pso{nullptr};
-    VkmSceneModel _model;
-    VkmSceneModelGpu _modelGpu;
-    std::vector<VkmSceneModel::DrawItem> _drawList;
+    // One PSO per vertex layout preset, indexed by VkmVertexLayoutPreset.
+    std::array<VkmPipelineStateBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _layoutPipelines{};
+    VkmScene _scene;
     VkmCamera _camera;
     VkmOrbitCameraController _cameraController{&_camera};
     std::vector<SceneEntry> _sceneEntries;
     std::string _currentScenePath;
     std::string _pendingScenePath; // set by the browser, consumed at the end of update()
     std::string _loadError;
-    bool _modelReady{false};
+    bool _sceneReady{false};
+    // Import-time totals kept for the browser's stats line; the CPU-side model is dropped once
+    // its geometry is pooled.
+    size_t _meshCount{0};
+    uint64_t _vertexCount{0};
     VkmResourceHandle _depthTexture{VKM_INVALID_RESOURCE_HANDLE};
     glm::uvec2 _depthExtent{0, 0};
 };

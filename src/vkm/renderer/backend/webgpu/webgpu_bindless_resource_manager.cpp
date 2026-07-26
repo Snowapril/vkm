@@ -55,25 +55,62 @@ namespace vkm
             return false;
         }
 
-        // Engine-global bind group 0 layout, mirroring the shader-side convention (see the
-        // VKM_BACKEND_WEBGPU variant in triangle.hlsl): b0 = push-constant UBO (dynamic
-        // offset), b1 = vertex mega-buffer, b2 = index mega-buffer, b3 = slot table.
-        WGPUBindGroupLayoutEntry layoutEntries[4]{};
+        // Stands in for any singleton binding nothing has published yet: a WebGPU bind group has to
+        // supply an entry for every layout entry, so there is no "leave it out" option.
+        _singletonPlaceholder = createBindlessBuffer(device, "VkmBindlessSingletonPlaceholder",
+                                                     kSingletonPlaceholderSize,
+                                                     WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
+        if (_singletonPlaceholder == nullptr)
+        {
+            VKM_DEBUG_ERROR("Failed to create the bindless singleton placeholder buffer");
+            return false;
+        }
+        _slotTableSize = slotTableSize;
+
+        /*
+        * Engine-global bind group 0 layout, mirroring the shader-side convention (see the
+        * VKM_BACKEND_WEBGPU variants in the engine shaders): b0 = push-constant UBO (dynamic
+        * offset), b1 = vertex mega-buffer, b2 = index mega-buffer, b3 = slot table, b4..b6 = the
+        * VkmBindlessSingletonBuffer entries.
+        *
+        * IndirectArgument is the only writable-storage entry and is visible to compute ONLY.
+        * WebGPU forbids writable storage in the vertex stage, and a buffer used as writable
+        * storage inside a render pass's usage scope may not also be fetched as an indirect buffer
+        * in that scope -- which is exactly what the GPU-driven draw path does. Keeping the entry
+        * compute-only is what makes that legal, so no render pipeline's shader may declare it.
+        */
+        constexpr uint32_t kSingletonCount = static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count);
+        constexpr uint32_t kEntryCount = kFirstSingletonBinding + kSingletonCount;
+
+        WGPUBindGroupLayoutEntry layoutEntries[kEntryCount]{};
         layoutEntries[0].binding = 0;
-        layoutEntries[0].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
+        layoutEntries[0].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment | WGPUShaderStage_Compute;
         layoutEntries[0].buffer.type = WGPUBufferBindingType_Uniform;
         layoutEntries[0].buffer.hasDynamicOffset = true;
         layoutEntries[0].buffer.minBindingSize = kVkmBindlessPushConstantSize;
-        for (uint32_t i = 1; i < 4; ++i)
+        for (uint32_t i = 1; i < kFirstSingletonBinding; ++i)
         {
             layoutEntries[i].binding = i;
-            layoutEntries[i].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
+            layoutEntries[i].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment | WGPUShaderStage_Compute;
             layoutEntries[i].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+        }
+        for (uint32_t i = 0; i < kSingletonCount; ++i)
+        {
+            const VkmBindlessSingletonBuffer which = static_cast<VkmBindlessSingletonBuffer>(i);
+            const bool isWritable = (which == VkmBindlessSingletonBuffer::IndirectArgument ||
+                                     which == VkmBindlessSingletonBuffer::VisibleList);
+            WGPUBindGroupLayoutEntry& entry = layoutEntries[kFirstSingletonBinding + i];
+            entry.binding = kFirstSingletonBinding + i;
+            entry.visibility = isWritable
+                                   ? WGPUShaderStage_Compute
+                                   : (WGPUShaderStage_Vertex | WGPUShaderStage_Fragment | WGPUShaderStage_Compute);
+            entry.buffer.type = isWritable ? WGPUBufferBindingType_Storage
+                                           : WGPUBufferBindingType_ReadOnlyStorage;
         }
 
         WGPUBindGroupLayoutDescriptor layoutDescriptor{};
         layoutDescriptor.label = toWGPUStringView("VkmBindlessBindGroupLayout");
-        layoutDescriptor.entryCount = 4;
+        layoutDescriptor.entryCount = kEntryCount;
         layoutDescriptor.entries = layoutEntries;
         _bindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDescriptor);
         if (_bindGroupLayout == nullptr)
@@ -82,7 +119,15 @@ namespace vkm
             return false;
         }
 
-        WGPUBindGroupEntry bindEntries[4]{};
+        return recreateBindGroup();
+    }
+
+    bool VkmBindlessResourceManagerWebGPU::recreateBindGroup()
+    {
+        constexpr uint32_t kSingletonCount = static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count);
+        constexpr uint32_t kEntryCount = kFirstSingletonBinding + kSingletonCount;
+
+        WGPUBindGroupEntry bindEntries[kEntryCount]{};
         bindEntries[0].binding = 0;
         bindEntries[0].buffer = _pushConstantRing;
         bindEntries[0].offset = 0;
@@ -95,21 +140,64 @@ namespace vkm
         bindEntries[2].size = INDEX_MEGA_BUFFER_SIZE;
         bindEntries[3].binding = 3;
         bindEntries[3].buffer = _slotTable;
-        bindEntries[3].size = slotTableSize;
+        bindEntries[3].size = _slotTableSize;
+        for (uint32_t i = 0; i < kSingletonCount; ++i)
+        {
+            WGPUBindGroupEntry& entry = bindEntries[kFirstSingletonBinding + i];
+            entry.binding = kFirstSingletonBinding + i;
+            const bool bound = _singletonBuffers[i] != nullptr;
+            entry.buffer = bound ? _singletonBuffers[i] : _singletonPlaceholder;
+            entry.size = bound ? _singletonSizes[i] : kSingletonPlaceholderSize;
+        }
 
         WGPUBindGroupDescriptor bindGroupDescriptor{};
         bindGroupDescriptor.label = toWGPUStringView("VkmBindlessBindGroup");
         bindGroupDescriptor.layout = _bindGroupLayout;
-        bindGroupDescriptor.entryCount = 4;
+        bindGroupDescriptor.entryCount = kEntryCount;
         bindGroupDescriptor.entries = bindEntries;
-        _bindGroup = wgpuDeviceCreateBindGroup(device, &bindGroupDescriptor);
-        if (_bindGroup == nullptr)
+
+        WGPUBindGroup bindGroup = wgpuDeviceCreateBindGroup(_driver->getDevice(), &bindGroupDescriptor);
+        if (bindGroup == nullptr)
         {
             VKM_DEBUG_ERROR("Failed to create bindless bind group");
             return false;
         }
 
+        if (_bindGroup != nullptr)
+        {
+            wgpuBindGroupRelease(_bindGroup);
+        }
+        _bindGroup = bindGroup;
         return true;
+    }
+
+    bool VkmBindlessResourceManagerWebGPU::setSingletonBuffer(VkmBindlessSingletonBuffer which, VkmResourceHandle bufferHandle)
+    {
+        VKM_ASSERT(which < VkmBindlessSingletonBuffer::Count, "Unknown VkmBindlessSingletonBuffer");
+
+        const size_t index = static_cast<size_t>(which);
+        if (bufferHandle == VKM_INVALID_RESOURCE_HANDLE)
+        {
+            if (_singletonBuffers[index] == nullptr)
+            {
+                return true;
+            }
+            _singletonBuffers[index] = nullptr;
+            _singletonSizes[index] = 0;
+            return recreateBindGroup();
+        }
+
+        VkmBufferWebGPU* bufferWebGPU = static_cast<VkmBufferWebGPU*>(
+            _driver->getRenderResourcePool()->getResource<VkmBuffer>(bufferHandle));
+        if (bufferWebGPU == nullptr)
+        {
+            VKM_DEBUG_ERROR("setSingletonBuffer was given a handle that is not a live buffer");
+            return false;
+        }
+
+        _singletonBuffers[index] = bufferWebGPU->getBuffer();
+        _singletonSizes[index] = bufferWebGPU->getBufferInfo()._size;
+        return recreateBindGroup();
     }
 
     void VkmBindlessResourceManagerWebGPU::destroy()
@@ -124,7 +212,8 @@ namespace vkm
             wgpuBindGroupLayoutRelease(_bindGroupLayout);
             _bindGroupLayout = nullptr;
         }
-        for (WGPUBuffer* buffer : {&_pushConstantRing, &_slotTable, &_indexMegaBuffer, &_vertexMegaBuffer})
+        for (WGPUBuffer* buffer : {&_pushConstantRing, &_slotTable, &_indexMegaBuffer, &_vertexMegaBuffer,
+                                   &_singletonPlaceholder})
         {
             if (*buffer != nullptr)
             {
@@ -132,6 +221,9 @@ namespace vkm
                 *buffer = nullptr;
             }
         }
+        // Not owned here -- the scene owns the buffers it published.
+        _singletonBuffers.fill(nullptr);
+        _singletonSizes.fill(0);
     }
 
     uint32_t VkmBindlessResourceManagerWebGPU::registerBuffer(VkmResourceHandle bufferHandle, VkmBindlessArrayType arrayType)
@@ -140,16 +232,15 @@ namespace vkm
             "registerBuffer only accepts Buffer or IndexBuffer array types");
 
         const bool isVertexArray = (arrayType == VkmBindlessArrayType::Buffer);
-        const uint32_t elementStride = isVertexArray ? VERTEX_ELEMENT_STRIDE : INDEX_ELEMENT_STRIDE;
 
         VkmBufferWebGPU* bufferWebGPU = static_cast<VkmBufferWebGPU*>(
             _driver->getRenderResourcePool()->getResource<VkmBuffer>(bufferHandle));
         const VkmBufferInfo& bufferInfo = bufferWebGPU->getBufferInfo();
 
-        // The mega-buffers are typed WGSL arrays; sources must be whole elements and
-        // copyable (see the class comment for the convention this enforces).
-        VKM_ASSERT(bufferInfo._size % elementStride == 0,
-            "Bindless-registered WebGPU buffers must be tightly packed arrays of the engine element type");
+        // Both mega-buffers are u32 word arrays, so the only requirement on a source is that it is
+        // a whole number of words -- any vertex stride works (see the class comment).
+        VKM_ASSERT(bufferInfo._size % ELEMENT_STRIDE == 0,
+            "Bindless-registered WebGPU buffers must be a whole number of u32 words");
         VKM_ASSERT(bufferInfo._flags & VkmResourceCreateInfo::AllowTransferSrc,
             "Bindless-registered WebGPU buffers need AllowTransferSrc for the mega-buffer copy");
 
@@ -162,8 +253,10 @@ namespace vkm
         }
 
         VkmOffsetAllocator& megaAllocator = isVertexArray ? _vertexMegaAllocator : _indexMegaAllocator;
+        // 16-byte alignment keeps a float4-aligned vertex attribute aligned inside the pool too,
+        // and is a multiple of the u32 word the offsets are expressed in.
         const VkmGpuMemoryAllocation allocation =
-            megaAllocator.allocate(static_cast<uint32_t>(bufferInfo._size), elementStride);
+            megaAllocator.allocate(static_cast<uint32_t>(bufferInfo._size), 16);
         if (!allocation.isValid())
         {
             // Fail-hard at capacity: mega-buffer growth is deliberately out of scope (TODO.md).
@@ -189,12 +282,12 @@ namespace vkm
         wgpuCommandBufferRelease(commandBuffer);
         wgpuCommandEncoderRelease(encoder);
 
-        // Publish the range's element offset in the slot table (index-buffer slots live in
-        // the table's upper half -- see the shader-side convention).
-        const uint32_t elementOffset = allocation._offset / elementStride;
+        // Publish the range's u32-word offset in the slot table (index-pool slots live in the
+        // table's upper half -- see the shader-side convention).
+        const uint32_t wordOffset = allocation._offset / ELEMENT_STRIDE;
         const uint32_t tableIndex = isVertexArray ? slot : (kVkmBindlessBufferCapacity + slot);
         wgpuQueueWriteBuffer(queue, _slotTable, tableIndex * sizeof(uint32_t),
-                             &elementOffset, sizeof(elementOffset));
+                             &wordOffset, sizeof(wordOffset));
 
         return slot;
     }

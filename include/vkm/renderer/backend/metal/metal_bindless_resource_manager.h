@@ -40,6 +40,7 @@ namespace vkm
 
         uint32_t registerBuffer(VkmResourceHandle bufferHandle, VkmBindlessArrayType arrayType) override final;
         void unregisterBuffer(uint32_t slot, VkmBindlessArrayType arrayType) override final;
+        bool setSingletonBuffer(VkmBindlessSingletonBuffer which, VkmResourceHandle bufferHandle) override final;
 
         // Publishes the texture's MTLResourceID at the returned slot of the argument
         // buffer's texture range.

@@ -117,7 +117,7 @@ namespace vkm
         uint64_t count = 0;
         for (const VkmSceneMesh& mesh : _meshes)
         {
-            count += mesh._vertices.size();
+            count += mesh._vertexCount;
         }
         return count;
     }

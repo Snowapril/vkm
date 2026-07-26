@@ -189,9 +189,35 @@ namespace vkm
     void VkmCommandBufferMetal::onBindPipeline(VkmPipelineStateBase* pipelineState)
     {
         VkmPipelineStateMetal* pipelineStateMetal = static_cast<VkmPipelineStateMetal*>(pipelineState);
+        VkmBindlessResourceManagerMetal* bindlessManager =
+            static_cast<VkmDriverMetal*>(_driver)->getBindlessResourceManager();
+
         if (pipelineStateMetal->isCompute())
         {
-            [_commandEncoder.getActiveComputeCommandEncoder() setComputePipelineState:pipelineStateMetal->getComputePipelineState()];
+            /*
+            * A compute pipeline bind is what opens the compute pass (and unbindPipeline closes it):
+            * a dispatch is recorded outside any render pass, and Metal has no encoder-less compute.
+            * One encoder per pass -- never one per barrier, per the MTL4CommandQueueErrorTimeout
+            * lesson in common/AGENTS.md.
+            */
+            if (_commandEncoder.getActiveComputeCommandEncoder() == nullptr)
+            {
+                _commandEncoder.beginComputePass();
+            }
+            id<MTL4ComputeCommandEncoder> computeEncoder = _commandEncoder.getActiveComputeCommandEncoder();
+            [computeEncoder setComputePipelineState:pipelineStateMetal->getComputePipelineState()];
+
+            // Metal 4 does no automatic hazard tracking: make preceding copies (e.g. the scene's
+            // per-frame ObjectData upload) visible to this pass.
+            [computeEncoder barrierAfterQueueStages:MTLStageAll
+                                       beforeStages:MTLStageDispatch
+                                  visibilityOptions:MTL4VisibilityOptionDevice];
+
+            // The compute stage reaches the same engine-global bindless set the graphics stages do.
+            id<MTL4ArgumentTable> argumentTable = bindlessManager->getArgumentTable();
+            [computeEncoder setArgumentTable:argumentTable];
+            [argumentTable setAddress:bindlessManager->getArgumentBuffer().gpuAddress
+                              atIndex:kVkmMetalBindlessArgumentBufferIndex];
         }
         else
         {
@@ -205,8 +231,6 @@ namespace vkm
             // the set-0 argument buffer at [[buffer(2)]] and a safe default for the
             // push-constant slot at [[buffer(3)]] (overwritten per setPushConstants call).
             // Mirrors VkmCommandBufferVulkan::onBindPipeline's implicit set-0 bind.
-            VkmBindlessResourceManagerMetal* bindlessManager =
-                static_cast<VkmDriverMetal*>(_driver)->getBindlessResourceManager();
             id<MTL4ArgumentTable> argumentTable = bindlessManager->getArgumentTable();
             [renderCommandEncoder setArgumentTable:argumentTable
                                           atStages:MTLRenderStageVertex | MTLRenderStageFragment];
@@ -222,8 +246,17 @@ namespace vkm
 
     void VkmCommandBufferMetal::onUnbindPipeline()
     {
-        // No explicit "unbind" concept in Metal -- the next bindPipeline() call (or the
-        // end of the render/compute pass) supersedes whatever pipeline state is set.
+        // No explicit "unbind" concept in Metal for graphics -- the next bindPipeline() call (or the
+        // end of the render pass) supersedes whatever pipeline state is set. A compute pass, though,
+        // is opened by its pipeline bind, so this is where it closes: publish its writes to
+        // everything recorded afterwards, then end the encoder.
+        if (_commandEncoder.getActiveComputeCommandEncoder() != nullptr)
+        {
+            [_commandEncoder.getActiveComputeCommandEncoder() barrierAfterStages:MTLStageDispatch
+                                                              beforeQueueStages:MTLStageAll
+                                                              visibilityOptions:MTL4VisibilityOptionDevice];
+            _commandEncoder.commit();
+        }
     }
 
     void VkmCommandBufferMetal::onCopyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size)
@@ -364,6 +397,48 @@ namespace vkm
                                                             vertexCount:vertexCount
                                                           instanceCount:instanceCount
                                                            baseInstance:firstInstance];
+    }
+
+    void VkmCommandBufferMetal::onDrawIndirectCount(VkmIndirectArgumentLayout layout,
+                                                    VkmResourceHandle argumentBuffer, uint64_t argumentOffset,
+                                                    VkmResourceHandle countBuffer, uint64_t countOffset,
+                                                    uint32_t maxDrawCount)
+    {
+        // Metal 4 has no multi-draw and no GPU-side draw count for a plain indirect draw, so this
+        // encodes one indirect draw per candidate slot. All-zero argument records draw nothing,
+        // which is what culled slots are -- see VkmCommandBufferBase::drawIndirectCount for the
+        // compaction contract that makes this agree with Vulkan's vkCmdDrawIndirectCount.
+        (void)countBuffer;
+        (void)countOffset;
+
+        const uint64_t argumentStride = vkmGetIndirectArgumentStride(layout);
+        id<MTLBuffer> mtlArgumentBuffer = resolveMTLBuffer(_driver->getRenderResourcePool(), argumentBuffer);
+        const MTLGPUAddress base = mtlArgumentBuffer.gpuAddress + argumentOffset;
+        id<MTL4RenderCommandEncoder> renderCommandEncoder = _commandEncoder.getActiveRenderCommandEncoder();
+        for (uint32_t i = 0; i < maxDrawCount; ++i)
+        {
+            [renderCommandEncoder drawPrimitives:static_cast<MTLPrimitiveType>(_boundPrimitiveType)
+                                 indirectBuffer:base + static_cast<uint64_t>(i) * argumentStride];
+        }
+    }
+
+    void VkmCommandBufferMetal::onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
+    {
+        // Threadgroup width is the engine-wide constant every engine compute shader declares:
+        // MTLComputePipelineState cannot be asked what [numthreads(...)] the shader used.
+        [_commandEncoder.getActiveComputeCommandEncoder()
+            dispatchThreadgroups:MTLSizeMake(groupCountX, groupCountY, groupCountZ)
+           threadsPerThreadgroup:MTLSizeMake(kVkmComputeThreadGroupSizeX, 1, 1)];
+    }
+
+    void VkmCommandBufferMetal::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)
+    {
+        (void)buffer;
+        // Metal 4 barriers are encoder-scoped rather than per-resource. A compute pass already
+        // brackets itself (onBindPipeline waits for prior queue stages, onUnbindPipeline publishes
+        // to later ones) and onCopyBuffer does the same, so every ordering this call exists to
+        // establish is already covered. Opening an encoder just to emit a barrier is exactly what
+        // caused the MTL4CommandQueueErrorTimeout documented in common/AGENTS.md.
     }
 
     void VkmCommandBufferMetal::onSetPushConstants(const void* data, uint32_t size, uint32_t offset)

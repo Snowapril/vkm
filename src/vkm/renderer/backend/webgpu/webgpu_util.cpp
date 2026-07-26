@@ -83,6 +83,7 @@ namespace vkm
         if ((flags & VkmResourceCreateInfo::AllowTransferDst) != 0) usage |= WGPUBufferUsage_CopyDst;
         if ((flags & VkmResourceCreateInfo::AllowShaderRead) != 0) usage |= WGPUBufferUsage_Uniform;
         if ((flags & VkmResourceCreateInfo::AllowShaderWrite) != 0) usage |= WGPUBufferUsage_Storage;
+        if ((flags & VkmResourceCreateInfo::AllowIndirectBuffer) != 0) usage |= WGPUBufferUsage_Indirect;
         return static_cast<WGPUBufferUsage>(usage);
     }
 

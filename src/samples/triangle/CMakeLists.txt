@@ -101,6 +101,9 @@ if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
     target_link_options(${target} PRIVATE
         "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}@/SampleData/triangle"
         "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/ShaderCache@/ShaderCache/triangle"
+        # VkmEngine loads its own PSO cache from RESOURCES_DIR, which is /resources/ under
+        # Emscripten (see src/vkm/CMakeLists.txt).
+        ${VKM_WASM_ENGINE_RESOURCE_PRELOAD}
     )
 endif()
 
@@ -113,6 +116,9 @@ vkm_add_shader_cache_target(
     EXTRA_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/triangle.hlsl")
 if (TARGET triangle_shaders)
     add_dependencies(${target} triangle_shaders)
+endif()
+if (TARGET vkm_engine_shaders)
+    add_dependencies(${target} vkm_engine_shaders)
     if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
         # Repack the .data bundle when regenerated caches change (the stamp path
         # matches vkm_add_shader_cache_target's naming for this target's single

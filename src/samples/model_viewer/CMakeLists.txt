@@ -98,6 +98,9 @@ if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
     target_link_options(${target} PRIVATE
         "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}@/SampleData/model_viewer"
         "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/ShaderCache@/ShaderCache/model_viewer"
+        # VkmEngine loads its own PSO cache from RESOURCES_DIR, which is /resources/ under
+        # Emscripten (see src/vkm/CMakeLists.txt).
+        ${VKM_WASM_ENGINE_RESOURCE_PRELOAD}
     )
 endif()
 
@@ -107,6 +110,10 @@ vkm_add_shader_cache_target(
     OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
     PSO_JSON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/renderpass.json"
     EXTRA_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/model_viewer.hlsl")
+if (TARGET vkm_engine_shaders)
+    # The scene's culling / emit compute PSOs live in the engine shader cache.
+    add_dependencies(${target} vkm_engine_shaders)
+endif()
 if (TARGET model_viewer_shaders)
     add_dependencies(${target} model_viewer_shaders)
     if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)

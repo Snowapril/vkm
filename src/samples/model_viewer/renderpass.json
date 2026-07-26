@@ -21,6 +21,8 @@
         "fragment": { "filepath": "model_viewer.hlsl", "entry_point": "PSMain" }
     },
     "options": {
-        "default": {}
+        "standard_pbr":  { "definitions": { "VKM_VERTEX_LAYOUT_STANDARD_PBR":  true } },
+        "compact":       { "definitions": { "VKM_VERTEX_LAYOUT_COMPACT":       true } },
+        "position_only": { "definitions": { "VKM_VERTEX_LAYOUT_POSITION_ONLY": true } }
     }
 }

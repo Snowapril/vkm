@@ -36,6 +36,12 @@
 - Render graph capture texture previews in ImGui are Metal-only (`getTextureID` returns 0 on Vulkan/WebGPU).
 - Programmatic .gputrace capture scopes only the Metal Graphics queue 0; Vulkan/WebGPU `requestGpuFrameCapture()` is a no-op (no RenderDoc integration).
 - glTF import covers geometry and material factors only: no textures, no samplers, no animation/skinning, no Draco/KTX2/`EXT_meshopt_compression` (the texture upload/bindless path it would need now exists).
+- Metal's emit stage is the shared HLSL one (`scene_emit_draws.hlsl`) and its `drawIndirectCount` encodes one `drawPrimitives:indirectBuffer:` per candidate slot. The planned Metal-only variant — an MSL kernel filling an `MTLIndirectCommandBuffer` plus `executeCommandsInBuffer:indirectBuffer:` — is not implemented; it needs the emit dispatch to become a backend service (Vulkan/WebGPU dispatch the engine HLSL PSO, Metal dispatches an embedded metallib kernel) so `VkmScene` stays backend-free, and it needs `inheritBuffers` proven against an MTL4 argument table first.
+- WebGPU indirect batches encode `maxDrawCount` draws per frame; no render-bundle caching, so the per-draw encode cost is paid every frame.
+- The culling pass and the WebGPU emit path are compile-verified only: the GPU-driven path is pixel- and count-verified on Metal, and the WebGPU/wasm test path needs emsdk plus Chrome, which `run_tests.py` skips when they are absent.
+- `VkmScene`'s dirty-range upload collapses to `[min, max]`, so two far-apart objects moving re-uploads every `VkmObjectData` that frame.
+- The culling pass tests one bounding sphere per object with no hierarchy, so a large object that straddles the frustum edge is never partially rejected, and there is no occlusion or LOD selection.
+- meshoptimizer clusterization is unused: `VkmSceneGeometryPool` is shaped to carry a meshlet pool (one more bindless slot, two more `MeshRange` fields) but nothing builds meshlets and there is no mesh-shader pipeline.
 - Imported vertices keep a zeroed `TANGENT` when the asset omits one (no MikkTSpace-style generator), and generated normals are area-weighted smooth rather than the spec's flat normals.
 - `copyBufferToTexture`/`uploadToTexture`, `registerTexture` and the set-0 sampler are Vulkan/Metal-only; WebGPU has error-logging stubs (WGSL has no runtime-sized texture arrays).
 - Set 0 has one fixed linear/clamp-to-edge sampler at binding 3 rather than a sampler array, so per-texture filter/address modes are not selectable in shaders.

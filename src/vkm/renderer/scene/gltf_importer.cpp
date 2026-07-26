@@ -10,6 +10,7 @@
 #include <meshoptimizer.h>
 
 #include <utility>
+#include <vector>
 
 namespace vkm
 {
@@ -61,14 +62,35 @@ namespace vkm
         * we instead accumulate area-weighted face normals per vertex, which keeps the index
         * buffer intact at the cost of smoothing hard edges on such assets.
         */
+        // Byte address of vertex `index` inside a mesh's interleaved vertex storage.
+        inline uint8_t* vertexAt(VkmSceneMesh& mesh, uint32_t index)
+        {
+            return mesh._vertexData.data() + static_cast<size_t>(index) * mesh._layout._stride;
+        }
+        inline const uint8_t* vertexAt(const VkmSceneMesh& mesh, uint32_t index)
+        {
+            return mesh._vertexData.data() + static_cast<size_t>(index) * mesh._layout._stride;
+        }
+
+        glm::vec3 readPosition(const VkmSceneMesh& mesh, uint32_t index)
+        {
+            float position[3];
+            vkmReadVertexAttribute(vertexAt(mesh, index), mesh._layout, VkmVertexSemantic::Position, position, 3);
+            return glm::make_vec3(position);
+        }
+
         void generateNormals(VkmSceneMesh& mesh)
         {
-            for (VkmSceneVertex& vertex : mesh._vertices)
+            // Nothing to write into: a layout without a normal attribute (PositionOnly) simply
+            // does not carry shading data.
+            if (vkmFindVertexAttribute(mesh._layout, VkmVertexSemantic::Normal) == nullptr)
             {
-                vertex._normal[0] = 0.0f;
-                vertex._normal[1] = 0.0f;
-                vertex._normal[2] = 0.0f;
+                return;
             }
+
+            // Accumulate in a float scratch rather than read-modify-writing the packed storage:
+            // a quantized normal format would lose the running sum between triangles.
+            std::vector<glm::vec3> accumulated(mesh._vertexCount, glm::vec3(0.0f));
 
             for (size_t i = 0; i + 2 < mesh._indices.size(); i += 3)
             {
@@ -76,47 +98,43 @@ namespace vkm
                 const uint32_t i1 = mesh._indices[i + 1];
                 const uint32_t i2 = mesh._indices[i + 2];
 
-                const glm::vec3 p0 = glm::make_vec3(mesh._vertices[i0]._position);
-                const glm::vec3 p1 = glm::make_vec3(mesh._vertices[i1]._position);
-                const glm::vec3 p2 = glm::make_vec3(mesh._vertices[i2]._position);
-
                 // Unnormalized: its length is twice the triangle area, which is exactly the
                 // weight we want each face to contribute.
-                const glm::vec3 faceNormal = glm::cross(p1 - p0, p2 - p0);
+                const glm::vec3 faceNormal =
+                    glm::cross(readPosition(mesh, i1) - readPosition(mesh, i0),
+                               readPosition(mesh, i2) - readPosition(mesh, i0));
 
                 for (const uint32_t index : { i0, i1, i2 })
                 {
-                    mesh._vertices[index]._normal[0] += faceNormal.x;
-                    mesh._vertices[index]._normal[1] += faceNormal.y;
-                    mesh._vertices[index]._normal[2] += faceNormal.z;
+                    accumulated[index] += faceNormal;
                 }
             }
 
-            for (VkmSceneVertex& vertex : mesh._vertices)
+            for (uint32_t i = 0; i < mesh._vertexCount; ++i)
             {
-                const glm::vec3 normal = glm::make_vec3(vertex._normal);
-                const float length = glm::length(normal);
-                const glm::vec3 unitNormal = length > 0.0f ? normal / length : glm::vec3(0.0f, 1.0f, 0.0f);
-                vertex._normal[0] = unitNormal.x;
-                vertex._normal[1] = unitNormal.y;
-                vertex._normal[2] = unitNormal.z;
+                const float length = glm::length(accumulated[i]);
+                const glm::vec3 unitNormal = length > 0.0f ? accumulated[i] / length : glm::vec3(0.0f, 1.0f, 0.0f);
+                vkmWriteVertexAttribute(vertexAt(mesh, i), mesh._layout, VkmVertexSemantic::Normal,
+                                        glm::value_ptr(unitNormal), 3);
             }
         }
 
         void optimizeMesh(VkmSceneMesh& mesh)
         {
-            if (mesh._indices.empty() || mesh._vertices.empty())
+            if (mesh._indices.empty() || mesh._vertexCount == 0)
             {
                 return;
             }
 
             meshopt_optimizeVertexCache(mesh._indices.data(), mesh._indices.data(),
-                                        mesh._indices.size(), mesh._vertices.size());
+                                        mesh._indices.size(), mesh._vertexCount);
 
+            // meshoptimizer takes the vertex stride, so this works for any layout preset.
             const size_t remainingVertexCount = meshopt_optimizeVertexFetch(
-                mesh._vertices.data(), mesh._indices.data(), mesh._indices.size(),
-                mesh._vertices.data(), mesh._vertices.size(), sizeof(VkmSceneVertex));
-            mesh._vertices.resize(remainingVertexCount);
+                mesh._vertexData.data(), mesh._indices.data(), mesh._indices.size(),
+                mesh._vertexData.data(), mesh._vertexCount, mesh._layout._stride);
+            mesh._vertexCount = static_cast<uint32_t>(remainingVertexCount);
+            mesh._vertexData.resize(static_cast<size_t>(mesh._vertexCount) * mesh._layout._stride);
         }
 
         // Converts one triangle primitive; returns false (with a warning already logged) for
@@ -144,20 +162,33 @@ namespace vkm
             const cgltf_accessor* tangents = cgltf_find_accessor(&primitive, cgltf_attribute_type_tangent, 0);
 
             VkmSceneMesh mesh;
-            mesh._vertices.resize(positions->count);
+            mesh._layout = vkmGetVertexLayoutPreset(options._vertexLayout);
+            mesh._vertexCount = static_cast<uint32_t>(positions->count);
+            // Zero-initialized, which is what leaves attributes the asset omits at zero.
+            mesh._vertexData.assign(static_cast<size_t>(mesh._vertexCount) * mesh._layout._stride, 0);
+
             for (cgltf_size i = 0; i < positions->count; ++i)
             {
-                VkmSceneVertex& vertex = mesh._vertices[i];
-                vertex = VkmSceneVertex{};
+                uint8_t* vertex = vertexAt(mesh, static_cast<uint32_t>(i));
 
-                readElement(positions, i, vertex._position, 3);
-                readElement(normals, i, vertex._normal, 3);
-                readElement(uvs, i, vertex._uv0, 2);
+                // Read through a float scratch and let vkmWriteVertexAttribute do the packing;
+                // writes for semantics this layout omits are no-ops.
+                float scratch[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+                readElement(positions, i, scratch, 3);
+                vkmWriteVertexAttribute(vertex, mesh._layout, VkmVertexSemantic::Position, scratch, 3);
+                mesh._bounds.expand(glm::make_vec3(scratch));
+
+                readElement(normals, i, scratch, 3);
+                vkmWriteVertexAttribute(vertex, mesh._layout, VkmVertexSemantic::Normal, scratch, 3);
+
+                readElement(uvs, i, scratch, 2);
+                vkmWriteVertexAttribute(vertex, mesh._layout, VkmVertexSemantic::UV0, scratch, 2);
+
                 // Tangents stay zeroed when absent: nothing consumes them yet, and deriving
                 // them properly needs a MikkTSpace-style generator.
-                readElement(tangents, i, vertex._tangent, 4);
-
-                mesh._bounds.expand(glm::make_vec3(vertex._position));
+                readElement(tangents, i, scratch, 4);
+                vkmWriteVertexAttribute(vertex, mesh._layout, VkmVertexSemantic::Tangent, scratch, 4);
             }
 
             if (primitive.indices != nullptr)
@@ -168,7 +199,7 @@ namespace vkm
 
                 for (const uint32_t index : mesh._indices)
                 {
-                    if (index >= mesh._vertices.size())
+                    if (index >= mesh._vertexCount)
                     {
                         VKM_DEBUG_WARN("glTF import: skipping a primitive whose indices are out of range");
                         return false;

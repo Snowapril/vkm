@@ -77,6 +77,48 @@ namespace vkm
         // Draw related -- indices, if any, are fetched manually in-shader via a bindless
         // index buffer rather than a bound VkBuffer, so there is no separate "indexed" draw.
         void draw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex = 0, uint32_t firstInstance = 0);
+
+        /*
+        * @brief GPU-driven draw: `argumentBuffer` holds `maxDrawCount` consecutive records of
+        * `layout` starting at `argumentOffset`, and `countBuffer`/`countOffset` name a uint32 the
+        * GPU wrote with how many of them are live.
+        *
+        * `layout` is what the record stride comes from (vkmGetIndirectArgumentStride), so a caller
+        * declares the buffer's structure instead of every backend assuming it.
+        *
+        * Only Vulkan consumes the count buffer (vkCmdDrawIndirectCount). Metal 4 and WebGPU core
+        * have neither a GPU-side draw count nor multi-draw, so they encode exactly `maxDrawCount`
+        * indirect draws and rely on all-zero records being no-ops. The producing pass must
+        * therefore ALWAYS (a) compact surviving draws to the front of the range and (b) leave the
+        * rest zeroed -- otherwise the backends disagree about what gets drawn.
+        *
+        * Only VkmIndirectArgumentLayout::NonIndexed is accepted today: an indexed draw needs a
+        * bound index buffer, and this engine deliberately has none (see draw() above). Indexed is
+        * rejected here rather than in each backend so none of them carries a dead branch.
+        *
+        * Callers must have recorded barrierIndirectArgumentBuffer() for `argumentBuffer` after the
+        * writing dispatch and before beginRenderPass().
+        */
+        void drawIndirectCount(VkmIndirectArgumentLayout layout,
+                               VkmResourceHandle argumentBuffer, uint64_t argumentOffset,
+                               VkmResourceHandle countBuffer, uint64_t countOffset,
+                               uint32_t maxDrawCount);
+
+        /*
+        * @brief Compute dispatch of `groupCount*` threadgroups. Must be recorded outside a render
+        * pass with a compute pipeline bound; the backing compute pass is opened by that bindPipeline()
+        * and closed by unbindPipeline(). The threadgroup width is the engine-wide
+        * kVkmComputeThreadGroupSizeX, which Metal needs here and cannot query from its pipeline.
+        */
+        void dispatch(uint32_t groupCountX, uint32_t groupCountY = 1, uint32_t groupCountZ = 1);
+
+        /*
+        * @brief Orders GPU-driven bookkeeping buffers: transfer and compute writes to `buffer`
+        * recorded before this call become visible to compute reads and indirect-argument fetches
+        * recorded after it. Must be recorded outside a render pass.
+        */
+        void barrierIndirectArgumentBuffer(VkmResourceHandle buffer);
+
         void setPushConstants(const void* data, uint32_t size, uint32_t offset = 0);
 
         // GPU frame-time profiling hooks for the engine debug overlay. Only Vulkan overrides
@@ -146,6 +188,15 @@ namespace vkm
         virtual void onCopyBufferToTexture(VkmResourceHandle srcBuffer, VkmResourceHandle dstTexture, uint64_t srcOffset, uint32_t mipLevel, uint32_t arrayLayer) = 0;
         virtual void onCopyTexture(VkmResourceHandle srcTexture, VkmResourceHandle dstTexture) = 0;
         virtual void onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) = 0;
+        // `layout` is guaranteed to be NonIndexed today (drawIndirectCount rejects the rest), but
+        // the record stride must still be taken from it via vkmGetIndirectArgumentStride rather
+        // than assumed.
+        virtual void onDrawIndirectCount(VkmIndirectArgumentLayout layout,
+                                         VkmResourceHandle argumentBuffer, uint64_t argumentOffset,
+                                         VkmResourceHandle countBuffer, uint64_t countOffset,
+                                         uint32_t maxDrawCount) = 0;
+        virtual void onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
+        virtual void onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer) = 0;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) = 0;
         virtual void onSetDebugName(const char* name) = 0;
         virtual void onPushDebugGroup(const char* name) = 0;

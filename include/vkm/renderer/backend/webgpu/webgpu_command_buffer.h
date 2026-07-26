@@ -33,6 +33,12 @@ namespace vkm
         virtual void onCopyTexture(VkmResourceHandle srcTexture, VkmResourceHandle dstTexture) override final;
         virtual void onCopyBufferToTexture(VkmResourceHandle srcBuffer, VkmResourceHandle dstTexture, uint64_t srcOffset, uint32_t mipLevel, uint32_t arrayLayer) override final;
         virtual void onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) override final;
+        virtual void onDrawIndirectCount(VkmIndirectArgumentLayout layout,
+                                         VkmResourceHandle argumentBuffer, uint64_t argumentOffset,
+                                         VkmResourceHandle countBuffer, uint64_t countOffset,
+                                         uint32_t maxDrawCount) override final;
+        virtual void onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) override final;
+        virtual void onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer) override final;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) override final;
         virtual void onSetDebugName(const char* name) override final;
         virtual void onPushDebugGroup(const char* name) override final;
