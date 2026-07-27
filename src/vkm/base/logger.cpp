@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/base/logger.h>
+#include <vkm/base/global_variable.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <iostream>
@@ -12,6 +13,7 @@
 
 namespace vkm
 {
+    VKM_GLOBAL_VARIABLE(bool, gv_logger_verbose, false);
     Logger::Logger()
     {
 
@@ -25,9 +27,15 @@ namespace vkm
     bool Logger::initializeCommon()
     {
         #if defined(VKM_DEBUG)
-            _logger->set_level(spdlog::level::debug);
+        if (gv_logger_verbose.get())
+        {
+
+        }
+        else
         #else
+        {
             _logger->set_level(spdlog::level::info);
+        }
         #endif
         
         _logger->set_pattern("[%H:%M:%S %z] [%n] [%^--%L--%$] [thread %t] %v");
