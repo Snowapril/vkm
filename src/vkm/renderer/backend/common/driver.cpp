@@ -197,8 +197,43 @@ namespace vkm
         return stagingBuffer;
     }
 
-    bool VkmDriverBase::uploadToBuffer(VkmResourceHandle dstBuffer, const void* data, uint64_t size, uint64_t dstOffset)
+    bool VkmDriverBase::uploadToBuffer(VkmResourceHandle dstBuffer, const void* data, uint64_t size, uint64_t dstOffset, VkmResourceUploadMode mode)
     {
+        VkmBuffer* buffer = _renderResourcePool->getResource<VkmBuffer>(dstBuffer);
+        if (buffer == nullptr)
+        {
+            VKM_DEBUG_ERROR("uploadToBuffer: invalid buffer handle");
+            return false;
+        }
+        if (dstOffset + size > buffer->getBufferInfo()._size)
+        {
+            VKM_DEBUG_ERROR("uploadToBuffer: the destination range is outside the buffer");
+            return false;
+        }
+
+        // The destination's own memory decides what is possible; the mode only chooses among
+        // what that already made available.
+        const bool hostCopyAvailable = buffer->isHostWritable();
+        if (mode == VkmResourceUploadMode::ForceHostCopy && !hostCopyAvailable)
+        {
+            VKM_DEBUG_WARN("uploadToBuffer: ForceHostCopy requested but this buffer's memory is not host-writable; using the staging path");
+        }
+        if (hostCopyAvailable && mode != VkmResourceUploadMode::ForceStaging)
+        {
+            // No staging buffer, no command buffer, no submit, no wait -- the CPU writes the
+            // buffer's memory in place.
+            void* mapped = buffer->map();
+            if (mapped != nullptr)
+            {
+                std::memcpy(static_cast<uint8_t*>(mapped) + dstOffset, data, size);
+                buffer->unmap();
+                return true;
+            }
+            // isHostWritable() said yes but the mapping is gone; the staging path below writes
+            // the same bytes, so fall through rather than fail.
+            VKM_DEBUG_WARN("uploadToBuffer: a host-writable buffer returned no mapped pointer; using the staging path");
+        }
+
         VkmStagingBufferInfo stagingInfo{};
         stagingInfo._flags = VkmResourceCreateInfo::AllowTransferSrc;
         stagingInfo._size = size;
@@ -211,6 +246,12 @@ namespace vkm
         }
 
         void* mapped = stagingBuffer->map();
+        if (mapped == nullptr)
+        {
+            VKM_DEBUG_ERROR("uploadToBuffer: failed to map the staging buffer");
+            _renderResourcePool->releaseResource(stagingBuffer->getHandle());
+            return false;
+        }
         std::memcpy(mapped, data, size);
         stagingBuffer->unmap();
         stagingBuffer->flush(0, size);
@@ -236,7 +277,7 @@ namespace vkm
     }
 
     bool VkmDriverBase::uploadToTexture(VkmResourceHandle dstTexture, const void* data, uint64_t size,
-                                        uint32_t mipLevel, uint32_t arrayLayer, VkmTextureUploadMode mode)
+                                        uint32_t mipLevel, uint32_t arrayLayer, VkmResourceUploadMode mode)
     {
         if ((getDriverCapabilityFlags() & VkmDriverCapabilityFlags::TextureUpload) == 0)
         {
@@ -254,11 +295,11 @@ namespace vkm
         // The destination's own memory decides what is possible; the mode only chooses among
         // what that already made available.
         const bool hostCopyAvailable = texture->isHostWritable();
-        if (mode == VkmTextureUploadMode::ForceHostCopy && !hostCopyAvailable)
+        if (mode == VkmResourceUploadMode::ForceHostCopy && !hostCopyAvailable)
         {
             VKM_DEBUG_WARN("uploadToTexture: ForceHostCopy requested but this texture's memory is not host-writable; using the staging path");
         }
-        if (hostCopyAvailable && mode != VkmTextureUploadMode::ForceStaging)
+        if (hostCopyAvailable && mode != VkmResourceUploadMode::ForceStaging)
         {
             // No staging buffer, no command buffer, no submit, no wait -- the CPU writes the
             // texture's memory in place.

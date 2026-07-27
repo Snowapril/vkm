@@ -38,6 +38,13 @@ namespace vkm
         */
         virtual void writeDirect(uint64_t offset, const void* data, uint64_t size) = 0;
 
+        /*
+        * @brief This buffer's address in the GPU's address space, or 0 where there is no such
+        * concept: WebGPU always, and Vulkan without
+        * VkmDriverCapabilityFlags::BufferDeviceAddress.
+        */
+        virtual uint64_t getGPUVirtualAddress() const { return 0; }
+
         inline const VkmStagingBufferInfo& getStagingBufferInfo() const { return _stagingBufferInfo; }
         VkmResourceType getResourceType() const override { return VkmResourceType::StagingBuffer; }
 

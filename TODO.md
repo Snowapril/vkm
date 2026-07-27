@@ -53,6 +53,11 @@
 - Host-copy texture upload is disabled on MoltenVK: it advertises `VK_EXT_host_image_copy` but enabling it hung the macOS Vulkan CI job during initialization, and the cause was never isolated (the hang produces no output and did not reproduce locally against the same MoltenVK build).
 - The Vulkan host-copy path therefore has no CI coverage at all: MoltenVK is excluded, and lavapipe on the Ubuntu runners does not advertise the extension, so every CI Vulkan job takes the staging path.
 - `VkmMemoryPlacementHint` is still ignored by the Metal texture path, and now sits alongside a second, separate memory decision (host-writable storage) rather than being unified with it.
+- WebGPU buffers can be neither host-written nor asked for a GPU address; `wgpuQueueWriteBuffer` could serve `uploadToBuffer`'s host path there but is a queue op with alignment rules, not a CPU write.
+- The frame-constant managers and the bindless argument/mega-buffers still hand-roll native host-visible allocations instead of a `VkmMemoryAccessHint::HostWrite` `VkmBuffer`, so they stay invisible to the memory tracker.
+- `VkmBuffer::map()` is write-only in practice: there is no `VkmMemoryAccessHint` for CPU readback, and no `readbackBuffer()` counterpart to `readbackTexture()`.
+- `kPoolBufferUsage` in `vulkan_gpu_buffer_pool.cpp` omits `VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT` while `toVkBufferUsageFlags` can produce it, so a sub-4 MiB `AllowIndirectBuffer` buffer would be pooled into a block lacking that usage.
+- `uploadToTexture` never returns its one-off command buffer to the pool, unlike `uploadToBuffer` and `readbackTexture`.
 - A crash inside `mi_malloc` recurses forever: backward-cpp's signal handler allocates while printing the trace, so an abort becomes a hang with misleading mimalloc assertions instead of a stack trace.
 - Sponza-scale scenes exceed the WebGPU bindless mega-buffers (16 MiB vertex / 8 MiB index, no growth), and `model_viewer`'s wasm build preloads no scene at all.
 - The Vulkan/WebGPU depth-attachment paths in `onBeginRenderPass` have no unit-test coverage (the offscreen scene-model render test is Metal-only; the Vulkan fixture rendered black and crashed on lavapipe). They ship compile-verified only, validated via the model_viewer sample on real hardware.

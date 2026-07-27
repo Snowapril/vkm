@@ -26,12 +26,17 @@ namespace vkm
         uint64_t getAllocatedSize() const override { return _allocatedSize; }
         uint32_t getMemoryAlignment() const override { return _alignment; }
 
+        virtual void* map() override final;
+        virtual void unmap() override final;
+        virtual uint64_t getGPUVirtualAddress() const override final;
+
         inline VkBuffer getBuffer() const { return _vkBuffer; }
         inline uint64_t getBufferOffset() const { return _ownerPool != nullptr ? _poolAllocation._offset : 0; }
 
     private:
         VkBuffer _vkBuffer{VK_NULL_HANDLE};
         VmaAllocation _vmaAllocation{nullptr}; // valid only for the committed path
+        void* _mappedPointer{nullptr};         // valid only for the host-writable committed path
         uint64_t _allocatedSize{0};
         uint32_t _alignment{0};
 

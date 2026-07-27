@@ -54,7 +54,10 @@ not used — `MTLHeapTypeAutomatic` already does the placement work `VkmGpuHeapP
 otherwise have to hand-roll, and this project has no need for the additional control
 `MTLHeapTypePlacement` offers. `VkmSamplerMetal` has no memory backing at all (mirrors Vulkan's
 `VkSampler`). `VkmStagingBufferMetal` is always committed + `MTLStorageModeShared` (persistently
-host-visible; no explicit map/unmap step exists in the Metal API at all).
+host-visible; no explicit map/unmap step exists in the Metal API at all). A
+`VkmMemoryAccessHint::HostWrite` `VkmBufferMetal` gets that same `MTLStorageModeShared` treatment
+and is therefore always committed too — the heap pool's `MTLHeap` is `MTLStorageModePrivate`, so a
+Shared buffer cannot be placed in it (combining it with `ForcePooled` warns).
 
 ## Class Override Map
 

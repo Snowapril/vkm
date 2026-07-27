@@ -32,10 +32,17 @@ namespace vkm
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
             VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 
+        VkBufferUsageFlags usage = kPoolBufferUsage;
+        if (_driver->isBufferDeviceAddressEnabled())
+        {
+            // Without this on the block, no sub-allocation could report a GPU address either.
+            usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+        }
+
         const VkBufferCreateInfo bufferCreateInfo{
             .sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
             .size        = POOL_BLOCK_SIZE_BYTES,
-            .usage       = kPoolBufferUsage,
+            .usage       = usage,
             .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
         };
 

@@ -65,6 +65,14 @@ namespace vkm
         inline bool isDrawIndirectCountSupported() const { return _drawIndirectCountSupported; }
 
         /*
+        * @brief Whether VkPhysicalDeviceVulkan12Features::bufferDeviceAddress is on, so buffers
+        * may carry VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT and vkGetBufferDeviceAddress is
+        * valid to call. Mirrors VkmDriverCapabilityFlags::BufferDeviceAddress, but is readable
+        * before that flag is assembled -- the VMA allocator needs it at creation time.
+        */
+        inline bool isBufferDeviceAddressEnabled() const { return _bufferDeviceAddressEnabled; }
+
+        /*
         * @brief Whether VK_EXT_host_image_copy is enabled *and* its feature bit is on, so
         * vkCopyMemoryToImage / vkTransitionImageLayoutEXT are valid to call.
         */
@@ -136,6 +144,7 @@ namespace vkm
         VkPhysicalDeviceFaultFeaturesEXT _deviceFaultFeatures{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
         bool _deviceFaultExtensionEnabled{false};
         bool _drawIndirectCountSupported{false};
+        bool _bufferDeviceAddressEnabled{false};
 
         VkPhysicalDeviceHostImageCopyFeatures _hostImageCopyFeatures{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES};

@@ -47,10 +47,16 @@ namespace vkm
         // Backend can write a texture's memory from the CPU, so uploadToTexture can skip the
         // staging buffer and the queue submit entirely. Requires both the mechanism (Metal:
         // MTLStorageModeShared; Vulkan: VK_EXT_host_image_copy) and a reason to use it
-        // (unified memory) -- see VkmTextureUploadMode. A texture still only takes that path
+        // (unified memory) -- see VkmResourceUploadMode. A texture still only takes that path
         // when its own memory allows it: VkmTexture::isHostWritable is the per-texture answer,
         // this flag is the per-device precondition.
         TextureHostCopy         = 0x00000008,
+        // Buffers can report an address in the GPU's address space
+        // (VkmBuffer/VkmStagingBuffer::getGPUVirtualAddress). Native on Metal; on Vulkan it
+        // needs VkPhysicalDeviceVulkan12Features::bufferDeviceAddress, which the driver already
+        // enables wherever the GPU offers it. WebGPU has no such concept, and neither does a
+        // Vulkan driver without that feature -- both report 0 rather than failing.
+        BufferDeviceAddress     = 0x00000010,
     };
 
     inline VkmDriverCapabilityFlags operator|(VkmDriverCapabilityFlags lhs, VkmDriverCapabilityFlags rhs)
@@ -138,12 +144,18 @@ namespace vkm
 
         /*
          * @brief Synchronously upload `size` bytes from `data` into `dstBuffer` at
-         * `dstOffset`, via a transient staging buffer and a one-off command buffer
-         * submitted to the Graphics queue (this engine has no dedicated Transfer queue).
-         * Blocks until the GPU copy completes -- intended for setup-time uploads (e.g.
-         * postDriverReady), not per-frame streaming.
+         * `dstOffset`.
+         *
+         * `mode` selects how the bytes get there; the default picks the direct CPU write when
+         * the destination buffer's memory allows it (see VkmResourceUploadMode) and otherwise
+         * goes through a transient staging buffer and a one-off command buffer submitted to
+         * the Graphics queue (this engine has no dedicated Transfer queue). Only a buffer
+         * created with VkmMemoryAccessHint::HostWrite can take the direct write; the staging
+         * path blocks until the GPU copy completes, so it is intended for setup-time uploads
+         * (e.g. postDriverReady), not per-frame streaming.
          */
-        bool uploadToBuffer(VkmResourceHandle dstBuffer, const void* data, uint64_t size, uint64_t dstOffset = 0);
+        bool uploadToBuffer(VkmResourceHandle dstBuffer, const void* data, uint64_t size, uint64_t dstOffset = 0,
+                             VkmResourceUploadMode mode = VkmResourceUploadMode::Auto);
 
         /*
          * @brief Synchronously upload `size` bytes of tightly-packed pixels into one mip
@@ -155,13 +167,13 @@ namespace vkm
          *
          * `mode` selects how the pixels get there; the default picks the direct CPU write
          * when the destination texture's memory allows it and the staging copy otherwise
-         * (see VkmTextureUploadMode). The direct write does no queue work at all, so it does
+         * (see VkmResourceUploadMode). The direct write does no queue work at all, so it does
          * not block -- but it is only available where the memory type permits, which is why
          * this stays a single entry point rather than two.
          */
         bool uploadToTexture(VkmResourceHandle dstTexture, const void* data, uint64_t size,
                              uint32_t mipLevel = 0, uint32_t arrayLayer = 0,
-                             VkmTextureUploadMode mode = VkmTextureUploadMode::Auto);
+                             VkmResourceUploadMode mode = VkmResourceUploadMode::Auto);
 
         /*
          * @brief Create sampler with the given sampler info
@@ -190,7 +202,7 @@ namespace vkm
         * CPU-writable memory costs the GPU nothing to sample.
         * @details Set by each backend during initializeInner (Metal: hasUnifiedMemory;
         * Vulkan: a DEVICE_LOCAL|HOST_VISIBLE memory type exists). This is what gates the
-        * host-copy texture upload path -- see VkmTextureUploadMode and
+        * host-copy texture upload path -- see VkmResourceUploadMode and
         * VkmTexture::isHostWritable. False on backends that never checked.
         */
         inline bool hasUnifiedMemory() const { return _hasUnifiedMemory; }

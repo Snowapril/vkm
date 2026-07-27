@@ -29,9 +29,17 @@ Texture/Buffer placement (committed vs. pooled) is decided per-resource inside e
 concrete class's own `initialize()` (see `shouldUseDedicatedTexture`/`shouldUseCommittedBuffer`
 in `vulkan_texture.cpp`/`vulkan_buffer.cpp`): an explicit `VkmMemoryPlacementHint` always
 wins; `Auto` forces committed for large/attachment/read-write/externally-owned resources
-and otherwise pools. Sampler has no memory backing at all (`vkCreateSampler` involves no
-VMA/`VkDeviceMemory`). StagingBuffer is always committed + persistently host-mapped
-(`VMA_ALLOCATION_CREATE_MAPPED_BIT`), never pooled.
+and otherwise pools. A `VkmMemoryAccessHint::HostWrite` buffer overrides even
+`ForcePooled` (with a warning) — the pool block is device-local, so it is allocated committed
+with `VMA_ALLOCATION_CREATE_MAPPED_BIT | HOST_ACCESS_SEQUENTIAL_WRITE_BIT` and re-checked with
+`vmaGetAllocationMemoryProperties` before reporting `isHostWritable()`. Sampler has no memory
+backing at all (`vkCreateSampler` involves no VMA/`VkDeviceMemory`). StagingBuffer is always
+committed + persistently host-mapped (`VMA_ALLOCATION_CREATE_MAPPED_BIT`), never pooled.
+
+Every buffer (pool block included) carries `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` and the
+allocator `VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT` when
+`VkmDriverVulkan::isBufferDeviceAddressEnabled()`; without that feature nothing carries either and
+`getGPUVirtualAddress()` reports 0.
 
 Pooled buffers are suballocated from `VkmGpuBufferPoolVulkan` (one shared 64 MiB `VkBuffer`
 + dedicated VMA allocation per block, carved up via the vendored `VkmOffsetAllocator`

@@ -39,6 +39,10 @@ namespace vkm
         {
             usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         }
+        if (driverVulkan->isBufferDeviceAddressEnabled())
+        {
+            usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+        }
 
         const VkBufferCreateInfo bufferCreateInfo{
             .sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -100,6 +104,20 @@ namespace vkm
     {
         std::memcpy(static_cast<uint8_t*>(_mappedPointer) + offset, data, size);
         flush(offset, size);
+    }
+
+    uint64_t VkmStagingBufferVulkan::getGPUVirtualAddress() const
+    {
+        VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
+        if (_vkBuffer == VK_NULL_HANDLE || !driverVulkan->isBufferDeviceAddressEnabled())
+        {
+            return 0;
+        }
+        const VkBufferDeviceAddressInfo addressInfo{
+            .sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+            .buffer = _vkBuffer,
+        };
+        return vkGetBufferDeviceAddress(driverVulkan->getDevice(), &addressInfo);
     }
 
     void VkmStagingBufferVulkan::setDebugName(const char* name)

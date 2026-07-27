@@ -30,6 +30,7 @@ set(SRCS
     ${SRC_DIR}/TestCpuProfiler.cpp
     ${SRC_DIR}/TestImageLoader.cpp
     ${SRC_DIR}/TestCubemapTexture.cpp
+    ${SRC_DIR}/TestBufferHostWrite.cpp
 )
 
 if (VKM_USE_METAL_API)
@@ -41,6 +42,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestClipSpaceOrientationMetal.mm
         ${SRC_DIR}/TestSceneModelRenderMetal.mm
         ${SRC_DIR}/TestCubemapTextureMetal.mm
+        ${SRC_DIR}/TestBufferHostWriteMetal.mm
     )
 endif()
 
@@ -56,6 +58,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestClipSpaceOrientationMetal.mm
         ${SRC_DIR}/TestSceneModelRenderMetal.mm
         ${SRC_DIR}/TestCubemapTextureMetal.mm
+        ${SRC_DIR}/TestBufferHostWriteMetal.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++"
     )
 endif()

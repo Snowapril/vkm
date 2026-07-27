@@ -626,6 +626,17 @@ namespace vkm
             VKM_DEBUG_INFO("vkCmdDrawIndirectCount is unavailable; GPU-driven draws will issue the full argument range");
         }
 
+        // Also optional: without it getGPUVirtualAddress() reports 0 everywhere and nothing else
+        // changes -- no buffer carries VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT and VMA is not
+        // told to expect one. The feature itself is already enabled by the "request everything
+        // supported" chain above; this only records whether the GPU offered it, and it has to be
+        // known before the VMA allocator is created below.
+        _bufferDeviceAddressEnabled = (_features12.bufferDeviceAddress == VK_TRUE);
+        if (!_bufferDeviceAddressEnabled)
+        {
+            VKM_DEBUG_INFO("VkPhysicalDeviceVulkan12Features::bufferDeviceAddress is unavailable; buffer GPU addresses will report 0");
+        }
+
         // Query queue families
         uint32_t queueFamilyCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(_physicalDevice, &queueFamilyCount, nullptr);
@@ -702,7 +713,10 @@ namespace vkm
         VmaVulkanFunctions vmaVulkanFunctions{};
         vmaVulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
         vmaVulkanFunctions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+        // VMA has to be told when buffers will carry VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        // because their memory needs VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT at allocation time.
         const VmaAllocatorCreateInfo allocatorCreateInfo{
+            .flags            = _bufferDeviceAddressEnabled ? VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT : VmaAllocatorCreateFlags{0},
             .physicalDevice   = _physicalDevice,
             .device           = _device,
             .pVulkanFunctions = &vmaVulkanFunctions,
@@ -747,6 +761,10 @@ namespace vkm
         if (_hostImageCopyEnabled && _hasUnifiedMemory)
         {
             _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::TextureHostCopy;
+        }
+        if (_bufferDeviceAddressEnabled)
+        {
+            _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::BufferDeviceAddress;
         }
 
         // Both must exist before VkmEngine::initializeBackendDriver() loads engine PSOs, since

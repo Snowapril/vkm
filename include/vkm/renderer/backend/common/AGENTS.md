@@ -43,28 +43,58 @@ virtual void onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResource
 virtual void onEndCommandBuffer() = 0;
 ```
 
-### Texture upload: two paths, one entry point
+### Resource upload: two paths, one entry point
 
-`VkmDriverBase::uploadToTexture` picks between a staging-buffer copy (allocate staging, record
-`copyBufferToTexture`, submit, block) and a direct CPU write into the texture's own memory
-(`VkmTexture::writeRegion` -- no staging, no command buffer, no submit, no wait).
+`VkmDriverBase::uploadToTexture` and `uploadToBuffer` each pick between a staging-buffer copy
+(allocate staging, record `copyBufferToTexture` / `copyBuffer`, submit, block) and a direct CPU
+write into the destination's own memory (`VkmTexture::writeRegion` / `VkmBuffer::map()` +
+`unmap()` -- no staging, no command buffer, no submit, no wait).
 
-The choice is **the destination texture's**, not the caller's: `VkmTexture::isHostWritable()` is
-set at creation from what the backend actually allocated, and `VkmTextureUploadMode` only selects
-among what that made available. Two levels of gating:
+In both cases `VkmResourceUploadMode` only selects among what the destination already made
+available; `isHostWritable()` is what decides. **Textures and buffers differ in who makes that
+decision**, and deliberately so:
 
-- `VkmDriverCapabilityFlags::TextureHostCopy` -- per *device*: the backend has the mechanism
-  (Metal `MTLStorageModeShared`; Vulkan `VK_EXT_host_image_copy`, since an OPTIMAL-tiled image
-  cannot be memcpy'd into) **and** unified memory makes it worth using.
-- `VkmTexture::isHostWritable()` -- per *texture*: it is a plain upload destination
-  (`AllowTransferDst`, not an attachment or presentable) and its allocation really did land in
-  CPU-reachable memory. On Vulkan that is re-checked after the fact with
-  `vmaGetAllocationMemoryProperties`, because adding `HOST_TRANSFER` usage can change the
-  image's memory-type requirements -- a request is not a guarantee.
+- **Textures: backend policy.** `VkmTexture::isHostWritable()` is inferred at creation -- a plain
+  upload destination (`AllowTransferDst`, not an attachment or presentable) on a device that
+  reports `VkmDriverCapabilityFlags::TextureHostCopy`. Callers cannot request or refuse it.
+- **Buffers: caller opt-in.** `VkmBufferInfo::_accessHint` (`VkmMemoryAccessHint::HostWrite`) is
+  the request; a buffer that does not ask stays device-local exactly as before. Inferring it would
+  have silently moved every scene mega-buffer, ObjectData buffer and indirect-args buffer into
+  host-visible memory, which is a bandwidth decision only the caller can make.
 
-Both paths leave the texture shader-readable, so callers never branch on which one ran. A backend
-that reports neither flag needs no `writeRegion` override; the base default is the unreachable-case
-guard.
+Either way the answer reports what was **allocated**, not what was asked for. On Vulkan both are
+re-checked after the fact with `vmaGetAllocationMemoryProperties` -- a request is not a guarantee.
+The device-level preconditions:
+
+- `VkmDriverCapabilityFlags::TextureHostCopy` -- the backend has the mechanism (Metal
+  `MTLStorageModeShared`; Vulkan `VK_EXT_host_image_copy`, since an OPTIMAL-tiled image cannot be
+  memcpy'd into) **and** unified memory makes it worth using.
+- A `HostWrite` buffer needs no capability flag on Vulkan/Metal (host-visible memory always
+  exists), but it is unavailable on WebGPU: a `WGPUBuffer`'s usage flags fix its map mode for
+  life and `MapWrite` only combines with `CopySrc`, so a buffer anything else touches can never
+  be CPU-write-mapped. `isHostWritable()` stays false there and uploads keep going through staging.
+- `HostWrite` always takes the *committed* allocation path. Both suballocation pools are backed by
+  device-private memory (Vulkan's shared pool block, Metal's `MTLStorageModePrivate` heap), so a
+  host-writable buffer cannot be placed in one; combining it with `ForcePooled` warns.
+
+Both paths leave the resource GPU-readable, so callers never branch on which one ran. A backend
+that offers neither needs no override; the base defaults are the unreachable-case guards.
+
+### GPU virtual addresses
+
+`VkmBuffer::getGPUVirtualAddress()` and `VkmStagingBuffer::getGPUVirtualAddress()` report the
+buffer's address in the GPU's address space, or **0** where there is no such concept. Gated by
+`VkmDriverCapabilityFlags::BufferDeviceAddress`:
+
+- Metal: unconditional (`MTLBuffer.gpuAddress`) -- the argument buffers and the push-constant ring
+  have bound by address since the MTL4 port.
+- Vulkan: needs `VkPhysicalDeviceVulkan12Features::bufferDeviceAddress`. The driver's device
+  creation already requests every supported feature, so nothing has to be enabled explicitly; what
+  the capability gates is `VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT` on the allocator and
+  `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` on every buffer (including the pool block, or its
+  sub-allocations could not report one). A pooled buffer's address is the block's plus
+  `getBufferOffset()`.
+- WebGPU: no such concept exists; always 0.
 
 ### VkmBindlessResourceManagerBase (`bindless_resource_manager.h`)
 ```cpp
@@ -94,7 +124,22 @@ virtual void* map() = 0;
 virtual void unmap() = 0;
 virtual void flush(uint64_t offset, uint64_t size) = 0;
 virtual void writeDirect(uint64_t offset, const void* data, uint64_t size) = 0;
+virtual uint64_t getGPUVirtualAddress() const;  // 0 without BufferDeviceAddress
 ```
+
+### VkmBuffer (`buffer.h`)
+```cpp
+virtual bool initialize(VkmResourceHandle handle, const VkmBufferInfo& info) = 0;
+virtual bool overrideExternalHandle(void* externalHandle) = 0;
+// Non-pure: a backend that never reports isHostWritable() implements neither.
+virtual void* map();                            // nullptr unless isHostWritable()
+virtual void unmap();                           // the flush point; the pointer stays valid
+virtual uint64_t getGPUVirtualAddress() const;  // 0 without BufferDeviceAddress
+```
+`map()` returns a pointer that lives as long as the buffer -- Vulkan keeps
+`VMA_ALLOCATION_CREATE_MAPPED_BIT` allocations mapped and Metal's `Shared` `contents` is valid for
+the buffer's lifetime, so `unmap()` exists only to flush (a no-op on Metal, `vmaFlushAllocation` on
+Vulkan) rather than to tear a mapping down.
 
 ## Coordinate Space
 
@@ -142,12 +187,15 @@ slot; WebGPU a bind group per frame slot at group 1; Metal a plain buffer bindin
 `kVkmMetalFrameConstantBufferIndex`, because vkm-compiler declares set 1 *discrete*
 (`add_discrete_descriptor_set`) so spirv-cross does not wrap it in a second argument buffer.
 
-Each manager owns a raw native uniform buffer rather than a `VkmBuffer`: no `VkmBuffer` is
-host-writable on any backend (device-local on Vulkan, `StorageModePrivate` on Metal) and no
+Each manager owns a raw native uniform buffer rather than a `VkmBuffer`: when they were written no
+`VkmBuffer` could be host-writable (device-local on Vulkan, `StorageModePrivate` on Metal) and no
 staging buffer can carry uniform usage (on WebGPU `MapWrite` only combines with `CopySrc`). This
 mirrors what the bindless managers already do for their argument/mega-buffers, and has the same
 consequence: these allocations bypass `newBuffer()`, so they do not appear in the memory tracker
 and the Metal one registers itself into the Default residency set explicitly.
+`VkmMemoryAccessHint::HostWrite` has since removed the first half of that reason on Vulkan and
+Metal, so these managers could move onto `VkmBuffer` and become visible to the tracker; that
+migration has not been done (logged in `TODO.md`).
 
 The buffer holds `FRAME_COUNT` regions at `kVkmFrameConstantStride`. Writes are plain host
 writes with no GPU synchronization, so `VkmEngine::render()` performs them only after that

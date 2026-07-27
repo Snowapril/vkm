@@ -258,6 +258,23 @@ namespace vkm
     };
 
     /*
+    * @brief Which side is allowed to write a buffer's memory directly.
+    * @details A request, not a guarantee: VkmBuffer::isHostWritable() reports what the backend
+    * actually allocated. HostWrite is what enables VkmBuffer::map()/unmap() and the direct
+    * uploadToBuffer path; DeviceLocal (the default) keeps the GPU-only memory every buffer has
+    * always used, reachable from the CPU only through a staging copy.
+    *
+    * HostWrite always takes the committed path -- both backends' suballocation pools are backed
+    * by device-private memory (Vulkan's shared pool block, Metal's MTLStorageModePrivate heap),
+    * so a host-writable buffer cannot be placed in one.
+    */
+    enum class VkmMemoryAccessHint : uint8_t
+    {
+        DeviceLocal = 0,
+        HostWrite = 1,
+    };
+
+    /*
     * @brief How a texture (or a view of one) is addressed by the shader.
     * @details Auto reproduces the inference every backend used before this enum existed --
     * a plain 2D image, or a 2D array once _numArrayLayers > 1 -- so leaving it unset keeps
@@ -275,19 +292,19 @@ namespace vkm
     inline constexpr uint32_t kVkmCubeFaceCount = 6;
 
     /*
-    * @brief How VkmDriverBase::uploadToTexture moves pixels into a texture.
+    * @brief How VkmDriverBase::uploadToTexture / uploadToBuffer move bytes into a resource.
     * @details Auto is what callers should use: it takes the direct CPU write when the
-    * destination's memory allows one (VkmTexture::isHostWritable, decided at creation from
-    * what the backend actually allocated) and the staging-buffer copy otherwise. On a
-    * unified-memory device the direct write skips the staging allocation, the command
-    * buffer, the queue submit and the wait entirely; elsewhere nothing changes.
+    * destination's memory allows one (VkmTexture::isHostWritable / VkmBuffer::isHostWritable,
+    * both decided at creation from what the backend actually allocated) and the staging-buffer
+    * copy otherwise. The direct write skips the staging allocation, the command buffer, the
+    * queue submit and the wait entirely; elsewhere nothing changes.
     *
     * The explicit modes exist for benchmarking and for tests that need to exercise one
-    * specific path. ForceHostCopy on a texture whose memory cannot take one warns and falls
-    * back to staging rather than failing -- the resulting pixels are identical either way,
+    * specific path. ForceHostCopy on a resource whose memory cannot take one warns and falls
+    * back to staging rather than failing -- the resulting bytes are identical either way,
     * so refusing would only make callers write their own fallback.
     */
-    enum class VkmTextureUploadMode : uint8_t
+    enum class VkmResourceUploadMode : uint8_t
     {
         Auto = 0,
         ForceStaging = 1,
@@ -322,6 +339,7 @@ namespace vkm
     {
         uint64_t _size;
         VkmMemoryPlacementHint _placementHint = VkmMemoryPlacementHint::Auto;
+        VkmMemoryAccessHint _accessHint = VkmMemoryAccessHint::DeviceLocal;
     };
 
     struct VkmStagingBufferInfo : public VkmResourceInfo

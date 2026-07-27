@@ -66,6 +66,11 @@ namespace vkm
         std::memcpy(static_cast<uint8_t*>(_mappedPointer) + offset, data, size);
     }
 
+    uint64_t VkmStagingBufferMetal::getGPUVirtualAddress() const
+    {
+        return _mtlBuffer != nil ? (uint64_t)[_mtlBuffer gpuAddress] : 0;
+    }
+
     void VkmStagingBufferMetal::setDebugName(const char* name)
     {
         [_mtlBuffer setLabel:[NSString stringWithUTF8String:name]];

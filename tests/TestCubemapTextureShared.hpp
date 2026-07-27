@@ -75,7 +75,7 @@ namespace vkmtest
         CHECK(cubemap->getTextureInfo()._type == vkm::VkmTextureType::Cube);
 
         // Uploads face `face` in the given color through the given path.
-        const auto uploadFace = [&](uint32_t face, const std::array<uint8_t, 4>& color, vkm::VkmTextureUploadMode mode) {
+        const auto uploadFace = [&](uint32_t face, const std::array<uint8_t, 4>& color, vkm::VkmResourceUploadMode mode) {
             std::vector<uint8_t> pixels(static_cast<size_t>(kCubeFaceExtent) * kCubeFaceExtent * 4);
             for (size_t texel = 0; texel < pixels.size(); texel += 4)
             {
@@ -97,7 +97,7 @@ namespace vkmtest
 
         for (uint32_t face = 0; face < vkm::kVkmCubeFaceCount; ++face)
         {
-            CHECK(uploadFace(face, kFaceColors[face], vkm::VkmTextureUploadMode::Auto));
+            CHECK(uploadFace(face, kFaceColors[face], vkm::VkmResourceUploadMode::Auto));
         }
 
         SUBCASE("every face reads back the color it was uploaded with")
@@ -119,7 +119,7 @@ namespace vkmtest
         {
             for (uint32_t face = 0; face < vkm::kVkmCubeFaceCount; ++face)
             {
-                CHECK(uploadFace(face, kFaceColors[face], vkm::VkmTextureUploadMode::ForceStaging));
+                CHECK(uploadFace(face, kFaceColors[face], vkm::VkmResourceUploadMode::ForceStaging));
             }
             for (uint32_t face = 0; face < vkm::kVkmCubeFaceCount; ++face)
             {
@@ -131,7 +131,7 @@ namespace vkmtest
             };
             for (uint32_t face = 0; face < vkm::kVkmCubeFaceCount; ++face)
             {
-                CHECK(uploadFace(face, reversedColor(face), vkm::VkmTextureUploadMode::ForceHostCopy));
+                CHECK(uploadFace(face, reversedColor(face), vkm::VkmResourceUploadMode::ForceHostCopy));
             }
             for (uint32_t face = 0; face < vkm::kVkmCubeFaceCount; ++face)
             {

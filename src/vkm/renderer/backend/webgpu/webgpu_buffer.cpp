@@ -38,6 +38,14 @@ namespace vkm
             // Dawn/emdawnwebgpu exposes no placement/suballocation API -- always committed.
             VKM_DEBUG_WARN("VkmMemoryPlacementHint::ForcePooled is not supported by WebGPU; buffer will be committed");
         }
+        if (info._accessHint == VkmMemoryAccessHint::HostWrite)
+        {
+            // A WGPUBuffer's usage flags fix its map mode for life and MapWrite only combines
+            // with CopySrc, so no buffer that is also sampled, drawn from or written by a shader
+            // can ever be CPU-write-mapped. isHostWritable() stays false and uploads keep going
+            // through the staging path.
+            VKM_DEBUG_WARN("VkmMemoryAccessHint::HostWrite is not supported by WebGPU; buffer will be device-local");
+        }
 
         VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
 

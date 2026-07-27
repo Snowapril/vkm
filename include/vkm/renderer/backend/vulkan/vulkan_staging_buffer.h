@@ -22,6 +22,7 @@ namespace vkm
         virtual void flush(uint64_t offset, uint64_t size) override final;
         virtual void invalidate(uint64_t offset, uint64_t size) override final;
         virtual void writeDirect(uint64_t offset, const void* data, uint64_t size) override final;
+        virtual uint64_t getGPUVirtualAddress() const override final;
         virtual void setDebugName(const char* name) override final;
 
         uint64_t getAllocatedSize() const override { return _allocatedSize; }

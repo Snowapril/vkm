@@ -21,6 +21,10 @@ namespace vkm
         uint64_t getAllocatedSize() const override { return _allocatedSize; }
         uint32_t getMemoryAlignment() const override { return _memoryAlignment; }
 
+        virtual void* map() override final;
+        virtual void unmap() override final;
+        virtual uint64_t getGPUVirtualAddress() const override final;
+
         inline id<MTLBuffer> getBuffer() const { return _mtlBuffer; }
 
     private:

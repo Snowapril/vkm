@@ -385,7 +385,7 @@ line names it twice both before and after — and is left alone.
   memory the CPU can already write and stalls the queue once per call.
 - Now two paths behind one entry point. Which one runs is the *destination texture's*
   property, not the caller's: `VkmTexture::isHostWritable()` is set at creation from what the
-  backend actually allocated, and `VkmTextureUploadMode` (Auto/ForceStaging/ForceHostCopy)
+  backend actually allocated, and `VkmResourceUploadMode` (Auto/ForceStaging/ForceHostCopy)
   only selects among what that made available. Two levels of gating --
   `VkmDriverCapabilityFlags::TextureHostCopy` per device, `isHostWritable()` per texture.
 - Metal: `MTLStorageModeShared` + `replaceRegion:`, the same mechanism the ImGui font atlas
@@ -503,6 +503,51 @@ line names it twice both before and after — and is left alone.
   enforcement is proven from inside a green suite.
 - Verified: Metal 107/107, Vulkan 108/108, wasm/WebGPU via headless Chrome all pass; a temporary
   infinite-loop test was killed by the watchdog in 6 s with exit code 1 and correct attribution.
+
+## 2026-07-28 — Host-writable buffers, buffer map/unmap, and GPU virtual addresses
+
+- `uploadToBuffer` had gained a `VkmResourceUploadMode` parameter that nothing read, because there
+  was nothing it *could* read: `VkmBuffer` had no `isHostWritable()`, no `map()`, and every backend
+  allocated it GPU-only (VMA `AUTO` with no `HOST_ACCESS_*`; `MTLResourceStorageModePrivate`; no
+  WebGPU map usage bits). It now has the same two-path shape `uploadToTexture` has had.
+- **Host-writability is a caller opt-in for buffers, not backend policy.** New
+  `VkmMemoryAccessHint {DeviceLocal, HostWrite}` on `VkmBufferInfo`; the default leaves all nine
+  existing `uploadToBuffer` call sites and every engine buffer in exactly today's memory. Textures
+  infer it instead, and the asymmetry is deliberate: inferring it for buffers would have moved the
+  scene mega-buffers, the ObjectData buffer and the indirect-args buffer into host-visible memory
+  at once, which is a bandwidth decision only the caller can make.
+- `HostWrite` forces the committed path on both backends — Vulkan's shared pool block is
+  device-local and Metal's heap is `MTLStorageModePrivate`, so a host-writable buffer cannot be
+  suballocated from either. Combining it with `ForcePooled` warns rather than failing.
+- Vulkan reports `isHostWritable()` from `vmaGetAllocationMemoryProperties` after the fact, the
+  same "a request is not a guarantee" check `VkmTextureVulkan` already does. `unmap()` is where
+  `vmaFlushAllocation` happens: the mapping itself is permanent (`VMA_ALLOCATION_CREATE_MAPPED_BIT`),
+  so a separate `flush()` on `VkmBuffer` would have been API surface for nothing.
+- **`bufferDeviceAddress` turned out to need no enabling.** `VkmDriverVulkan` already requests every
+  feature `vkGetPhysicalDeviceFeatures2` reports and passes that chain straight to `vkCreateDevice`,
+  so the feature was on all along and unused. What was missing was
+  `VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT` and `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT`
+  on every buffer — including the pool block, or its sub-allocations could not report an address
+  either. A pooled buffer's address is the block's plus `getBufferOffset()`.
+- New `VkmDriverCapabilityFlags::BufferDeviceAddress` keeps that optional: a driver without the
+  feature adds neither the usage bit nor the allocator flag and reports 0, so nothing about its
+  initialization changes. Metal sets the flag unconditionally (`MTLBuffer.gpuAddress`), WebGPU never.
+- WebGPU gets no host-write path at all, and this is forced rather than deferred: a `WGPUBuffer`'s
+  usage flags fix its map mode for life and `MapWrite` only combines with `CopySrc`, so a buffer
+  anything else touches can never be CPU-write-mapped. It warns and stays device-local.
+- `VkmStagingBuffer` needed only `getGPUVirtualAddress()` — its `map()`/`unmap()` already existed
+  on all three backends and were left untouched.
+- New `tests/TestBufferHostWrite{,Metal}.{cpp,mm}` + shared header. The load-bearing assertion is
+  that `ForceStaging` and `ForceHostCopy` produce identical bytes while writing *different*
+  patterns, so a host write that silently did nothing fails instead of passing on the staging
+  pass's leftovers — the same trick that made the cubemap test meaningful. The GPU-address test
+  covers committed, pooled and host-writable buffers and asserts their addresses are distinct,
+  which is what would catch a pooled buffer reporting the block base instead of its own range.
+- Verified: Metal 147/147 (17932 assertions) with Metal API Validation on, Vulkan 148/148 with
+  `VK_LAYER_KHRONOS_validation`, WebGPU PASS. Zero validation output on either backend — which
+  matters more than usual here, since the new usage bit and allocator flag touch *every* Vulkan
+  buffer allocation. On this machine's MoltenVK, `bufferDeviceAddress` is supported and the tests
+  observed real, distinct addresses rather than the 0 fallback.
 
 ## Deviations
 

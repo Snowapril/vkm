@@ -15,6 +15,16 @@ namespace vkm
 
         bool shouldUseCommittedBuffer(const VkmBufferInfo& info)
         {
+            // The heap pool's MTLHeap is MTLStorageModePrivate, so a Shared buffer cannot be
+            // placed in it -- host-writable always means committed, whatever the hint says.
+            if (info._accessHint == VkmMemoryAccessHint::HostWrite)
+            {
+                if (info._placementHint == VkmMemoryPlacementHint::ForcePooled)
+                {
+                    VKM_DEBUG_WARN("VkmMemoryAccessHint::HostWrite cannot be pooled; buffer will be committed");
+                }
+                return true;
+            }
             if (info._placementHint == VkmMemoryPlacementHint::ForceCommitted)
             {
                 return true;
@@ -66,7 +76,10 @@ namespace vkm
 
         VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
         id<MTLDevice> device = driverMetal->getMTLDevice();
-        MTLSizeAndAlign sizeAndAlign = [device heapBufferSizeAndAlignWithLength:info._size options:MTLResourceStorageModePrivate];
+        const MTLResourceOptions storageMode = (info._accessHint == VkmMemoryAccessHint::HostWrite)
+            ? MTLResourceStorageModeShared
+            : MTLResourceStorageModePrivate;
+        MTLSizeAndAlign sizeAndAlign = [device heapBufferSizeAndAlignWithLength:info._size options:storageMode];
         _memoryAlignment = (uint32_t)sizeAndAlign.align;
 
         if (!shouldUseCommittedBuffer(info))
@@ -84,14 +97,35 @@ namespace vkm
             // single pool block).
         }
 
-        _mtlBuffer = [device newBufferWithLength:info._size options:MTLResourceStorageModePrivate];
+        _mtlBuffer = [device newBufferWithLength:info._size options:storageMode];
         if (_mtlBuffer == nil)
         {
             VKM_DEBUG_ERROR("Failed to create MTLBuffer");
             return false;
         }
         _allocatedSize = [_mtlBuffer allocatedSize];
+        // Reports what was actually allocated: only the committed Shared path is host-writable,
+        // and a HostWrite request always lands there.
+        _isHostWritable = (storageMode == MTLResourceStorageModeShared);
         return true;
+    }
+
+    void* VkmBufferMetal::map()
+    {
+        // A Shared-mode buffer's contents pointer is valid for its whole lifetime; a Private
+        // one has none, which is exactly what isHostWritable() reports.
+        return _isHostWritable ? [_mtlBuffer contents] : nullptr;
+    }
+
+    void VkmBufferMetal::unmap()
+    {
+        // No-op: MTLStorageModeShared is coherent between CPU and GPU, and there is no explicit
+        // map/unmap step in the Metal API at all.
+    }
+
+    uint64_t VkmBufferMetal::getGPUVirtualAddress() const
+    {
+        return _mtlBuffer != nil ? (uint64_t)[_mtlBuffer gpuAddress] : 0;
     }
 
     // A handle bound here after creation is never registered into a residency set (the swapchain, today's only such caller, bypasses the common newBuffer/newTexture residency hook entirely).
