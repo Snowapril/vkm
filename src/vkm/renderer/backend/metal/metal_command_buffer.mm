@@ -57,6 +57,44 @@ namespace vkm
         return MTLPrimitiveTypeTriangle;
     }
 
+    // VkmFillMode::Point and VkmCullMode::FrontAndBack are rejected at PSO creation
+    // (see VkmPipelineStateMetal's raster-state validation), so they cannot reach here.
+    static MTLTriangleFillMode getTriangleFillMode(VkmFillMode fillMode)
+    {
+        switch (fillMode)
+        {
+            case VkmFillMode::Solid:     return MTLTriangleFillModeFill;
+            case VkmFillMode::Wireframe: return MTLTriangleFillModeLines;
+            default:                     return MTLTriangleFillModeFill;
+        }
+    }
+
+    static MTLCullMode getCullMode(VkmCullMode cullMode)
+    {
+        switch (cullMode)
+        {
+            case VkmCullMode::None:  return MTLCullModeNone;
+            case VkmCullMode::Front: return MTLCullModeFront;
+            case VkmCullMode::Back:  return MTLCullModeBack;
+            default:                 return MTLCullModeBack;
+        }
+    }
+
+    // Mapped 1:1, unlike vulkan_pipeline_state.cpp's toVkFrontFace, which is deliberately
+    // inverted. The engine's clip space is +Y-up, which is already Metal's convention; Vulkan
+    // is the one backend that compensates, because vkm-compiler builds its SPIR-V with
+    // -fvk-invert-y and that mirrors triangle winding in screen space. WebGPU maps 1:1 for the
+    // same reason Metal does.
+    static MTLWinding getFrontFacingWinding(VkmFrontFace frontFace)
+    {
+        switch (frontFace)
+        {
+            case VkmFrontFace::CounterClockwise: return MTLWindingCounterClockwise;
+            case VkmFrontFace::Clockwise:        return MTLWindingClockwise;
+            default:                             return MTLWindingCounterClockwise;
+        }
+    }
+
     // copyBuffer() accepts either a Buffer or a StagingBuffer resource on either side (see
     // the same-named helper in vulkan_command_buffer.cpp) -- resolve via the handle's own
     // recorded type. Metal buffers are never sub-allocated within a shared MTLBuffer, so
@@ -234,6 +272,15 @@ namespace vkm
             [renderCommandEncoder setDepthStencilState:pipelineStateMetal->getDepthStencilState()];
             _boundPrimitiveType = static_cast<uint32_t>(
                 getPrimitiveType(pipelineStateMetal->getDescriptor().primitiveTopology));
+
+            // Raster state is encoder state on Metal, not part of the pipeline object, so it
+            // has to be re-applied per bind -- the same reason the primitive type is resolved
+            // here. Vulkan and WebGPU bake all three into their pipeline descriptors.
+            const VkmRasterizationStateDescriptor& rasterizationState =
+                pipelineStateMetal->getDescriptor().rasterizationState;
+            [renderCommandEncoder setTriangleFillMode:getTriangleFillMode(rasterizationState.fillMode)];
+            [renderCommandEncoder setCullMode:getCullMode(rasterizationState.cullMode)];
+            [renderCommandEncoder setFrontFacingWinding:getFrontFacingWinding(rasterizationState.frontFace)];
 
             // Every graphics pipeline shares the engine-global bindless argument table:
             // the set-0 argument buffer at [[buffer(2)]] and a safe default for the
