@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/vulkan/vulkan_command_buffer.h>
+#include <vkm/renderer/backend/vulkan/vulkan_command_queue.h>
 #include <vkm/renderer/backend/vulkan/vulkan_texture.h>
 #include <vkm/renderer/backend/vulkan/vulkan_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_staging_buffer.h>
@@ -95,10 +96,20 @@ namespace vkm
 
     VkmCommandBufferVulkan::~VkmCommandBufferVulkan()
     {
+        // The pool owns the native lifetime: any handle still held here is freed when
+        // VkmCommandBufferPoolVulkan destroys its VkCommandPool. Freeing it here would be
+        // wrong anyway -- this destructor, if it ever ran, would run after that pool.
     }
 
     void VkmCommandBufferVulkan::setRHICommandBuffer(VKM_COMMAND_BUFFER_HANDLE handle)
     {
+        // Hand the outgoing handle back so the pool can free it once its submission
+        // completes; without this every acquire allocated a fresh VkCommandBuffer and none
+        // was ever freed before device teardown. _gpuEventTimelineObject still refers to the
+        // previous use's submission here -- beginCommandBuffer() allocates the next one only
+        // after this returns.
+        static_cast<VkmCommandBufferPoolVulkan*>(_commandBufferPool)
+            ->retireRHICommandBuffer(_vkCommandBuffer, getGpuEventTimelineObject());
         _vkCommandBuffer = static_cast<VkCommandBuffer>(handle);
     }
 

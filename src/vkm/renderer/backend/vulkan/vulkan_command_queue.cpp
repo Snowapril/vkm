@@ -30,11 +30,24 @@ namespace vkm
     VkmCommandBufferPoolVulkan::~VkmCommandBufferPoolVulkan()
     {
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
+        // Destroying the pool frees every command buffer allocated from it, including any
+        // still awaiting their submission's completion -- no separate free pass needed.
+        _retiredCommandBuffers.clear();
         if (_vkCommandPool != VK_NULL_HANDLE)
         {
             vkDestroyCommandPool(driverVulkan->getDevice(), _vkCommandPool, nullptr);
             _vkCommandPool = VK_NULL_HANDLE;
         }
+    }
+
+    void VkmCommandBufferPoolVulkan::retireRHICommandBuffer(VkCommandBuffer commandBuffer,
+                                                            const VkmGpuEventTimelineObject& timelineObject)
+    {
+        if (commandBuffer == VK_NULL_HANDLE)
+        {
+            return;
+        }
+        _retiredCommandBuffers.emplace_back(commandBuffer, timelineObject);
     }
 
     VkmCommandBufferBase* VkmCommandBufferPoolVulkan::newCommandBuffer()
@@ -45,6 +58,25 @@ namespace vkm
     VKM_COMMAND_BUFFER_HANDLE VkmCommandBufferPoolVulkan::getOrCreateRHICommandBuffer()
     {
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
+
+        // Free everything whose submission has completed. Polling here rather than waiting
+        // keeps this off the critical path: queryLastCompletedTimeline() is a plain
+        // vkGetSemaphoreCounterValue, and anything still pending is simply reconsidered on the
+        // next acquire. Timeline values are monotonic, so an object that was allocated but
+        // never submitted is still overtaken by a later submission.
+        for (auto it = _retiredCommandBuffers.begin(); it != _retiredCommandBuffers.end();)
+        {
+            VkmGpuEventTimelineBase* timeline = it->second._gpuEventTimeline;
+            if (timeline != nullptr && timeline->queryLastCompletedTimeline() >= it->second._timelineValue)
+            {
+                vkFreeCommandBuffers(driverVulkan->getDevice(), _vkCommandPool, 1, &it->first);
+                it = _retiredCommandBuffers.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
 
         const VkCommandBufferAllocateInfo allocInfo{
             .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
