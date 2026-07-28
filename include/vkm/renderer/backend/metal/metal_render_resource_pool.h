@@ -6,6 +6,7 @@
 
 #include <array>
 #include <mutex>
+#include <unordered_set>
 
 @protocol MTLResidencySet;
 @protocol MTLAllocation;
@@ -58,6 +59,13 @@ namespace vkm
 
     private:
         std::array<id<MTLResidencySet>, (uint8_t)VkmResourcePoolType::Count> _residencySets{};
+        // Which allocations this pool actually added to each residency set. onResourceInitialized
+        // bails out for a resource whose native object does not exist yet -- the swapchain
+        // backbuffer, whose drawable arrives later via overrideExternalHandle -- so "the resource
+        // has an allocation now" is not evidence that the set ever contained it. Without this,
+        // releaseResource stages removeAllocation: for drawables that were never added.
+        // Guarded by _residencyMutex.
+        std::array<std::unordered_set<const void*>, (uint8_t)VkmResourcePoolType::Count> _residentAllocations;
         std::mutex _residencyMutex;
         bool _residencyDirty{false}; // guarded by _residencyMutex
     };

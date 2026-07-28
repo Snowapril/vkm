@@ -86,6 +86,10 @@ namespace vkm
         }
 
         std::lock_guard<std::mutex> lock(_residencyMutex);
+        if (!_residentAllocations[(uint8_t)handle.poolType].insert(allocation).second)
+        {
+            return;
+        }
         [_residencySets[(uint8_t)handle.poolType] addAllocation:allocation];
         _residencyDirty = true;
     }
@@ -99,8 +103,14 @@ namespace vkm
             // The residency set retains staged allocations, so deferring the commit only
             // delays the Metal object's release until the next flush -- never a dangle.
             std::lock_guard<std::mutex> lock(_residencyMutex);
-            [_residencySets[(uint8_t)handle.poolType] removeAllocation:allocation];
-            _residencyDirty = true;
+            // Only remove what this pool actually added: a swapchain backbuffer has an
+            // allocation by now (the drawable was bound after initialization) but was never
+            // registered, and removeAllocation: for a non-member is meaningless.
+            if (_residentAllocations[(uint8_t)handle.poolType].erase(allocation) == 1)
+            {
+                [_residencySets[(uint8_t)handle.poolType] removeAllocation:allocation];
+                _residencyDirty = true;
+            }
         }
 
         VkmRenderResourcePool::releaseResource(handle);
@@ -114,6 +124,12 @@ namespace vkm
         }
 
         std::lock_guard<std::mutex> lock(_residencyMutex);
+        // Idempotent: registering an already-resident allocation (the same MTLHeap block
+        // reached through two placed resources) must not stage a redundant change.
+        if (!_residentAllocations[(uint8_t)poolType].insert(allocation).second)
+        {
+            return;
+        }
         [_residencySets[(uint8_t)poolType] addAllocation:allocation];
         _residencyDirty = true;
     }
@@ -126,6 +142,10 @@ namespace vkm
         }
 
         std::lock_guard<std::mutex> lock(_residencyMutex);
+        if (_residentAllocations[(uint8_t)poolType].erase(allocation) != 1)
+        {
+            return;
+        }
         [_residencySets[(uint8_t)poolType] removeAllocation:allocation];
         _residencyDirty = true;
     }
