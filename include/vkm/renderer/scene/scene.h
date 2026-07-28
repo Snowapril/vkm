@@ -62,7 +62,14 @@ namespace vkm
         glm::vec4 _frustumPlanes[6]{};            // offset   0, world space, normalized, xyz = n, w = d
         glm::vec4 _lightDirection{ 0.0f, 1.0f, 0.0f, 0.0f }; // offset  96, world space, towards the light
         uint32_t _materialPoolSlot = 0;           // offset 112, bindless Buffer-array slot
-        uint32_t _pad0[3]{ 0, 0, 0 };
+        /*
+        * offset 116. Carried through to the drawing shader untouched; 0 always means "shade
+        * normally". Which visualisation any other value selects is the drawing shader's own
+        * business -- the scene neither defines nor reads the meanings (see the model_viewer
+        * sample's DebugMode).
+        */
+        uint32_t _debugMode = 0;
+        uint32_t _pad0[2]{ 0, 0 };
     };
     static_assert(sizeof(VkmFrameData) == 128, "VkmFrameData must match the shader-side FrameData layout");
 

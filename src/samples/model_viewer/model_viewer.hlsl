@@ -14,8 +14,8 @@
 //
 // Geometry pools are untyped u32 word arrays on every backend, which is what lets one pool hold
 // vertices of any stride (see VkmVertexLayout): VKM_BINDLESS_VERTEX_PULLING(uint) makes
-// VKM_LOAD_VERTEX a plain word load. The only per-permutation code is fetchNormal(); the PSO JSON
-// "options" supply exactly one VKM_VERTEX_LAYOUT_* define per build.
+// VKM_LOAD_VERTEX a plain word load. The only per-permutation code is fetchNormal() and
+// fetchTangent(); the PSO JSON "options" supply exactly one VKM_VERTEX_LAYOUT_* define per build.
 
 #include "vkm_bindless.hlsli"
 #include "vkm_frame_constants.hlsli"
@@ -55,8 +55,17 @@ struct FrameData
     float4 frustumPlanes[6]; // world space, normalized, xyz = normal, w = distance
     float4 lightDirection;   // xyz: normalized world-space direction towards the light
     uint   materialPoolSlot;
-    uint3  _pad0;
+    uint   debugMode;        // one of VKM_DEBUG_MODE_*, chosen by the sample
+    uint2  _pad0;
 };
+
+// Debug visualisations debugMode selects. Mirrors DebugMode in the sample's main.cpp; the scene
+// only carries the value, so these names live here rather than in the engine.
+#define VKM_DEBUG_MODE_LIT            0
+#define VKM_DEBUG_MODE_BASE_COLOR     1
+#define VKM_DEBUG_MODE_MATERIAL_INDEX 2
+#define VKM_DEBUG_MODE_NORMAL         3
+#define VKM_DEBUG_MODE_TANGENT_NORMAL 4
 
 // The pools are untyped word arrays, so the "vertex type" is a single u32.
 VKM_BINDLESS_VERTEX_PULLING(uint);
@@ -69,6 +78,11 @@ struct VSOutput
     float4 position : SV_POSITION;
     [[vk::location(0)]] float3 normal : NORMAL0;
     [[vk::location(1)]] float4 baseColor : COLOR0;
+    // World-space tangent, w = bitangent sign. Zero when the layout or the asset has no tangent.
+    [[vk::location(2)]] float4 tangent : TANGENT0;
+    // Push constants are vertex-stage only, so the debug views carry what they need as
+    // interpolants; the material index is an integer and must not be interpolated.
+    [[vk::location(3)]] nointerpolation uint materialIndex : TEXCOORD0;
 };
 
 float3 loadFloat3(uint slot, uint wordBase)
@@ -78,11 +92,16 @@ float3 loadFloat3(uint slot, uint wordBase)
                   asfloat(VKM_LOAD_VERTEX(slot, wordBase + 2)));
 }
 
-// Unpacks the low three components of a snorm8x4 word, the inverse of meshopt_quantizeSnorm(v, 8).
-float3 unpackSnorm8x3(uint packed)
+float4 loadFloat4(uint slot, uint wordBase)
 {
-    const int3 signedBytes = int3(packed << 24, packed << 16, packed << 8) >> 24;
-    return max(float3(signedBytes) / 127.0, -1.0);
+    return float4(loadFloat3(slot, wordBase), asfloat(VKM_LOAD_VERTEX(slot, wordBase + 3)));
+}
+
+// Unpacks a snorm8x4 word, the inverse of meshopt_quantizeSnorm(v, 8).
+float4 unpackSnorm8x4(uint packed)
+{
+    const int4 signedBytes = int4(packed << 24, packed << 16, packed << 8, packed) >> 24;
+    return max(float4(signedBytes) / 127.0, -1.0);
 }
 
 // One object's vertex `index` in its pool, in that pool's layout.
@@ -91,10 +110,28 @@ float3 fetchNormal(ObjectData obj, uint wordBase)
 #if defined(VKM_VERTEX_LAYOUT_STANDARD_PBR)
     return loadFloat3(obj.vertexPoolSlot, wordBase + 4); // normal at byte 16 == word 4
 #elif defined(VKM_VERTEX_LAYOUT_COMPACT)
-    return unpackSnorm8x3(VKM_LOAD_VERTEX(obj.vertexPoolSlot, wordBase + 3)); // normal at byte 12 == word 3
+    return unpackSnorm8x4(VKM_LOAD_VERTEX(obj.vertexPoolSlot, wordBase + 3)).xyz; // normal at byte 12 == word 3
 #else
     // PositionOnly carries no shading data; a constant normal keeps the geometry visible.
     return float3(0.0, 0.0, 1.0);
+#endif
+}
+
+/*
+* One object's vertex tangent, xyz plus the bitangent sign in w.
+*
+* Zero whenever there is no tangent to fetch: PositionOnly has no such attribute, and the glTF
+* importer leaves tangents zeroed for assets that ship none. The tangent debug view flags that
+* rather than drawing a frame built from nothing.
+*/
+float4 fetchTangent(ObjectData obj, uint wordBase)
+{
+#if defined(VKM_VERTEX_LAYOUT_STANDARD_PBR)
+    return loadFloat4(obj.vertexPoolSlot, wordBase + 12); // tangent at byte 48 == word 12
+#elif defined(VKM_VERTEX_LAYOUT_COMPACT)
+    return unpackSnorm8x4(VKM_LOAD_VERTEX(obj.vertexPoolSlot, wordBase + 5)); // tangent at byte 20 == word 5
+#else
+    return float4(0.0, 0.0, 0.0, 0.0);
 #endif
 }
 
@@ -117,6 +154,7 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
 
     const float3 position = loadFloat3(obj.vertexPoolSlot, wordBase);
     const float3 normal = fetchNormal(obj, wordBase);
+    const float4 tangent = fetchTangent(obj, wordBase);
 
     VSOutput output;
     // Two mat4 x vec4 products rather than folding VP*M per draw: the camera is shared by every
@@ -125,13 +163,59 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
     // Shading is world-space now that there are no per-draw push constants to carry an
     // object-space light in; normalTransform is the inverse-transpose of worldTransform.
     output.normal = mul((float3x3)obj.normalTransform, normal);
+    // A tangent is a direction along the surface, so it rides the world matrix itself rather than
+    // its inverse-transpose; the handedness sign is a scalar and passes through untouched.
+    output.tangent = float4(mul((float3x3)obj.worldTransform, tangent.xyz), tangent.w);
     output.baseColor = fetchBaseColor(g_VkmSceneFrame[0].materialPoolSlot, obj.materialIndex);
+    output.materialIndex = obj.materialIndex;
     return output;
+}
+
+// Marks data a debug view needs but the asset does not carry.
+static const float3 kMissingDataColor = float3(1.0, 0.0, 1.0);
+
+// A distinct, reasonably bright colour per index, from a cheap integer hash. Only adjacent
+// indices need to be told apart, so a hash beats maintaining a palette.
+float3 debugIndexColor(uint index)
+{
+    const uint hash = index * 2654435761u;
+    const float3 channels = float3(uint3(hash, hash >> 8, hash >> 16) & 255u) / 255.0;
+    return 0.25 + 0.75 * channels;
 }
 
 float4 PSMain(VSOutput input) : SV_TARGET
 {
     const float3 normal = normalize(input.normal);
+    const uint debugMode = g_VkmSceneFrame[0].debugMode;
+
+    if (debugMode == VKM_DEBUG_MODE_BASE_COLOR)
+    {
+        return float4(input.baseColor.rgb, 1.0);
+    }
+    if (debugMode == VKM_DEBUG_MODE_MATERIAL_INDEX)
+    {
+        return float4(debugIndexColor(input.materialIndex), 1.0);
+    }
+    if (debugMode == VKM_DEBUG_MODE_NORMAL)
+    {
+        return float4(normal * 0.5 + 0.5, 1.0);
+    }
+    if (debugMode == VKM_DEBUG_MODE_TANGENT_NORMAL)
+    {
+        // Materials carry no normal map yet, so what goes through the basis is a flat tangent-space
+        // normal: the result equals the world normal exactly when the frame is well formed, which
+        // is what makes a missing or broken one stand out against VKM_DEBUG_MODE_NORMAL.
+        if (dot(input.tangent.xyz, input.tangent.xyz) < 1e-8)
+        {
+            return float4(kMissingDataColor, 1.0);
+        }
+        // Gram-Schmidt: interpolation leaves the tangent neither unit length nor perpendicular.
+        const float3 tangent = normalize(input.tangent.xyz - normal * dot(normal, input.tangent.xyz));
+        const float3 bitangent = cross(normal, tangent) * input.tangent.w;
+        const float3x3 tbn = float3x3(tangent, bitangent, normal);
+        return float4(normalize(mul(float3(0.0, 0.0, 1.0), tbn)) * 0.5 + 0.5, 1.0);
+    }
+
     const float3 lightDirection = normalize(g_VkmSceneFrame[0].lightDirection.xyz);
 
     // Half-Lambert wrap so backfacing-but-visible geometry stays readable instead of black.

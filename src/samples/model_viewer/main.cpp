@@ -11,6 +11,8 @@
 #include <vkm/base/common.h>
 #include <vkm/base/global_variable.h>
 #include <vkm/platform/common/app_delegate.h>
+#include <vkm/platform/common/input_codes.h>
+#include <vkm/platform/common/input_handler.h>
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/command_queue.h>
@@ -55,6 +57,29 @@ namespace
 {
     constexpr VkmFormat kDepthFormat = VkmFormat::D32_SFLOAT;
     constexpr glm::vec3 kWorldLightDirection{ 0.4f, 0.8f, 0.45f }; // towards the light
+
+    // What the pixel shader draws instead of shading. Mirrors the VKM_DEBUG_MODE_* constants in
+    // model_viewer.hlsl; travels there as VkmFrameData::_debugMode.
+    enum class DebugMode : uint32_t
+    {
+        Lit = 0,
+        BaseColor = 1,
+        MaterialIndex = 2,
+        Normal = 3,
+        TangentNormal = 4,
+        Count = 5,
+    };
+
+    constexpr size_t kDebugModeCount = static_cast<size_t>(DebugMode::Count);
+
+    // Both indexed by DebugMode, so the sized declarations fail to compile if one drifts.
+    constexpr const char* kDebugModeNames[kDebugModeCount] = {
+        "Lit", "Base color", "Material index", "World normal", "TBN normal",
+    };
+    // Digits, so nothing collides with the fly camera's WASD/QE/Shift set.
+    constexpr VkmKeyCode kDebugModeKeys[kDebugModeCount] = {
+        VkmKeyCode::Num0, VkmKeyCode::Num1, VkmKeyCode::Num2, VkmKeyCode::Num3, VkmKeyCode::Num4,
+    };
 
     // One loadable file found under resources/Scenes/.
     struct SceneEntry
@@ -173,6 +198,7 @@ public:
         {
             _flyController.tick(deltaTime);
         }
+        pollDebugModeKeys();
         updateDepthTexture();
 
 #if defined(VKM_ENABLE_IMGUI)
@@ -234,6 +260,7 @@ public:
         // World space now that the draw path pushes no per-object constants: the shader rotates the
         // normal by the object's normalTransform instead of pre-rotating the light per draw.
         frameData._lightDirection = glm::vec4(glm::normalize(kWorldLightDirection), 0.0f);
+        frameData._debugMode = static_cast<uint32_t>(_debugMode);
 
         std::vector<VkmResourceHandle> referenced;
         _scene.collectReferencedResources(&referenced);
@@ -395,6 +422,21 @@ private:
         }
 
         ImGui::Separator();
+        int debugMode = static_cast<int>(_debugMode);
+        if (ImGui::Combo("Debug view", &debugMode, kDebugModeNames, static_cast<int>(kDebugModeCount)))
+        {
+            _debugMode = static_cast<DebugMode>(debugMode);
+        }
+        if (_debugMode == DebugMode::TangentNormal)
+        {
+            ImGui::TextDisabled("Magenta = no tangent (the asset ships none, or the layout has no room)");
+        }
+        else
+        {
+            ImGui::TextDisabled("Or press 0-%zu over the render window", kDebugModeCount - 1);
+        }
+
+        ImGui::Separator();
         bool flyMode = _flyMode;
         if (ImGui::Checkbox("Fly camera (WASD)", &flyMode))
         {
@@ -422,6 +464,29 @@ private:
         ImGui::End();
     }
 #endif // VKM_ENABLE_IMGUI
+
+    /*
+    * @brief Selects a debug view from the number row of the window the scene is drawn in.
+    * @details The pressed edge is drained once per frame by the engine before update() runs, so
+    * polling here fires exactly once per physical press. ImGui lives in its own window on desktop,
+    * so its combo and these keys never see the same keystroke.
+    */
+    void pollDebugModeKeys()
+    {
+        if (_engine == nullptr)
+        {
+            return;
+        }
+
+        const VkmInputHandler& input = _engine->getInputHandler();
+        for (size_t mode = 0; mode < kDebugModeCount; ++mode)
+        {
+            if (input.isKeyPressed(kDebugModeKeys[mode]))
+            {
+                _debugMode = static_cast<DebugMode>(mode);
+            }
+        }
+    }
 
     /*
     * @brief Hands the camera between the orbit and fly controllers.
@@ -505,6 +570,7 @@ private:
     // Exactly one of the two is registered at a time; see setFlyMode().
     VkmFlyCameraController _flyController{&_camera};
     bool _flyMode{false};
+    DebugMode _debugMode{DebugMode::Lit};
     std::vector<SceneEntry> _sceneEntries;
     std::string _currentScenePath;
     std::string _pendingScenePath; // set by the browser, consumed at the end of update()

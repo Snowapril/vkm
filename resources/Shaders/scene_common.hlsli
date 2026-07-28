@@ -32,7 +32,8 @@ struct FrameData
     float4 frustumPlanes[6]; // world space, normalized, xyz = normal, w = distance
     float4 lightDirection;
     uint   materialPoolSlot;
-    uint3  _pad0;
+    uint   debugMode; // drawing-shader defined; the culling passes ignore it
+    uint2  _pad0;
 };
 
 /*

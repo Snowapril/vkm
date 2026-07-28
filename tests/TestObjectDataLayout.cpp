@@ -39,6 +39,7 @@ TEST_CASE("VkmFrameData - matches the shader-side FrameData layout") {
     CHECK(offsetof(vkm::VkmFrameData, _frustumPlanes) == 0);
     CHECK(offsetof(vkm::VkmFrameData, _lightDirection) == 96);
     CHECK(offsetof(vkm::VkmFrameData, _materialPoolSlot) == 112);
+    CHECK(offsetof(vkm::VkmFrameData, _debugMode) == 116);
 }
 
 /*
