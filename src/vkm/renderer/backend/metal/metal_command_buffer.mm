@@ -89,23 +89,31 @@ namespace vkm
                                                                                        colorAttachmentDesc._clearColors[3]);
         }
 
-        if (frameBufferDesc._depthStencilAttachment.has_value())
+        // Both optionals are required: the handle lives on the framebuffer, the load/store
+        // actions on the render pass, and they are set independently. Vulkan and WebGPU
+        // already check both before dereferencing either.
+        if (frameBufferDesc._depthStencilAttachment.has_value() && renderPassDesc._depthStencilAttachment.has_value())
         {
             VkmTextureMetal* depthStencilTextureMetal = static_cast<VkmTextureMetal*>(renderResourcePool->getResource<VkmTexture>(frameBufferDesc._depthStencilAttachment.value()));;
             const VkmTextureInfo& textureInfo = depthStencilTextureMetal->getTextureInfo();
+            // One shared load/store pair covers both aspects, matching the descriptor (and
+            // Vulkan, which builds a single attachment info and assigns it to both).
+            const VkmDepthStencilAttachmentDescriptor& depthStencilDesc = renderPassDesc._depthStencilAttachment.value();
 
             if (hasDepth(textureInfo._format))
             {
                 mtlRenderPassDescriptor.depthAttachment.texture = depthStencilTextureMetal->getInternalHandle();
-                mtlRenderPassDescriptor.depthAttachment.loadAction = MTLLoadActionClear;
-                mtlRenderPassDescriptor.depthAttachment.storeAction = MTLStoreActionStore;
+                mtlRenderPassDescriptor.depthAttachment.loadAction = getLoadAction(depthStencilDesc._loadAction);
+                mtlRenderPassDescriptor.depthAttachment.storeAction = getStoreAction(depthStencilDesc._storeAction);
+                mtlRenderPassDescriptor.depthAttachment.clearDepth = depthStencilDesc._clearDepth;
             }
 
             if (hasStencil(textureInfo._format))
             {
                 mtlRenderPassDescriptor.stencilAttachment.texture = depthStencilTextureMetal->getInternalHandle();
-                mtlRenderPassDescriptor.stencilAttachment.loadAction = MTLLoadActionClear;
-                mtlRenderPassDescriptor.stencilAttachment.storeAction = MTLStoreActionStore;
+                mtlRenderPassDescriptor.stencilAttachment.loadAction = getLoadAction(depthStencilDesc._loadAction);
+                mtlRenderPassDescriptor.stencilAttachment.storeAction = getStoreAction(depthStencilDesc._storeAction);
+                mtlRenderPassDescriptor.stencilAttachment.clearStencil = depthStencilDesc._clearStencil;
             }
         }
 
