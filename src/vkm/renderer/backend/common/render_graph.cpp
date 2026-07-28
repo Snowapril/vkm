@@ -105,6 +105,13 @@ namespace vkm
         VkmCommandBufferPoolBase* commandBufferPool = commandQueue->getCommandBufferPool();
 
         VkmCommandBufferBase* commandBuffer = commandBufferPool->allocate();
+        // Must follow allocate(), which is what binds the native handle every onSetDebugName
+        // override labels. Without a name the crash handler falls back to "<queueName>#<index>"
+        // (see VkmGpuCrashHandler's breadcrumb assembly), which cannot tell this submit apart
+        // from the driver's own upload submits on the same queue; the frame slot is exactly the
+        // information that fallback lacks. Per-subgraph identity is already carried by the debug
+        // group below and by each subgraph's completion marker.
+        commandBuffer->setDebugName(("RenderGraph.Frame" + std::to_string(_frameIndex)).c_str());
         commandBuffer->beginCommandBuffer();
         commandBuffer->writeGpuTimestampBegin();
 

@@ -11,6 +11,7 @@
 namespace vkm
 {
     VkmRenderResourcePool::VkmRenderResourcePool(VkmDriverBase* driver)
+        : _driver(driver)
     {
 
     }

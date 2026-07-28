@@ -57,7 +57,6 @@ namespace vkm
         virtual void releaseResource(VkmResourceHandle handle) override final;
 
     private:
-        VkmDriverMetal* _driverMetal;
         std::array<id<MTLResidencySet>, (uint8_t)VkmResourcePoolType::Count> _residencySets{};
         std::mutex _residencyMutex;
         bool _residencyDirty{false}; // guarded by _residencyMutex

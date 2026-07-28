@@ -44,7 +44,7 @@ namespace vkm
     }
 
     VkmRenderResourcePoolMetal::VkmRenderResourcePoolMetal(VkmDriverBase* driver)
-        : VkmRenderResourcePool(driver), _driverMetal(static_cast<VkmDriverMetal*>(driver))
+        : VkmRenderResourcePool(driver)
     {
     }
 
@@ -53,7 +53,7 @@ namespace vkm
         // Runs after VkmDriverMetal::initializeInner() validated the device/OS -- calling
         // residency-set APIs on an unvalidated device hangs inside the Metal framework on
         // unsupported (e.g. paravirtualized CI) GPUs instead of returning nil.
-        id<MTLDevice> device = _driverMetal->getMTLDevice();
+        id<MTLDevice> device = static_cast<VkmDriverMetal*>(getDriver())->getMTLDevice();
 
         for (uint8_t poolType = 0; poolType < (uint8_t)VkmResourcePoolType::Count; ++poolType)
         {
