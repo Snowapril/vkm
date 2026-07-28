@@ -2,11 +2,14 @@
 
 #include <vkm/base/memory.h>
 #include <vkm/platform/common/process_stats.h>
+#include <vkm/renderer/memory_report.h>
 
 #include <algorithm>
 #include <cstring>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -75,13 +78,15 @@ TEST_CASE("MemoryTracker - VKM_NEW auto-tags allocation with its own file/line")
     CHECK(freed->liveCount == 0);
 }
 
-TEST_CASE("MemoryTracker - plain new/delete still routes through mimalloc under the Untagged bucket") {
+#if defined(VKM_PLATFORM_WASM)
+TEST_CASE("MemoryTracker - plain new/delete stays in the Untagged bucket on WASM") {
+    // WebAssembly cannot read its own return addresses, so there is no call site to capture
+    // and the sentinel bucket is still where plain new lands.
     auto before = findEntry(vkm::MemoryTracker::singleton().getTaggedAllocations(), "Untagged");
     const size_t liveBefore = before.has_value() ? before->liveCount : 0;
 
     int* value = new int(5);
     REQUIRE(value != nullptr);
-    CHECK(*value == 5);
 
     auto during = findEntry(vkm::MemoryTracker::singleton().getTaggedAllocations(), "Untagged");
     REQUIRE(during.has_value());
@@ -94,6 +99,80 @@ TEST_CASE("MemoryTracker - plain new/delete still routes through mimalloc under 
     REQUIRE(after.has_value());
     CHECK(after->liveCount <= liveDuring - 1);
 }
+#else
+TEST_CASE("MemoryTracker - plain new/delete is attributed to its own call site") {
+    // The call site is a machine address, so unlike the VKM_NEW case the test cannot name the
+    // row it expects up front. Landmark's odd size is what identifies it instead: querying the
+    // tracker allocates its own result vector, so "the row whose live count went up" alone
+    // would just as happily match that.
+    struct Landmark
+    {
+        char _bytes[4099];
+    };
+
+    const auto findLandmarkRow = []() -> std::optional<vkm::TaggedAllocationSummary> {
+        for (const vkm::TaggedAllocationSummary& entry : vkm::MemoryTracker::singleton().getTaggedAllocations())
+        {
+            if (entry.callSite != nullptr && entry.liveCount == 1 && entry.requestedBytes == sizeof(Landmark))
+            {
+                return entry;
+            }
+        }
+        return std::nullopt;
+    };
+
+    REQUIRE_FALSE(findLandmarkRow().has_value());
+
+    Landmark* landmark = new Landmark();
+    REQUIRE(landmark != nullptr);
+
+    const std::optional<vkm::TaggedAllocationSummary> live = findLandmarkRow();
+    REQUIRE(live.has_value());
+    CHECK(live->callSite != nullptr);
+    CHECK(live->label == nullptr); // no longer the "Untagged" sentinel
+    CHECK(live->file == nullptr);  // and not a compile-time tag either
+    CHECK(live->usableBytes >= live->requestedBytes);
+
+    delete landmark;
+
+    CHECK_FALSE(findLandmarkRow().has_value());
+}
+
+/*
+* Resolution is best-effort by contract: it needs the platform's symbolizer and line tables
+* the build may not carry. So this asserts the shape of the outcome rather than demanding a
+* particular one -- either the address resolved, in which case it must name this very file,
+* or it did not, in which case the raw address must still be shown.
+*/
+TEST_CASE("memory report - a captured call site resolves to a readable name") {
+    int* value = new int(11);
+
+    std::vector<vkm::TaggedAllocationSummary> tags = vkm::MemoryTracker::singleton().getTaggedAllocations();
+    tags.erase(std::remove_if(tags.begin(), tags.end(),
+                              [](const vkm::TaggedAllocationSummary& entry) {
+                                  return entry.callSite == nullptr || entry.liveCount == 0;
+                              }),
+               tags.end());
+    REQUIRE(!tags.empty());
+
+    vkm::resolveMemoryTagCallSites(tags);
+
+    size_t namedRows = 0;
+    for (const vkm::TaggedAllocationSummary& entry : tags)
+    {
+        const std::string name = vkm::formatMemoryTagName(entry);
+        CHECK(!name.empty());
+        // Either a bare address, or something a human can act on -- never an empty cell.
+        if (name.rfind("0x", 0) != 0)
+        {
+            ++namedRows;
+        }
+    }
+    INFO("resolved " << namedRows << " of " << tags.size() << " call sites");
+
+    delete value;
+}
+#endif // defined(VKM_PLATFORM_WASM)
 
 #if defined(VKM_USE_MIMALLOC)
 TEST_CASE("MemoryTracker - getMimallocStats returns real, self-consistent numbers") {

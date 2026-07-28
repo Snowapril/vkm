@@ -155,7 +155,15 @@ namespace vkm
                 const TaggedAllocationSummary& tag = snapshot._cpuTags[row];
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::TextUnformatted(formatMemoryTagName(tag).c_str());
+                // Symbolized call sites carry the allocated type in their template arguments,
+                // which is the useful part but far wider than the column; the cell clips and
+                // the tooltip carries the whole thing.
+                const std::string name = formatMemoryTagName(tag);
+                ImGui::TextUnformatted(name.c_str());
+                if (tag.callSite != nullptr)
+                {
+                    ImGui::SetItemTooltip("%s", name.c_str());
+                }
                 ImGui::TableNextColumn();
                 ImGui::Text("%zu", tag.liveCount);
                 ImGui::TableNextColumn();

@@ -61,6 +61,25 @@ namespace vkm
     // "412.3 MiB" / "1.02 GiB" / "512 B".
     std::string formatByteSize(uint64_t bytes);
 
-    // "SceneMeshVertices" for a labelled tag, "gltf_importer.cpp:154" for a call-site tag.
+    /*
+    * @brief "SceneMeshVertices" for a labelled tag, "gltf_importer.cpp:154" for a call-site tag.
+    * @details Address-tagged rows (everything that reached global operator new without a
+    * VKM_NEW tag) read from the symbol cache resolveMemoryTagCallSites() fills; an address
+    * that has never been resolved formats as a bare "0x...".
+    */
     std::string formatMemoryTagName(const TaggedAllocationSummary& tag);
+
+    /*
+    * @brief Symbolizes the call site of every address-tagged row in `tags`.
+    *
+    * Batched on purpose: symbolizing costs one child-process launch per loaded module, so
+    * resolving a whole snapshot at once is enormously cheaper than resolving row by row.
+    * Results are cached process-wide and code addresses never move, so repeat calls only pay
+    * for addresses seen for the first time -- a steady-state snapshot resolves nothing.
+    *
+    * Best-effort by nature: it yields "function (file.cpp:123)" where the platform's symbol
+    * tooling and the build's debug info allow it, degrades to the function name alone, and
+    * falls back to the raw address. Never fails, never throws.
+    */
+    void resolveMemoryTagCallSites(const std::vector<TaggedAllocationSummary>& tags);
 } // namespace vkm

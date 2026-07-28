@@ -9,6 +9,25 @@
 #include <mimalloc.h>
 #endif
 
+// The address of the instruction that called the enclosing function. Both spellings are
+// compiler intrinsics that compile to a single load, which is what keeps call-site capture
+// affordable on the global allocation path.
+//
+// Deliberately absent on WASM: WebAssembly's call stack is not addressable from within the
+// module, and there would be nothing to symbolize an address against even if it were. That
+// platform keeps the "Untagged" bucket it always had.
+#if defined(VKM_PLATFORM_WASM)
+#define VKM_RETURN_ADDRESS() nullptr
+#elif defined(_MSC_VER)
+#include <intrin.h>
+#pragma intrinsic(_ReturnAddress)
+#define VKM_RETURN_ADDRESS() _ReturnAddress()
+#elif defined(__GNUC__) || defined(__clang__)
+#define VKM_RETURN_ADDRESS() __builtin_return_address(0)
+#else
+#define VKM_RETURN_ADDRESS() nullptr
+#endif
+
 namespace
 {
     // Header prepended to every tracked allocation; recovered via pointer arithmetic on
@@ -24,6 +43,7 @@ namespace
         const char* file;
         int line;
         const char* label;
+        const void* callSite;
         size_t requestedSize;
         size_t usableSize;
     };
@@ -99,6 +119,12 @@ namespace vkm
             return label != nullptr && other.label != nullptr &&
                    std::string_view(label) == std::string_view(other.label);
         }
+        // Raw address comparison: two call sites are the same row exactly when they are the
+        // same instruction, which is also what makes this cheap enough for the hot path.
+        if (callSite != nullptr || other.callSite != nullptr)
+        {
+            return callSite == other.callSite;
+        }
         return file == other.file && line == other.line;
     }
 
@@ -107,6 +133,10 @@ namespace vkm
         if (key.label != nullptr)
         {
             return std::hash<std::string_view>{}(std::string_view(key.label));
+        }
+        if (key.callSite != nullptr)
+        {
+            return std::hash<const void*>{}(key.callSite);
         }
         return std::hash<const void*>{}(key.file) ^ (std::hash<int>{}(key.line) << 1);
     }
@@ -154,9 +184,12 @@ namespace vkm
         return *instance;
     }
 
-    void* MemoryTracker::allocate(size_t size, const char* file, int line, const char* label)
+    void* MemoryTracker::allocate(size_t size, const char* file, int line, const char* label,
+                                  const void* callSite)
     {
-        const TagKey key = label != nullptr ? TagKey{ nullptr, 0, label } : TagKey{ file, line, nullptr };
+        const TagKey key = label != nullptr      ? TagKey{ nullptr, 0, label, nullptr }
+                           : callSite != nullptr ? TagKey{ nullptr, 0, nullptr, callSite }
+                                                 : TagKey{ file, line, nullptr, nullptr };
         const size_t totalSize = sizeof(AllocationHeader) + size;
 
         void* raw = rawAlloc(totalSize);
@@ -170,6 +203,7 @@ namespace vkm
         header->file = key.file;
         header->line = key.line;
         header->label = key.label;
+        header->callSite = key.callSite;
         header->requestedSize = size;
         header->usableSize = usable;
 
@@ -192,9 +226,9 @@ namespace vkm
         }
 
         auto* header = reinterpret_cast<AllocationHeader*>(static_cast<char*>(taggedPtr) - sizeof(AllocationHeader));
-        const TagKey key = header->label != nullptr
-            ? TagKey{ nullptr, 0, header->label }
-            : TagKey{ header->file, header->line, nullptr };
+        const TagKey key = header->label != nullptr      ? TagKey{ nullptr, 0, header->label, nullptr }
+                           : header->callSite != nullptr ? TagKey{ nullptr, 0, nullptr, header->callSite }
+                                                         : TagKey{ header->file, header->line, nullptr, nullptr };
 
         {
             std::lock_guard<std::mutex> lock(_mutex);
@@ -228,7 +262,7 @@ namespace vkm
             for (const auto& [key, stats] : _tagStats)
             {
                 scratch.push_back(TaggedAllocationSummary{
-                    key.file, key.line, key.label,
+                    key.file, key.line, key.label, key.callSite,
                     stats.liveCount, stats.requestedBytes, stats.usableBytes });
             }
         }
@@ -238,9 +272,13 @@ namespace vkm
 
 namespace
 {
-    void* trackedGlobalNew(std::size_t size)
+    void* trackedGlobalNew(std::size_t size, const void* callSite)
     {
-        return vkm::MemoryTracker::singleton().allocate(size, nullptr, 0, kUntaggedLabel);
+        // A null call site can only happen where VKM_RETURN_ADDRESS is unavailable; the
+        // "Untagged" bucket still exists for exactly that case.
+        return callSite != nullptr
+            ? vkm::MemoryTracker::singleton().allocate(size, nullptr, 0, nullptr, callSite)
+            : vkm::MemoryTracker::singleton().allocate(size, nullptr, 0, kUntaggedLabel);
     }
 
     void trackedGlobalDelete(void* ptr) noexcept
@@ -249,20 +287,31 @@ namespace
     }
 }
 
-// Global operator new/delete overrides: every allocation in the process routes through
-// vkm::MemoryTracker (and therefore mimalloc), tagged "Untagged" unless it went through
-// VKM_NEW/VKM_NEW_TAGGED. operator new(std::nothrow_t) is intentionally not overridden -
-// the standard-mandated default nothrow wrapper already calls the (replaceable) throwing
-// operator new(size_t) in a try/catch, so it automatically routes through the override
-// below with no functional loss, and nothing in this codebase uses new(std::nothrow).
+/*
+* Global operator new/delete overrides: every allocation in the process routes through
+* vkm::MemoryTracker (and therefore mimalloc). Allocations that went through
+* VKM_NEW/VKM_NEW_TAGGED carry their own tag; everything else -- plain new, make_unique, STL
+* containers, third-party code -- is attributed to the machine address of whoever called
+* operator new, which the memory report symbolizes on demand.
+*
+* Capturing the return address here rather than inside trackedGlobalNew is deliberate: these
+* are replaceable global functions, so no caller can inline them away and frame 0 is always
+* the real allocation site. trackedGlobalNew, by contrast, is a static that the compiler is
+* free to inline, which would shift what frame 0 means.
+*
+* operator new(std::nothrow_t) is intentionally not overridden - the standard-mandated default
+* nothrow wrapper already calls the (replaceable) throwing operator new(size_t) in a try/catch,
+* so it automatically routes through the override below with no functional loss, and nothing in
+* this codebase uses new(std::nothrow).
+*/
 void* operator new(std::size_t size)
 {
-    return trackedGlobalNew(size);
+    return trackedGlobalNew(size, VKM_RETURN_ADDRESS());
 }
 
 void* operator new[](std::size_t size)
 {
-    return trackedGlobalNew(size);
+    return trackedGlobalNew(size, VKM_RETURN_ADDRESS());
 }
 
 void operator delete(void* ptr) noexcept

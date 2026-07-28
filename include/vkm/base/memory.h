@@ -35,16 +35,20 @@ namespace vkm
 
     /*
     * @brief Aggregated live-allocation counters for a single memory tag.
-    * @details A tag is either an auto-captured call site (file/line set, label == nullptr)
-    * or a user-supplied label (file == nullptr, line == 0, label set). "Untagged" is the
-    * sentinel label used for allocations that did not go through VKM_NEW/VKM_NEW_TAGGED
-    * (plain new/delete, make_unique, STL containers, third-party code).
+    * @details A tag is one of three kinds, in the order the tracker prefers them:
+    *   - user-supplied label (VKM_NEW_TAGGED): label set, everything else null
+    *   - compile-time call site (VKM_NEW): file/line set
+    *   - captured call site: callSite set -- the return address of whoever called global
+    *     operator new, symbolized only when something asks to display it
+    * "Untagged" remains the sentinel label, but now only for allocations whose call site
+    * could not be captured at all (see the global operator new overrides in memory.cpp).
     */
     struct TaggedAllocationSummary
     {
         const char* file = nullptr;
         int line = 0;
         const char* label = nullptr;
+        const void* callSite = nullptr;
         size_t liveCount = 0;
         size_t requestedBytes = 0;
         size_t usableBytes = 0; // mimalloc's actual usable size for the live allocations; == requestedBytes on WASM
@@ -70,9 +74,12 @@ namespace vkm
         * @details Intended for use by VKM_NEW/VKM_NEW_TAGGED and the global operator
         * new/delete overrides - not meant to be called directly elsewhere. `label`, when
         * non-null, must be a string literal or otherwise have static storage duration:
-        * it is stored by pointer, never copied.
+        * it is stored by pointer, never copied. `callSite` is a code address used only when
+        * neither a label nor a file/line is available; it is stored raw and symbolized
+        * lazily by whoever displays it, so this stays a single register store.
         */
-        void* allocate(size_t size, const char* file, int line, const char* label);
+        void* allocate(size_t size, const char* file, int line, const char* label,
+                       const void* callSite = nullptr);
 
         /*
         * @brief Free a pointer previously returned by allocate().
@@ -94,14 +101,14 @@ namespace vkm
     private:
         MemoryTracker();
 
-        // Identifies an aggregate row: either (file, line) for an auto-captured call site,
-        // or `label` alone for a manually-tagged/sentinel row (file/line ignored when
-        // label != nullptr).
+        // Identifies an aggregate row. Exactly one of the three kinds is significant, tested
+        // in this order: `label`, then `callSite`, then (file, line).
         struct TagKey
         {
             const char* file = nullptr;
             int line = 0;
             const char* label = nullptr;
+            const void* callSite = nullptr;
 
             bool operator==(const TagKey& other) const noexcept;
         };
