@@ -9,7 +9,9 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace vkm
@@ -286,5 +288,55 @@ namespace vkm
         // Restart numbering so each capture's first frame reads as #0 in the UI rather than
         // continuing a count from a capture the user already discarded.
         state._nextFrameNumber = 0;
+    }
+
+    std::vector<VkmProfileScopeTotal> vkmAggregateProfileRange(const VkmProfileFrame& frame,
+                                                              const uint64_t beginNs, const uint64_t endNs)
+    {
+        if (endNs <= beginNs)
+        {
+            return {};
+        }
+
+        std::unordered_map<std::string_view, VkmProfileScopeTotal> totals;
+        for (const VkmProfileThreadTimeline& timeline : frame._threads)
+        {
+            for (const VkmProfileZone& zone : timeline._zones)
+            {
+                if (zone._name == nullptr)
+                {
+                    continue;
+                }
+                const uint64_t overlapBegin = std::max(zone._beginNs, beginNs);
+                const uint64_t overlapEnd = std::min(zone._endNs, endNs);
+                if (overlapEnd <= overlapBegin)
+                {
+                    continue;
+                }
+
+                VkmProfileScopeTotal& entry = totals[std::string_view(zone._name)];
+                // Whichever pointer arrived first wins; they all spell the same name, and the
+                // zones that own them outlive this result.
+                if (entry._name == nullptr)
+                {
+                    entry._name = zone._name;
+                }
+                entry._totalNs += overlapEnd - overlapBegin;
+                entry._count += 1;
+            }
+        }
+
+        std::vector<VkmProfileScopeTotal> sorted;
+        sorted.reserve(totals.size());
+        for (const auto& [name, entry] : totals)
+        {
+            (void)name;
+            sorted.push_back(entry);
+        }
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const VkmProfileScopeTotal& lhs, const VkmProfileScopeTotal& rhs) {
+                      return lhs._totalNs > rhs._totalNs;
+                  });
+        return sorted;
     }
 } // namespace vkm

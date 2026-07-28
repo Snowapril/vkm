@@ -39,6 +39,13 @@ namespace vkm
         // kNoFrame when the ring is empty.
         size_t drawFrameHistory();
         void drawFlameChart(const VkmProfileFrame& frame);
+        /*
+        * @brief Draws what the selected time range contains: its span, and which scopes spent
+        * the most time inside it.
+        * @details Drawn above the chart rather than inside it, so the totals stay put while
+        * the chart underneath is panned and zoomed.
+        */
+        void drawSelectionSummary(const VkmProfileFrame& frame);
 
         bool _visible = false;
         // Frame number the user clicked, held only while _hasPinnedFrame. Pinning by number
@@ -51,6 +58,22 @@ namespace vkm
         float _panMs = 0.0f;
         // Set when the displayed frame changes, to re-fit zoom/pan to the new frame's span.
         bool _fitRequested = true;
+
+        /*
+        * Time range the user dragged out across the ruler, in milliseconds from the displayed
+        * frame's start -- the same units as _panMs, so it survives zooming and panning.
+        *
+        * Only the ruler starts a selection. Dragging inside the zone rows keeps panning the
+        * chart, which is the gesture that was already there.
+        */
+        bool _hasSelection = false;
+        bool _draggingSelection = false;
+        // Where the drag started; the range is this and the cursor, in whichever order.
+        float _selectionAnchorMs = 0.0f;
+        float _selectionStartMs = 0.0f;
+        float _selectionEndMs = 0.0f;
+        // Raised by the summary's button, which is drawn before the chart that acts on it.
+        bool _zoomToSelectionRequested = false;
 
         static constexpr size_t kNoFrame = static_cast<size_t>(-1);
     };

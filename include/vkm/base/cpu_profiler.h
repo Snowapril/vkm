@@ -62,6 +62,30 @@ namespace vkm
         uint64_t _durationNs = 0;
     };
 
+    // How long one scope name was running inside a queried time range, and how many zones
+    // contributed. `_name` is borrowed from the zones it came from, so it lives as long as they do.
+    struct VkmProfileScopeTotal
+    {
+        const char* _name = nullptr;
+        uint64_t _totalNs = 0;
+        uint32_t _count = 0;
+    };
+
+    /*
+    * @brief Totals how long each scope was running inside [beginNs, endNs], longest first.
+    *
+    * Zones are clipped to the range rather than counted whole, so a scope straddling either
+    * edge contributes only the part inside -- which is what makes the numbers describe the
+    * range the caller asked about instead of the zones that happen to touch it.
+    *
+    * Nesting is counted at every level: a parent and its children each contribute their own
+    * overlap, so the totals deliberately sum to more than the range's duration (and more again
+    * per thread). Grouping is by name text, not by the interned pointer, so one scope compiled
+    * into two translation units still lands on a single row.
+    */
+    std::vector<VkmProfileScopeTotal> vkmAggregateProfileRange(const VkmProfileFrame& frame,
+                                                              uint64_t beginNs, uint64_t endNs);
+
     /*
     * @brief Process-wide collector of nested per-thread CPU scopes, recorded only while
     * capturing, and kept as a ring of the most recent frames for live inspection.

@@ -211,3 +211,121 @@ TEST_CASE("clear empties the ring and starting a capture discards the previous o
 
     resetProfiler();
 }
+
+/*
+* The range aggregation the profiler window's drag-selection reads. Built from hand-made
+* frames rather than a real capture so the expected nanosecond totals are exact.
+*/
+namespace
+{
+vkm::VkmProfileFrame makeFrame(std::vector<vkm::VkmProfileThreadTimeline> threads)
+{
+    vkm::VkmProfileFrame frame;
+    frame._frameNumber = 0;
+    frame._beginNs = 0;
+    frame._endNs = 1000;
+    frame._threads = std::move(threads);
+    return frame;
+}
+
+vkm::VkmProfileZone makeZone(const char* name, uint64_t beginNs, uint64_t endNs, uint16_t depth = 0)
+{
+    vkm::VkmProfileZone zone;
+    zone._name = name;
+    zone._beginNs = beginNs;
+    zone._endNs = endNs;
+    zone._depth = depth;
+    return zone;
+}
+
+const vkm::VkmProfileScopeTotal* findTotal(const std::vector<vkm::VkmProfileScopeTotal>& totals,
+                                           const char* name)
+{
+    for (const vkm::VkmProfileScopeTotal& entry : totals)
+    {
+        if (std::string(entry._name) == name)
+        {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+} // namespace
+
+TEST_CASE("range aggregation clips zones to the range instead of counting them whole")
+{
+    vkm::VkmProfileThreadTimeline timeline;
+    timeline._threadId = 1;
+    timeline._zones = {
+        makeZone("Straddles", 50, 250),  // only 150 of its 200 ns is inside
+        makeZone("Inside", 120, 170),    // wholly inside
+        makeZone("Outside", 300, 400),   // wholly outside
+    };
+
+    const std::vector<vkm::VkmProfileScopeTotal> totals =
+        vkm::vkmAggregateProfileRange(makeFrame({ timeline }), 100, 250);
+
+    REQUIRE(totals.size() == 2); // "Outside" contributes nothing and gets no row
+
+    const vkm::VkmProfileScopeTotal* straddles = findTotal(totals, "Straddles");
+    REQUIRE(straddles != nullptr);
+    CHECK(straddles->_totalNs == 150);
+    CHECK(straddles->_count == 1);
+
+    const vkm::VkmProfileScopeTotal* inside = findTotal(totals, "Inside");
+    REQUIRE(inside != nullptr);
+    CHECK(inside->_totalNs == 50);
+
+    CHECK(findTotal(totals, "Outside") == nullptr);
+
+    // Longest first, which is what makes the top of the table the answer.
+    CHECK(totals[0]._totalNs >= totals[1]._totalNs);
+}
+
+TEST_CASE("range aggregation counts nested scopes at every level and merges repeats")
+{
+    vkm::VkmProfileThreadTimeline timeline;
+    timeline._threadId = 1;
+    timeline._zones = {
+        makeZone("Parent", 0, 100, 0),
+        makeZone("Child", 10, 40, 1),
+        makeZone("Child", 60, 90, 1), // same name again: one row, two calls
+    };
+
+    const std::vector<vkm::VkmProfileScopeTotal> totals =
+        vkm::vkmAggregateProfileRange(makeFrame({ timeline }), 0, 100);
+
+    const vkm::VkmProfileScopeTotal* child = findTotal(totals, "Child");
+    REQUIRE(child != nullptr);
+    CHECK(child->_totalNs == 60); // 30 + 30
+    CHECK(child->_count == 2);
+
+    const vkm::VkmProfileScopeTotal* parent = findTotal(totals, "Parent");
+    REQUIRE(parent != nullptr);
+    CHECK(parent->_totalNs == 100); // the parent is not reduced by what its children took
+
+    // Nesting means the totals exceed the range's own duration; that is the documented shape.
+    CHECK(parent->_totalNs + child->_totalNs > 100);
+}
+
+TEST_CASE("range aggregation sums across threads and rejects an empty range")
+{
+    vkm::VkmProfileThreadTimeline first;
+    first._threadId = 1;
+    first._zones = { makeZone("Shared", 0, 50) };
+
+    vkm::VkmProfileThreadTimeline second;
+    second._threadId = 2;
+    second._zones = { makeZone("Shared", 0, 30) };
+
+    const vkm::VkmProfileFrame frame = makeFrame({ first, second });
+
+    const std::vector<vkm::VkmProfileScopeTotal> totals = vkm::vkmAggregateProfileRange(frame, 0, 100);
+    REQUIRE(totals.size() == 1);
+    CHECK(totals[0]._totalNs == 80);
+    CHECK(totals[0]._count == 2);
+
+    // A zero-width or inverted range has nothing to report rather than everything.
+    CHECK(vkm::vkmAggregateProfileRange(frame, 50, 50).empty());
+    CHECK(vkm::vkmAggregateProfileRange(frame, 80, 20).empty());
+}
