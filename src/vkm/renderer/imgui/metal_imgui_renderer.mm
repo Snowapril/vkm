@@ -13,6 +13,8 @@
 
 #include <imgui.h>
 
+#include <cfloat>
+
 #import <Metal/Metal.h>
 #import <Metal/MTL4Compiler.h>
 #import <Metal/MTL4LibraryFunctionDescriptor.h>
@@ -514,8 +516,16 @@ namespace vkm
         // Mouse position + buttons are polled from the key window each frame. Keyboard input
         // and scroll-wheel are event-driven instead, bridged via the NSEvent local monitor
         // installed in initializeInner() (see keyEventMonitor).
+        //
+        // Only this renderer's own window may be polled. mouseLocationOutsideOfEventStream
+        // reports coordinates relative to whichever window it is asked, with no indication of
+        // where the cursor actually is, so polling another window would feed that window's
+        // coordinates into this one's io.DisplaySize space -- and a cursor position over the
+        // scene window would then raise WantCaptureMouse and make the platform layer drop the
+        // scene's own mouse input. isWindowFocused() is the engine's answer to "is the key
+        // window mine", which beats inspecting AppKit's view hierarchy from here.
         NSWindow* keyWindow = [NSApp keyWindow];
-        if (keyWindow != nil)
+        if (isWindowFocused() && keyWindow != nil)
         {
             const NSPoint windowPoint = [keyWindow mouseLocationOutsideOfEventStream];
             const NSRect contentFrame = [keyWindow contentLayoutRect];
@@ -525,6 +535,16 @@ namespace vkm
             io.AddMouseButtonEvent(ImGuiMouseButton_Left, (pressedButtons & (1u << 0)) != 0);
             io.AddMouseButtonEvent(ImGuiMouseButton_Right, (pressedButtons & (1u << 1)) != 0);
             io.AddMouseButtonEvent(ImGuiMouseButton_Middle, (pressedButtons & (1u << 2)) != 0);
+        }
+        else
+        {
+            // Releasing the buttons matters as much as the position: pressedMouseButtons is
+            // system-global, so a drag being performed in the other window must not leave an
+            // ImGui button stuck down.
+            io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Middle, false);
         }
 
         ImGui::NewFrame();

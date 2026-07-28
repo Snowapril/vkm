@@ -154,7 +154,11 @@ namespace vkm
         if (_imGuiRenderer)
         {
             VKM_PROFILE_SCOPE("ImGui::newFrame");
-            _imGuiRenderer->newFrame();
+            // Backends that poll the mouse themselves must know whether the ImGui window is the
+            // one being typed into; the engine is the only place that knows.
+            const bool imGuiWindowFocused = (_imGuiWindowIndex != INVALID_VALUE32) &&
+                                            (_inputHandler.getFocusedWindowIndex() == _imGuiWindowIndex);
+            _imGuiRenderer->newFrame(imGuiWindowFocused);
         }
 #endif
 
@@ -166,6 +170,35 @@ namespace vkm
 #endif // VKM_GPU_CAPTURE
 
         _currentFrameIndex = (_currentFrameIndex + 1) % FRAME_COUNT;
+    }
+
+    uint32_t VkmEngine::findWindowIndex(const void* nativeHandle) const
+    {
+        if (nativeHandle == nullptr)
+        {
+            return kVkmNoFocusedWindow;
+        }
+
+        for (uint32_t windowIndex = 0; windowIndex < _windowContexts.size(); ++windowIndex)
+        {
+            if (_windowContexts[windowIndex]._windowHandle == nativeHandle)
+            {
+                return windowIndex;
+            }
+        }
+        return kVkmNoFocusedWindow;
+    }
+
+    void VkmEngine::onWindowFocusChanged(const void* nativeHandle, bool focused)
+    {
+        const uint32_t windowIndex = findWindowIndex(nativeHandle);
+        if (windowIndex == kVkmNoFocusedWindow)
+        {
+            // A window this engine does not own (or a focus notification arriving before
+            // addSwapChain registered it) says nothing about our windows.
+            return;
+        }
+        _inputHandler.onWindowFocusChanged(windowIndex, focused);
     }
 
     bool VkmEngine::wantsCaptureKeyboard() const

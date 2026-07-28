@@ -99,6 +99,9 @@ namespace vkm
         }
 
         installGlfwInputCallbacks(_window.getHandle(), &_engine);
+        // The ImGui window's input callbacks belong to the ImGui backend; only its focus is
+        // the engine's business, so that is all we install there.
+        installGlfwWindowFocusCallback(_imguiWindow.getHandle(), &_engine);
 
         // Linux drives the frame loop on the main thread (unlike Apple, which hands it to a
         // dedicated render thread), so this is the thread the CPU profiler's frames come from.

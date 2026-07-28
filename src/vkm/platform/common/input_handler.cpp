@@ -97,6 +97,15 @@ namespace vkm
         pushEvent(event);
     }
 
+    void VkmInputHandler::onWindowFocusChanged(uint32_t windowIndex, bool focused)
+    {
+        VkmInputEvent event;
+        event._type = VkmInputEventType::WindowFocus;
+        event._windowIndex = windowIndex;
+        event._focused = focused;
+        pushEvent(event);
+    }
+
     void VkmInputHandler::pushEvent(const VkmInputEvent& event)
     {
         std::lock_guard<std::mutex> lock(_pendingMutex);
@@ -206,6 +215,35 @@ namespace vkm
                 _scrollDeltaY += event._y;
                 break;
             }
+            case VkmInputEventType::WindowFocus:
+            {
+                if (event._focused)
+                {
+                    _focusedWindowIndex = event._windowIndex;
+                    break;
+                }
+
+                // Only the window that still holds focus may clear it: a gain and the previous
+                // window's loss arrive in an order the platform decides, and on macOS the loss
+                // comes second.
+                if (_focusedWindowIndex == event._windowIndex)
+                {
+                    _focusedWindowIndex = kVkmNoFocusedWindow;
+                }
+
+                // The release for anything held goes to whoever took focus, so drop it here
+                // rather than leave it latched down forever. Releases are published as edges so
+                // a consumer watching isKeyReleased() still sees the transition.
+                _keyReleased |= _keyDown;
+                _buttonReleased |= _buttonDown;
+                _keyDown.reset();
+                _buttonDown.reset();
+                _modifiers = 0;
+                // The cursor may reappear anywhere; treating the next move as the first one
+                // avoids a delta spanning the two windows.
+                _cursorInitialized = false;
+                break;
+            }
         }
     }
 
@@ -239,6 +277,12 @@ namespace vkm
             {
                 VKM_DEBUG_LOG(fmt::format("[Input] Scroll dx={:.3f} dy={:.3f}",
                     event._x, event._y).c_str());
+                break;
+            }
+            case VkmInputEventType::WindowFocus:
+            {
+                VKM_DEBUG_LOG(fmt::format("[Input] WindowFocus window={} {}",
+                    event._windowIndex, event._focused ? "gained" : "lost").c_str());
                 break;
             }
         }

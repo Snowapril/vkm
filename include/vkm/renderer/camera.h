@@ -135,4 +135,85 @@ namespace vkm
         double _lastCursorX = 0.0;
         double _lastCursorY = 0.0;
     };
+
+    /*
+    * @brief Free-fly controller for a VkmCamera: WASD moves, left-drag looks around.
+    *
+    * W/S move along the view direction, A/D strafe, Q/E rise and fall along world up, and
+    * holding LeftShift multiplies the speed. Unlike VkmOrbitCameraController this one cannot be
+    * purely event-driven -- "held" is a duration, so tick(deltaTime) must be called once per
+    * frame (from AppDelegate::update, which already receives the frame's delta). Held keys are
+    * polled from the handler rather than integrated from key events, because auto-repeat rate is
+    * an OS setting and would otherwise decide how fast the camera flies.
+    *
+    * Leaves the camera's projection alone: a fly camera has no orbit distance to scale near and
+    * far by, so whatever the caller set stays.
+    *
+    * The camera pointer is borrowed and must outlive the controller.
+    */
+    class VkmFlyCameraController
+    {
+    public:
+        explicit VkmFlyCameraController(VkmCamera* camera);
+        ~VkmFlyCameraController();
+
+        VkmFlyCameraController(const VkmFlyCameraController&) = delete;
+        VkmFlyCameraController& operator=(const VkmFlyCameraController&) = delete;
+
+        /*
+        * @brief Subscribes to `inputHandler`. Registering twice is a no-op; the handler must
+        * outlive this controller or unregister() must be called first.
+        */
+        void registerTo(VkmInputHandler& inputHandler);
+        void unregister();
+
+        /*
+        * @brief Applies one frame of held movement keys. A no-op while not registered, since
+        * held state is read from the handler.
+        */
+        void tick(double deltaTime);
+
+        /*
+        * @brief Adopts the camera's current eye and view direction, so handing control over
+        * from another controller does not snap the view.
+        */
+        void syncFromCamera();
+
+        void setPosition(const glm::vec3& position);
+
+        inline void setMoveSpeed(float unitsPerSecond) { _moveSpeed = unitsPerSecond; }
+        inline void setBoostMultiplier(float multiplier) { _boostMultiplier = multiplier; }
+        inline void setLookSensitivity(float radiansPerPixel) { _lookSensitivity = radiansPerPixel; }
+
+        inline const glm::vec3& getPosition() const { return _position; }
+        inline float getYaw() const { return _yaw; }
+        inline float getPitch() const { return _pitch; }
+        inline float getMoveSpeed() const { return _moveSpeed; }
+
+    private:
+        void onInputEvent(const VkmInputEvent& event);
+        void applyToCamera();
+        glm::vec3 getForward() const;
+
+    private:
+        VkmCamera* _camera;
+
+        VkmInputHandler* _inputHandler = nullptr;
+        uint32_t _listenerHandle = 0;
+
+        glm::vec3 _position{ 0.0f, 0.0f, 3.0f };
+        // Same convention as VkmOrbitCameraController: yaw around world +Y, pitch above the
+        // horizon, both feeding the identical forward-vector formula.
+        float _yaw = 0.0f;
+        float _pitch = 0.0f;
+
+        float _moveSpeed = 3.0f;
+        float _boostMultiplier = 4.0f;
+        float _lookSensitivity = 0.005f;
+
+        bool _dragging = false;
+        bool _hasLastCursor = false;
+        double _lastCursorX = 0.0;
+        double _lastCursorY = 0.0;
+    };
 } // namespace vkm

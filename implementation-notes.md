@@ -549,6 +549,56 @@ line names it twice both before and after — and is left alone.
   buffer allocation. On this machine's MoltenVK, `bufferDeviceAddress` is supported and the tests
   observed real, distinct addresses rather than the 0 fallback.
 
+## 2026-07-28 — WASD fly camera + per-window input focus
+
+- **New `VkmFlyCameraController`** next to the orbit one (`renderer/camera.{h,cpp}`): WASD moves
+  along the camera basis, Q/E along **world** up so rising stays vertical while pitched, Shift
+  boosts, left-drag looks (matching the orbit controller and the skybox `LookCamera`, which were
+  the only existing conventions). The orbit controller is untouched, so `model_viewer`'s turntable
+  feel is unchanged; a checkbox in its Scene Browser hands the shared camera between the two, with
+  `syncFromCamera()` on the way in so the switch is invisible.
+- It is the first controller with a `tick(deltaTime)`. Continuous movement cannot be event-driven:
+  held keys are polled from `VkmInputHandler::isKeyDown` rather than integrated from key events,
+  because auto-repeat rate is an OS setting and would otherwise decide how fast the camera flies.
+  The direction is normalized so diagonals are not faster than the axes.
+- Switching *back* to orbit reframes on the scene bounds. The orbit controller only touches the
+  camera when it receives an event, so without that the view would sit where the fly camera left it
+  and then jump on the first drag.
+- **The macOS multi-window mouse bug** was `VkmImGuiRendererMetal::newFrameInner` polling
+  `[NSApp keyWindow]` unconditionally. At startup that is the *scene* window, so the scene cursor
+  drove ImGui's virtual cursor in the ImGui window's `io.DisplaySize` space; wherever it crossed a
+  panel's rectangle `WantCaptureMouse` flipped true and `VkmWindowImpl::forwardCursorMoveEvent`
+  dropped the event — the camera stalled depending on where in the scene window the cursor was.
+  `[NSEvent pressedMouseButtons]` being system-global made a scene drag register as an ImGui click
+  on top of that.
+- Fixed by giving the engine real focus tracking rather than by patching the poll in place:
+  `VkmInputHandler::onWindowFocusChanged` / `getFocusedWindowIndex()`, fed by
+  `windowDidBecomeKey:`/`windowDidResignKey:` on macOS and a new `glfwSetWindowFocusCallback` on the
+  GLFW backends, with `VkmEngine::findWindowIndex()` mapping a native handle back to an index (the
+  first real use of `VkmWindowContext::_windowHandle`, stored since the multi-window work and never
+  read). `VkmImGuiRendererBase::newFrame(windowFocused)` carries the answer to the backend, and the
+  Metal poll is gated on it; when it is not focused ImGui is told the cursor is outside *and* all
+  three buttons are up.
+- Resolving the window is deliberately done against the `NSWindow`s the app created, not
+  `contentView.layer`: neither view is marked layer-hosting, so AppKit may substitute a layer there
+  and the comparison would silently never match.
+- **Latent bug the same mechanism fixes:** hold a key, click the other window, and the release goes
+  to whoever took focus — `_keyDown` stayed latched forever. Harmless while nothing read held keys;
+  it stops being harmless the moment WASD lands. Focus loss now clears held keys and buttons,
+  publishing them as release *edges* so a consumer watching the transition still sees one, and drops
+  the tracked cursor so the next move does not produce a delta spanning two windows. Both camera
+  controllers also end any drag in progress on focus loss.
+- A stale focus loss cannot clear a focus another window just took: macOS delivers the gain before
+  the previous window's loss, so only the window that still holds focus may clear it.
+- Verified: Metal 157/157 (17977 assertions) with Metal API Validation, Vulkan 158/158 with
+  `VK_LAYER_KHRONOS_validation`, WebGPU PASS, zero validation output; `model_viewer` and `triangle`
+  run validation-clean on Metal. The new headless cases cover the movement basis, dt proportionality
+  (two half-ticks == one full tick), boost, normalized diagonals, look-only-while-dragging, pitch
+  clamping, `syncFromCamera` round-trip, unregister, and the focus semantics including the
+  held-key release. **The two-window interaction itself is not machine-verifiable** — it needs a
+  human clicking between the windows — so that part rests on the code path plus the unit-level
+  focus tests.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:

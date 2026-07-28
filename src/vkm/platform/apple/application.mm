@@ -639,6 +639,9 @@ static void createMenuBar(const char* appName)
                                                   screen:screen];
     _imguiWindow.releasedWhenClosed = NO;
     _imguiWindow.title = @"ImGui";
+    // Shared with the scene window purely so both report windowDidBecomeKey/ResignKey; this
+    // window still receives no engine input of its own.
+    _imguiWindow.delegate = self;
 }
 
 // Create the ImGui window's Metal layer + swapchain. Its pixel format must match the ImGui
@@ -761,6 +764,36 @@ static void createMenuBar(const char* appName)
 - (void)setEngine:(nonnull vkm::VkmEngine*) engine
 {
     _engine = engine;
+}
+
+// Both windows share this delegate, so the engine learns which one holds keyboard focus. The
+// layer is the handle addSwapChain() was given, which is what findWindowIndex() matches on;
+// it is looked up from the window we created rather than from contentView.layer, which AppKit
+// is free to substitute on a view that was never marked layer-hosting.
+- (void)reportFocus:(NSNotification *)notification focused:(BOOL)focused
+{
+    if (_engine == nullptr)
+    {
+        return;
+    }
+
+    NSWindow* window = (NSWindow*)notification.object;
+    CAMetalLayer* layer = nil;
+    if (window == _window)          { layer = _metalLayer; }
+    else if (window == _imguiWindow) { layer = _imguiMetalLayer; }
+    else                             { return; }
+
+    _engine->onWindowFocusChanged((__bridge const void*)layer, focused == YES);
+}
+
+- (void)windowDidBecomeKey:(NSNotification *)notification
+{
+    [self reportFocus:notification focused:YES];
+}
+
+- (void)windowDidResignKey:(NSNotification *)notification
+{
+    [self reportFocus:notification focused:NO];
 }
 
 - (void)windowDidChangeScreen:(NSNotification *)notification
@@ -991,6 +1024,9 @@ namespace vkm
         }
 
         installGlfwInputCallbacks(_window.getHandle(), &_engine);
+        // The ImGui window's input callbacks belong to the ImGui backend; only its focus is
+        // the engine's business, so that is all we install there.
+        installGlfwWindowFocusCallback(_imguiWindow.getHandle(), &_engine);
 
         // The Vulkan-on-macOS path drives the frame loop here on the main thread, unlike the
         // Metal path's dedicated RenderThread.

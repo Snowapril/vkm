@@ -20,6 +20,7 @@ namespace vkm
         MouseButton,
         CursorMove,
         Scroll,
+        WindowFocus,
     };
 
     /*
@@ -36,7 +37,13 @@ namespace vkm
         double _x {0.0}; // CursorMove: absolute position. Scroll: offset.
         double _y {0.0};
         bool _isRepeat {false};
+        // WindowFocus only: which window gained or lost focus, and which way.
+        uint32_t _windowIndex {0};
+        bool _focused {false};
     };
+
+    // getFocusedWindowIndex() while no window of this app holds focus.
+    inline constexpr uint32_t kVkmNoFocusedWindow = ~0u;
 
     using VkmInputListener = std::function<void(const VkmInputEvent&)>;
 
@@ -57,6 +64,14 @@ namespace vkm
         void onMouseButtonEvent(VkmMouseButton button, VkmKeyAction action, uint32_t modifiers = 0);
         void onCursorMove(double x, double y);
         void onScroll(double offsetX, double offsetY);
+
+        /*
+        * @brief Reports that `windowIndex` gained or lost keyboard focus.
+        * @details Losing focus clears the held key and button state: the matching release goes
+        * to whichever window took focus, so a key held across the switch would otherwise stay
+        * latched down forever.
+        */
+        void onWindowFocusChanged(uint32_t windowIndex, bool focused);
 
         // --- consumer side: called from the engine loop thread only ------------------
 
@@ -83,6 +98,14 @@ namespace vkm
         inline double getCursorDeltaY() const { return _cursorDeltaY; }
         inline double getScrollDeltaX() const { return _scrollDeltaX; }
         inline double getScrollDeltaY() const { return _scrollDeltaY; }
+
+        /*
+        * @brief The window that currently holds keyboard focus, or kVkmNoFocusedWindow while
+        * none of this app's windows does.
+        * @details Follows the same one-frame cadence as every other queryable state: a focus
+        * change pushed from a platform callback lands here at the next beginFrame().
+        */
+        inline uint32_t getFocusedWindowIndex() const { return _focusedWindowIndex; }
 
         /*
         * @brief Subscribes to every input event. Listeners are invoked from beginFrame(),
@@ -125,6 +148,8 @@ namespace vkm
         double _cursorDeltaY {0.0};
         double _scrollDeltaX {0.0};
         double _scrollDeltaY {0.0};
+
+        uint32_t _focusedWindowIndex {kVkmNoFocusedWindow};
 
         std::vector<std::pair<uint32_t, VkmInputListener>> _listeners;
         uint32_t _nextListenerHandle {0};

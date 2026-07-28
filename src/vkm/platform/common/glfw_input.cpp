@@ -12,14 +12,19 @@
 
 #include <GLFW/glfw3.h>
 
+#include <utility>
+#include <vector>
+
 namespace vkm
 {
     namespace
     {
         /*
         * @brief Previously installed GLFW handlers, which belong to the ImGui backend.
-        * @details File-static because the engine is single-window by construction
-        * (VkmEngine::addSwapChain asserts that no main swapchain exists yet).
+        * @details File-static rather than per-window because the engine's own input callbacks
+        * are installed on exactly one window -- the scene window. ImGui's callbacks live on the
+        * ImGui window instead (installed by its own backend during addSwapChain), so the two
+        * sinks never contend for the same window and there is nothing per-window to remember.
         */
         struct GlfwPreviousCallbacks
         {
@@ -274,12 +279,59 @@ namespace vkm
 
             engine->getInputHandler().onScroll(offsetX, offsetY);
         }
+
+        /*
+        * @brief Handlers displaced by our focus callback, one per window.
+        * @details Unlike the input callbacks above this one is installed on *every* window, so
+        * the displaced handler (ImGui's, on the ImGui window) has to be remembered per window
+        * rather than in a single slot.
+        */
+        std::vector<std::pair<GLFWwindow*, GLFWwindowfocusfun>> g_previousFocusCallbacks;
+
+        void windowFocusCallback(GLFWwindow* window, int focused)
+        {
+            for (const std::pair<GLFWwindow*, GLFWwindowfocusfun>& entry : g_previousFocusCallbacks)
+            {
+                if (entry.first == window && entry.second != nullptr)
+                {
+                    entry.second(window, focused);
+                    break;
+                }
+            }
+
+            VkmEngine* engine = getEngine(window);
+            if (engine == nullptr)
+            {
+                return;
+            }
+
+            // Never gated on ImGui capture: which window has focus is not something ImGui may
+            // swallow, and it is exactly what tells the engine to drop keys held across the
+            // switch.
+            engine->onWindowFocusChanged(window, focused != 0);
+        }
+    }
+
+    void installGlfwWindowFocusCallback(void* glfwWindow, VkmEngine* engine)
+    {
+        GLFWwindow* window = static_cast<GLFWwindow*>(glfwWindow);
+        glfwSetWindowUserPointer(window, engine);
+        g_previousFocusCallbacks.emplace_back(window, glfwSetWindowFocusCallback(window, windowFocusCallback));
+
+        // GLFW reports focus only on change, so a window that is already focused when this runs
+        // would never announce itself.
+        if (glfwGetWindowAttrib(window, GLFW_FOCUSED) != 0)
+        {
+            engine->onWindowFocusChanged(window, true);
+        }
     }
 
     void installGlfwInputCallbacks(void* glfwWindow, VkmEngine* engine)
     {
         GLFWwindow* window = static_cast<GLFWwindow*>(glfwWindow);
         glfwSetWindowUserPointer(window, engine);
+
+        installGlfwWindowFocusCallback(glfwWindow, engine);
 
         // Each setter returns the handler it displaced -- ImGui's, since addSwapChain()
         // initializes the ImGui GLFW backend with install_callbacks=true before we get here.
@@ -304,6 +356,12 @@ namespace vkm
     void installGlfwInputCallbacks(void* /*glfwWindow*/, VkmEngine* /*engine*/)
     {
         // No GLFW window on the macOS Metal path; input arrives through AppKit instead.
+    }
+
+    void installGlfwWindowFocusCallback(void* /*glfwWindow*/, VkmEngine* /*engine*/)
+    {
+        // Focus is reported by VkmApplicationImpl's windowDidBecomeKey:/windowDidResignKey:
+        // on the macOS Metal path.
     }
 }
 

@@ -21,8 +21,9 @@ namespace vkm
         return initializeInner(windowHandle, backBufferFormat);
     }
 
-    void VkmImGuiRendererBase::newFrame()
+    void VkmImGuiRendererBase::newFrame(bool windowFocused)
     {
+        _windowFocused = windowFocused;
         newFrameInner();
         _frameRendered = false;
     }

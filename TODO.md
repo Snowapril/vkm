@@ -58,6 +58,11 @@
 - `VkmBuffer::map()` is write-only in practice: there is no `VkmMemoryAccessHint` for CPU readback, and no `readbackBuffer()` counterpart to `readbackTexture()`.
 - `kPoolBufferUsage` in `vulkan_gpu_buffer_pool.cpp` omits `VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT` while `toVkBufferUsageFlags` can produce it, so a sub-4 MiB `AllowIndirectBuffer` buffer would be pooled into a block lacking that usage.
 - `uploadToTexture` never returns its one-off command buffer to the pool, unlike `uploadToBuffer` and `readbackTexture`.
+- Input events carry no window index; only focus changes do, so a listener cannot tell which window an event came from (it is always the scene window today).
+- `VkmImGuiRendererMetal::newFrameInner` calls AppKit (`[NSApp keyWindow]`, `mouseLocationOutsideOfEventStream`) from the CAMetalDisplayLink render thread.
+- ImGui's `io.DisplayFramebufferScale` is hardcoded to 1.0 while the Metal layers use fixed drawable sizes and the window content rects are in points.
+- `gv_logger_verbose=1` no longer raises the log level, so `VKM_DEBUG_LOG` output is unreachable in any build.
+- `VkmFlyCameraController` has no gamepad or arrow-key bindings, and no way to move relative to a surface (no collision or ground clamp).
 - A crash inside `mi_malloc` recurses forever: backward-cpp's signal handler allocates while printing the trace, so an abort becomes a hang with misleading mimalloc assertions instead of a stack trace.
 - Sponza-scale scenes exceed the WebGPU bindless mega-buffers (16 MiB vertex / 8 MiB index, no growth), and `model_viewer`'s wasm build preloads no scene at all.
 - The Vulkan/WebGPU depth-attachment paths in `onBeginRenderPass` have no unit-test coverage (the offscreen scene-model render test is Metal-only; the Vulkan fixture rendered black and crashed on lavapipe). They ship compile-verified only, validated via the model_viewer sample on real hardware.

@@ -58,6 +58,30 @@ Use `TARGET_OS_*` macros (not `IOS` CMake variable) in source files.
 
 The Apple application drives the event loop via `NSApplicationMain` / `UIApplicationMain`. The engine is created and ticked from the app delegate (`include/vkm/platform/common/app_delegate.h`).
 
+## Input and Window Focus (macOS Metal)
+
+Two windows exist: the scene window (`VkmWindowImpl : NSWindow`) and a plain ImGui window. Only
+the scene window forwards input into `VkmEngine::getInputHandler()`; ImGui gets keys and scroll
+from an app-wide `NSEvent` local monitor and polls the mouse itself
+(`renderer/imgui/metal_imgui_renderer.mm`).
+
+Both windows share `VkmApplicationImpl` as their delegate purely so `windowDidBecomeKey:` /
+`windowDidResignKey:` can report focus to `VkmEngine::onWindowFocusChanged`. The engine resolves
+the reporting window by comparing against the `NSWindow`s it created and passing the matching
+`CAMetalLayer` — the handle `addSwapChain()` was given, and what `findWindowIndex()` matches on.
+Deliberately not `contentView.layer`: neither view is marked layer-hosting, so AppKit is free to
+substitute a layer there.
+
+That focus index is what stops the ImGui mouse poll from reading the *scene* window's cursor.
+`mouseLocationOutsideOfEventStream` answers for whichever window it is asked, with no indication
+of where the cursor actually is, so polling a foreign window feeds its coordinates into ImGui's
+own `io.DisplaySize` space and raises `WantCaptureMouse` over scene content — which the scene
+window's `forwardCursorMoveEvent:` then honours by dropping the event. `VkmImGuiRendererBase::
+newFrame(windowFocused)` carries the answer in; `isWindowFocused()` gates the poll.
+
+Losing focus also clears held keys and buttons in `VkmInputHandler`, because the matching release
+is delivered to whichever window took focus and would otherwise never arrive.
+
 ## Backend Pairing
 
 - macOS/iOS Metal: also read `src/vkm/renderer/backend/metal/AGENTS.md`

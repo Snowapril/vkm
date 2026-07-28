@@ -145,6 +145,24 @@ namespace vkm
         inline uint32_t getWindowCount() const { return static_cast<uint32_t>(_windowContexts.size()); }
 
         /*
+        * @brief Maps a native window handle (GLFWwindow* / CAMetalLayer*, whatever was passed
+        * as VkmWindowInfo::_windowHandle) back to its window index, or kVkmNoFocusedWindow if
+        * it belongs to no window of this engine.
+        */
+        uint32_t findWindowIndex(const void* nativeHandle) const;
+
+        /*
+        * @brief Platform layers report keyboard focus changes here, by native handle so they
+        * never have to track window indices themselves. Unknown handles are ignored.
+        */
+        void onWindowFocusChanged(const void* nativeHandle, bool focused);
+
+        /*
+        * @brief The window that currently holds keyboard focus, or kVkmNoFocusedWindow.
+        */
+        inline uint32_t getFocusedWindowIndex() const { return _inputHandler.getFocusedWindowIndex(); }
+
+        /*
         * @brief returns engine's launch options
         */
         inline const VkmEngineLaunchOptions& getEngineOptions() const { return _engineOptions; }

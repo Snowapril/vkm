@@ -4,6 +4,7 @@
 
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
+#include <glm/geometric.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -155,6 +156,17 @@ namespace vkm
                                        _minDistance, _maxDistance);
                 break;
             }
+            case VkmInputEventType::WindowFocus:
+            {
+                // The button release lands on whichever window took focus, so end the drag here
+                // or the next cursor move in this window would keep orbiting.
+                if (!event._focused)
+                {
+                    _dragging = false;
+                    _hasLastCursor = false;
+                }
+                return;
+            }
             case VkmInputEventType::Key:
                 return;
         }
@@ -172,5 +184,167 @@ namespace vkm
         _camera->lookAt(eye, _target, glm::vec3(0.0f, 1.0f, 0.0f));
         // Near and far slide with the dolly so the depth range stays useful at every zoom.
         _camera->setPerspective(_camera->getFovYRadians(), _distance * 0.01f, _distance * 10.0f);
+    }
+
+    namespace
+    {
+        constexpr glm::vec3 kWorldUp{ 0.0f, 1.0f, 0.0f };
+        // Just short of the poles, where the up vector would degenerate. Same limit the orbit
+        // controller uses.
+        constexpr float kMaxPitch = 1.5f;
+    }
+
+    VkmFlyCameraController::VkmFlyCameraController(VkmCamera* camera)
+        : _camera(camera)
+    {
+        applyToCamera();
+    }
+
+    VkmFlyCameraController::~VkmFlyCameraController()
+    {
+        unregister();
+    }
+
+    void VkmFlyCameraController::registerTo(VkmInputHandler& inputHandler)
+    {
+        if (_inputHandler != nullptr)
+        {
+            return;
+        }
+        _inputHandler = &inputHandler;
+        _listenerHandle = inputHandler.addListener([this](const VkmInputEvent& event) {
+            onInputEvent(event);
+        });
+    }
+
+    void VkmFlyCameraController::unregister()
+    {
+        if (_inputHandler == nullptr)
+        {
+            return;
+        }
+        _inputHandler->removeListener(_listenerHandle);
+        _inputHandler = nullptr;
+    }
+
+    void VkmFlyCameraController::setPosition(const glm::vec3& position)
+    {
+        _position = position;
+        applyToCamera();
+    }
+
+    void VkmFlyCameraController::syncFromCamera()
+    {
+        _position = _camera->getPosition();
+
+        const glm::vec3 toTarget = _camera->getTarget() - _position;
+        const float horizontal = std::sqrt(toTarget.x * toTarget.x + toTarget.z * toTarget.z);
+        // A camera looking straight up or down carries no yaw information, so keep the current
+        // one rather than letting atan2(0, 0) reset it to zero.
+        if (horizontal > 1e-6f)
+        {
+            _yaw = std::atan2(toTarget.x, toTarget.z);
+        }
+        _pitch = std::clamp(std::atan2(toTarget.y, horizontal), -kMaxPitch, kMaxPitch);
+        applyToCamera();
+    }
+
+    void VkmFlyCameraController::tick(double deltaTime)
+    {
+        if (_inputHandler == nullptr || deltaTime <= 0.0)
+        {
+            return;
+        }
+
+        const glm::vec3 forward = getForward();
+        const glm::vec3 right = glm::normalize(glm::cross(forward, kWorldUp));
+
+        glm::vec3 direction{ 0.0f };
+        if (_inputHandler->isKeyDown(VkmKeyCode::W)) direction += forward;
+        if (_inputHandler->isKeyDown(VkmKeyCode::S)) direction -= forward;
+        if (_inputHandler->isKeyDown(VkmKeyCode::D)) direction += right;
+        if (_inputHandler->isKeyDown(VkmKeyCode::A)) direction -= right;
+        // World up rather than the camera's own, so rising stays vertical while pitched.
+        if (_inputHandler->isKeyDown(VkmKeyCode::E)) direction += kWorldUp;
+        if (_inputHandler->isKeyDown(VkmKeyCode::Q)) direction -= kWorldUp;
+
+        if (glm::dot(direction, direction) <= 0.0f)
+        {
+            return;
+        }
+
+        // Normalized so diagonals are not faster than the axes.
+        const bool boosting = _inputHandler->isKeyDown(VkmKeyCode::LeftShift) ||
+                              _inputHandler->isKeyDown(VkmKeyCode::RightShift);
+        const float speed = _moveSpeed * (boosting ? _boostMultiplier : 1.0f);
+        _position += glm::normalize(direction) * speed * static_cast<float>(deltaTime);
+        applyToCamera();
+    }
+
+    void VkmFlyCameraController::onInputEvent(const VkmInputEvent& event)
+    {
+        switch (event._type)
+        {
+            case VkmInputEventType::MouseButton:
+            {
+                if (event._button != VkmMouseButton::Left)
+                {
+                    return;
+                }
+                _dragging = (event._action == VkmKeyAction::Press);
+                // Same reasoning as the orbit controller: the tracked position can be stale
+                // because events went elsewhere while ImGui owned the mouse.
+                _hasLastCursor = false;
+                return;
+            }
+            case VkmInputEventType::CursorMove:
+            {
+                const bool look = _dragging && _hasLastCursor;
+                const double deltaX = event._x - _lastCursorX;
+                const double deltaY = event._y - _lastCursorY;
+                _lastCursorX = event._x;
+                _lastCursorY = event._y;
+                _hasLastCursor = true;
+                if (!look)
+                {
+                    return;
+                }
+                _yaw += static_cast<float>(deltaX) * _lookSensitivity;
+                _pitch = std::clamp(_pitch + static_cast<float>(deltaY) * _lookSensitivity,
+                                    -kMaxPitch, kMaxPitch);
+                break;
+            }
+            case VkmInputEventType::WindowFocus:
+            {
+                // The button release lands on whichever window took focus, so end the drag here
+                // or the next cursor move in this window would keep turning the view.
+                if (!event._focused)
+                {
+                    _dragging = false;
+                    _hasLastCursor = false;
+                }
+                return;
+            }
+            case VkmInputEventType::Key:
+            case VkmInputEventType::Scroll:
+                // Movement keys are polled in tick(); there is nothing to do per event.
+                return;
+        }
+
+        applyToCamera();
+    }
+
+    glm::vec3 VkmFlyCameraController::getForward() const
+    {
+        return glm::vec3{
+            std::cos(_pitch) * std::sin(_yaw),
+            std::sin(_pitch),
+            std::cos(_pitch) * std::cos(_yaw),
+        };
+    }
+
+    void VkmFlyCameraController::applyToCamera()
+    {
+        _camera->lookAt(_position, _position + getForward(), kWorldUp);
     }
 } // namespace vkm

@@ -2,7 +2,9 @@
 
 #include <vkm/platform/common/input_handler.h>
 
+#include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 TEST_CASE("InputHandler key press sets down and pressed edge for one frame only")
@@ -189,6 +191,76 @@ TEST_CASE("InputHandler latches exit on escape press before any frame is drained
     input.onKeyEvent(vkm::VkmKeyCode::Escape, vkm::VkmKeyAction::Press);
 
     CHECK(input.shouldExit());
+}
+
+TEST_CASE("InputHandler tracks the focused window on the usual one-frame cadence")
+{
+    vkm::VkmInputHandler input;
+
+    CHECK(input.getFocusedWindowIndex() == vkm::kVkmNoFocusedWindow);
+
+    input.onWindowFocusChanged(1, true);
+    CHECK(input.getFocusedWindowIndex() == vkm::kVkmNoFocusedWindow); // not drained yet
+    input.beginFrame();
+    CHECK(input.getFocusedWindowIndex() == 1);
+
+    // macOS delivers the gain before the previous window's loss, so a stale loss from another
+    // window must not clear the focus the new one just took.
+    input.onWindowFocusChanged(0, true);
+    input.onWindowFocusChanged(1, false);
+    input.beginFrame();
+    CHECK(input.getFocusedWindowIndex() == 0);
+
+    input.onWindowFocusChanged(0, false);
+    input.beginFrame();
+    CHECK(input.getFocusedWindowIndex() == vkm::kVkmNoFocusedWindow);
+}
+
+TEST_CASE("InputHandler releases held keys and buttons when focus is lost")
+{
+    vkm::VkmInputHandler input;
+
+    input.onWindowFocusChanged(0, true);
+    input.onKeyEvent(vkm::VkmKeyCode::W, vkm::VkmKeyAction::Press);
+    input.onMouseButtonEvent(vkm::VkmMouseButton::Left, vkm::VkmKeyAction::Press);
+    input.beginFrame();
+    REQUIRE(input.isKeyDown(vkm::VkmKeyCode::W));
+    REQUIRE(input.isMouseButtonDown(vkm::VkmMouseButton::Left));
+
+    // The real release goes to whichever window took focus, so it never arrives here.
+    input.onWindowFocusChanged(0, false);
+    input.beginFrame();
+
+    CHECK(input.isKeyDown(vkm::VkmKeyCode::W) == false);
+    CHECK(input.isMouseButtonDown(vkm::VkmMouseButton::Left) == false);
+    // Published as edges, so a consumer watching for the transition still sees one.
+    CHECK(input.isKeyReleased(vkm::VkmKeyCode::W));
+    CHECK(input.isMouseButtonReleased(vkm::VkmMouseButton::Left));
+    CHECK(input.getModifiers() == 0);
+}
+
+TEST_CASE("InputHandler dispatches focus changes to listeners")
+{
+    vkm::VkmInputHandler input;
+
+    std::vector<std::pair<uint32_t, bool>> received;
+    input.addListener([&received](const vkm::VkmInputEvent& event)
+    {
+        if (event._type == vkm::VkmInputEventType::WindowFocus)
+        {
+            received.emplace_back(event._windowIndex, event._focused);
+        }
+    });
+
+    input.onWindowFocusChanged(2, true);
+    input.onWindowFocusChanged(2, false);
+    input.beginFrame();
+
+    REQUIRE(received.size() == 2);
+    CHECK(received[0].first == 2);
+    CHECK(received[0].second);
+    CHECK(received[1].first == 2);
+    CHECK(received[1].second == false);
 }
 
 TEST_CASE("InputHandler stringifies key, button and action enumerators")

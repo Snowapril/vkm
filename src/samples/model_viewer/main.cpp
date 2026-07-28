@@ -157,6 +157,7 @@ public:
     virtual void preShutdown() override final
     {
         _cameraController.unregister();
+        _flyController.unregister();
         if (_engine != nullptr)
         {
             _engine->setActiveCamera(nullptr); // the camera dies with this delegate
@@ -166,7 +167,12 @@ public:
 
     virtual void update(const double deltaTime) override final
     {
-        (void)deltaTime;
+        // Only the fly controller needs a tick: the orbit controller is driven entirely by the
+        // events its listener receives.
+        if (_flyMode)
+        {
+            _flyController.tick(deltaTime);
+        }
         updateDepthTexture();
 
 #if defined(VKM_ENABLE_IMGUI)
@@ -311,7 +317,14 @@ private:
 
         _meshCount = model._meshes.size();
         _vertexCount = model.getTotalVertexCount();
+        // frame() moves the shared camera whether or not the orbit controller is the registered
+        // one, so in fly mode the fly controller has to adopt the framed pose or its next tick
+        // would snap the view back.
         frameCameraOnBounds(_cameraController, _scene.computeWorldBounds());
+        if (_flyMode)
+        {
+            _flyController.syncFromCamera();
+        }
         _currentScenePath = path;
         _loadError.clear();
         _sceneReady = true;
@@ -372,12 +385,33 @@ private:
                         _scene.getDrawBatches().size());
             if (ImGui::Button("Reframe camera"))
             {
+                setFlyMode(false);
                 frameCameraOnBounds(_cameraController, _scene.computeWorldBounds());
             }
         }
         else
         {
             ImGui::TextDisabled("No scene loaded");
+        }
+
+        ImGui::Separator();
+        bool flyMode = _flyMode;
+        if (ImGui::Checkbox("Fly camera (WASD)", &flyMode))
+        {
+            setFlyMode(flyMode);
+        }
+        if (_flyMode)
+        {
+            ImGui::TextDisabled("WASD move, Q/E down/up, Shift boost, left-drag looks");
+            float moveSpeed = _flyController.getMoveSpeed();
+            if (ImGui::DragFloat("Speed", &moveSpeed, 0.1f, 0.01f, 1000.0f, "%.2f u/s"))
+            {
+                _flyController.setMoveSpeed(moveSpeed);
+            }
+        }
+        else
+        {
+            ImGui::TextDisabled("Left-drag orbits, scroll dollies");
         }
 
         if (!_loadError.empty())
@@ -388,6 +422,36 @@ private:
         ImGui::End();
     }
 #endif // VKM_ENABLE_IMGUI
+
+    /*
+    * @brief Hands the camera between the orbit and fly controllers.
+    * @details Only one is registered at a time, so neither can fight the other over the shared
+    * camera. The incoming controller adopts the current view first, so the switch is invisible.
+    */
+    void setFlyMode(bool enabled)
+    {
+        if (enabled == _flyMode || _engine == nullptr)
+        {
+            return;
+        }
+        _flyMode = enabled;
+
+        if (_flyMode)
+        {
+            _cameraController.unregister();
+            _flyController.syncFromCamera();
+            _flyController.registerTo(_engine->getInputHandler());
+        }
+        else
+        {
+            _flyController.unregister();
+            _cameraController.registerTo(_engine->getInputHandler());
+            // The orbit controller only touches the camera when it receives an event, so
+            // without this the view would sit wherever the fly camera left it and then jump on
+            // the first drag. Reframing is the one pose an orbit camera can always define.
+            frameCameraOnBounds(_cameraController, _scene.computeWorldBounds());
+        }
+    }
 
     // The depth buffer must always match the swapchain, which the window can resize under us.
     void updateDepthTexture()
@@ -438,6 +502,9 @@ private:
     VkmScene _scene;
     VkmCamera _camera;
     VkmOrbitCameraController _cameraController{&_camera};
+    // Exactly one of the two is registered at a time; see setFlyMode().
+    VkmFlyCameraController _flyController{&_camera};
+    bool _flyMode{false};
     std::vector<SceneEntry> _sceneEntries;
     std::string _currentScenePath;
     std::string _pendingScenePath; // set by the browser, consumed at the end of update()

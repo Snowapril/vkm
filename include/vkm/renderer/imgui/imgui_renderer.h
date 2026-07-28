@@ -23,7 +23,17 @@ namespace vkm
         virtual ~VkmImGuiRendererBase();
 
         bool initialize(void* windowHandle, VkmFormat backBufferFormat);
-        void newFrame();
+
+        /*
+        * @brief Begins an ImGui frame. `windowFocused` says whether the window this renderer is
+        * bound to currently holds keyboard focus.
+        * @details The engine is the only thing that knows which of its windows is focused, and a
+        * backend that polls the mouse itself (Metal) must not poll while another window owns it
+        * -- it would read that window's coordinates into this one's display space and raise
+        * WantCaptureMouse over the other window's content. Backends whose ImGui platform layer
+        * already tracks focus for them (GLFW, i.e. Vulkan/WebGPU) ignore it.
+        */
+        void newFrame(bool windowFocused);
         void renderDrawData(VkmCommandBufferBase* commandBuffer);
         void shutdown();
 
@@ -40,10 +50,14 @@ namespace vkm
         virtual void renderDrawDataInner(VkmCommandBufferBase* commandBuffer) = 0;
         virtual void shutdownInner() = 0;
 
+        // Valid inside newFrameInner(); see newFrame().
+        inline bool isWindowFocused() const { return _windowFocused; }
+
     protected:
         VkmDriverBase* _driver;
 
     private:
         bool _frameRendered = false; // Guards ImGui::Render() from running more than once per frame
+        bool _windowFocused = false;
     };
 } // namespace vkm
