@@ -139,6 +139,16 @@ namespace vkm
         void clear();
 
         /*
+        * @brief Writes every collected frame's zones to `path` in Chrome Trace Event Format,
+        * loadable in chrome://tracing or ui.perfetto.dev.
+        * @details One complete event ("ph":"X") per zone plus one "thread_name" metadata event
+        * ("ph":"M") per thread. Timestamps are emitted in MICROSECONDS as the format requires,
+        * converted from the nanoseconds VkmProfileZone stores. Returns false if the file cannot
+        * be written, and unconditionally when the CHROME_TRACING CMake option is off.
+        */
+        bool exportChromeTrace(const std::string& path) const;
+
+        /*
         * @brief Names the calling thread for the profile UI. Threads that never call this show
         * up as "Thread <id>". Safe to call when not capturing (names are not capture state).
         */

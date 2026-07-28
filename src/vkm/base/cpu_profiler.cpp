@@ -6,6 +6,7 @@
 #include <chrono>
 #include <deque>
 #include <functional>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -13,6 +14,10 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+
+#if defined(ENABLE_CHROME_TRACING)
+#include <nlohmann/json.hpp>
+#endif // ENABLE_CHROME_TRACING
 
 namespace vkm
 {
@@ -338,5 +343,70 @@ namespace vkm
                       return lhs._totalNs > rhs._totalNs;
                   });
         return sorted;
+    }
+
+    bool VkmCpuProfiler::exportChromeTrace(const std::string& path) const
+    {
+#if defined(ENABLE_CHROME_TRACING)
+        // Chrome's pid/tid are display groupings, not OS identifiers, so one process row is
+        // enough for an in-process profiler.
+        constexpr int kProcessId = 1;
+
+        // _threadId is a 64-bit hash of std::thread::id, which the viewer's JavaScript cannot
+        // represent exactly. Hand out small sequential ids in first-seen order instead, so a
+        // thread keeps one row across every exported frame.
+        std::unordered_map<uint64_t, int> threadRowIds;
+        nlohmann::json events = nlohmann::json::array();
+
+        // Built through the public frame accessors, each of which takes and releases the frame
+        // mutex on its own -- beginFrame() must never be left waiting on this export's file I/O.
+        const size_t frameCount = getFrameCount();
+        for (size_t frameIndex = 0; frameIndex < frameCount; ++frameIndex)
+        {
+            VkmProfileFrame frame;
+            if (!copyFrame(frameIndex, frame))
+            {
+                continue;
+            }
+
+            for (const VkmProfileThreadTimeline& timeline : frame._threads)
+            {
+                auto [row, inserted] =
+                    threadRowIds.emplace(timeline._threadId, static_cast<int>(threadRowIds.size()));
+                if (inserted)
+                {
+                    events.push_back({{"ph", "M"},
+                                      {"name", "thread_name"},
+                                      {"pid", kProcessId},
+                                      {"tid", row->second},
+                                      {"args", {{"name", timeline._threadName}}}});
+                }
+
+                for (const VkmProfileZone& zone : timeline._zones)
+                {
+                    // Complete events nest by containment on a row, and beginFrame() already
+                    // sorts each thread's zones by (begin, depth), so no explicit nesting.
+                    events.push_back({{"ph", "X"},
+                                      {"cat", "cpu"},
+                                      {"name", zone._name != nullptr ? zone._name : ""},
+                                      {"pid", kProcessId},
+                                      {"tid", row->second},
+                                      {"ts", static_cast<double>(zone._beginNs) / 1000.0},
+                                      {"dur", static_cast<double>(zone._endNs - zone._beginNs) / 1000.0}});
+                }
+            }
+        }
+
+        std::ofstream out(path, std::ios::trunc);
+        if (!out)
+        {
+            return false;
+        }
+        out << nlohmann::json{{"traceEvents", std::move(events)}}.dump();
+        return out.good();
+#else
+        (void)path;
+        return false;
+#endif // ENABLE_CHROME_TRACING
     }
 } // namespace vkm

@@ -5,9 +5,17 @@
 #include <vkm/base/cpu_profiler.h>
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
+
+#if defined(ENABLE_CHROME_TRACING)
+#include <nlohmann/json.hpp>
+namespace fs = std::filesystem;
+#endif // ENABLE_CHROME_TRACING
 
 using vkm::VkmCpuProfiler;
 using vkm::VkmProfileFrame;
@@ -329,3 +337,75 @@ TEST_CASE("range aggregation sums across threads and rejects an empty range")
     CHECK(vkm::vkmAggregateProfileRange(frame, 50, 50).empty());
     CHECK(vkm::vkmAggregateProfileRange(frame, 80, 20).empty());
 }
+
+#if defined(ENABLE_CHROME_TRACING)
+TEST_CASE("exportChromeTrace emits microsecond complete events and thread_name metadata")
+{
+    resetProfiler();
+    VkmCpuProfiler::singleton().setCapturing(true);
+    VKM_PROFILE_SET_THREAD_NAME("ChromeTraceThread");
+
+    {
+        vkm::VkmProfileScope outer("ChromeOuter");
+        {
+            vkm::VkmProfileScope inner("ChromeInner");
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    }
+    VkmCpuProfiler::singleton().beginFrame();
+
+    const fs::path tracePath = fs::temp_directory_path() / "vkm_test_chrome_trace.json";
+    REQUIRE(VkmCpuProfiler::singleton().exportChromeTrace(tracePath.string()));
+
+    std::ifstream in(tracePath);
+    REQUIRE(in.good());
+    const nlohmann::json trace = nlohmann::json::parse(in);
+    in.close();
+
+    const nlohmann::json& events = trace.at("traceEvents");
+    REQUIRE(events.is_array());
+    REQUIRE(events.empty() == false);
+
+    const nlohmann::json* outer = nullptr;
+    const nlohmann::json* inner = nullptr;
+    size_t threadNameEvents = 0;
+    const nlohmann::json* threadNameEvent = nullptr;
+    for (const nlohmann::json& event : events)
+    {
+        if (event.at("ph") == "M" && event.at("name") == "thread_name" &&
+            event.at("args").at("name") == "ChromeTraceThread")
+        {
+            ++threadNameEvents;
+            threadNameEvent = &event;
+        }
+        else if (event.at("ph") == "X")
+        {
+            if (event.at("name") == "ChromeOuter") { outer = &event; }
+            else if (event.at("name") == "ChromeInner") { inner = &event; }
+        }
+    }
+
+    REQUIRE(outer != nullptr);
+    REQUIRE(inner != nullptr);
+    REQUIRE(threadNameEvent != nullptr);
+    CHECK(threadNameEvents == 1);
+
+    // Both zones belong to the thread the metadata event named.
+    CHECK(outer->at("tid") == threadNameEvent->at("tid"));
+    CHECK(inner->at("tid") == threadNameEvent->at("tid"));
+
+    // The format requires microseconds, while VkmProfileZone stores nanoseconds. A 2 ms sleep
+    // is at least 1000 us; deliberately no upper bound, so a slow machine cannot fail this.
+    const double outerDurationUs = outer->at("dur").get<double>();
+    CHECK(outerDurationUs >= 1000.0);
+
+    // The inner scope is contained by the outer one, which is what makes the viewer nest them.
+    const double outerBeginUs = outer->at("ts").get<double>();
+    const double innerBeginUs = inner->at("ts").get<double>();
+    CHECK(innerBeginUs >= outerBeginUs);
+    CHECK(innerBeginUs + inner->at("dur").get<double>() <= outerBeginUs + outerDurationUs);
+
+    fs::remove(tracePath);
+    resetProfiler();
+}
+#endif // ENABLE_CHROME_TRACING

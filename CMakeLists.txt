@@ -201,8 +201,7 @@ else()
     set(VKM_METAL_EMIT_MSL_SOURCE_DEFAULT ON)
 endif()
 option(VKM_METAL_EMIT_MSL_SOURCE "Emit intermediate MSL source + embed it in metallib for shader debugging" ${VKM_METAL_EMIT_MSL_SOURCE_DEFAULT})
-option(CHROME_TRACING "Enable Chrome Tracing for CPU profiling" ON)
-option(TASKFLOW_PROFILER, "Enable Taskflow Profiler" ON)
+option(CHROME_TRACING "Enable Chrome Tracing export for the CPU profiler" ON)
 option(VKM_ENABLE_IMGUI "Enable ImGui integration" ON)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug AND CMAKE_COMPILER_IS_GNUCXX AND BUILD_COVERAGE)
@@ -224,11 +223,6 @@ endif()
 
 if (CHROME_TRACING)
     add_definitions(-DENABLE_CHROME_TRACING)
-endif()
-
-if (TASKFLOW_PROFILER)
-    # You can visualize profiled json file at https://taskflow.github.io/tfprof/ 
-    add_definitions(-DTF_ENABLE_PROFILER=taskflow_profile.json)
 endif()
 
 if (VKM_ENABLE_IMGUI)
