@@ -680,10 +680,15 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
   `front_face: counter_clockwise` and passes under the 1:1 mapping; the inverted mapping would
   have culled its geometry and turned the target black.
 
-### 2026-07-28 — Vulkan command buffers are freed on a retire list, not in setRHICommandBuffer
+### 2026-07-28 — Vulkan command buffers are recycled through a retire list, not freed in setRHICommandBuffer
 - Planned: mirror Metal, which releases the previous handle directly in `setRHICommandBuffer`.
 - Did instead: hand the outgoing handle to a completion-gated retire list on the pool, swept by
-  the next `getOrCreateRHICommandBuffer()`.
+  the next `getOrCreateRHICommandBuffer()`. Following PR review, a completed entry is **reused**
+  rather than freed — it moves to an available list and is handed straight back out, since
+  `vkBeginCommandBuffer` implicitly resets a buffer in the executable state when the pool carries
+  `VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT` (it already did). Steady-state rendering
+  therefore allocates nothing at all, where the free-and-reallocate version churned one command
+  buffer per acquire. The pool converges on the peak number of simultaneously-live buffers.
 - Why: the two are not equivalent. An `MTLCommandBuffer` is refcounted and the queue retains it
   while executing, but `vkFreeCommandBuffers` on a pending command buffer is
   `VUID-vkFreeCommandBuffers-pCommandBuffers-00047`. `VkmRenderGraph` releases a command buffer

@@ -18,13 +18,13 @@ namespace vkm
 
         /*
         * @brief Hands a no-longer-current VkCommandBuffer back, together with the timeline
-        * object of the submission that last used it. It is freed by a later
-        * getOrCreateRHICommandBuffer() once that timeline value has completed.
-        * @details Not freed eagerly on purpose: vkFreeCommandBuffers on a command buffer still
-        * in the pending state is a validation error, and the render graph releases a command
-        * buffer back to the pool in the same frame it submits it -- up to FRAME_COUNT frames
-        * before that submission completes. Callers must hold the pool's command-buffer mutex,
-        * which VkmCommandBufferPoolBase::allocate() already does across the whole handoff.
+        * object of the submission that last used it. A later getOrCreateRHICommandBuffer()
+        * returns it to the reuse pool once that timeline value has completed.
+        * @details Not recycled eagerly on purpose: resetting or re-recording a command buffer
+        * still in the pending state is a validation error, and the render graph releases a
+        * command buffer back to the pool in the same frame it submits it -- up to FRAME_COUNT
+        * frames before that submission completes. Callers must hold the pool's command-buffer
+        * mutex, which VkmCommandBufferPoolBase::allocate() already does across the whole handoff.
         */
         void retireRHICommandBuffer(VkCommandBuffer commandBuffer, const VkmGpuEventTimelineObject& timelineObject);
 
@@ -34,9 +34,13 @@ namespace vkm
 
     private:
         VkCommandPool _vkCommandPool{VK_NULL_HANDLE};
-        // Bounded by the frames in flight: an entry is freed as soon as its submission
-        // completes, so this never grows past the number of uncompleted submissions.
+        // Handed back but possibly still executing. Bounded by the frames in flight: an entry
+        // moves to _availableCommandBuffers as soon as its submission completes.
         std::vector<std::pair<VkCommandBuffer, VkmGpuEventTimelineObject>> _retiredCommandBuffers;
+        // Completed and ready to be handed out again. Together with the list above this caps
+        // the pool at the peak number of simultaneously-live command buffers, so steady-state
+        // rendering allocates none.
+        std::vector<VkCommandBuffer> _availableCommandBuffers;
     };
 
     class VkmGpuEventTimelineVulkan : public VkmGpuEventTimelineBase

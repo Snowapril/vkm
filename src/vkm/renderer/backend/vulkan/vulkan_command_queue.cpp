@@ -30,9 +30,10 @@ namespace vkm
     VkmCommandBufferPoolVulkan::~VkmCommandBufferPoolVulkan()
     {
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
-        // Destroying the pool frees every command buffer allocated from it, including any
-        // still awaiting their submission's completion -- no separate free pass needed.
+        // Destroying the pool frees every command buffer allocated from it, whether it is
+        // awaiting completion or parked for reuse -- no separate free pass needed.
         _retiredCommandBuffers.clear();
+        _availableCommandBuffers.clear();
         if (_vkCommandPool != VK_NULL_HANDLE)
         {
             vkDestroyCommandPool(driverVulkan->getDevice(), _vkCommandPool, nullptr);
@@ -59,17 +60,18 @@ namespace vkm
     {
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
 
-        // Free everything whose submission has completed. Polling here rather than waiting
-        // keeps this off the critical path: queryLastCompletedTimeline() is a plain
-        // vkGetSemaphoreCounterValue, and anything still pending is simply reconsidered on the
-        // next acquire. Timeline values are monotonic, so an object that was allocated but
-        // never submitted is still overtaken by a later submission.
+        // Anything whose submission has completed is no longer pending and may be recorded
+        // again. Polling here rather than waiting keeps this off the critical path:
+        // queryLastCompletedTimeline() is a plain vkGetSemaphoreCounterValue, and whatever is
+        // still pending is simply reconsidered on the next acquire. Timeline values are
+        // monotonic, so an object that was allocated but never submitted is still overtaken by
+        // a later submission.
         for (auto it = _retiredCommandBuffers.begin(); it != _retiredCommandBuffers.end();)
         {
             VkmGpuEventTimelineBase* timeline = it->second._gpuEventTimeline;
             if (timeline != nullptr && timeline->queryLastCompletedTimeline() >= it->second._timelineValue)
             {
-                vkFreeCommandBuffers(driverVulkan->getDevice(), _vkCommandPool, 1, &it->first);
+                _availableCommandBuffers.push_back(it->first);
                 it = _retiredCommandBuffers.erase(it);
             }
             else
@@ -78,14 +80,25 @@ namespace vkm
             }
         }
 
-        const VkCommandBufferAllocateInfo allocInfo{
-            .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .commandPool        = _vkCommandPool,
-            .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = 1,
-        };
         VkCommandBuffer vkCommandBuffer{VK_NULL_HANDLE};
-        vkAllocateCommandBuffers(driverVulkan->getDevice(), &allocInfo, &vkCommandBuffer);
+        if (_availableCommandBuffers.empty())
+        {
+            const VkCommandBufferAllocateInfo allocInfo{
+                .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                .commandPool        = _vkCommandPool,
+                .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                .commandBufferCount = 1,
+            };
+            vkAllocateCommandBuffers(driverVulkan->getDevice(), &allocInfo, &vkCommandBuffer);
+        }
+        else
+        {
+            // Reused as-is: the pool carries VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            // so vkBeginCommandBuffer below implicitly resets a buffer in the executable state.
+            // An explicit vkResetCommandBuffer would only repeat that work.
+            vkCommandBuffer = _availableCommandBuffers.back();
+            _availableCommandBuffers.pop_back();
+        }
 
         const VkCommandBufferBeginInfo beginInfo{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
