@@ -599,6 +599,61 @@ line names it twice both before and after — and is left alone.
   human clicking between the windows — so that part rests on the code path plus the unit-level
   focus tests.
 
+## 2026-07-28 — TODO.md sweep: eight small self-contained fixes
+
+Picked the slice of `TODO.md` that was small, self-contained, and verifiable on this machine.
+Two entries turned out to describe less than was actually wrong.
+
+- `VkmRenderResourcePool::_driver` was not merely unstored, it was **uninitialized** — the member
+  was declared, the constructor took the pointer, and nothing ever assigned it, so it held an
+  indeterminate value for the object's lifetime. Initialized it, added a `protected getDriver()`,
+  and dropped `VkmRenderResourcePoolMetal::_driverMetal` in favour of it. Deleting the parameter
+  instead was rejected: it would modify a public method in `common/` (the one absolute rule in
+  `AGENTS.md`), touch four call sites, and still leave the Metal duplicate.
+- `VkmCommandBufferBase::setDebugName()` gained its first caller. The render graph records every
+  subgraph into **one** command buffer, so per-subgraph naming is structurally unavailable; the
+  frame slot is what the `"<queueName>#<index>"` fallback actually lacks, and subgraph identity
+  is already carried by the debug group and the completion markers.
+- Metal's depth attachment now honours `VkmDepthStencilAttachmentDescriptor`. The converters were
+  already there and already applied to color twelve lines above. Also widened the guard to require
+  **both** the framebuffer and render-pass depth optionals — they are set independently, and
+  reading the descriptor on the strength of the handle alone is UB. Metal was the only backend
+  not checking both.
+- Metal residency: membership is now tracked explicitly instead of inferred from "does this handle
+  have an allocation". `onResourceInitialized` skips resources whose native object does not exist
+  yet (the swapchain backbuffer, whose drawable arrives later via `overrideExternalHandle`), but
+  `releaseResource` removed anything that had one by then. `registerExternalAllocation` /
+  `unregisterExternalAllocation` became idempotent as a side effect.
+- Metal raster state (fill/cull/winding) is applied at bind time. It is *encoder* state on Metal,
+  not part of `MTLRenderPipelineState`, and nothing ever set it — `setTriangleFillMode:`,
+  `setCullMode:` and `setFrontFacingWinding:` appeared nowhere in the tree. Second-order effect
+  worth knowing: a PSO omitting `rasterization_state` now gets the descriptor's default
+  `cullMode = Back` on Metal where it previously got `MTLCullModeNone`. Audited every PSO JSON;
+  only `model_viewer` declares back-face culling.
+- Vulkan now frees command buffers. Not eagerly the way Metal does — see the deviation below.
+- `CHROME_TRACING` went from dead to functional: `VkmCpuProfiler::exportChromeTrace()` writes
+  Chrome Trace Event Format built on the profiler's existing frame/zone model. `TASKFLOW_PROFILER`
+  was deleted rather than repaired; its stray comma made the variable literally
+  `TASKFLOW_PROFILER,` so its guard tested a never-defined name, and there is no taskflow code
+  anywhere to profile.
+- New `tests/TestRasterState{.cpp,Metal.mm,Shared.hpp}` renders the wireframe PSO variant offscreen
+  and asserts the triangle interior is empty. Proven as a real repro, not just a passing test:
+  with the fill mode forced back to `Fill` the interior pixel reads (94, 102, 60) and the test
+  fails. Runs on both Metal and Vulkan.
+- New `TestCpuProfiler` case asserts the exporter's microsecond units and containment nesting.
+- Verified: Metal, Vulkan **and** wasm/WebGPU all pass (147 cases on Metal). The Vulkan free path
+  was measured on the triangle sample at 22000 acquires with the pending list never exceeding 0
+  and no validation output. Also configured once with `-DCHROME_TRACING=OFF` to confirm the build
+  stays green with the export compiled out.
+- Deliberately untested, and why: no public API exposes the live `VkCommandBuffer` count and
+  `MTLResidencySet` has no membership query, so the Vulkan and Metal residency fixes are proven by
+  validation-layer silence plus a sample soak rather than by assertions. Adding accessors purely
+  for tests would be the speculative API `CLAUDE.md` §2 forbids.
+- Surfaced, not fixed (`CLAUDE.md` §3): `~VkmCommandBufferPoolBase` leaks every pooled
+  `VkmCommandBufferBase*`; `VkmRenderResource::initializeCommon` validates `_handle` *before*
+  assigning it, so its guard can never fire; the taskflow include paths in `CMakeLists.txt:265`
+  and `tests/CMakeLists.txt:116` are now fully orphaned.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:
@@ -609,6 +664,53 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Did instead: <the conservative option taken>
 - Why: <the edge case that forced it>
 ```
+
+### 2026-07-28 — Metal's front-face mapping is 1:1, not inverted
+- Planned: mirror `vulkan_pipeline_state.cpp`'s `toVkFrontFace` and map
+  `VkmFrontFace::CounterClockwise` to `MTLWindingClockwise`, on the theory that Metal's top-left
+  framebuffer origin reverses screen-space orientation the same way Vulkan's does.
+- Did instead: mapped 1:1 — `CounterClockwise` to `MTLWindingCounterClockwise`.
+- Why: the premise was backwards. `toVkFrontFace`'s own comment says the inversion exists *on
+  Vulkan* to cancel `-fvk-invert-y`, "so a PSO declaring `counter_clockwise` culls the same faces
+  on Vulkan as it does on **Metal/WebGPU**", and `src/samples/triangle/main.cpp:70-73` states
+  +Y-up is "the engine convention, matching HLSL/D3D, Metal and WebGPU; the Vulkan backend flips
+  its viewport to match". Vulkan is the single compensating backend. `webgpu_pipeline_state.cpp`
+  already maps 1:1 and is correct — it was briefly flagged as inconsistent and is not. Confirmed
+  empirically: `TestSceneModelRenderMetal` renders with `cull_mode: back` +
+  `front_face: counter_clockwise` and passes under the 1:1 mapping; the inverted mapping would
+  have culled its geometry and turned the target black.
+
+### 2026-07-28 — Vulkan command buffers are recycled through a retire list, not freed in setRHICommandBuffer
+- Planned: mirror Metal, which releases the previous handle directly in `setRHICommandBuffer`.
+- Did instead: hand the outgoing handle to a completion-gated retire list on the pool, swept by
+  the next `getOrCreateRHICommandBuffer()`. Following PR review, a completed entry is **reused**
+  rather than freed — it moves to an available list and is handed straight back out, since
+  `vkBeginCommandBuffer` implicitly resets a buffer in the executable state when the pool carries
+  `VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT` (it already did). Steady-state rendering
+  therefore allocates nothing at all, where the free-and-reallocate version churned one command
+  buffer per acquire. The pool converges on the peak number of simultaneously-live buffers.
+- Why: the two are not equivalent. An `MTLCommandBuffer` is refcounted and the queue retains it
+  while executing, but `vkFreeCommandBuffers` on a pending command buffer is
+  `VUID-vkFreeCommandBuffers-pCommandBuffers-00047`. `VkmRenderGraph` releases a command buffer
+  back to the pool in the same frame it submits it, and `ensureCompleted()` waits only on that
+  frame slot, so an eager free would hit a still-pending buffer within the first `FRAME_COUNT`
+  frames. The list is polled with `vkGetSemaphoreCounterValue` rather than waited on, so it costs
+  nothing on the critical path, and it is bounded by frames in flight.
+
+### 2026-07-28 — exportChromeTrace uses the public frame accessors, not the internal mutex
+- Planned: take `ProfilerState::_frameMutex` directly and walk `state._frames`.
+- Did instead: built on the public `getFrameCount()` / `copyFrame()`, each of which takes and
+  releases that mutex on its own.
+- Why: `copyFrame` already deep-copies a frame under the lock, so reaching into the internals
+  bought nothing and would have held the lock across the whole event-array build. `beginFrame()`
+  runs on the frame-driver thread and must never wait on an export. Same reason the file write
+  stays outside any lock.
+
+### 2026-07-28 — render graph names its command buffer with std::to_string, not fmt::format
+- Planned: `fmt::format("RenderGraph.Frame{}", _frameIndex)`.
+- Did instead: `"RenderGraph.Frame" + std::to_string(_frameIndex)`.
+- Why: `fmt` is not directly included in that translation unit, and this avoids adding a header
+  for a single integer append. `CLAUDE.md` §7 prefers the STL where it already suffices.
 
 ### 2026-07-25 — the test hang watchdog uses _Exit, not abort
 - Planned: `std::abort()` once a test overruns its budget by the grace factor.

@@ -151,7 +151,13 @@ namespace vkm
         return true;
     }
 
-    // A handle bound here after creation is never registered into a residency set (the swapchain, today's only such caller, bypasses the common newBuffer/newTexture residency hook entirely).
+    // Binding a handle here does not make it resident: the common newTexture residency hook has
+    // already run and found nothing to register. A caller supplying a non-swapchain external
+    // texture must register it itself via VkmRenderResourcePoolMetal::registerExternalAllocation
+    // (idempotent, and paired with unregisterExternalAllocation before release). The swapchain
+    // deliberately does not -- CAMetalLayer.residencySet already covers its drawables, and
+    // registering them individually would retain every drawable the layer ever vends, since a
+    // residency set retains its members and only the last drawable is ever released back.
     bool VkmTextureMetal::overrideExternalHandle(void* externalHandle)
     {
         _mtlTexture = static_cast<id<MTLTexture>>(externalHandle);

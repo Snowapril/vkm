@@ -15,9 +15,15 @@
 #include <unordered_map>
 
 // Symbolization is a host-tooling job: it needs to know which module an address belongs to
-// and read that module's debug info. Emscripten has neither, so the WASM build keeps the raw
-// addresses and everything below compiles out.
-#if !defined(VKM_PLATFORM_WASM)
+// and read that module's debug info. This implementation is POSIX-only -- dladdr for the
+// module, then atos/addr2line in a child process for the name. Emscripten has none of it, and
+// neither does Windows (which would need DbgHelp and a different resolver entirely). Both keep
+// the raw addresses and everything below compiles out.
+#if !defined(VKM_PLATFORM_WASM) && !defined(VKM_PLATFORM_WINDOWS)
+#define VKM_MEMORY_REPORT_SYMBOLIZE
+#endif
+
+#if defined(VKM_MEMORY_REPORT_SYMBOLIZE)
 #include <dlfcn.h>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -80,7 +86,7 @@ namespace vkm
             return std::string(buffer);
         }
 
-#if !defined(VKM_PLATFORM_WASM)
+#if defined(VKM_MEMORY_REPORT_SYMBOLIZE)
         // Runs `argv` and returns its stdout. posix_spawn rather than popen: this process is
         // multithreaded and replaces global operator new, and fork() in that situation can
         // deadlock in the child if anything between fork and exec touches the allocator.
@@ -263,7 +269,7 @@ namespace vkm
                 }
             }
         }
-#endif // !defined(VKM_PLATFORM_WASM)
+#endif // VKM_MEMORY_REPORT_SYMBOLIZE
     } // namespace
 
     std::string formatByteSize(uint64_t bytes)
@@ -294,7 +300,7 @@ namespace vkm
 
     void resolveMemoryTagCallSites(const std::vector<TaggedAllocationSummary>& tags)
     {
-#if defined(VKM_PLATFORM_WASM)
+#if !defined(VKM_MEMORY_REPORT_SYMBOLIZE)
         (void)tags;
 #else
         // Grouped by module: each one costs a child process, and every address in a shared

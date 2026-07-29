@@ -2,6 +2,10 @@
 
 #include <vkm/renderer/imgui/cpu_profiler_inspector.h>
 
+#if defined(ENABLE_CHROME_TRACING)
+#include <vkm/base/common.h>
+#endif // ENABLE_CHROME_TRACING
+
 #include <imgui.h>
 
 #include <algorithm>
@@ -129,6 +133,26 @@ namespace vkm
             profiler.clear();
             _hasPinnedFrame = false;
         }
+
+#if defined(ENABLE_CHROME_TRACING)
+        ImGui::SameLine();
+        if (ImGui::Button("Export Chrome trace"))
+        {
+            // Lives here rather than behind a hotkey because capture is tied to this window
+            // being open -- a global key pressed with the window closed would export nothing.
+            static constexpr const char* kChromeTracePath = "vkm_cpu_trace.json";
+            if (profiler.exportChromeTrace(kChromeTracePath))
+            {
+                VKM_DEBUG_LOG("Wrote CPU profile to vkm_cpu_trace.json");
+            }
+            else
+            {
+                VKM_DEBUG_ERROR("Failed to write vkm_cpu_trace.json");
+            }
+        }
+        ImGui::SetItemTooltip("Write the collected frames to vkm_cpu_trace.json in the working "
+                              "directory; open it in chrome://tracing or ui.perfetto.dev.");
+#endif // ENABLE_CHROME_TRACING
 
         ImGui::SameLine();
         if (_hasPinnedFrame)

@@ -128,7 +128,11 @@ namespace vkm
         return _mtlBuffer != nil ? (uint64_t)[_mtlBuffer gpuAddress] : 0;
     }
 
-    // A handle bound here after creation is never registered into a residency set (the swapchain, today's only such caller, bypasses the common newBuffer/newTexture residency hook entirely).
+    // Binding a handle here does not make it resident: the common newBuffer residency hook has
+    // already run and found nothing to register. A caller supplying an external buffer must
+    // register it itself via VkmRenderResourcePoolMetal::registerExternalAllocation (idempotent,
+    // and paired with unregisterExternalAllocation before release) -- the same contract
+    // VkmTextureMetal::overrideExternalHandle documents.
     bool VkmBufferMetal::overrideExternalHandle(void* externalHandle)
     {
         _mtlBuffer = static_cast<id<MTLBuffer>>(externalHandle);

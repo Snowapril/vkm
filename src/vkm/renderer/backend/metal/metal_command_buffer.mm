@@ -57,6 +57,44 @@ namespace vkm
         return MTLPrimitiveTypeTriangle;
     }
 
+    // VkmFillMode::Point and VkmCullMode::FrontAndBack are rejected at PSO creation
+    // (see VkmPipelineStateMetal's raster-state validation), so they cannot reach here.
+    static MTLTriangleFillMode getTriangleFillMode(VkmFillMode fillMode)
+    {
+        switch (fillMode)
+        {
+            case VkmFillMode::Solid:     return MTLTriangleFillModeFill;
+            case VkmFillMode::Wireframe: return MTLTriangleFillModeLines;
+            default:                     return MTLTriangleFillModeFill;
+        }
+    }
+
+    static MTLCullMode getCullMode(VkmCullMode cullMode)
+    {
+        switch (cullMode)
+        {
+            case VkmCullMode::None:  return MTLCullModeNone;
+            case VkmCullMode::Front: return MTLCullModeFront;
+            case VkmCullMode::Back:  return MTLCullModeBack;
+            default:                 return MTLCullModeBack;
+        }
+    }
+
+    // Mapped 1:1, unlike vulkan_pipeline_state.cpp's toVkFrontFace, which is deliberately
+    // inverted. The engine's clip space is +Y-up, which is already Metal's convention; Vulkan
+    // is the one backend that compensates, because vkm-compiler builds its SPIR-V with
+    // -fvk-invert-y and that mirrors triangle winding in screen space. WebGPU maps 1:1 for the
+    // same reason Metal does.
+    static MTLWinding getFrontFacingWinding(VkmFrontFace frontFace)
+    {
+        switch (frontFace)
+        {
+            case VkmFrontFace::CounterClockwise: return MTLWindingCounterClockwise;
+            case VkmFrontFace::Clockwise:        return MTLWindingClockwise;
+            default:                             return MTLWindingCounterClockwise;
+        }
+    }
+
     // copyBuffer() accepts either a Buffer or a StagingBuffer resource on either side (see
     // the same-named helper in vulkan_command_buffer.cpp) -- resolve via the handle's own
     // recorded type. Metal buffers are never sub-allocated within a shared MTLBuffer, so
@@ -89,23 +127,31 @@ namespace vkm
                                                                                        colorAttachmentDesc._clearColors[3]);
         }
 
-        if (frameBufferDesc._depthStencilAttachment.has_value())
+        // Both optionals are required: the handle lives on the framebuffer, the load/store
+        // actions on the render pass, and they are set independently. Vulkan and WebGPU
+        // already check both before dereferencing either.
+        if (frameBufferDesc._depthStencilAttachment.has_value() && renderPassDesc._depthStencilAttachment.has_value())
         {
             VkmTextureMetal* depthStencilTextureMetal = static_cast<VkmTextureMetal*>(renderResourcePool->getResource<VkmTexture>(frameBufferDesc._depthStencilAttachment.value()));;
             const VkmTextureInfo& textureInfo = depthStencilTextureMetal->getTextureInfo();
+            // One shared load/store pair covers both aspects, matching the descriptor (and
+            // Vulkan, which builds a single attachment info and assigns it to both).
+            const VkmDepthStencilAttachmentDescriptor& depthStencilDesc = renderPassDesc._depthStencilAttachment.value();
 
             if (hasDepth(textureInfo._format))
             {
                 mtlRenderPassDescriptor.depthAttachment.texture = depthStencilTextureMetal->getInternalHandle();
-                mtlRenderPassDescriptor.depthAttachment.loadAction = MTLLoadActionClear;
-                mtlRenderPassDescriptor.depthAttachment.storeAction = MTLStoreActionStore;
+                mtlRenderPassDescriptor.depthAttachment.loadAction = getLoadAction(depthStencilDesc._loadAction);
+                mtlRenderPassDescriptor.depthAttachment.storeAction = getStoreAction(depthStencilDesc._storeAction);
+                mtlRenderPassDescriptor.depthAttachment.clearDepth = depthStencilDesc._clearDepth;
             }
 
             if (hasStencil(textureInfo._format))
             {
                 mtlRenderPassDescriptor.stencilAttachment.texture = depthStencilTextureMetal->getInternalHandle();
-                mtlRenderPassDescriptor.stencilAttachment.loadAction = MTLLoadActionClear;
-                mtlRenderPassDescriptor.stencilAttachment.storeAction = MTLStoreActionStore;
+                mtlRenderPassDescriptor.stencilAttachment.loadAction = getLoadAction(depthStencilDesc._loadAction);
+                mtlRenderPassDescriptor.stencilAttachment.storeAction = getStoreAction(depthStencilDesc._storeAction);
+                mtlRenderPassDescriptor.stencilAttachment.clearStencil = depthStencilDesc._clearStencil;
             }
         }
 
@@ -226,6 +272,15 @@ namespace vkm
             [renderCommandEncoder setDepthStencilState:pipelineStateMetal->getDepthStencilState()];
             _boundPrimitiveType = static_cast<uint32_t>(
                 getPrimitiveType(pipelineStateMetal->getDescriptor().primitiveTopology));
+
+            // Raster state is encoder state on Metal, not part of the pipeline object, so it
+            // has to be re-applied per bind -- the same reason the primitive type is resolved
+            // here. Vulkan and WebGPU bake all three into their pipeline descriptors.
+            const VkmRasterizationStateDescriptor& rasterizationState =
+                pipelineStateMetal->getDescriptor().rasterizationState;
+            [renderCommandEncoder setTriangleFillMode:getTriangleFillMode(rasterizationState.fillMode)];
+            [renderCommandEncoder setCullMode:getCullMode(rasterizationState.cullMode)];
+            [renderCommandEncoder setFrontFacingWinding:getFrontFacingWinding(rasterizationState.frontFace)];
 
             // Every graphics pipeline shares the engine-global bindless argument table:
             // the set-0 argument buffer at [[buffer(2)]] and a safe default for the

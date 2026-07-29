@@ -100,6 +100,9 @@ namespace vkm
             std::array<std::vector<VkmResourceHandle::IdType>, (uint8_t)VkmResourceType::Count> _freeIds;
         };
 
+    protected:
+        inline VkmDriverBase* getDriver() const { return _driver; }
+
     private:
         VkmDriverBase* _driver;
         std::array<VkmDriverResourceSubPool, (uint8_t)VkmResourcePoolType::Count> _subPools;

@@ -21,6 +21,7 @@ set(SRCS
     ${SRC_DIR}/TestTimeBudget.cpp
     ${SRC_DIR}/TestCamera.cpp
     ${SRC_DIR}/TestClipSpaceOrientation.cpp
+    ${SRC_DIR}/TestRasterState.cpp
     ${SRC_DIR}/TestGlobalVariable.cpp
     ${SRC_DIR}/TestVertexLayout.cpp
     ${SRC_DIR}/TestObjectDataLayout.cpp
@@ -40,6 +41,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestMetalBindlessTriangle.mm
         ${SRC_DIR}/TestRenderGraphCapture.mm
         ${SRC_DIR}/TestClipSpaceOrientationMetal.mm
+        ${SRC_DIR}/TestRasterStateMetal.mm
         ${SRC_DIR}/TestSceneModelRenderMetal.mm
         ${SRC_DIR}/TestCubemapTextureMetal.mm
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
@@ -56,6 +58,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestMetalBindlessTriangle.mm
         ${SRC_DIR}/TestRenderGraphCapture.mm
         ${SRC_DIR}/TestClipSpaceOrientationMetal.mm
+        ${SRC_DIR}/TestRasterStateMetal.mm
         ${SRC_DIR}/TestSceneModelRenderMetal.mm
         ${SRC_DIR}/TestCubemapTextureMetal.mm
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
