@@ -3,37 +3,42 @@
 Living document for the ReSTIR GI implementation: what the technique is, the staged plan,
 current status, remaining TODOs, and the reading list. Updated at the end of every phase.
 
-**Status:** Phase 0 (scaffolding). No implementation work started.
+**Status:** Phase 1 spike **passed** (2026-07-30). See §4.1. Next: Phase 2 shared infrastructure.
 
 ---
 
 ## 1. Goal and decisions
 
 Implement **ReSTIR GI** (Ouyang et al. 2021, *ReSTIR GI: Path Resampling for Real-Time Path
-Tracing*) as production-usable real-time indirect lighting.
+Tracing*) as vkm's **high-end** GI tier.
+
+**ReSTIR GI is not vkm's default GI.** It is one of at least two interchangeable techniques behind
+a common interface. A **low-spec tier** must also exist for ray-tracing-less and mobile targets.
+See §5 for that architecture — it is a first-class requirement, not a fallback bolted on later.
 
 | Decision | Choice |
 |---|---|
-| Secondary ray tracing | Hardware ray tracing, **inline ray query in compute** (not RT pipelines) |
-| Backends | Vulkan **and** Metal, developed in parallel |
-| Metal shader path | Existing `dxc` → SPIR-V → SPIRV-Cross → MSL chain (**no** Metal Shader Converter) |
-| WebGPU | GI gated off — WebGPU has no ray tracing |
+| Secondary ray tracing (high tier) | Hardware ray tracing, **inline ray query in compute** (not RT pipelines) |
+| Backends (high tier) | Vulkan **and** Metal, developed in parallel |
+| Metal shader path | Existing `dxc` → SPIR-V → SPIRV-Cross → MSL chain (**no** Metal Shader Converter) — verified, §4.1 |
+| Geometry in acceleration structures | **Triangles only** (see §4.2) |
+| Low-spec tier | Required; runs everywhere including WebGPU and mobile. Technique TBD, see §5 |
 | Quality bar | Production: denoiser, motion vectors, performance work all in scope |
 
-### Platform matrix for GI
+### Platform matrix
 
-| Combination | GI support | Why |
-|---|---|---|
-| Windows Vulkan | Yes | `VK_KHR_ray_query` |
-| Linux Vulkan | Yes | `VK_KHR_ray_query`; lavapipe works for CI (needs Mesa ≥ 24.1) |
-| macOS Metal 4 | Yes | `metal::raytracing` intersection queries |
-| macOS Vulkan | **No** | MoltenVK implements neither `VK_KHR_ray_query` nor `VK_KHR_acceleration_structure` |
-| iOS Metal 4 | Untested | API present; perf unknown |
-| WASM WebGPU | **No** | WebGPU has no ray tracing (blocked on bindless in the WG) |
+| Combination | High tier (ReSTIR GI) | Low-spec tier | Why |
+|---|---|---|---|
+| Windows Vulkan | Yes | Yes | `VK_KHR_ray_query` |
+| Linux Vulkan | Yes | Yes | `VK_KHR_ray_query`; lavapipe covers CI (needs Mesa ≥ 24.1) |
+| macOS Metal 4 | Yes | Yes | `metal::raytracing` intersection queries |
+| macOS Vulkan | **No** | Yes | MoltenVK implements neither `VK_KHR_ray_query` nor `VK_KHR_acceleration_structure` (confirmed, §4.3) |
+| iOS Metal 4 | Unlikely / untested | **Primary target** | RT API exists but hardware RT is A17+; low-spec tier is the realistic path |
+| WASM WebGPU | **No** | **Primary target** | WebGPU has no ray tracing (blocked on bindless in the WG) |
 
 **Consequence:** macOS ray tracing is reachable *only* through the Metal backend. The
-Vulkan/Metal cross-check that vkm normally relies on for validation is unavailable on a single
-macOS machine — Vulkan RT can only be verified on Windows/Linux or in CI.
+Vulkan/Metal cross-check vkm normally relies on for validation is unavailable on a single macOS
+machine — Vulkan RT can only be verified on Windows/Linux or in CI.
 
 ---
 
@@ -174,9 +179,75 @@ The render graph is a flat ordered callback list, not a scheduler — `compile()
 
 ---
 
-## 4. Toolchain findings (settled by research; spike still required)
+## 4. Toolchain findings
 
-### SPIRV-Cross → MSL supports ray query
+### 4.1 Spike result: PASS — the existing chain carries inline ray query to Metal
+
+Run 2026-07-30 on macOS, Xcode 26.3, using the Vulkan SDK 1.4.341.1 binaries on `PATH`
+(`dxc` 1.10/1.9.0.5180, `spirv-cross` `vulkan-sdk-1.4.335.0-28-ga0fba56c`). Note the system
+spirv-cross is slightly *older* than the revision this repo pins (`vulkan-sdk-1.4.350.0`), so the
+result is conservative — the pinned newer revision will also work.
+
+A triangle-only inline `RayQuery<>` compute shader writing to an `RWStructuredBuffer<float>`:
+
+```
+dxc -spirv -T cs_6_5 -E CSMain -fspv-target-env=vulkan1.2 \
+    -fspv-extension=SPV_KHR_ray_query -Fo out.spv in.hlsl     # exit 0
+spirv-val out.spv                                              # exit 0
+spirv-cross --msl --msl-version 30000 \
+    --msl-argument-buffers --msl-argument-buffer-tier 2 out.spv --output out.metal   # exit 0
+xcrun -sdk macosx metal -std=metal3.0 -c out.metal -o out.air  # exit 0
+xcrun -sdk macosx metallib out.air -o out.metallib             # exit 0
+```
+
+Results:
+
+- SPIR-V declares exactly `OpCapability RayQueryKHR` + `OpExtension "SPV_KHR_ray_query"`, and
+  validates.
+- **Correction to earlier research:** `SPV_KHR_ray_tracing` is **not** emitted. Inline-only ray
+  query does not pull it in, so that flag is unnecessary.
+- SPIRV-Cross emits correct MSL:
+  `raytracing::intersection_query<raytracing::instancing, raytracing::triangle_data>` with
+  `.reset()` / `.next()` / `.get_committed_intersection_type()` / `.get_committed_distance()`, and
+  `raytracing::acceleration_structure<raytracing::instancing>`, guarded by
+  `#if __METAL_VERSION__ >= 230`.
+- **The critical result:** with Tier-2 argument buffers the acceleration structure lands *inside*
+  the descriptor-set struct as
+  `raytracing::acceleration_structure<raytracing::instancing> g_Scene [[id(0)]]` — directly
+  compatible with vkm's hand-pinned `[[id(N)]]` bindless layout. Both the plain-binding and
+  argument-buffer variants compile to metallib.
+
+**Conclusion: no new shader toolchain, no Metal Shader Converter, no Slang.** vkm-compiler needs
+only a per-PSO SM 6.5 profile and the ray-query SPIR-V flag. (`metal-shaderconverter` *is* installed
+on this machine at `/usr/local/bin`, but is not needed — and §4.2 explains why adopting it would
+cost more than it buys.)
+
+### 4.2 The envelope: triangles only, and the failure is silent
+
+Procedural/AABB geometry is **not** usable, and the failure mode is worse than expected. A shader
+using `CANDIDATE_PROCEDURAL_PRIMITIVE` / `CommitProceduralPrimitiveHit()` compiles cleanly all the
+way to `.air` — but spirv-cross hardcodes the query tags to
+`intersection_query<instancing, triangle_data>` while still emitting
+`commit_bounding_box_intersection()`. The query is never typed for bounding-box data, so this is
+wrong **at runtime with no diagnostic**, not a compile error.
+
+Also unsupported (these do throw): `OpConvertUToAccelerationStructureKHR` (no AS-from-uint64, so no
+pointer-style bindless AS) and `...ShaderBindingTableRecordOffsetKHR`. No RT pipelines to MSL.
+
+**Therefore: triangle geometry only, one TLAS bound as a singleton.** Do not attempt procedural
+primitives on the Metal path, and add a comment saying why at the declaration site.
+
+### 4.3 MoltenVK confirmed unusable for RT
+
+Grepping this machine's `~/VulkanSDK/vulkaninfo.txt` for `ray_query`, `ray_tracing`,
+`acceleration_structure`, and `deferred_host` returns **zero** matches — empirical confirmation
+that macOS GI must go through the Metal backend.
+Upstream: [MoltenVK#1956](https://github.com/KhronosGroup/MoltenVK/issues/1956) (open since
+2023-06); maintainer in [#2079](https://github.com/KhronosGroup/MoltenVK/discussions/2079):
+*"Ray tracing is a large project, and we are currently talking with customers about funding its
+development."*
+
+### 4.4 Why SPIRV-Cross works (source evidence)
 
 Verified against the pinned revision `vulkan-sdk-1.4.350.0` (`dependencies/bootstrap.json:103`):
 
@@ -229,13 +300,6 @@ says `Metal: No` for ray tracing but is stale — `slang-emit-metal.cpp` emits
 "[Metal] Fix RayQuery TriangleFrontFace emission". It also has `-target metallib`. Cost is a
 front-end migration off dxc.
 
-### MoltenVK will not help
-
-Neither `VK_KHR_ray_query` nor `VK_KHR_acceleration_structure` is implemented
-([MoltenVK#1956](https://github.com/KhronosGroup/MoltenVK/issues/1956), open since 2023-06;
-maintainer in [#2079](https://github.com/KhronosGroup/MoltenVK/discussions/2079): *"Ray tracing is
-a large project, and we are currently talking with customers about funding its development."*).
-
 ### CI: lavapipe works, but the runner is too old
 
 Mesa's `docs/features.txt` lists `VK_KHR_ray_query  DONE (anv/gfx12.5+, lvp, radv/gfx10.3+, tu/a740+, vn)`,
@@ -247,10 +311,8 @@ Bumping the runner also allows un-pinning `dxc-linux` from the GLIBC-2.34 releas
 
 - `RayQuery` requires **SM 6.5** → `-T cs_6_5`. vkm-compiler hardcodes `cs_6_0`
   (`main.cpp:48,142,605`), so profiles become per-PSO configuration.
-- Add `-fspv-target-env=vulkan1.2 -fspv-extension=SPV_KHR_ray_query -fspv-extension=SPV_KHR_ray_tracing`.
-  DXC emits `SPV_KHR_ray_tracing` unconditionally when an AS is present
-  ([DXC#4113](https://github.com/microsoft/DirectXShaderCompiler/issues/4113)); harmless,
-  SPIRV-Cross does not reject the capability.
+- Add `-fspv-target-env=vulkan1.2 -fspv-extension=SPV_KHR_ray_query`. Verified sufficient in §4.1 —
+  `SPV_KHR_ray_tracing` is *not* needed for inline-only ray query.
 - Known quirk: *storing* a `RayQuery<>` value fails
   ([DXC#4221](https://github.com/microsoft/DirectXShaderCompiler/issues/4221)) — keep it a plain local.
 
@@ -276,7 +338,69 @@ Other `accelerationStructure*` members are optional.
 
 ---
 
-## 5. Two vkm-specific gotchas
+## 5. GI as a tiered, interchangeable system
+
+ReSTIR GI is the high tier only. A low-spec tier must run where there is no ray tracing (WebGPU,
+macOS Vulkan/MoltenVK) and where there is RT hardware but not enough of it (mobile). This shapes
+the plan in two ways worth stating plainly.
+
+### The abstraction boundary
+
+Do **not** try to make one algorithm scale down, and do **not** try to reuse ReSTIR's reservoirs
+with a screen-space tracer. The two tiers are genuinely different algorithms; what they share is
+infrastructure:
+
+| Shared (build once) | Per-technique (owned by each tier) |
+|---|---|
+| G-buffer + previous-frame G-buffer | Its own passes and dispatch order |
+| Motion vectors, frame constants, history management | Its own resources (reservoirs / probes / trace buffers) |
+| Denoiser + history-confidence input | Its own quality/perf knobs |
+| Composite + tone mapping | Its own capability requirements |
+| Debug-view plumbing | |
+
+Proposed contract: a technique produces an **indirect radiance texture** (plus optionally a
+per-pixel confidence/variance channel for the denoiser), consumed by one shared composite pass.
+That is a narrow enough interface that a third technique could be added later without touching the
+first two, and wide enough that neither tier is crippled by it.
+
+Selection should be a runtime choice gated on `VkmDriverCapabilityFlags::RayTracing` plus a user/
+quality setting — not `#ifdef`, matching how `TextureUpload` and `BufferDeviceAddress` are already
+handled.
+
+### Why this reorders the plan favourably
+
+The low-spec tier needs **none** of the ray-tracing work (Phases 1–2). It needs only the shared
+infrastructure (Phases 3–4). That makes it:
+
+- the **first GI that works end to end**, on all five platform combinations,
+- the thing that **validates the technique interface with two consumers** before ReSTIR lands, and
+- a hedge: if ReSTIR stalls, vkm still has GI.
+
+So the low-spec tier is scheduled *before* ReSTIR GI in §8, even though ReSTIR is the headline
+feature. This is a deliberate de-risking choice, not a deprioritization of ReSTIR.
+
+### Candidate low-spec techniques (decision still open — see §12)
+
+| Technique | Fit | Cost | Notes |
+|---|---|---|---|
+| **Irradiance probe volumes (SH)** | Best mobile fit | Low runtime, needs bake or slow runtime update | Smooth indirect diffuse, view-independent, no offscreen problem. Probes can be baked offline (mobile) or updated by rasterized probe cubemaps (mid-tier, still no RT). Leaks through thin geometry; needs care near walls. |
+| **Screen-space GI (depth-buffer ray march)** | Cheap, fully dynamic | Low | No new data structures. But offscreen and occluded geometry simply miss, so it cannot be the *only* tier. Best as a contact-detail supplement on top of probes. |
+| **Voxel cone tracing** | Middle ground | Memory-heavy | World-space and view-independent, but resolution-limited leaking and blocky indirect shadows; voxelization cost scales with dynamic geometry. Poor mobile memory fit. |
+| **Baked lightmaps** | Cheapest at runtime | Offline bake, static only | Widest mobile shipping precedent. Worth considering as a *third* tier rather than the dynamic low tier. |
+
+**Leaning:** probe volumes as the low-spec tier, with SSGI as an optional additive contact term.
+That combination is view-independent (so it degrades gracefully rather than wrongly), has a
+realistic mobile budget, and shares the G-buffer and denoiser with ReSTIR. Decide before starting
+Phase 5.
+
+> Note from the ReSTIR literature that reinforces keeping these separate: screen-space tracing is a
+> poor ReSTIR citizen specifically because the *support* of `p̂` becomes view-dependent and changes
+> as the camera moves — exactly the assumption cross-domain MIS relies on. Expect brightening/
+> darkening that shifts with camera motion if the two are combined naively.
+
+---
+
+## 6. Two vkm-specific gotchas
 
 **Vulkan Y-flip does not apply to compute.** The engine's clip space is +Y up with `[0,1]` depth
 everywhere, and Vulkan's inverted NDC is compensated by `-fvk-invert-y`, which vkm-compiler
@@ -293,75 +417,63 @@ per-PSO (Phase 3).
 
 ---
 
-## 6. Scope reality check
+## 7. Scope reality check
 
 | Phases | What | Rough share |
 |---|---|---|
-| 1–4 | Engine prerequisites (RT toolchain, acceleration structures, per-pass binding + barriers, G-buffer/motion vectors) | ~50% |
-| 5–6 | Reference path tracer + unresampled baseline | ~15% |
-| 7 | ReSTIR GI itself | ~15% |
-| 8 | Denoiser + performance + robustness | ~20% |
+| 1–3 | Shared infrastructure (RT toolchain ✅, per-pass binding + barriers, G-buffer/motion vectors) | ~30% |
+| 4 | GI technique interface + low-spec tier | ~15% |
+| 5 | Acceleration structures | ~10% |
+| 6–7 | Reference path tracer + unresampled baseline | ~15% |
+| 8 | ReSTIR GI itself | ~15% |
+| 9 | Denoiser + performance + robustness (both tiers) | ~15% |
 
-Phases 1–4 are all things vkm needs anyway and are independently mergeable. Phases 5–6 look
-skippable and are not — they are the only way to tell a Jacobian bug from noise later.
+**ReSTIR GI itself is ~15% of the work.** Phases 1–3 are things vkm needs anyway and are
+independently mergeable; Phase 4 ships usable GI on every platform before any ray tracing exists.
+Phases 6–7 look skippable and are not — they are the only way to tell a Jacobian bug from noise.
 
 ---
 
-## 7. Phase plan
+## 8. Phase plan
 
-### Phase 0 — scaffolding
+Reordered after the Phase 1 spike and the tiering requirement (§5): **shared infrastructure and the
+low-spec tier come before acceleration structures and ReSTIR.** The low-spec tier needs none of the
+ray-tracing work, so it becomes the first GI that works end to end, validates the technique
+interface with two consumers, and hedges the project. ReSTIR remains the headline feature.
+
+### Phase 0 — scaffolding ✅
 - [x] Create this document
 - [ ] Add genuine known limitations to `TODO.md` as they appear (one line each, per `CLAUDE.md` §8)
 
-### Phase 1 — Ray tracing toolchain spike (go/no-go)
-Highest risk, so it goes first. Time-boxed.
-- [ ] **~1 hour spike:** one `RayQuery<>` compute shader through `dxc -T cs_6_5` → `CompilerMSL`
-      → `xcrun metal`. Validates or kills the whole recommendation before any runtime work.
-- [ ] `vulkaninfo` on MoltenVK and on CI lavapipe, grepping for the RT extensions
-- [ ] Per-PSO shader profile in vkm-compiler (SM 6.5 for RT shaders)
-- [ ] Vulkan SPIR-V flags for ray query
-- [ ] Decide: SPIRV-Cross (expected) vs Slang (fallback). Record outcome here and in
-      `implementation-notes.md`
+### Phase 1 — Ray tracing toolchain spike ✅ PASSED
+- [x] Spike: `RayQuery<>` compute shader through `dxc -T cs_6_5` → `spirv-cross` → `xcrun metal`
+      → metallib, in both plain-binding and Tier-2 argument-buffer configurations. **All exit 0** (§4.1)
+- [x] Confirm MoltenVK exposes no RT extensions (§4.3)
+- [x] Decision: keep the existing SPIRV-Cross chain. **No Metal Shader Converter, no Slang** (§4.2)
+- [ ] Per-PSO shader profile in vkm-compiler (SM 6.5 only for RT shaders; `main.cpp:48,142,605`)
+- [ ] Ray-query SPIR-V flag wired into the Vulkan target in vkm-compiler
+- [ ] `TestRayQuerySmoke` + Metal variant, running the shader against a hardcoded triangle
+- [ ] Check CI lavapipe version; open a runner-bump task if < Mesa 24.1
 
-**Gate:** a trivial HLSL compute shader with a `RayQuery<>` against a hardcoded triangle compiles
-and runs on Vulkan *and* Metal, writing a known value. New `TestRayQuerySmoke` + Metal variant.
-
-### Phase 2 — Acceleration structures in the RHI
-- [ ] New resource type + `VkmDriverCapabilityFlags::RayTracing` (pattern at `driver.h:34-59`)
-- [ ] Vulkan: enable the three extensions; BLAS per mesh, TLAS per scene
-- [ ] Metal: `MTL4PrimitiveAccelerationStructureDescriptor` / instance descriptors via
-      `MTL4ComputeCommandEncoder`
-- [ ] Build BLAS from the existing `VkmSceneGeometryPool` so no vertex data is duplicated
-- [ ] Refit on transform change; full rebuild only on topology change
-- [ ] Bind the AS to a compute shader (new bindless singleton binding is least invasive)
-
-**Gate:** a compute shader ray-casts a loaded glTF scene and writes hit/miss + `t` matching a CPU
-reference for known rays, on both backends.
-
-**RHI contract note (Phases 2–3):** `backend/common/AGENTS.md:556` requires that no new pure
-virtual is added without implementing it in **all** backends — so every RT and barrier entry point
-needs a **WebGPU error-logging stub**, per the `copyTexture`/`registerTexture` precedent
-(`TODO.md:29,42`). Gate on the capability flag, not `#ifdef`. Public base-class signatures must not
-change.
-
-### Phase 3 — Per-pass resource binding, barriers, threadgroup sizes
-Blocks *any* multi-pass compute work. Both are pre-existing `TODO.md:8` items.
+### Phase 2 — Shared infrastructure A: per-pass binding, barriers, threadgroup sizes
+Blocks *any* multi-pass compute work, and therefore **both** GI tiers. Pre-existing `TODO.md:8` items.
 - [ ] Implement **descriptor set 2 (per-pass)** for pass-owned buffers/storage images, plus its
       PSO-JSON representation (`TODO.md:16`). Note every pipeline layout currently declares sets 0
       and 1 and binds both unconditionally
 - [ ] Add a **general texture/buffer barrier** entry point. The engine's stated convention is that
       operations manage layout implicitly (`command_buffer.h:62-66`), which cannot express
-      compute-write → sample-read — so this is a deliberate extension
+      compute-write → sample-read — so this is a deliberate, documented extension
 - [ ] Push constants beyond the vertex stage, or per-pass constants through set 2
-- [ ] **Per-PSO compute threadgroup size** + a `dispatch2D` helper
+- [ ] **Per-PSO compute threadgroup size** + a `dispatch2D` helper (see §6)
 
 **Gate:** a two-pass compute chain (A writes a storage texture, B samples it) produces correct
-pixels with **zero validation-layer errors** on both backends. Per `CLAUDE.md` §9, non-negotiable.
+pixels with **zero validation-layer errors** on Vulkan and Metal. Per `CLAUDE.md` §9, non-negotiable.
 
-### Phase 4 — G-buffer, motion vectors, frame constants
+### Phase 3 — Shared infrastructure B: G-buffer, motion vectors, frame constants
+Also shared by both tiers.
 - [ ] MRT G-buffer: linear depth, world/shading normal, **geometric normal** (for ray offsetting),
       albedo, roughness/metallic, material ID, **3-component motion vectors**
-- [ ] **Previous-frame G-buffer** (double-buffered) — temporal resampling reads last frame's
+- [ ] **Previous-frame G-buffer** (double-buffered) — temporal reuse reads last frame's
       normal/depth/material to reject taps and evaluates `p̂` in the previous domain
 - [ ] Extend `VkmFrameConstants`: `_prevView`, `_prevViewProjection`, inverses, `_frameIndex`,
       `_viewportSize`/`_invViewportSize`, jitter, previous camera position. Lockstep across
@@ -370,13 +482,49 @@ pixels with **zero validation-layer errors** on both backends. Per `CLAUDE.md` �
 - [ ] Reconstruct world position from depth + inverse view-projection rather than storing it
 - [ ] Fullscreen-pass HLSL building block + live tone mapping
 - [ ] PBR BRDF evaluation reading the already-imported `VkmMaterialData`
+- [ ] Hash-based stateless RNG seeded per (pixel, frame, pass)
 
 **Gate:** G-buffer channels visualizable via a debug view; reprojection debug view stable under
-camera motion with no drift.
+camera motion with no drift. Works on all five platform combinations.
 
-### Phase 5 — Reference path tracer
+### Phase 4 — GI technique interface + low-spec tier ⭐ first working GI
+The de-risking phase. Delivers visible GI on **all five** platform combinations with no ray tracing.
+- [ ] Decide the low-spec technique (§5 leans probe volumes + optional SSGI contact term; see §12)
+- [ ] Define the **technique interface**: a technique owns its passes and resources and produces an
+      indirect-radiance texture (+ optional confidence channel) for one shared composite pass
+- [ ] Runtime selection gated on `VkmDriverCapabilityFlags::RayTracing` + a quality setting, not `#ifdef`
+- [ ] Implement the low-spec technique end to end
+- [ ] `restir_gi` sample renamed/scoped as a **GI sample** with a technique switcher
+
+**Gate:** low-spec GI renders correctly on Vulkan, Metal **and** WebGPU, with zero validation errors,
+and the technique switcher works at runtime. This is the interface's real test — one consumer proves
+nothing.
+
+### Phase 5 — Acceleration structures in the RHI
+Where the high tier starts.
+- [ ] New resource type + `VkmDriverCapabilityFlags::RayTracing` (pattern at `driver.h:34-59`)
+- [ ] Vulkan: enable `VK_KHR_acceleration_structure`, `VK_KHR_ray_query`,
+      `VK_KHR_deferred_host_operations`; BLAS per mesh, TLAS per scene
+- [ ] Metal: `MTL4PrimitiveAccelerationStructureDescriptor` / instance descriptors via
+      `MTL4ComputeCommandEncoder` (Metal 4 folded the AS encoder into the compute encoder)
+- [ ] Build BLAS from the existing `VkmSceneGeometryPool` so no vertex data is duplicated.
+      **Triangles only** — document why at the declaration site (§4.2)
+- [ ] Refit on transform change; full rebuild only on topology change
+- [ ] Bind one TLAS as a bindless singleton; confirm `MTL4ArgumentTable` AS binding empirically
+- [ ] Prefer `MTLResidencySet` over per-encoder `useResource:` (fits vkm's existing residency code)
+
+**Gate:** a compute shader ray-casts a loaded glTF scene and writes hit/miss + `t` matching a CPU
+reference for known rays, on Vulkan and Metal.
+
+**RHI contract note (Phases 2 and 5):** `backend/common/AGENTS.md:556` requires that no new pure
+virtual is added without implementing it in **all** backends — so every RT and barrier entry point
+needs a **WebGPU error-logging stub**, per the `copyTexture`/`registerTexture` precedent
+(`TODO.md:29,42`). Gate on the capability flag, not `#ifdef`. Public base-class signatures must not
+change.
+
+### Phase 6 — Reference path tracer
 **Do not skip.** Without ground truth you cannot distinguish a Jacobian bug from noise.
-- [ ] Accumulating brute-force path tracer in compute using Phase 2's ray query
+- [ ] Accumulating brute-force path tracer in compute using Phase 5's ray query
 - [ ] Area/emissive light representation — one `_lightDirection` (`scene.h:63`) is not enough
 - [ ] MSE/RelMSE comparison utility, so later phases produce a *number*
 - [ ] Split-screen accumulation mode: ground truth vs live pipeline
@@ -384,10 +532,9 @@ camera motion with no drift.
 **Gate:** white furnace test passes (uniform environment, albedo 1 → output equals input); energy
 conservation holds on a small diffuse test scene.
 
-### Phase 6 — 1-spp indirect, no resampling (baseline to beat)
+### Phase 7 — 1-spp indirect, no resampling (baseline to beat)
 - [ ] Single indirect bounce, one ray per pixel, no reservoirs. Deliberately noisy
 - [ ] Direct lighting at the secondary hit (`L_o` = emission + NEE + optional continued path)
-- [ ] Hash-based stateless RNG seeded per (pixel, frame, pass)
 - [ ] Hit-point encoding, **forward-compatible with the LoD paper**: reserve
       `(instanceID, float2 uv)` alongside `(primitiveID, barycentrics)`, and put "locate this
       surface point" behind one `vertexMapping()` function rather than inlining it. Free now,
@@ -395,13 +542,13 @@ conservation holds on a small diffuse test scene.
 - [ ] Ray origin offset along the **geometric** normal, scale-relative epsilon; reconnection
       visibility rays use `t_max = (1-ε)·distance`
 
-**Gate:** converges to the Phase 5 reference when accumulated. Proves sampling and BRDF are right
+**Gate:** converges to the Phase 6 reference when accumulated. Proves sampling and BRDF are right
 *before* reservoirs — if this is biased, ReSTIR will be, and far harder to see.
 
-### Phase 7 — ReSTIR GI core
-Incremental, with measured RelMSE against Phase 5 at every sub-step.
+### Phase 8 — ReSTIR GI core
+Incremental, with measured RelMSE against Phase 6 at every sub-step.
 
-- [ ] **7.1 Reservoir buffer.** RTXDI-style packing is worth copying:
+- [ ] **8.1 Reservoir buffer.** RTXDI-style packing is worth copying:
       `position` fp32 (feeds a `1/d²` Jacobian — fp16 is not viable), `normal` as octahedral
       `snorm2x16`, `radiance` as **LogLuv or RGB9E5** (not fp16×3 — HDR indirect clips and
       quantizes badly), `weight` fp32, and `M`/`age` as 8-bit fields (so `M ≤ 255`, `age ≤ 255`).
@@ -411,33 +558,34 @@ Incremental, with measured RelMSE against Phase 5 at every sub-step.
       **Triple-buffering hazard:** `FRAME_COUNT = 3` (`base/common.h:21`), so frames N-1/N-2 may
       still be executing when N is recorded. Either allocate `FRAME_COUNT` slices or rely on the
       per-slot `ensureCompleted()` deliberately — decide and document before writing the passes.
-- [ ] **7.2 Neighbour offset LUT** — a small buffer of precomputed low-discrepancy disk offsets,
+- [ ] **8.2 Neighbour offset LUT** — a small buffer of precomputed low-discrepancy disk offsets,
       indexed with a mask. Cheap, avoids per-pixel disk sampling, gives a stable pattern
-- [ ] **7.3 Sample generation pass** — trace one ray, fill a fresh reservoir (`c = 1`, `age = 0`)
-- [ ] **7.4 Spatial resampling first** (easier to validate than temporal — no scene change between
+- [ ] **8.3 Sample generation pass** — trace one ray, fill a fresh reservoir (`c = 1`, `age = 0`)
+- [ ] **8.4 Spatial resampling first** (easier to validate than temporal — no scene change between
       samples): merge `k` neighbours (start 3–5, radius ~30 px) with normal/depth/material
       rejection (relative depth ~10%), the reconnection Jacobian, Jacobian validation, and a
       visibility ray per accepted neighbour. Then the second loop over accepted neighbours for the
       bias-correction denominator
-- [ ] **7.5 Temporal resampling** — camera and scene **static first**, then moving. Reproject via
+- [ ] **8.5 Temporal resampling** — camera and scene **static first**, then moving. Reproject via
       motion vectors, ring of jittered fallback taps, optional zero-motion fallback, confidence
       cap (start 20), separate **age cap**
-- [ ] **7.6 Shading/resolve** — `f_s · cos · L_o · W`, optional final visibility ray, composite
+- [ ] **8.6 Shading/resolve** — `f_s · cos · L_o · W`, optional final visibility ray, composite
       with direct light
-- [ ] **7.7 Final-shading MIS** on low-roughness surfaces (see the bias section). Cyberpunk's cheap
+- [ ] **8.7 Final-shading MIS** on low-roughness surfaces (see §2's bias note). Cyberpunk's cheap
       version: `BRDF·(1−roughness²) + ReSTIR·roughness²`
 
 > **Hard rule (course Tip 4.1):** choose which neighbours to reuse based **only** on the G-buffer.
 > Never on the samples or weights stored *in* the neighbours' reservoirs — that conditions the
 > probability space and biases the result. Same rule for resetting confidence on disocclusion.
 
-**Gate per sub-step:** RelMSE versus Phase 5 must improve or at least not regress, and the mean
+**Gate per sub-step:** RelMSE versus Phase 6 must improve or at least not regress, and the mean
 must match **on a diffuse-only scene** (specular secondary hits are legitimately biased — see §2).
 A shifted mean on diffuse means a broken MIS weight or missing Jacobian. Add a debug view per pass
 (reservoir `M`, `W`, `age`, chosen sample position, temporal-vs-spatial contribution) — these bugs
 are invisible in the final image.
 
-### Phase 8 — Denoiser and production hardening
+### Phase 9 — Denoiser and production hardening
+The denoiser is **shared by both tiers**, so it is built once here and benefits the low-spec path too.
 - [ ] **A-SVGF** (SVGF + temporal-gradient adaptive history rejection). Backend-agnostic, unlike
       NRD which is Vulkan/DX-only and would break backend parity
 - [ ] Feed the denoiser **demodulated** radiance (divide out albedo, re-modulate after) and a
@@ -450,21 +598,22 @@ are invisible in the final image.
       filter** (kill reservoirs whose `luminance·weightSum` is a tile-level outlier), Jacobian
       rejection
 - [ ] Disocclusion boost (temporarily raise spatial sample count)
-- [ ] **Permutation sampling** to decorrelate histories — but note it erodes detail (see TODOs)
+- [ ] **Permutation sampling** to decorrelate histories — but note it erodes detail (§9)
 - [ ] Moving lights: validation/re-trace frames (kajiya re-traces stored samples every 3rd frame
       and lowers `M` if radiance changed materially), plus aggressive age capping
 - [ ] Performance: half-res tracing + upsample, reservoir compression (measure first), BLAS refit
       budgeting
+- [ ] Mobile budget pass for the low-spec tier (iOS Metal)
 
-**Gate:** Sponza-class scene at 60 fps on both backends, zero validation errors, no visible
-ghosting under camera motion.
+**Gate:** Sponza-class scene at 60 fps on both backends for the high tier, and a documented mobile
+budget for the low tier. Zero validation errors, no visible ghosting under camera motion.
 
-### Phase 9 (optional, much later) — the LoD paper
-Only once Phases 7–8 are solid *and* a dynamic geometry-LoD system exists. See §9.
+### Phase 10 (optional, much later) — the LoD paper
+Only once Phases 8–9 are solid *and* a dynamic geometry-LoD system exists. See §10.
 
 ---
 
-## 8. Known pitfalls (consolidated)
+## 9. Known pitfalls (consolidated)
 
 **Bias and correctness**
 - Never substitute the chosen candidate's `W_{X_s}` for `W_Y`.
@@ -510,7 +659,7 @@ Only once Phases 7–8 are solid *and* a dynamic geometry-LoD system exists. See
 
 ---
 
-## 9. The linked paper: Real-Time Level-of-Detail Rendering with ReSTIR
+## 10. The linked paper: Real-Time Level-of-Detail Rendering with ReSTIR
 
 Wang, Kettunen, Lin, Wyman, Wu, Zhao. SIGGRAPH Conference Papers '26, July 19–23 2026.
 [Landing page](https://research.nvidia.com/labs/rtr/publication/wang2026levelofdetail/) ·
@@ -560,7 +709,7 @@ motion, dithered LoD crossfade, or confidence decay instead of a hard history re
 
 ---
 
-## 10. Reading list
+## 11. Reading list
 
 ### Start here — this one replaces reading the papers cold
 **A Gentle Introduction to ReSTIR: Path Reuse in Real-Time** — Wyman, Kettunen, Lin, Bitterli,
@@ -595,7 +744,7 @@ what *order* to build in. Its correction of the DI paper's `1/M` placement alone
 4. **Generalized Resampled Importance Sampling: Foundations of ReSTIR** — Lin et al. SIGGRAPH 2022.
    <https://d1qx31qr3h6wln.cloudfront.net/publications/sig22_GRIS.pdf> ·
    code <https://github.com/DQLin/ReSTIR_PT>
-   Theory + ReSTIR PT. Read once Phase 7 produces images.
+   Theory + ReSTIR PT. Read once Phase 8 produces images.
 
 ### Code to read
 - **RTXDI** — <https://github.com/NVIDIA-RTX/RTXDI> ·
@@ -640,7 +789,7 @@ what *order* to build in. Its correction of the DI paper's `1/M` placement alone
   <http://cwyman.org/presentations/2021_HPG_Productizing_ReSTIR.pdf>
 - **Ray Tracing Gems II** ch. 49, *ReBLUR: A Hierarchical Recurrent Denoiser*. Read before wiring
   any denoiser. <https://link.springer.com/content/pdf/10.1007/978-1-4842-7185-8_49.pdf>
-- SVGF — Schied et al. 2017; **A-SVGF** — Schied et al. 2018 (the Phase 8 target).
+- SVGF — Schied et al. 2017; **A-SVGF** — Schied et al. 2018 (the Phase 9 target).
 
 ### Current state of the art (for the "what I'd do differently" list)
 **ReSTIR PT Enhanced** — Lin, Kettunen, Wyman 2026.
@@ -651,7 +800,7 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 
 ---
 
-## 11. Remaining TODOs / open questions
+## 12. Remaining TODOs / open questions
 
 - [ ] **Test scene.** No Cornell-box-style scene exists; `scripts/download_scenes.py` offers only
       `DamagedHelmet` and `Sponza`. Hand-author a small `.gltf` in `resources/tests/` (following
@@ -660,11 +809,15 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
       un-pinning `dxc-linux`.
 - [ ] **Confirm `MTL4ArgumentTable` AS binding** empirically — no documented
       `setAccelerationStructure`; binding is inferred to go through `gpuResourceID`.
-- [ ] **Where GI lives.** Recommendation: passes and reservoir management in the engine
-      (`src/vkm/renderer/`, they need RHI-level resources and barriers), debug UI and scene setup
-      in a `restir_gi` sample — mirroring how `VkmScene` owns cull/emit while `model_viewer` owns
-      presentation. Exclude the sample from the WebGPU build as `skybox` does
-      (`CMakeLists.txt:489`).
+- [ ] **Low-spec technique choice — blocks Phase 4.** §5 leans probe volumes (SH irradiance) as the
+      dynamic low tier, with SSGI as an optional additive contact term, and baked lightmaps as a
+      possible third tier. Decide before Phase 4 starts. Key question: does the low tier need to be
+      fully dynamic on mobile, or is a bake acceptable there? That single answer picks the technique.
+- [ ] **Where GI lives.** Recommendation: technique passes and their resources in the engine
+      (`src/vkm/renderer/`, they need RHI-level resources and barriers), debug UI and scene setup in
+      a **GI sample** with a runtime technique switcher — mirroring how `VkmScene` owns cull/emit
+      while `model_viewer` owns presentation. The sample must build on WebGPU (unlike `skybox`,
+      which is excluded at `CMakeLists.txt:489`), since the low-spec tier targets it.
 - [ ] **glTF textures.** Importer reads material factors only (`TODO.md:34`). Not needed early;
       needed for the production bar. The texture upload/bindless path already exists.
 - [ ] **Direct lighting strategy.** ReSTIR GI needs `L_o` shaded at the secondary hit. Decide
@@ -675,8 +828,10 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 
 ---
 
-## 12. Progress log
+## 13. Progress log
 
 | Date | Phase | Note |
 |---|---|---|
 | 2026-07-30 | 0 | Document created. Toolchain research settled: SPIRV-Cross supports ray query → MSL, so Metal Shader Converter is not needed; MoltenVK has no RT, so macOS GI is Metal-only. |
+| 2026-07-30 | 1 | **Spike passed.** HLSL `RayQuery<>` → `dxc -T cs_6_5` → SPIR-V (validates, `RayQueryKHR`) → `spirv-cross` MSL → metallib, in both plain-binding and Tier-2 argument-buffer configurations, all exit 0. AS lands at `[[id(0)]]` inside the descriptor-set struct, compatible with vkm's pinned bindless layout. Corrections: `SPV_KHR_ray_tracing` is not needed; procedural/AABB geometry compiles but is silently wrong at runtime, so triangles only. MoltenVK RT absence confirmed from local `vulkaninfo.txt`. |
+| 2026-07-30 | — | Scope change: ReSTIR GI is the **high tier only**; a low-spec tier is now a first-class requirement (§5). Phase plan reordered so shared infrastructure and the low-spec tier precede acceleration structures and ReSTIR. |
