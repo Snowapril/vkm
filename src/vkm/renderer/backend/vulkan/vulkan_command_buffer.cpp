@@ -432,6 +432,39 @@ namespace vkm
                              0, 0, nullptr, 1, &barrier, 0, nullptr);
     }
 
+    void VkmCommandBufferVulkan::onBarrierTextureForShaderRead(VkmResourceHandle texture)
+    {
+        VkmTextureVulkan* textureVulkan =
+            static_cast<VkmTextureVulkan*>(_driver->getRenderResourcePool()->getResource<VkmTexture>(texture));
+        if (textureVulkan == nullptr)
+        {
+            VKM_DEBUG_ERROR("barrierTextureForShaderRead was given a handle that is not a live texture");
+            return;
+        }
+
+        // SHADER_READ_ONLY_OPTIMAL is the layout the bindless texture descriptors declare
+        // (VkmBindlessResourceManagerVulkan writes imageLayout = SHADER_READ_ONLY_OPTIMAL), so a
+        // texture sampled through set 0 has to actually be in it. Uploaded textures already end up
+        // here via copyBufferToTexture; a render target does not, which is the gap this closes.
+        if (textureVulkan->getCurrentLayout() == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        {
+            return;
+        }
+
+        // A sampled depth texture (a shadow map, or the G-buffer depth a GI pass reads) needs the
+        // depth/stencil aspects rather than the colour one.
+        const VkmFormat format = textureVulkan->getTextureInfo()._format;
+        const VkImageAspectFlags aspectMask =
+            (hasDepth(format) || hasStencil(format))
+                ? ((hasDepth(format) ? VK_IMAGE_ASPECT_DEPTH_BIT : 0u) |
+                   (hasStencil(format) ? VK_IMAGE_ASPECT_STENCIL_BIT : 0u))
+                : VK_IMAGE_ASPECT_COLOR_BIT;
+        transitionImageLayout(_vkCommandBuffer, textureVulkan->getImage(),
+                              textureVulkan->getCurrentLayout(),
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, aspectMask);
+        textureVulkan->setCurrentLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
     void VkmCommandBufferVulkan::onSetPushConstants(const void* data, uint32_t size, uint32_t offset)
     {
         // Must name the same stages the range was declared with (VUID-vkCmdPushConstants-offset-01795).

@@ -15,6 +15,7 @@ set(SRCS
     ${SRC_DIR}/TestPsoConfig.cpp
     ${SRC_DIR}/TestMemoryTracker.cpp
     ${SRC_DIR}/TestShaderCacheUtil.cpp
+    ${SRC_DIR}/TestTextureShaderReadBarrier.cpp
     ${SRC_DIR}/TestPipelineStateManager.cpp
     ${SRC_DIR}/TestBindlessSlotAllocator.cpp
     ${SRC_DIR}/TestInputHandler.cpp

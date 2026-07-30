@@ -123,6 +123,28 @@ namespace vkm
         */
         void barrierIndirectArgumentBuffer(VkmResourceHandle buffer);
 
+        /*
+        * @brief Makes earlier writes to `texture` visible to shaders that sample it, and leaves it
+        * in whatever state that sampling needs.
+        *
+        * @details Every other texture operation manages its own destination state (see
+        * copyBufferToTexture), which works because each one both writes and finishes the texture.
+        * A texture written as a render-pass attachment and then *sampled* by a later pass is the
+        * case that convention cannot express: the render pass leaves it in an attachment state,
+        * and nothing afterwards knows to undo that. This is the entry point for that hand-off --
+        * the G-buffer -> lighting-pass dependency in particular.
+        *
+        * Named for its destination like barrierIndirectArgumentBuffer, and equally coarse: it does
+        * not take a source state, because Vulkan already tracks the texture's current layout and
+        * the other two backends need no layout at all. Must be recorded outside a render pass, so
+        * it sits between the pass that wrote the texture and the pass that reads it.
+        *
+        * Only Vulkan does real work here. Metal 4 brackets each compute pass with
+        * barrierAfterQueueStages:/barrierAfterStages: on open and close, which already orders a
+        * render pass's writes against a later pass's reads; WebGPU orders passes implicitly.
+        */
+        void barrierTextureForShaderRead(VkmResourceHandle texture);
+
         void setPushConstants(const void* data, uint32_t size, uint32_t offset = 0);
 
         /*
@@ -239,6 +261,7 @@ namespace vkm
                                          uint32_t maxDrawCount) = 0;
         virtual void onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
         virtual void onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer) = 0;
+        virtual void onBarrierTextureForShaderRead(VkmResourceHandle texture) = 0;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) = 0;
         virtual void onSetDebugName(const char* name) = 0;
         virtual void onPushDebugGroup(const char* name) = 0;

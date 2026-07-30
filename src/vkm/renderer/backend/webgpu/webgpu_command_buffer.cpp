@@ -300,6 +300,13 @@ namespace vkm
         // specification, and the scene's copies, culling dispatch and draws are all separate passes.
     }
 
+    void VkmCommandBufferWebGPU::onBarrierTextureForShaderRead(VkmResourceHandle texture)
+    {
+        (void)texture;
+        // Same reason as onBarrierIndirectArgumentBuffer: WebGPU has no explicit barriers and no
+        // image layouts, and one pass's writes are visible to the next by specification.
+    }
+
     void VkmCommandBufferWebGPU::onSetDebugName(const char* name)
     {
         wgpuCommandEncoderSetLabel(_encoder, toWGPUStringView(name));

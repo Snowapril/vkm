@@ -197,6 +197,16 @@ namespace vkm
         onBarrierIndirectArgumentBuffer(buffer);
     }
 
+    void VkmCommandBufferBase::barrierTextureForShaderRead(VkmResourceHandle texture)
+    {
+        if (!_isRecording || _isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("barrierTextureForShaderRead must be recorded while recording and outside a render pass");
+            return;
+        }
+        onBarrierTextureForShaderRead(texture);
+    }
+
     void VkmCommandBufferBase::setPushConstants(const void* data, uint32_t size, uint32_t offset)
     {
         if (!_isRecording || _boundPipelineState == nullptr)

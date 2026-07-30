@@ -515,6 +515,21 @@ namespace vkm
         // caused the MTL4CommandQueueErrorTimeout documented in common/AGENTS.md.
     }
 
+    void VkmCommandBufferMetal::onBarrierTextureForShaderRead(VkmResourceHandle texture)
+    {
+        (void)texture;
+        // Metal has no image layouts to transition, and Metal 4's barriers are encoder-scoped
+        // rather than per-resource, so there is nothing to record for one texture. The ordering
+        // this call exists to establish is already covered: a compute pass opens with
+        // barrierAfterQueueStages:MTLStageAll (onBindPipeline) and closes with
+        // barrierAfterStages:...beforeQueueStages:MTLStageAll (onUnbindPipeline), so a render
+        // pass's writes are visible to a later pass's reads and vice versa.
+        //
+        // As with onBarrierIndirectArgumentBuffer, opening an encoder purely to emit a barrier is
+        // what caused the MTL4CommandQueueErrorTimeout documented in common/AGENTS.md, so this
+        // deliberately records nothing rather than forcing one.
+    }
+
     void VkmCommandBufferMetal::onSetPushConstants(const void* data, uint32_t size, uint32_t offset)
     {
         // Each call fills a fresh ring entry, so a partial update at a non-zero offset

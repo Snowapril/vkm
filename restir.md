@@ -555,9 +555,18 @@ Blocks *any* multi-pass compute work, and therefore **both** GI tiers. Pre-exist
 - [ ] Implement **descriptor set 2 (per-pass)** for pass-owned buffers/storage images, plus its
       PSO-JSON representation (`TODO.md:16`). Note every pipeline layout currently declares sets 0
       and 1 and binds both unconditionally
-- [ ] Add a **general texture/buffer barrier** entry point. The engine's stated convention is that
-      operations manage layout implicitly (`command_buffer.h:62-66`), which cannot express
-      compute-write → sample-read — so this is a deliberate, documented extension
+- [x] **Texture barrier for shader reads.** Added `barrierTextureForShaderRead(texture)`, named for
+      its destination like the existing `barrierIndirectArgumentBuffer` and equally coarse (it takes
+      no source state: Vulkan already tracks the texture's layout, and the other backends have none).
+      Closes a latent gap — a render target left in `COLOR_ATTACHMENT_OPTIMAL` while the bindless
+      descriptors declare `SHADER_READ_ONLY_OPTIMAL` — which nothing had hit only because nothing
+      renders to a texture and then samples it yet. Vulkan transitions (handling depth/stencil
+      aspects); Metal and WebGPU are documented no-ops, since Metal 4's compute passes already
+      bracket themselves with `barrierAfterQueueStages:`/`barrierAfterStages:` and WebGPU orders
+      passes implicitly. Three Vulkan tests, each confirmed to fail when the transition is removed
+- [ ] A **buffer** barrier beyond `barrierIndirectArgumentBuffer` has not been needed — that one
+      already covers transfer/compute writes reaching compute reads. Add one when a case appears
+      rather than pre-emptively
 - [ ] Push constants beyond the vertex stage, or per-pass constants through set 2
 - [x] **Per-PSO compute threadgroup size.** Done differently and better than planned: rather than
       declaring the size in the PSO JSON (which could drift from the shader), vkm-compiler reads
@@ -963,4 +972,5 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-07-30 | — | Scope change: ReSTIR GI is the **high tier only**; a low-spec tier is now a first-class requirement (§5). Phase plan reordered so shared infrastructure and the low-spec tier precede acceleration structures and ReSTIR. |
 | 2026-07-30 | 1 | `ray_query` PSO opt-in implemented (`VkmShaderStageDescriptor::requiresRayQuery` → `cs_6_5` + `-fspv-target-env=vulkan1.2`), covered by `TestPsoConfig`. End-to-end through `vkm-compiler`: **Vulkan passes** (SPIR-V 1.5, validates, ray query + descriptor indexing, using the real bindless macros); **Metal blocked** on registering the AS as a set-0 binding (§4.4) — Phase 5 work, not a toolchain gap. Found that `-fspv-extension` is a whitelist that would break every bindless shader; it is now deliberately not passed. CI Ubuntu runners are all 22.04 (Mesa 23.2.x), so Vulkan RT will have no CI coverage until bumped. Full suite: 164/164, 18602 assertions, Metal validation clean. |
 | 2026-07-30 | 2 | Compute threadgroup size now comes from the shader's compiled SPIR-V via `VkmShaderCacheHeader::threadGroupSize` (cache v3) rather than the engine-global `kVkmComputeThreadGroupSizeX`, so 2D kernels can declare `[numthreads(8, 8, 1)]`. Metal reads it off the bound pipeline at dispatch. Verified end to end with an 8x8x1 shader on both targets; the Metal GPU cull test (visible count 1 -> 0 -> 1) covers the changed dispatch path. |
+| 2026-07-31 | 2 | Added `barrierTextureForShaderRead`: the render-pass-writes -> shader-samples hand-off the engine's implicit-layout convention could not express. Real work on Vulkan only; Metal and WebGPU documented no-ops. Verified on Vulkan (170 tests) and Metal (166), plus a wasm build for the WebGPU stub; the new tests were checked to actually fail when the transition is sabotaged. |
 | 2026-07-30 | 4 | Low-spec tier must be **fully dynamic** (no bake) → technique decided: raster-updated dynamic probe volume (DDGI-style octahedral irradiance + distance moments, Chebyshev visibility) plus an additive SSGI contact term. Storage/sampling are update-mechanism-agnostic, so Phase 5's rays can later refresh the same volume, and ReSTIR GI can query it for multi-bounce `L_o`. |
