@@ -181,7 +181,10 @@ The render graph is a flat ordered callback list, not a scheduler — `compile()
 
 ## 4. Toolchain findings
 
-### 4.1 Spike result: PASS — the existing chain carries inline ray query to Metal
+### 4.1 Spike result: PASS — the existing chain can carry inline ray query to Metal
+
+(Toolchain capability only. vkm's own Metal path additionally needs the AS registered as a set-0
+binding before it compiles — see §4.4.)
 
 Run 2026-07-30 on macOS, Xcode 26.3, using the Vulkan SDK 1.4.341.1 binaries on `PATH`
 (`dxc` 1.10/1.9.0.5180, `spirv-cross` `vulkan-sdk-1.4.335.0-28-ga0fba56c`). Note the system
@@ -247,7 +250,29 @@ Upstream: [MoltenVK#1956](https://github.com/KhronosGroup/MoltenVK/issues/1956) 
 *"Ray tracing is a large project, and we are currently talking with customers about funding its
 development."*
 
-### 4.4 Why SPIRV-Cross works (source evidence)
+### 4.4 The Metal integration blocker, already diagnosed
+
+Compiling a ray-query PSO for the **metal** target through `vkm-compiler` currently fails:
+
+```
+vkm-compiler: spirv-cross MSL generation failed for rq_test.hlsl: Argument buffer resource base
+type could not be determined. When padding argument buffer elements, all descriptor set resources
+must be supplied with a base type by the app.
+```
+
+**This is not a toolchain limitation** — §4.1 proved spirv-cross lowers ray query to MSL and places
+an acceleration structure inside a Tier-2 argument buffer. It is vkm's argument-buffer *padding*
+requirement: `mslOptions.pad_argument_buffer_resources = true` makes spirv-cross walk **every** set-0
+binding to synthesize padding members, and it needs an `add_msl_resource_binding` entry supplying a
+base type for each one (`main.cpp:376-420`). The acceleration structure has no such entry yet.
+
+Fixing it means giving the AS a real set-0 binding — extending `VkmBindlessSingletonBuffer`, all
+three backend managers, `vkm_bindless.hlsli`, and the `add_msl_resource_binding` list. That is
+squarely **Phase 5**, and doing it now would add a singleton binding with no resource able to
+populate it. So the Metal compile path stays unproven inside vkm until Phase 5, with the failure
+mode already understood and the fix already located.
+
+### 4.5 Why SPIRV-Cross works (source evidence)
 
 Verified against the pinned revision `vulkan-sdk-1.4.350.0` (`dependencies/bootstrap.json:103`):
 
@@ -309,12 +334,29 @@ Bumping the runner also allows un-pinning `dxc-linux` from the GLIBC-2.34 releas
 
 ### dxc flags
 
-- `RayQuery` requires **SM 6.5** → `-T cs_6_5`. vkm-compiler hardcodes `cs_6_0`
-  (`main.cpp:48,142,605`), so profiles become per-PSO configuration.
-- Add `-fspv-target-env=vulkan1.2 -fspv-extension=SPV_KHR_ray_query`. Verified sufficient in §4.1 —
-  `SPV_KHR_ray_tracing` is *not* needed for inline-only ray query.
+- `RayQuery` requires **SM 6.5** → `-T cs_6_5`. Implemented as a per-stage opt-in
+  (`"ray_query": true` in the PSO JSON → `VkmShaderStageDescriptor::requiresRayQuery`) so the
+  baseline stays at `cs_6_0` and one ray-tracing shader does not raise the bar engine-wide.
+- Add **`-fspv-target-env=vulkan1.2`** for those stages. Not cosmetic: without it dxc emits a
+  **SPIR-V 1.0** module, with it **SPIR-V 1.5** — the version Vulkan 1.2 mandates and the one the RT
+  extensions are written against. The 1.0 module does validate, but no driver exposing `rayQuery`
+  predates Vulkan 1.2, so emitting 1.0 buys nothing and asks drivers to accept an odd combination.
+- **Do NOT pass `-fspv-extension`.** ⚠ It is a *whitelist*, not an "also allow" switch. Naming
+  `SPV_KHR_ray_query` alone makes dxc **reject vkm's bindless unsized descriptor arrays**:
+  `error: SPIR-V extension 'SPV_EXT_descriptor_indexing' required for runtime array of resources but
+  not permitted to use`. Verified against a shader mirroring vkm's set-0 layout. dxc emits both
+  `SPV_KHR_ray_query` and `SPV_EXT_descriptor_indexing` unprompted, so the flag is unnecessary as
+  well as actively harmful. (Earlier research recommended it; it is wrong for this engine.)
+- `SPV_KHR_ray_tracing` is *not* emitted and not needed for inline-only ray query.
 - Known quirk: *storing* a `RayQuery<>` value fails
   ([DXC#4221](https://github.com/microsoft/DirectXShaderCompiler/issues/4221)) — keep it a plain local.
+- Metal side, one trap that does **not** apply to vkm but looks alarming in isolation: feeding a
+  ray-query shader that uses unsized descriptor arrays through the `spirv-cross` **CLI** throws
+  *"Runtime sized variables must be in device storage argument buffers."* vkm never hits this,
+  because vkm-compiler pins every set-0 array with an explicit `count`
+  (`resourceBinding.count = kVkmBindlessBufferCapacity`, `main.cpp:389-396`), so spirv-cross emits
+  **sized** arrays and the runtime-array path is never taken. Only reach for
+  `--msl-device-argument-buffer` if those pins are ever removed.
 
 ### Metal 4 acceleration structures
 
@@ -369,8 +411,8 @@ handled.
 
 ### Why this reorders the plan favourably
 
-The low-spec tier needs **none** of the ray-tracing work (Phases 1–2). It needs only the shared
-infrastructure (Phases 3–4). That makes it:
+The low-spec tier needs **none** of the ray-tracing work (Phase 1's toolchain, Phase 5's
+acceleration structures). It needs only the shared infrastructure of Phases 2–3. That makes it:
 
 - the **first GI that works end to end**, on all five platform combinations,
 - the thing that **validates the technique interface with two consumers** before ReSTIR lands, and
@@ -487,10 +529,26 @@ interface with two consumers, and hedges the project. ReSTIR remains the headlin
       → metallib, in both plain-binding and Tier-2 argument-buffer configurations. **All exit 0** (§4.1)
 - [x] Confirm MoltenVK exposes no RT extensions (§4.3)
 - [x] Decision: keep the existing SPIRV-Cross chain. **No Metal Shader Converter, no Slang** (§4.2)
-- [ ] Per-PSO shader profile in vkm-compiler (SM 6.5 only for RT shaders; `main.cpp:48,142,605`)
-- [ ] Ray-query SPIR-V flag wired into the Vulkan target in vkm-compiler
-- [ ] `TestRayQuerySmoke` + Metal variant, running the shader against a hardcoded triangle
-- [ ] Check CI lavapipe version; open a runner-bump task if < Mesa 24.1
+- [x] Per-stage `ray_query` opt-in: `VkmShaderStageDescriptor::requiresRayQuery`, parsed from the PSO
+      JSON, selecting `cs_6_5` + `-fspv-target-env=vulkan1.2` in vkm-compiler. Covered by
+      `TestPsoConfig`
+- [x] Establish that `-fspv-extension` must **not** be used — it whitelists and would break every
+      bindless shader in the engine (§4.4 "dxc flags")
+- [x] End-to-end through `vkm-compiler`, **Vulkan: PASS.** A ray-query compute shader that also uses
+      the engine's real `VKM_BINDLESS_VERTEX_PULLING` + push constants produced
+      `rq_test[default].comp.vulkan.vfcache`, whose payload is **SPIR-V 1.5**, passes `spirv-val`,
+      and declares `RayQueryKHR` + `RuntimeDescriptorArray` with both `SPV_KHR_ray_query` and
+      `SPV_EXT_descriptor_indexing`
+- [ ] End-to-end through `vkm-compiler`, **Metal: blocked on Phase 5** — see §4.4. Not a toolchain
+      gap; it needs the AS registered as a set-0 binding, which is Phase 5's task
+- [x] CI lavapipe check: **every** Ubuntu job pins `os: ubuntu-22.04`
+      (`.github/workflows/ubuntu.yml:27-62`, 8 entries), whose `mesa-vulkan-drivers` is Mesa 23.2.x
+      — below the 24.1 that introduced `VK_KHR_ray_query` in lavapipe. So Vulkan RT gets **no CI
+      coverage** until the runner is bumped. Tracked in §12
+
+**Deferred to Phase 5 (needs an acceleration structure to exist):** actually *dispatching* a ray
+query. A `RayQuery<>` cannot run without a bound AS, so a runtime smoke test belongs with Phase 5's
+gate, not here. Phase 1's gate is the **compile** path only — that is what was at risk.
 
 ### Phase 2 — Shared infrastructure A: per-pass binding, barriers, threadgroup sizes
 Blocks *any* multi-pass compute work, and therefore **both** GI tiers. Pre-existing `TODO.md:8` items.
@@ -561,7 +619,13 @@ Where the high tier starts.
 - [ ] Build BLAS from the existing `VkmSceneGeometryPool` so no vertex data is duplicated.
       **Triangles only** — document why at the declaration site (§4.2)
 - [ ] Refit on transform change; full rebuild only on topology change
-- [ ] Bind one TLAS as a bindless singleton; confirm `MTL4ArgumentTable` AS binding empirically
+- [ ] Bind one TLAS as a bindless singleton — extend `VkmBindlessSingletonBuffer`, all three
+      backends' managers, and `vkm_bindless.hlsli`. **On Metal it must also get an
+      `add_msl_resource_binding` entry** (`basetype = SPIRType::AccelerationStructure`, `count = 1`,
+      using the `msl_buffer` index category): `pad_argument_buffer_resources` walks *every*
+      registered set-0 binding to synthesize padding members, so an unregistered one shifts the whole
+      argument-buffer layout for every shader (`main.cpp:376-420`)
+- [ ] Confirm `MTL4ArgumentTable` AS binding empirically (no documented `setAccelerationStructure`)
 - [ ] Prefer `MTLResidencySet` over per-encoder `useResource:` (fits vkm's existing residency code)
 
 **Gate:** a compute shader ray-casts a loaded glTF scene and writes hit/miss + `t` matching a CPU
@@ -891,4 +955,5 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-07-30 | 0 | Document created. Toolchain research settled: SPIRV-Cross supports ray query → MSL, so Metal Shader Converter is not needed; MoltenVK has no RT, so macOS GI is Metal-only. |
 | 2026-07-30 | 1 | **Spike passed.** HLSL `RayQuery<>` → `dxc -T cs_6_5` → SPIR-V (validates, `RayQueryKHR`) → `spirv-cross` MSL → metallib, in both plain-binding and Tier-2 argument-buffer configurations, all exit 0. AS lands at `[[id(0)]]` inside the descriptor-set struct, compatible with vkm's pinned bindless layout. Corrections: `SPV_KHR_ray_tracing` is not needed; procedural/AABB geometry compiles but is silently wrong at runtime, so triangles only. MoltenVK RT absence confirmed from local `vulkaninfo.txt`. |
 | 2026-07-30 | — | Scope change: ReSTIR GI is the **high tier only**; a low-spec tier is now a first-class requirement (§5). Phase plan reordered so shared infrastructure and the low-spec tier precede acceleration structures and ReSTIR. |
+| 2026-07-30 | 1 | `ray_query` PSO opt-in implemented (`VkmShaderStageDescriptor::requiresRayQuery` → `cs_6_5` + `-fspv-target-env=vulkan1.2`), covered by `TestPsoConfig`. End-to-end through `vkm-compiler`: **Vulkan passes** (SPIR-V 1.5, validates, ray query + descriptor indexing, using the real bindless macros); **Metal blocked** on registering the AS as a set-0 binding (§4.4) — Phase 5 work, not a toolchain gap. Found that `-fspv-extension` is a whitelist that would break every bindless shader; it is now deliberately not passed. CI Ubuntu runners are all 22.04 (Mesa 23.2.x), so Vulkan RT will have no CI coverage until bumped. Full suite: 164/164, 18602 assertions, Metal validation clean. |
 | 2026-07-30 | 4 | Low-spec tier must be **fully dynamic** (no bake) → technique decided: raster-updated dynamic probe volume (DDGI-style octahedral irradiance + distance moments, Chebyshev visibility) plus an additive SSGI contact term. Storage/sampling are update-mechanism-agnostic, so Phase 5's rays can later refresh the same volume, and ReSTIR GI can query it for multi-bounce `L_o`. |

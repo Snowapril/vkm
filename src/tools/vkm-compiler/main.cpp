@@ -46,6 +46,11 @@ namespace
         VkmShaderCacheStage stage;
         const char* shortName; // file-name component, e.g. "vert"
         const char* profile;   // dxc target profile, e.g. "vs_6_0"
+        // Profile used instead when the stage sets VkmShaderStageDescriptor::requiresRayQuery.
+        // `RayQuery<>` is a shader-model-6.5 feature, and the baseline profile stays at 6.0 so
+        // one shader opting into ray tracing does not raise the requirement for every shader.
+        // Null for stages that cannot carry a ray query (everything but compute).
+        const char* rayQueryProfile;
     };
 
     const char* backendDefault()
@@ -137,13 +142,40 @@ namespace
                         const fs::path& includeDir,
                         const fs::path& spvOut)
     {
+        if (desc.requiresRayQuery && info.rayQueryProfile == nullptr)
+        {
+            std::cerr << "vkm-compiler: " << source.filename().string() << " (" << info.shortName
+                      << ") sets ray_query, but only the compute stage can carry an inline ray"
+                         " query\n";
+            return false;
+        }
+
         std::vector<std::string> args = {
             "-spirv",
-            "-T", info.profile,
+            "-T", desc.requiresRayQuery ? info.rayQueryProfile : info.profile,
             "-E", desc.entryPoint,
             "-D", backendDefine(backend),
             "-D", "VKM_BINDLESS_BUFFER_CAPACITY=" + std::to_string(kVkmBindlessBufferCapacity),
         };
+        if (desc.requiresRayQuery)
+        {
+            // Raises the emitted module from SPIR-V 1.0 (dxc's default) to 1.5, the version
+            // Vulkan 1.2 mandates and the one the ray-tracing extensions are written against.
+            // A query-only module does validate as SPIR-V 1.0 + SPV_KHR_ray_query, but no driver
+            // exposing rayQuery predates Vulkan 1.2, so emitting 1.0 buys nothing and asks
+            // drivers to accept an unusual combination.
+            //
+            // Deliberately no -fspv-extension: that flag is a *whitelist*, and naming
+            // SPV_KHR_ray_query alone makes dxc reject the engine's bindless unsized descriptor
+            // arrays ("SPV_EXT_descriptor_indexing required ... but not permitted to use"). dxc
+            // already emits both extensions on its own, so the flag is unnecessary as well as
+            // harmful.
+            //
+            // Both targets take this path: the Metal target compiles its own SPIR-V and then
+            // feeds spirv-cross, which lowers OpRayQuery* to metal::raytracing intersection
+            // queries.
+            args.push_back("-fspv-target-env=vulkan1.2");
+        }
         if (!includeDir.empty())
         {
             // Where the engine's shared .hlsli headers (include/vkm/shaders) are found.
@@ -600,9 +632,9 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    const StageInfo vertexInfo{VkmShaderCacheStage::Vertex, "vert", "vs_6_0"};
-    const StageInfo fragmentInfo{VkmShaderCacheStage::Fragment, "frag", "ps_6_0"};
-    const StageInfo computeInfo{VkmShaderCacheStage::Compute, "comp", "cs_6_0"};
+    const StageInfo vertexInfo{VkmShaderCacheStage::Vertex, "vert", "vs_6_0", nullptr};
+    const StageInfo fragmentInfo{VkmShaderCacheStage::Fragment, "frag", "ps_6_0", nullptr};
+    const StageInfo computeInfo{VkmShaderCacheStage::Compute, "comp", "cs_6_0", "cs_6_5"};
 
     bool allOk = true;
     for (const VkmPipelineStateDescriptor& variant : *variants)

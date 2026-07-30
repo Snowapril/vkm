@@ -154,6 +154,63 @@ TEST_CASE("VkmPipelineStateDescriptor - a compute-only pipeline parses and expan
     CHECK_FALSE((*variants)[0].vertexShader.has_value());
 }
 
+TEST_CASE("VkmPipelineStateDescriptor - shader stage ray_query flag") {
+    SUBCASE("absent ray_query leaves the stage on the shader-model-6.0 default") {
+        const std::string jsonText = R"({
+            "shaders": {
+                "compute": { "filepath": "plain.hlsl", "entry_point": "CSMain" }
+            }
+        })";
+
+        std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromString(jsonText);
+        REQUIRE(result.has_value());
+        REQUIRE(result->computeShader.has_value());
+        CHECK_FALSE(result->computeShader->requiresRayQuery);
+    }
+
+    SUBCASE("ray_query true is parsed and survives option expansion") {
+        // A non-empty "options" object requires a non-empty "name" to expand.
+        const std::string jsonText = R"({
+            "name": "ray_query_pso",
+            "shaders": {
+                "compute": { "filepath": "trace.hlsl", "entry_point": "CSMain", "ray_query": true }
+            },
+            "options": { "default": {} }
+        })";
+
+        std::string outError;
+        std::optional<vkm::VkmPipelineStateDescriptor> result =
+            vkm::parsePipelineStateFromString(jsonText, &outError);
+        REQUIRE(result.has_value());
+        CHECK(outError.empty());
+        REQUIRE(result->computeShader.has_value());
+        CHECK(result->computeShader->requiresRayQuery);
+
+        // The flag decides the dxc target profile, so it has to reach the per-variant
+        // descriptors that vkm-compiler actually compiles -- not just the parsed base.
+        std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> variants =
+            vkm::expandPipelineStateOptions(*result, vkm::VkmShaderCacheBackend::Metal, &outError);
+        REQUIRE(variants.has_value());
+        REQUIRE(variants->size() == 1);
+        REQUIRE((*variants)[0].computeShader.has_value());
+        CHECK((*variants)[0].computeShader->requiresRayQuery);
+    }
+
+    SUBCASE("a non-boolean ray_query fails to parse") {
+        const std::string jsonText = R"({
+            "shaders": {
+                "compute": { "filepath": "trace.hlsl", "ray_query": "yes" }
+            }
+        })";
+
+        std::string outError;
+        std::optional<vkm::VkmPipelineStateDescriptor> result =
+            vkm::parsePipelineStateFromString(jsonText, &outError);
+        CHECK_FALSE(result.has_value());
+        CHECK(outError.find("shaders.compute.ray_query") != std::string::npos);
+    }
+}
+
 TEST_CASE("VkmPipelineStateDescriptor - malformed JSON text fails to parse") {
     std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromString("{ not valid json");
     CHECK_FALSE(result.has_value());

@@ -321,6 +321,12 @@ namespace vkm
                 return;
             }
 
+            parseBoolField(state, obj, "ray_query", fieldPrefix + ".ray_query", out.requiresRayQuery);
+            if (state.failed())
+            {
+                return;
+            }
+
             parseDefinitionsMap(state, obj, "definitions", fieldPrefix + ".definitions", out.definitions);
         }
 

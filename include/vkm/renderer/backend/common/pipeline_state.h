@@ -149,6 +149,16 @@ namespace vkm
         std::string filepath;
         std::string entryPoint = "main";
         std::unordered_map<std::string, std::string> definitions;
+
+        // Stage uses inline ray tracing (an HLSL `RayQuery<>` against a bound acceleration
+        // structure). Compile-time consequences only, applied by vkm-compiler: shader model 6.5
+        // instead of 6.0, and a Vulkan 1.2 SPIR-V target env so the module is SPIR-V 1.5 rather
+        // than 1.0. Compute stages only -- the engine has no ray-tracing pipeline stages, and
+        // inline queries are the one form spirv-cross can translate to MSL.
+        //
+        // Nothing here gates *loading* such a PSO on the device actually supporting ray tracing;
+        // there is no acceleration-structure resource or capability flag yet.
+        bool requiresRayQuery = false;
     };
 
     enum class VkmVertexAttributeBaseType : uint8_t
