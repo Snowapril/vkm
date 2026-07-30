@@ -488,11 +488,11 @@ ray-generation shader reconstructing rays from pixel coordinates via `_inverseVi
 **no** flip and will render vertically mirrored on Vulkan while looking correct on Metal. Handle it
 explicitly and cover it in the cross-backend test.
 
-**Threadgroup size is engine-global.** `kVkmComputeThreadGroupSizeX = 64` forces every compute
+**~~Threadgroup size is engine-global.~~ FIXED (Phase 2).** `kVkmComputeThreadGroupSizeX = 64` forced every compute
 shader to `[numthreads(64,1,1)]`, because Metal needs `threadsPerThreadgroup` at dispatch time and
 `MTLComputePipelineState` cannot be queried (`renderer_common.h:135-138`). Every ReSTIR pass is a
-2D screen-space kernel wanting `8×8` for locality and cheap neighbour taps. This must become
-per-PSO (Phase 3).
+2D screen-space kernel wanting `8x8` for locality and cheap neighbour taps. Resolved: the size now
+travels from the shader's SPIR-V through the cache header onto the pipeline object.
 
 ---
 
@@ -559,7 +559,13 @@ Blocks *any* multi-pass compute work, and therefore **both** GI tiers. Pre-exist
       operations manage layout implicitly (`command_buffer.h:62-66`), which cannot express
       compute-write → sample-read — so this is a deliberate, documented extension
 - [ ] Push constants beyond the vertex stage, or per-pass constants through set 2
-- [ ] **Per-PSO compute threadgroup size** + a `dispatch2D` helper (see §6)
+- [x] **Per-PSO compute threadgroup size.** Done differently and better than planned: rather than
+      declaring the size in the PSO JSON (which could drift from the shader), vkm-compiler reads
+      the declared local size out of the compiled SPIR-V and stores it in
+      `VkmShaderCacheHeader::threadGroupSize` (cache version 3). Metal's `onDispatch` reads it
+      from the bound pipeline; Vulkan/WebGPU take it from the shader module. Shaders may now
+      declare `[numthreads(8, 8, 1)]`. A `dispatch2D` helper was **not** needed — `dispatch()`
+      already takes 3 group counts and the size now comes from the shader
 
 **Gate:** a two-pass compute chain (A writes a storage texture, B samples it) produces correct
 pixels with **zero validation-layer errors** on Vulkan and Metal. Per `CLAUDE.md` §9, non-negotiable.
@@ -956,4 +962,5 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-07-30 | 1 | **Spike passed.** HLSL `RayQuery<>` → `dxc -T cs_6_5` → SPIR-V (validates, `RayQueryKHR`) → `spirv-cross` MSL → metallib, in both plain-binding and Tier-2 argument-buffer configurations, all exit 0. AS lands at `[[id(0)]]` inside the descriptor-set struct, compatible with vkm's pinned bindless layout. Corrections: `SPV_KHR_ray_tracing` is not needed; procedural/AABB geometry compiles but is silently wrong at runtime, so triangles only. MoltenVK RT absence confirmed from local `vulkaninfo.txt`. |
 | 2026-07-30 | — | Scope change: ReSTIR GI is the **high tier only**; a low-spec tier is now a first-class requirement (§5). Phase plan reordered so shared infrastructure and the low-spec tier precede acceleration structures and ReSTIR. |
 | 2026-07-30 | 1 | `ray_query` PSO opt-in implemented (`VkmShaderStageDescriptor::requiresRayQuery` → `cs_6_5` + `-fspv-target-env=vulkan1.2`), covered by `TestPsoConfig`. End-to-end through `vkm-compiler`: **Vulkan passes** (SPIR-V 1.5, validates, ray query + descriptor indexing, using the real bindless macros); **Metal blocked** on registering the AS as a set-0 binding (§4.4) — Phase 5 work, not a toolchain gap. Found that `-fspv-extension` is a whitelist that would break every bindless shader; it is now deliberately not passed. CI Ubuntu runners are all 22.04 (Mesa 23.2.x), so Vulkan RT will have no CI coverage until bumped. Full suite: 164/164, 18602 assertions, Metal validation clean. |
+| 2026-07-30 | 2 | Compute threadgroup size now comes from the shader's compiled SPIR-V via `VkmShaderCacheHeader::threadGroupSize` (cache v3) rather than the engine-global `kVkmComputeThreadGroupSizeX`, so 2D kernels can declare `[numthreads(8, 8, 1)]`. Metal reads it off the bound pipeline at dispatch. Verified end to end with an 8x8x1 shader on both targets; the Metal GPU cull test (visible count 1 -> 0 -> 1) covers the changed dispatch path. |
 | 2026-07-30 | 4 | Low-spec tier must be **fully dynamic** (no bake) → technique decided: raster-updated dynamic probe volume (DDGI-style octahedral irradiance + distance moments, Chebyshev visibility) plus an additive SSGI contact term. Storage/sampling are update-mechanism-agnostic, so Phase 5's rays can later refresh the same volume, and ReSTIR GI can query it for multi-bounce `L_o`. |
