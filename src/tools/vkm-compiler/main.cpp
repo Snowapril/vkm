@@ -96,6 +96,7 @@ namespace
                         const StageInfo& info,
                         VkmShaderCacheContentFormat format,
                         const std::string& entryPoint,
+                        const uint32_t (&threadGroupSize)[3],
                         const std::vector<uint8_t>& content)
     {
         VkmShaderCacheHeader header{};
@@ -105,6 +106,9 @@ namespace
         header.stage = info.stage;
         header.contentFormat = format;
         std::strncpy(header.entryPoint, entryPoint.c_str(), sizeof(header.entryPoint) - 1);
+        header.threadGroupSize[0] = threadGroupSize[0];
+        header.threadGroupSize[1] = threadGroupSize[1];
+        header.threadGroupSize[2] = threadGroupSize[2];
         header.contentSize = static_cast<uint64_t>(content.size());
 
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -225,6 +229,39 @@ namespace
         return words;
     }
 
+    /*
+    * @brief Reads a compute shader's declared [numthreads(x, y, z)] out of the compiled SPIR-V.
+    *
+    * Taking it from the module rather than from the PSO JSON keeps the shader the single source
+    * of truth: Metal must be told the threadgroup size at dispatch time, and a hand-maintained
+    * second copy that drifts from the shader would dispatch the wrong thread count silently.
+    * Returns false if the module declares no local size, which is a build error for a compute
+    * stage rather than something to paper over with a default.
+    */
+    bool readComputeThreadGroupSize(const std::vector<uint8_t>& spirv,
+                                    const std::string& entryPoint,
+                                    uint32_t (&out)[3])
+    {
+        try
+        {
+            const spirv_cross::Compiler reflect(toSpirvWords(spirv));
+            const spirv_cross::SPIREntryPoint& entry =
+                reflect.get_entry_point(entryPoint, spv::ExecutionModelGLCompute);
+            if (entry.workgroup_size.x == 0)
+            {
+                return false;
+            }
+            out[0] = entry.workgroup_size.x;
+            out[1] = entry.workgroup_size.y;
+            out[2] = entry.workgroup_size.z;
+            return true;
+        }
+        catch (const std::exception&)
+        {
+            return false;
+        }
+    }
+
 #if defined(VKM_METAL_TOOLS_AVAILABLE)
     // Compiles spirv-cross's MSL text into a metallib binary via the Metal toolchain
     // (`xcrun -sdk macosx metal ... -o out.metallib`). The metallib is what gets stored
@@ -327,6 +364,17 @@ namespace
         {
             std::cerr << "vkm-compiler: dxc produced empty SPIR-V for "
                       << source.filename().string() << "\n";
+            fs::remove(spvTmp);
+            return false;
+        }
+
+        uint32_t threadGroupSize[3] = {};
+        if (info.stage == VkmShaderCacheStage::Compute &&
+            !readComputeThreadGroupSize(spirv, desc.entryPoint, threadGroupSize))
+        {
+            std::cerr << "vkm-compiler: could not read [numthreads(...)] from "
+                      << source.filename().string() << " (entry '" << desc.entryPoint
+                      << "'); Metal needs it at dispatch time\n";
             fs::remove(spvTmp);
             return false;
         }
@@ -533,7 +581,7 @@ namespace
 
         const fs::path outPath =
             outputDir / buildShaderCacheFilename(baseName, optionName, info.stage, backend);
-        if (!writeCacheFile(outPath, backend, info, format, desc.entryPoint, content))
+        if (!writeCacheFile(outPath, backend, info, format, desc.entryPoint, threadGroupSize, content))
         {
             return false;
         }

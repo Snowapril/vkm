@@ -60,6 +60,10 @@ namespace vkm
         result.entryPoint.assign(header.entryPoint,
             ::strnlen(header.entryPoint, sizeof(header.entryPoint)));
 
+        result.threadGroupSize[0] = header.threadGroupSize[0];
+        result.threadGroupSize[1] = header.threadGroupSize[1];
+        result.threadGroupSize[2] = header.threadGroupSize[2];
+
         result.content.resize(static_cast<size_t>(header.contentSize));
         if (header.contentSize > 0)
         {

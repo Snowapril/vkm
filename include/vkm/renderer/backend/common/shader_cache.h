@@ -17,7 +17,8 @@ namespace vkm
 
     // 'V''F''C''H' little-endian magic identifying a vkm shader cache file.
     constexpr uint32_t kVkmShaderCacheMagic = 0x48434656u;
-    constexpr uint32_t kVkmShaderCacheVersion = 2u;
+    // 3: added VkmShaderCacheHeader::threadGroupSize.
+    constexpr uint32_t kVkmShaderCacheVersion = 3u;
 
     enum class VkmShaderCacheBackend : uint8_t
     {
@@ -54,6 +55,20 @@ namespace vkm
         VkmShaderCacheStage stage;
         VkmShaderCacheContentFormat contentFormat;
         char entryPoint[64] = {}; // NUL-padded UTF-8
+
+        /*
+        * @brief The compute stage's declared [numthreads(x, y, z)], read out of the compiled
+        * SPIR-V rather than restated anywhere by hand. {0, 0, 0} for non-compute stages.
+        *
+        * Metal needs this at dispatch time -- MTLComputePipelineState cannot be asked what
+        * threadgroup size its function declared -- and getting it wrong dispatches the wrong
+        * number of threads with no diagnostic. Carrying it in the cache keeps the shader the
+        * single source of truth, so a shader that changes its [numthreads] cannot silently
+        * disagree with the runtime. Vulkan and WebGPU take the size from the shader module
+        * itself and ignore this.
+        */
+        uint32_t threadGroupSize[3] = {};
+
         uint64_t contentSize;
     };
 #pragma pack(pop)

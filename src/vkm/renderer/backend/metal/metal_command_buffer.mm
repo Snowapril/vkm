@@ -480,11 +480,29 @@ namespace vkm
 
     void VkmCommandBufferMetal::onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
     {
-        // Threadgroup width is the engine-wide constant every engine compute shader declares:
-        // MTLComputePipelineState cannot be asked what [numthreads(...)] the shader used.
+        // MTLComputePipelineState cannot be asked what [numthreads(...)] its function declared,
+        // so the size travels from the shader through its .vfcache onto the pipeline object.
+        // Dispatching with the wrong one silently runs the wrong number of threads, which is why
+        // this reads the bound pipeline rather than assuming one engine-wide size.
+        const VkmPipelineStateMetal* pipelineState =
+            static_cast<const VkmPipelineStateMetal*>(getBoundPipelineState());
+        if (pipelineState == nullptr)
+        {
+            VKM_DEBUG_ERROR("dispatch() with no pipeline bound");
+            return;
+        }
+
+        const uint32_t* threadGroupSize = pipelineState->getComputeThreadGroupSize();
+        if (threadGroupSize[0] == 0)
+        {
+            VKM_DEBUG_ERROR("dispatch() on a pipeline with no compute threadgroup size (not a "
+                            "compute pipeline, or a stale shader cache)");
+            return;
+        }
+
         [_commandEncoder.getActiveComputeCommandEncoder()
             dispatchThreadgroups:MTLSizeMake(groupCountX, groupCountY, groupCountZ)
-           threadsPerThreadgroup:MTLSizeMake(kVkmComputeThreadGroupSizeX, 1, 1)];
+           threadsPerThreadgroup:MTLSizeMake(threadGroupSize[0], threadGroupSize[1], threadGroupSize[2])];
     }
 
     void VkmCommandBufferMetal::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)

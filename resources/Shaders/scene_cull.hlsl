@@ -24,7 +24,7 @@ float maxAxisScale(float4x4 transform)
     return sqrt(max(dot(x, x), max(dot(y, y), dot(z, z))));
 }
 
-[numthreads(64, 1, 1)] // must equal kVkmComputeThreadGroupSizeX
+[numthreads(64, 1, 1)] // must equal kVkmComputeThreadGroupSizeX: recordCull derives its group count from it
 void CSMain(uint3 threadId : SV_DispatchThreadID)
 {
     if (threadId.x >= g_Batch.objectCount)

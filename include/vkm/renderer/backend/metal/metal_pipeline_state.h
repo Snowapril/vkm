@@ -4,6 +4,8 @@
 
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 
+#include <cstdint>
+
 @protocol MTLRenderPipelineState;
 @protocol MTLComputePipelineState;
 @protocol MTLDepthStencilState;
@@ -27,6 +29,19 @@ namespace vkm
         // bind it without recomputing it per-frame.
         inline id<MTLDepthStencilState> getDepthStencilState() const { return _depthStencilState; }
 
+        /*
+        * @brief The compute function's declared [numthreads(x, y, z)], as recorded in its
+        * .vfcache by vkm-compiler. All zero for a graphics pipeline.
+        *
+        * dispatchThreadgroups: needs a threadsPerThreadgroup and MTLComputePipelineState cannot
+        * be asked what its function declared, so the command buffer reads it from here rather
+        * than assuming one engine-wide size (see VkmCommandBufferMetal::onDispatch).
+        *
+        * Plain integers rather than an MTLSize so this header keeps needing nothing from Metal
+        * beyond the forward-declared protocols above.
+        */
+        inline const uint32_t* getComputeThreadGroupSize() const { return _computeThreadGroupSize; }
+
     protected:
         virtual bool createInner(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError) override final;
         virtual void destroyInner() override final;
@@ -35,5 +50,6 @@ namespace vkm
         id<MTLRenderPipelineState> _renderPipelineState = nullptr;
         id<MTLComputePipelineState> _computePipelineState = nullptr;
         id<MTLDepthStencilState> _depthStencilState = nullptr;
+        uint32_t _computeThreadGroupSize[3] = {};
     };
 } // namespace vkm

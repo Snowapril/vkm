@@ -107,8 +107,12 @@ namespace vkm
         /*
         * @brief Compute dispatch of `groupCount*` threadgroups. Must be recorded outside a render
         * pass with a compute pipeline bound; the backing compute pass is opened by that bindPipeline()
-        * and closed by unbindPipeline(). The threadgroup width is the engine-wide
-        * kVkmComputeThreadGroupSizeX, which Metal needs here and cannot query from its pipeline.
+        * and closed by unbindPipeline().
+        *
+        * The threadgroup size is whatever the bound pipeline's shader declared in
+        * [numthreads(...)]: Vulkan and WebGPU take it from the shader module, and Metal reads it
+        * from the pipeline object, where it arrived via VkmShaderCacheHeader::threadGroupSize.
+        * Callers only supply the group counts.
         */
         void dispatch(uint32_t groupCountX, uint32_t groupCountY = 1, uint32_t groupCountZ = 1);
 
@@ -211,6 +215,12 @@ namespace vkm
         inline const std::vector<VkmPipelineStateBase*>& getBoundPipelineHistory() const { return _boundPipelineHistory; }
 
     protected:
+        // The pipeline bindPipeline() last published, or null after unbindPipeline(). Backends
+        // that need pipeline state while recording a command read it here -- Metal's onDispatch()
+        // takes the compute threadgroup size from it, since MTLComputePipelineState cannot be
+        // asked what [numthreads(...)] its function declared.
+        inline VkmPipelineStateBase* getBoundPipelineState() const { return _boundPipelineState; }
+
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) = 0;
         virtual void onEndRenderPass() = 0;
         virtual void onBindPipeline(VkmPipelineStateBase* pipelineState) = 0;
