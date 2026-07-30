@@ -379,24 +379,61 @@ infrastructure (Phases 3–4). That makes it:
 So the low-spec tier is scheduled *before* ReSTIR GI in §8, even though ReSTIR is the headline
 feature. This is a deliberate de-risking choice, not a deprioritization of ReSTIR.
 
-### Candidate low-spec techniques (decision still open — see §12)
+### Low-spec technique: DECIDED — raster-updated dynamic probe volume + SSGI contact term
 
-| Technique | Fit | Cost | Notes |
-|---|---|---|---|
-| **Irradiance probe volumes (SH)** | Best mobile fit | Low runtime, needs bake or slow runtime update | Smooth indirect diffuse, view-independent, no offscreen problem. Probes can be baked offline (mobile) or updated by rasterized probe cubemaps (mid-tier, still no RT). Leaks through thin geometry; needs care near walls. |
-| **Screen-space GI (depth-buffer ray march)** | Cheap, fully dynamic | Low | No new data structures. But offscreen and occluded geometry simply miss, so it cannot be the *only* tier. Best as a contact-detail supplement on top of probes. |
-| **Voxel cone tracing** | Middle ground | Memory-heavy | World-space and view-independent, but resolution-limited leaking and blocky indirect shadows; voxelization cost scales with dynamic geometry. Poor mobile memory fit. |
-| **Baked lightmaps** | Cheapest at runtime | Offline bake, static only | Widest mobile shipping precedent. Worth considering as a *third* tier rather than the dynamic low tier. |
+**Constraint set:** fully dynamic (no bake), no ray tracing, must run on mobile and WebGPU.
 
-**Leaning:** probe volumes as the low-spec tier, with SSGI as an optional additive contact term.
-That combination is view-independent (so it degrades gracefully rather than wrongly), has a
-realistic mobile budget, and shares the G-buffer and denoiser with ReSTIR. Decide before starting
-Phase 5.
+Options considered:
 
-> Note from the ReSTIR literature that reinforces keeping these separate: screen-space tracing is a
-> poor ReSTIR citizen specifically because the *support* of `p̂` becomes view-dependent and changes
-> as the camera moves — exactly the assumption cross-domain MIS relies on. Expect brightening/
-> darkening that shifts with camera motion if the two are combined naively.
+| Technique | Verdict |
+|---|---|
+| **Baked lightmaps / baked probes** | **Ruled out** — requires an offline bake; "fully dynamic" excludes it. Could still be added later as a separate third tier for shipping mobile titles. |
+| **Voxel cone tracing** | **Ruled out** — fully dynamic means re-voxelizing every frame, and the memory footprint is a poor mobile fit. Also gives prefiltered cone queries rather than point samples. |
+| **Screen-space GI alone** | **Ruled out as the only tier** — offscreen and occluded geometry simply miss, so indirect light changes as the camera turns. Kept as an *additive contact term*. |
+| **Dynamic irradiance probe volume, raster-updated** | **Chosen.** The only option that is fully dynamic, view-independent, and mobile-affordable. |
+
+**Design.** DDGI-style storage, but with probe updates driven by **rasterization instead of rays**:
+
+- A camera-centred probe grid (clipmap if the world is large).
+- Per probe, two octahedral maps packed into atlas textures: a small **irradiance** map (~8×8) and
+  a larger **distance/moment** map (~16×16). The moment map is what enables the **Chebyshev
+  visibility test** — the essential trick that stops light leaking through walls. Do not skip it;
+  SH-only irradiance in a 3D texture leaks badly and there is no cheap fix afterwards.
+- **Update:** round-robin a small subset of probes per frame. For each, rasterize a very low-res
+  cube view of the scene, shade it, convert to octahedral, and blend into the atlas with
+  hysteresis. Reuses the existing GPU-driven draw path (`VkmScene`'s cull/emit).
+- **Sampling:** trilinear across the 8 nearest probes, weighted by the Chebyshev test, plus a
+  normal bias and backface rejection.
+- **SSGI** added on top as an additive contact term, for the fine near-field detail the probe grid
+  is far too coarse to represent.
+
+**Honest costs of "fully dynamic, no RT":**
+- Rasterizing probe views re-renders geometry per probe, so **amortization is mandatory** — the
+  per-frame probe budget is the main tuning knob.
+- **Slow propagation:** with only a subset of probes refreshed per frame, moving lights take many
+  frames to converge. This is the direct price of dropping both the bake and the rays, and it
+  should be measured early rather than discovered late.
+- Leaking is *reduced* by the Chebyshev test, not eliminated.
+
+### Why this is not throwaway work
+
+The probe volume's **storage and sampling are independent of how it is updated**. That gives two
+things for free later:
+
+1. **Swap the update mechanism, keep everything else.** Once Phase 5 lands acceleration structures,
+   the same probe volume can be refreshed with rays instead of rasterized cube views — much better
+   convergence, no change to storage or sampling. This is real DDGI at that point.
+2. **It becomes the high tier's multi-bounce cache.** ReSTIR GI resamples *one* bounce; the radiance
+   `L_o` at the secondary hit still has to come from somewhere. Querying the probe volume there is
+   exactly what kajiya does with its world-space irradiance cache, and it is how multi-bounce GI
+   gets added without a second ReSTIR pass.
+
+So Phase 4 buys a shippable low tier *and* infrastructure the high tier wants anyway.
+
+> **Do not merge SSGI into ReSTIR's reservoirs.** Screen-space tracing is a poor ReSTIR citizen
+> because the *support* of `p̂` becomes view-dependent and changes as the camera moves — exactly the
+> assumption cross-domain MIS relies on. Combining them naively produces brightening/darkening that
+> shifts with camera motion. SSGI stays an additive term in the low tier only.
 
 ---
 
@@ -489,16 +526,30 @@ camera motion with no drift. Works on all five platform combinations.
 
 ### Phase 4 — GI technique interface + low-spec tier ⭐ first working GI
 The de-risking phase. Delivers visible GI on **all five** platform combinations with no ray tracing.
-- [ ] Decide the low-spec technique (§5 leans probe volumes + optional SSGI contact term; see §12)
+Technique decided in §5: **raster-updated dynamic probe volume + SSGI contact term.**
+
+- [x] Decide the low-spec technique (§5)
 - [ ] Define the **technique interface**: a technique owns its passes and resources and produces an
       indirect-radiance texture (+ optional confidence channel) for one shared composite pass
 - [ ] Runtime selection gated on `VkmDriverCapabilityFlags::RayTracing` + a quality setting, not `#ifdef`
-- [ ] Implement the low-spec technique end to end
-- [ ] `restir_gi` sample renamed/scoped as a **GI sample** with a technique switcher
+- [ ] **4.1 Probe volume storage** — camera-centred grid (clipmap if needed); per-probe octahedral
+      irradiance atlas (~8×8) **and** distance/moment atlas (~16×16). Both atlases from the start —
+      the moment map is what the Chebyshev test needs, and retrofitting it later is painful
+- [ ] **4.2 Probe update pass** — round-robin a per-frame probe budget; rasterize a very low-res cube
+      view per probe reusing `VkmScene`'s existing cull/emit draw path, shade it, convert to
+      octahedral, blend into the atlases with hysteresis
+- [ ] **4.3 Probe sampling** — trilinear over the 8 nearest probes, weighted by the **Chebyshev
+      visibility test**, plus normal bias and backface rejection
+- [ ] **4.4 SSGI contact term** — depth-buffer ray march, added on top of the probe result. Keep it
+      strictly additive and strictly in this tier (see the warning in §5)
+- [ ] **4.5 GI sample** with a runtime technique switcher and per-term debug views (probe irradiance,
+      probe depth/moments, Chebyshev weight, SSGI only, composite). Must build on WebGPU
+- [ ] Measure and record the light-propagation latency (frames for a moving light to converge) — this
+      is the known weak point of raster-updated probes and needs a number, not an impression
 
-**Gate:** low-spec GI renders correctly on Vulkan, Metal **and** WebGPU, with zero validation errors,
-and the technique switcher works at runtime. This is the interface's real test — one consumer proves
-nothing.
+**Gate:** low-spec GI renders correctly on Vulkan, Metal **and** WebGPU, with zero validation errors;
+the technique switcher works at runtime; no visible leaking through walls in a two-room test scene.
+This is the interface's real test — one consumer proves nothing.
 
 ### Phase 5 — Acceleration structures in the RHI
 Where the high tier starts.
@@ -809,10 +860,15 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
       un-pinning `dxc-linux`.
 - [ ] **Confirm `MTL4ArgumentTable` AS binding** empirically — no documented
       `setAccelerationStructure`; binding is inferred to go through `gpuResourceID`.
-- [ ] **Low-spec technique choice — blocks Phase 4.** §5 leans probe volumes (SH irradiance) as the
-      dynamic low tier, with SSGI as an optional additive contact term, and baked lightmaps as a
-      possible third tier. Decide before Phase 4 starts. Key question: does the low tier need to be
-      fully dynamic on mobile, or is a bake acceptable there? That single answer picks the technique.
+- [x] ~~**Low-spec technique choice.**~~ **Decided 2026-07-30:** fully dynamic (no bake), so the
+      technique is a **raster-updated dynamic probe volume + SSGI contact term** (§5). Baked
+      lightmaps and voxel cone tracing ruled out by the fully-dynamic + mobile constraints.
+- [ ] **Probe budget and propagation latency** are the low tier's real risk. Measure frames-to-converge
+      for a moving light early in Phase 4; if it is unacceptable on mobile, the options are a larger
+      per-frame probe budget, fewer/coarser probes, or revisiting the no-bake constraint.
+- [ ] **Multi-bounce for the high tier.** Once Phase 4's probe volume exists, decide whether ReSTIR GI
+      queries it for `L_o` at the secondary hit (kajiya-style world-space irradiance cache) rather
+      than continuing a path. This is the cheap route to multi-bounce and reuses Phase 4 directly.
 - [ ] **Where GI lives.** Recommendation: technique passes and their resources in the engine
       (`src/vkm/renderer/`, they need RHI-level resources and barriers), debug UI and scene setup in
       a **GI sample** with a runtime technique switcher — mirroring how `VkmScene` owns cull/emit
@@ -835,3 +891,4 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-07-30 | 0 | Document created. Toolchain research settled: SPIRV-Cross supports ray query → MSL, so Metal Shader Converter is not needed; MoltenVK has no RT, so macOS GI is Metal-only. |
 | 2026-07-30 | 1 | **Spike passed.** HLSL `RayQuery<>` → `dxc -T cs_6_5` → SPIR-V (validates, `RayQueryKHR`) → `spirv-cross` MSL → metallib, in both plain-binding and Tier-2 argument-buffer configurations, all exit 0. AS lands at `[[id(0)]]` inside the descriptor-set struct, compatible with vkm's pinned bindless layout. Corrections: `SPV_KHR_ray_tracing` is not needed; procedural/AABB geometry compiles but is silently wrong at runtime, so triangles only. MoltenVK RT absence confirmed from local `vulkaninfo.txt`. |
 | 2026-07-30 | — | Scope change: ReSTIR GI is the **high tier only**; a low-spec tier is now a first-class requirement (§5). Phase plan reordered so shared infrastructure and the low-spec tier precede acceleration structures and ReSTIR. |
+| 2026-07-30 | 4 | Low-spec tier must be **fully dynamic** (no bake) → technique decided: raster-updated dynamic probe volume (DDGI-style octahedral irradiance + distance moments, Chebyshev visibility) plus an additive SSGI contact term. Storage/sampling are update-mechanism-agnostic, so Phase 5's rays can later refresh the same volume, and ReSTIR GI can query it for multi-bounce `L_o`. |
