@@ -12,6 +12,7 @@
 #include <algorithm>
 
 #import <Metal/MTL4CommandBuffer.h>
+#import <Metal/MTL4Counters.h>
 #import <Metal/MTL4RenderCommandEncoder.h>
 #import <Metal/MTL4ComputeCommandEncoder.h>
 #import <Metal/MTL4RenderPass.h>
@@ -526,6 +527,40 @@ namespace vkm
     void VkmCommandBufferMetal::onPopDebugGroup()
     {
         [_mtlCommandBuffer popDebugGroup];
+    }
+
+    void VkmCommandBufferMetal::onBeginCommandBuffer()
+    {
+        _openGpuZoneEndSlots.clear();
+    }
+
+    void VkmCommandBufferMetal::onBeginGpuZone(const uint32_t beginSlot, const uint32_t endSlot)
+    {
+        id<MTL4CounterHeap> counterHeap = static_cast<VkmDriverMetal*>(_driver)->getGpuTimestampCounterHeap();
+        if (counterHeap == nil)
+        {
+            return;
+        }
+
+        // Command-buffer scope, like the debug group above: the encoders are nil between passes,
+        // and this is called from VkmRenderGraph::execute() outside any of them. That is exactly
+        // what lets a zone wrap a whole subgraph without splitting an encoder -- the per-encoder
+        // writeTimestampWithGranularity: variants would.
+        [_mtlCommandBuffer writeTimestampIntoHeap:counterHeap atIndex:beginSlot];
+        _openGpuZoneEndSlots.push_back(endSlot);
+    }
+
+    bool VkmCommandBufferMetal::onEndGpuZone()
+    {
+        id<MTL4CounterHeap> counterHeap = static_cast<VkmDriverMetal*>(_driver)->getGpuTimestampCounterHeap();
+        if (counterHeap == nil || _openGpuZoneEndSlots.empty())
+        {
+            return false;
+        }
+
+        [_mtlCommandBuffer writeTimestampIntoHeap:counterHeap atIndex:_openGpuZoneEndSlots.back()];
+        _openGpuZoneEndSlots.pop_back();
+        return true;
     }
 
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)

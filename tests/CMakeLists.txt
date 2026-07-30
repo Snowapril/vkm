@@ -29,6 +29,7 @@ set(SRCS
     ${SRC_DIR}/TestSceneBatching.cpp
     ${SRC_DIR}/TestGltfImporter.cpp
     ${SRC_DIR}/TestCpuProfiler.cpp
+    ${SRC_DIR}/TestGpuProfiler.cpp
     ${SRC_DIR}/TestImageLoader.cpp
     ${SRC_DIR}/TestCubemapTexture.cpp
     ${SRC_DIR}/TestBufferHostWrite.cpp
@@ -40,6 +41,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestBackbufferReadback.mm
         ${SRC_DIR}/TestMetalBindlessTriangle.mm
         ${SRC_DIR}/TestRenderGraphCapture.mm
+        ${SRC_DIR}/TestGpuProfilerCapture.mm
         ${SRC_DIR}/TestClipSpaceOrientationMetal.mm
         ${SRC_DIR}/TestRasterStateMetal.mm
         ${SRC_DIR}/TestSceneModelRenderMetal.mm

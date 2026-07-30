@@ -39,6 +39,25 @@ namespace vkm
             return static_cast<VkmFrameConstantManagerWebGPU*>(_frameConstantManager.get());
         }
 
+        /*
+        * @brief GPU timestamp pool backing VkmGpuProfiler: one WGPUQuerySet of `slotCount`
+        * timestamp queries, plus the two buffers a query set can only be read through (a
+        * QueryResolve target the GPU writes and a MapRead copy the CPU reads). Only available
+        * when the adapter offers the optional "timestamp-query" feature, which is requested at
+        * device creation.
+        *
+        * WebGPU has no encoder-level timestamp write, so unlike Vulkan/Metal the writes
+        * themselves are attached to render/compute pass descriptors -- see
+        * VkmCommandBufferWebGPU::onBeginGpuZone.
+        */
+        virtual bool initializeGpuTimestampPool(uint32_t slotCount) override final;
+        virtual void destroyGpuTimestampPool() override final;
+        virtual bool resolveGpuTimestamps(uint32_t firstSlot, uint32_t count, uint64_t* outTicks) override final;
+
+        inline WGPUQuerySet getGpuTimestampQuerySet() const { return _timestampQuerySet; }
+        inline WGPUBuffer getGpuTimestampResolveBuffer() const { return _timestampResolveBuffer; }
+        inline WGPUBuffer getGpuTimestampReadbackBuffer() const { return _timestampReadbackBuffer; }
+
     protected:
         virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) override final;
         virtual bool postInitializeInner() override final;
@@ -59,5 +78,11 @@ namespace vkm
         WGPUAdapter  _adapter{nullptr};
         WGPUDevice   _device{nullptr};
         WGPUQueue    _queue{nullptr};
+
+        WGPUQuerySet _timestampQuerySet{nullptr};
+        WGPUBuffer   _timestampResolveBuffer{nullptr};
+        WGPUBuffer   _timestampReadbackBuffer{nullptr};
+        // Requested at device creation; without it wgpuDeviceCreateQuerySet(Timestamp) is invalid.
+        bool         _timestampQuerySupported{false};
     };
 } // namespace vkm

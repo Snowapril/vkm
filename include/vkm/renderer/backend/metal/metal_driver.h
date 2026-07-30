@@ -13,6 +13,7 @@
 @protocol MTLDevice;
 @protocol MTLBuffer;
 @protocol MTLCaptureScope;
+@protocol MTL4CounterHeap;
 namespace vkm
 {
     class VkmGpuHeapPoolMetal;
@@ -41,6 +42,17 @@ namespace vkm
 
         // Device-reported allocation size/budget plus the heap pool's reserved-vs-used split.
         virtual VkmGpuMemoryStats getGpuMemoryStats() const override final;
+
+        // GPU timestamp pool backing VkmGpuProfiler: one MTL4CounterHeap of `slotCount`
+        // MTL4CounterHeapTypeTimestamp entries. See driver.h for the contract.
+        virtual bool initializeGpuTimestampPool(uint32_t slotCount) override final;
+        virtual void destroyGpuTimestampPool() override final;
+        virtual double getGpuTimestampPeriodNs() const override final { return _timestampPeriodNs; }
+        virtual void resetGpuTimestampSlots(VkmCommandBufferBase* commandBuffer, uint32_t firstSlot,
+                                            uint32_t count) override final;
+        virtual bool resolveGpuTimestamps(uint32_t firstSlot, uint32_t count, uint64_t* outTicks) override final;
+
+        inline id<MTL4CounterHeap> getGpuTimestampCounterHeap() const { return _timestampCounterHeap; }
 
         // Shadows VkmDriverBase::getBindlessResourceManager() with the Metal-typed manager
         // (the base member always holds a VkmBindlessResourceManagerMetal for this driver).
@@ -82,6 +94,10 @@ namespace vkm
     private:
         id<MTLDevice> _mtlDevice;
         std::vector<std::unique_ptr<VkmGpuHeapPoolMetal>> _heapPools;
+
+        // Owned +1 under MRC, like _captureScope below.
+        id<MTL4CounterHeap> _timestampCounterHeap {nullptr};
+        double _timestampPeriodNs {1.0};
 
 #if defined(VKM_GPU_CAPTURE)
         // Frame-aligned capture scope on the Graphics MTL4 queue (created in

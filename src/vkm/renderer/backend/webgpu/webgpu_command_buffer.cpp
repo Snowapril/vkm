@@ -87,10 +87,14 @@ namespace vkm
             }
         }
 
+        WGPUPassTimestampWrites timestampWrites{};
+        const bool hasTimestampWrites = takePendingGpuZone(&timestampWrites);
+
         const WGPURenderPassDescriptor renderPassDesc{
             .colorAttachmentCount   = colorAttachments.size(),
             .colorAttachments       = colorAttachments.data(),
             .depthStencilAttachment = depthStencilView != nullptr ? &depthStencilAttachment : nullptr,
+            .timestampWrites        = hasTimestampWrites ? &timestampWrites : nullptr,
         };
         _renderPassEncoder = wgpuCommandEncoderBeginRenderPass(_encoder, &renderPassDesc);
 
@@ -123,7 +127,11 @@ namespace vkm
             // torn down in onUnbindPipeline.
             if (_computePassEncoder == nullptr)
             {
-                _computePassEncoder = wgpuCommandEncoderBeginComputePass(_encoder, nullptr);
+                WGPUPassTimestampWrites timestampWrites{};
+                const WGPUComputePassDescriptor computePassDesc{
+                    .timestampWrites = takePendingGpuZone(&timestampWrites) ? &timestampWrites : nullptr,
+                };
+                _computePassEncoder = wgpuCommandEncoderBeginComputePass(_encoder, &computePassDesc);
             }
             wgpuComputePassEncoderSetPipeline(_computePassEncoder, pipelineStateWebGPU->getComputePipeline());
 
@@ -307,6 +315,75 @@ namespace vkm
     void VkmCommandBufferWebGPU::onPopDebugGroup()
     {
         wgpuCommandEncoderPopDebugGroup(_encoder);
+    }
+
+    void VkmCommandBufferWebGPU::onBeginCommandBuffer()
+    {
+        _openGpuZones.clear();
+    }
+
+    void VkmCommandBufferWebGPU::onBeginGpuZone(const uint32_t beginSlot, const uint32_t endSlot)
+    {
+        // Nothing can be recorded yet: WebGPU writes timestamps only through a pass descriptor,
+        // so the pair waits here until a render or compute pass is opened inside this zone.
+        _openGpuZones.push_back(OpenGpuZone{ beginSlot, endSlot, false });
+    }
+
+    bool VkmCommandBufferWebGPU::onEndGpuZone()
+    {
+        if (_openGpuZones.empty())
+        {
+            return false;
+        }
+        const bool attached = _openGpuZones.back()._attached;
+        _openGpuZones.pop_back();
+        return attached;
+    }
+
+    bool VkmCommandBufferWebGPU::takePendingGpuZone(WGPUPassTimestampWrites* outTimestampWrites)
+    {
+        WGPUQuerySet querySet = static_cast<VkmDriverWebGPU*>(_driver)->getGpuTimestampQuerySet();
+        if (querySet == nullptr)
+        {
+            return false;
+        }
+
+        // Innermost first: a subgraph's zone is opened inside the submission-wide one, and it is
+        // the subgraph that this pass actually belongs to.
+        for (auto zone = _openGpuZones.rbegin(); zone != _openGpuZones.rend(); ++zone)
+        {
+            if (zone->_attached)
+            {
+                continue;
+            }
+            zone->_attached = true;
+            outTimestampWrites->querySet = querySet;
+            outTimestampWrites->beginningOfPassWriteIndex = zone->_beginSlot;
+            outTimestampWrites->endOfPassWriteIndex = zone->_endSlot;
+            return true;
+        }
+        return false;
+    }
+
+    void VkmCommandBufferWebGPU::onResolveGpuZones(const uint32_t firstSlot, const uint32_t count)
+    {
+        VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
+        WGPUQuerySet querySet = driverWebGPU->getGpuTimestampQuerySet();
+        if (querySet == nullptr || count == 0)
+        {
+            return;
+        }
+
+        // A query set is not CPU-readable: it has to be resolved into a QueryResolve buffer on
+        // the GPU timeline and then copied into a separate MapRead buffer, because WebGPU forbids
+        // combining those two usages. VkmDriverWebGPU::resolveGpuTimestamps maps the second one
+        // once this submission has completed.
+        const uint64_t byteOffset = static_cast<uint64_t>(firstSlot) * sizeof(uint64_t);
+        const uint64_t byteSize = static_cast<uint64_t>(count) * sizeof(uint64_t);
+        wgpuCommandEncoderResolveQuerySet(_encoder, querySet, firstSlot, count,
+                                          driverWebGPU->getGpuTimestampResolveBuffer(), byteOffset);
+        wgpuCommandEncoderCopyBufferToBuffer(_encoder, driverWebGPU->getGpuTimestampResolveBuffer(), byteOffset,
+                                             driverWebGPU->getGpuTimestampReadbackBuffer(), byteOffset, byteSize);
     }
 
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)

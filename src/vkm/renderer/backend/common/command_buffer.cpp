@@ -31,6 +31,8 @@ namespace vkm
         _recordedSubgraphIds.clear();
 #endif // VKM_ENABLE_GPU_BREAD_CRUMBS
 
+        onBeginCommandBuffer();
+
         VkmGpuEventTimelineBase* gpuEventTimeline = _commandQueue->getGpuEventTimeline();
         _gpuEventTimelineObject = gpuEventTimeline->allocateGpuEventTimelineObject();
     }
@@ -243,5 +245,35 @@ namespace vkm
         {
             onPopDebugGroup();
         }
+    }
+
+    void VkmCommandBufferBase::beginGpuZone(const uint32_t beginSlot, const uint32_t endSlot)
+    {
+        if (_isRecording == false)
+        {
+            VKM_DEBUG_ERROR("beginGpuZone must be called while the command buffer is recording");
+            return;
+        }
+        onBeginGpuZone(beginSlot, endSlot);
+    }
+
+    bool VkmCommandBufferBase::endGpuZone()
+    {
+        if (_isRecording == false)
+        {
+            VKM_DEBUG_ERROR("endGpuZone must be called while the command buffer is recording");
+            return false;
+        }
+        return onEndGpuZone();
+    }
+
+    void VkmCommandBufferBase::resolveGpuZones(const uint32_t firstSlot, const uint32_t count)
+    {
+        if (_isRecording == false)
+        {
+            VKM_DEBUG_ERROR("resolveGpuZones must be called while the command buffer is recording");
+            return;
+        }
+        onResolveGpuZones(firstSlot, count);
     }
 }

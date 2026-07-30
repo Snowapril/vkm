@@ -76,7 +76,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_gpu_buffer_pool.h>
 #include <vkm/renderer/backend/vulkan/vulkan_command_queue.h>
 #include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
-#include <vkm/renderer/backend/vulkan/vulkan_gpu_timer.h>
+#include <vkm/renderer/backend/vulkan/vulkan_command_buffer.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 
 // X11/Xlib.h (see above) also #defines None and Always as bare integers, clobbering
@@ -280,6 +280,94 @@ namespace vkm
         stats._hasPoolStats = true;
 
         return stats;
+    }
+
+    bool VkmDriverVulkan::initializeGpuTimestampPool(const uint32_t slotCount)
+    {
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(_physicalDevice, &properties);
+        if (properties.limits.timestampComputeAndGraphics == VK_FALSE)
+        {
+            VKM_DEBUG_INFO("GPU timestamp queries are not supported on this device; GPU profiling is disabled");
+            return false;
+        }
+        _timestampPeriodNs = static_cast<double>(properties.limits.timestampPeriod);
+
+        // Only the low timestampValidBits of a written timestamp carry data; the remaining high
+        // bits are undefined and would turn a delta into nonsense.
+        uint32_t queueFamilyCount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(_physicalDevice, &queueFamilyCount, nullptr);
+        std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(_physicalDevice, &queueFamilyCount, queueFamilies.data());
+        if (_graphicsQueueFamilyIndex < queueFamilyCount)
+        {
+            const uint32_t validBits = queueFamilies[_graphicsQueueFamilyIndex].timestampValidBits;
+            if (validBits == 0)
+            {
+                VKM_DEBUG_INFO("Graphics queue family reports no valid timestamp bits; GPU profiling is disabled");
+                return false;
+            }
+            _timestampValidMask = (validBits >= 64) ? UINT64_MAX : ((uint64_t{1} << validBits) - 1);
+        }
+
+        const VkQueryPoolCreateInfo queryPoolCreateInfo{
+            .sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+            .queryType  = VK_QUERY_TYPE_TIMESTAMP,
+            .queryCount = slotCount,
+        };
+        const VkResult vkResult =
+            vkCreateQueryPool(_device, &queryPoolCreateInfo, nullptr, &_timestampQueryPool);
+        if (!VKM_VK_CHECK_RESULT_MSG(vkResult, "Failed to create GPU profiler timestamp query pool"))
+        {
+            return false;
+        }
+
+        _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::TimestampQuery;
+        return true;
+    }
+
+    void VkmDriverVulkan::destroyGpuTimestampPool()
+    {
+        if (_timestampQueryPool != VK_NULL_HANDLE)
+        {
+            vkDestroyQueryPool(_device, _timestampQueryPool, nullptr);
+            _timestampQueryPool = VK_NULL_HANDLE;
+        }
+    }
+
+    void VkmDriverVulkan::resetGpuTimestampSlots(VkmCommandBufferBase* commandBuffer, const uint32_t firstSlot,
+                                                 const uint32_t count)
+    {
+        if (_timestampQueryPool == VK_NULL_HANDLE || count == 0)
+        {
+            return;
+        }
+        vkCmdResetQueryPool(static_cast<VkmCommandBufferVulkan*>(commandBuffer)->getVkCommandBuffer(),
+                            _timestampQueryPool, firstSlot, count);
+    }
+
+    bool VkmDriverVulkan::resolveGpuTimestamps(const uint32_t firstSlot, const uint32_t count, uint64_t* outTicks)
+    {
+        if (_timestampQueryPool == VK_NULL_HANDLE || count == 0 || outTicks == nullptr)
+        {
+            return false;
+        }
+
+        // Callers only ask once the writing submission's timeline has completed, so every query
+        // in the range is available and this cannot stall.
+        const VkResult vkResult = vkGetQueryPoolResults(_device, _timestampQueryPool, firstSlot, count,
+                                                        sizeof(uint64_t) * count, outTicks, sizeof(uint64_t),
+                                                        VK_QUERY_RESULT_64_BIT);
+        if (vkResult != VK_SUCCESS)
+        {
+            return false;
+        }
+
+        for (uint32_t index = 0; index < count; ++index)
+        {
+            outTicks[index] &= _timestampValidMask;
+        }
+        return true;
     }
 
     uint32_t VkmDriverVulkan::getQueueFamilyIndex(VkmCommandQueueType queueType) const
@@ -784,12 +872,6 @@ namespace vkm
         }
         _frameConstantManager = std::move(frameConstantManager);
 
-        _gpuTimer = std::make_unique<VkmGpuTimerVulkan>(this);
-        if (!_gpuTimer->initialize())
-        {
-            return VkmInitResult{VkmInitResultCode::Failed, "Failed to initialize GPU timer"};
-        }
-
         return VkmInitResult{VkmInitResultCode::Success, ""};
     }
 
@@ -797,11 +879,6 @@ namespace vkm
     {
         setActiveVulkanDriver(nullptr);
 
-        if (_gpuTimer)
-        {
-            _gpuTimer->destroy();
-            _gpuTimer.reset();
-        }
         if (_frameConstantManager)
         {
             _frameConstantManager->destroy();

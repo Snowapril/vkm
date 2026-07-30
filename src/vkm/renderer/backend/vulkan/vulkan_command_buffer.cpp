@@ -9,7 +9,6 @@
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
 #include <vkm/renderer/backend/vulkan/vulkan_frame_constant_manager.h>
-#include <vkm/renderer/backend/vulkan/vulkan_gpu_timer.h>
 #include <vkm/renderer/backend/common/render_pass.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
@@ -440,14 +439,39 @@ namespace vkm
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT, offset, size, data);
     }
 
-    void VkmCommandBufferVulkan::writeGpuTimestampBegin()
+    void VkmCommandBufferVulkan::onBeginCommandBuffer()
     {
-        static_cast<VkmDriverVulkan*>(_driver)->getGpuTimer()->writeBeginTimestamp(_vkCommandBuffer);
+        _openGpuZoneEndSlots.clear();
     }
 
-    void VkmCommandBufferVulkan::writeGpuTimestampEnd()
+    void VkmCommandBufferVulkan::onBeginGpuZone(const uint32_t beginSlot, const uint32_t endSlot)
     {
-        static_cast<VkmDriverVulkan*>(_driver)->getGpuTimer()->writeEndTimestamp(_vkCommandBuffer);
+        const VkQueryPool queryPool = static_cast<VkmDriverVulkan*>(_driver)->getGpuTimestampQueryPool();
+        if (queryPool == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        // TOP_OF_PIPE at the open and BOTTOM_OF_PIPE at the close, so the pair brackets every
+        // stage of the work inside rather than only the stage the timestamp itself sits at.
+        // vkCmdWriteTimestamp2 is legal inside a render pass, which is what lets a zone wrap a
+        // whole subgraph without caring whether it opened one.
+        vkCmdWriteTimestamp2(_vkCommandBuffer, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, queryPool, beginSlot);
+        _openGpuZoneEndSlots.push_back(endSlot);
+    }
+
+    bool VkmCommandBufferVulkan::onEndGpuZone()
+    {
+        const VkQueryPool queryPool = static_cast<VkmDriverVulkan*>(_driver)->getGpuTimestampQueryPool();
+        if (queryPool == VK_NULL_HANDLE || _openGpuZoneEndSlots.empty())
+        {
+            return false;
+        }
+
+        vkCmdWriteTimestamp2(_vkCommandBuffer, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, queryPool,
+                             _openGpuZoneEndSlots.back());
+        _openGpuZoneEndSlots.pop_back();
+        return true;
     }
 
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)

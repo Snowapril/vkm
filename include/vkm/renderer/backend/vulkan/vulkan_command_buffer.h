@@ -5,6 +5,8 @@
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <volk.h>
 
+#include <vector>
+
 namespace vkm
 {
     class VkmCommandBufferVulkan : public VkmCommandBufferBase
@@ -16,9 +18,6 @@ namespace vkm
         virtual void setRHICommandBuffer(VKM_COMMAND_BUFFER_HANDLE handle) override final;
 
         inline VkCommandBuffer getVkCommandBuffer() const { return _vkCommandBuffer; }
-
-        virtual void writeGpuTimestampBegin() override final;
-        virtual void writeGpuTimestampEnd() override final;
 
     protected:
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) override final;
@@ -40,6 +39,9 @@ namespace vkm
         virtual void onSetDebugName(const char* name) override final;
         virtual void onPushDebugGroup(const char* name) override final;
         virtual void onPopDebugGroup() override final;
+        virtual void onBeginCommandBuffer() override final;
+        virtual void onBeginGpuZone(uint32_t beginSlot, uint32_t endSlot) override final;
+        virtual bool onEndGpuZone() override final;
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         virtual void onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset) override final;
         virtual void onEndCommandBuffer() override final;
@@ -51,5 +53,9 @@ namespace vkm
         // Set in onBindPipeline(); onSetPushConstants() needs the bound pipeline's layout,
         // but VkmCommandBufferBase::_boundPipelineState is private to the base class.
         VkPipelineLayout _boundPipelineLayout{VK_NULL_HANDLE};
+
+        // End slots of the GPU zones currently open, innermost last (onBeginGpuZone is handed
+        // both slots up front for WebGPU's sake; Vulkan only needs the end one at close time).
+        std::vector<uint32_t> _openGpuZoneEndSlots;
     };
 } // namespace vkm

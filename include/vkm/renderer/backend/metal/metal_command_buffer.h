@@ -76,6 +76,9 @@ namespace vkm
         virtual void onSetDebugName(const char* name) override final;
         virtual void onPushDebugGroup(const char* name) override final;
         virtual void onPopDebugGroup() override final;
+        virtual void onBeginCommandBuffer() override final;
+        virtual void onBeginGpuZone(uint32_t beginSlot, uint32_t endSlot) override final;
+        virtual bool onEndGpuZone() override final;
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         virtual void onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset) override final;
         virtual void onEndCommandBuffer() override final;
@@ -95,6 +98,10 @@ namespace vkm
         // onBindPipeline() time for onDraw() (Metal passes it per draw call, not in the
         // pipeline state object). uint32_t to keep MTLPrimitiveType out of this header.
         uint32_t _boundPrimitiveType = 0;
+
+        // End slots of the GPU zones currently open, innermost last (onBeginGpuZone is handed
+        // both slots up front for WebGPU's sake; Metal only needs the end one at close time).
+        std::vector<uint32_t> _openGpuZoneEndSlots;
 
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         // onWriteCompletionMarker() queues here instead of opening/closing its own compute

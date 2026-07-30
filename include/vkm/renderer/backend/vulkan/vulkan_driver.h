@@ -15,7 +15,6 @@ typedef struct VmaAllocator_T* VmaAllocator;
 namespace vkm
 {
     class VkmGpuBufferPoolVulkan;
-    class VkmGpuTimerVulkan;
 
     /*
     * @brief renderer backend driver base class
@@ -49,10 +48,19 @@ namespace vkm
         {
             return static_cast<VkmFrameConstantManagerVulkan*>(_frameConstantManager.get());
         }
-        inline VkmGpuTimerVulkan* getGpuTimer() const { return _gpuTimer.get(); }
-
         // VMA heap budgets (device allocated/budget) plus its block-vs-allocation split.
         virtual VkmGpuMemoryStats getGpuMemoryStats() const override final;
+
+        // GPU timestamp pool backing VkmGpuProfiler: one VkQueryPool of `slotCount`
+        // VK_QUERY_TYPE_TIMESTAMP queries. See driver.h for the contract.
+        virtual bool initializeGpuTimestampPool(uint32_t slotCount) override final;
+        virtual void destroyGpuTimestampPool() override final;
+        virtual double getGpuTimestampPeriodNs() const override final { return _timestampPeriodNs; }
+        virtual void resetGpuTimestampSlots(VkmCommandBufferBase* commandBuffer, uint32_t firstSlot,
+                                            uint32_t count) override final;
+        virtual bool resolveGpuTimestamps(uint32_t firstSlot, uint32_t count, uint64_t* outTicks) override final;
+
+        inline VkQueryPool getGpuTimestampQueryPool() const { return _timestampQueryPool; }
 
         /*
         * @brief true if VK_EXT_device_fault was requested (enableGpuCrashDump) and the
@@ -113,7 +121,12 @@ namespace vkm
     private:
         VmaAllocator _vmaAllocator{VK_NULL_HANDLE};
         std::vector<std::unique_ptr<VkmGpuBufferPoolVulkan>> _bufferPools;
-        std::unique_ptr<VkmGpuTimerVulkan> _gpuTimer;
+
+        VkQueryPool _timestampQueryPool{VK_NULL_HANDLE};
+        double _timestampPeriodNs{1.0};
+        // Timestamps are only valid in this many low bits on the graphics queue family; the rest
+        // are undefined and must be masked off before the value means anything.
+        uint64_t _timestampValidMask{UINT64_MAX};
 
         uint32_t _graphicsQueueFamilyIndex{UINT32_MAX};
         uint32_t _computeQueueFamilyIndex{UINT32_MAX};

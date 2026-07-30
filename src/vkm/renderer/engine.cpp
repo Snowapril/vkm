@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/render_graph_capture.h>
 #include <vkm/renderer/backend/common/frame_constants.h>
+#include <vkm/renderer/backend/common/gpu_profiler.h>
 #include <vkm/renderer/camera.h>
 #include <vkm/renderer/memory_report.h>
 #include <vkm/base/cpu_profiler.h>
@@ -28,7 +29,6 @@
 #if defined(VKM_USE_VULKAN_API)
 #include <vkm/renderer/imgui/vulkan_imgui_renderer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
-#include <vkm/renderer/backend/vulkan/vulkan_gpu_timer.h>
 #elif defined(VKM_USE_METAL_API)
 #include <vkm/renderer/imgui/metal_imgui_renderer.h>
 #elif defined(VKM_USE_WEBGPU_API)
@@ -38,6 +38,7 @@
 #include <vkm/renderer/imgui/render_graph_inspector.h>
 #include <vkm/renderer/imgui/memory_inspector.h>
 #include <vkm/renderer/imgui/cpu_profiler_inspector.h>
+#include <vkm/renderer/imgui/gpu_profiler_inspector.h>
 #include <imgui.h>
 #endif
 
@@ -46,6 +47,10 @@ namespace vkm
     // Opens the CPU profiler window (and starts capturing) from frame 0, for profiling a
     // startup path that is over before a hotkey could be pressed: ./triangle --gv_cpu_profile=1
     VKM_GLOBAL_VARIABLE(bool, gv_cpu_profile, false);
+
+    // Same idea for the GPU side: ./triangle --gv_gpu_profile=1 opens the GPU profiler window
+    // (and starts keeping frame history) from frame 0.
+    VKM_GLOBAL_VARIABLE(bool, gv_gpu_profile, false);
 
     VkmEngine::VkmEngine(VkmDriverBase* driver)
         : _driver(driver), _lastUpdateTime(0.0)
@@ -87,6 +92,13 @@ namespace vkm
             _cpuProfilerInspector->setVisible(true);
             VkmCpuProfiler::singleton().setCapturing(true);
         }
+
+        _gpuProfilerInspector = std::make_unique<VkmGpuProfilerInspector>();
+        // Visibility only: the driver is not initialized yet, so there is no VkmGpuProfiler to
+        // start here (unlike the CPU profiler's process-wide singleton above). None is needed --
+        // update()'s visibility-edge check below sees the window open on the first frame and
+        // starts capture then.
+        _gpuProfilerInspector->setVisible(gv_gpu_profile.get());
 #endif
 
         return true;
@@ -133,6 +145,10 @@ namespace vkm
         // collected frame lines up with exactly one loopInner() call. No-op while not capturing.
         VkmCpuProfiler::singleton().beginFrame();
         VKM_PROFILE_SCOPE("Frame");
+
+        // Retires whichever GPU submissions have finished since the last frame. Deliberately
+        // right after the CPU profiler's frame boundary, so both collectors advance together.
+        _driver->getGpuProfiler()->collect();
 
         const double deltaTime = currentUpdateTime - _lastUpdateTime;
         _lastUpdateTime = currentUpdateTime;
@@ -326,6 +342,10 @@ namespace vkm
             }
             renderDebugOverlay(deltaTime);
 
+            if (ImGui::IsKeyPressed(ImGuiKey_F6, false))
+            {
+                _gpuProfilerInspector->toggleVisible();
+            }
             if (ImGui::IsKeyPressed(ImGuiKey_F7, false))
             {
                 _cpuProfilerInspector->toggleVisible();
@@ -349,6 +369,7 @@ namespace vkm
                 _renderGraphInspector->draw(*_renderGraphCapture, _driver, _imGuiRenderer.get());
                 _memoryInspector->draw();
                 _cpuProfilerInspector->draw();
+                _gpuProfilerInspector->draw(_driver->getGpuProfiler());
             }
 
             // Collection follows the window: closing it (with F7 or the title bar's close
@@ -359,6 +380,15 @@ namespace vkm
             {
                 _cpuProfilerWasVisible = _cpuProfilerInspector->isVisible();
                 VkmCpuProfiler::singleton().setCapturing(_cpuProfilerWasVisible);
+            }
+
+            // Same follows-the-window rule, but it only gates the frame *history*: the GPU
+            // profiler keeps recording timestamps either way, because the overlay's GPU stat
+            // below reads the same collector whether or not this window is open.
+            if (_gpuProfilerInspector->isVisible() != _gpuProfilerWasVisible)
+            {
+                _gpuProfilerWasVisible = _gpuProfilerInspector->isVisible();
+                _driver->getGpuProfiler()->setCapturing(_gpuProfilerWasVisible);
             }
         }
 #endif
@@ -381,11 +411,10 @@ namespace vkm
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing);
         ImGui::Text("FPS: %.1f", _fpsSmoothed);
         ImGui::Text("CPU: %.1f%%", getProcessCpuUsagePercent());
-#if defined(VKM_USE_VULKAN_API)
-        ImGui::Text("GPU: %.2f ms", static_cast<VkmDriverVulkan*>(_driver)->getGpuTimer()->getLastGpuFrameTimeMs());
-#else
-        ImGui::Text("GPU: n/a");
-#endif
+        // Backend-free: VkmGpuProfiler is where every backend's timestamps land now, so this
+        // no longer needs to know which driver it is talking to. Reports 0 on a device without
+        // timestamp query support.
+        ImGui::Text("GPU: %.2f ms", _driver->getGpuProfiler()->getLastFrameGpuTimeMs());
         ImGui::Text("Frame: %u", _currentFrameIndex);
 
         // Read from the inspector's cached sample rather than re-querying: the tag table
@@ -402,6 +431,7 @@ namespace vkm
                         formatByteSize(memory._gpu._deviceBudgetBytes).c_str());
         }
 
+        ImGui::Text("F6: GPU profiler");
         ImGui::Text("F7: CPU profiler");
         ImGui::Text("F8: memory inspector");
         ImGui::Text("F10: capture render graph");

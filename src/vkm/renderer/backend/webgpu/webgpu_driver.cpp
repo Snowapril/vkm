@@ -16,6 +16,8 @@
 
 #include <emscripten/emscripten.h>
 
+#include <cstring>
+
 namespace vkm
 {
     namespace
@@ -32,6 +34,24 @@ namespace vkm
             }
             *static_cast<WGPUAdapter*>(userdata1) = adapter;
             *static_cast<bool*>(userdata2) = true;
+        }
+
+        struct MapAsyncResult
+        {
+            bool done = false;
+            WGPUMapAsyncStatus status = WGPUMapAsyncStatus_Error;
+        };
+
+        void onTimestampBufferMapped(WGPUMapAsyncStatus status, WGPUStringView message, void* userdata1, void*)
+        {
+            auto* result = static_cast<MapAsyncResult*>(userdata1);
+            result->status = status;
+            result->done = true;
+            if (status != WGPUMapAsyncStatus_Success)
+            {
+                VKM_DEBUG_ERROR(fmt::format("Failed to map the GPU timestamp readback buffer: {}",
+                                            toStdString(message)).c_str());
+            }
         }
 
         void onRequestDeviceEnded(WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView message, void* userdata1, void* userdata2)
@@ -104,7 +124,14 @@ namespace vkm
         const WGPUUncapturedErrorCallbackInfo errorCallbackInfo{
             .callback = logWGPUUncapturedError,
         };
+        // timestamp-query is optional in WebGPU, so it must be both offered by the adapter and
+        // asked for at device creation; requesting an unsupported feature fails device creation
+        // outright, which is why this is conditional rather than unconditional.
+        _timestampQuerySupported = wgpuAdapterHasFeature(_adapter, WGPUFeatureName_TimestampQuery);
+        const WGPUFeatureName requiredFeatures[] = { WGPUFeatureName_TimestampQuery };
         const WGPUDeviceDescriptor deviceDesc{
+            .requiredFeatureCount = _timestampQuerySupported ? 1u : 0u,
+            .requiredFeatures = _timestampQuerySupported ? requiredFeatures : nullptr,
             .deviceLostCallbackInfo = deviceLostCallbackInfo,
             .uncapturedErrorCallbackInfo = errorCallbackInfo,
         };
@@ -222,6 +249,116 @@ namespace vkm
     VkmRenderResourcePool* VkmDriverWebGPU::newRenderResourcePoolInner()
     {
         return new VkmRenderResourcePool(this);
+    }
+
+    bool VkmDriverWebGPU::initializeGpuTimestampPool(const uint32_t slotCount)
+    {
+        if (_timestampQuerySupported == false)
+        {
+            VKM_DEBUG_INFO("WebGPU adapter does not offer timestamp-query; GPU profiling is disabled");
+            return false;
+        }
+
+        const WGPUQuerySetDescriptor querySetDesc{
+            .label = toWGPUStringView("VkmGpuProfilerTimestamps"),
+            .type  = WGPUQueryType_Timestamp,
+            .count = slotCount,
+        };
+        _timestampQuerySet = wgpuDeviceCreateQuerySet(_device, &querySetDesc);
+        if (_timestampQuerySet == nullptr)
+        {
+            VKM_DEBUG_ERROR("Failed to create the WebGPU timestamp query set; GPU profiling is disabled");
+            return false;
+        }
+
+        // A query set can only be read through a GPU-side resolve into a QueryResolve buffer,
+        // and a QueryResolve buffer can never also be MapRead -- hence the second, mappable copy.
+        const uint64_t resolveSize = static_cast<uint64_t>(slotCount) * sizeof(uint64_t);
+        const WGPUBufferDescriptor resolveDesc{
+            .label = toWGPUStringView("VkmGpuProfilerTimestampResolve"),
+            .usage = WGPUBufferUsage_QueryResolve | WGPUBufferUsage_CopySrc,
+            .size  = resolveSize,
+        };
+        _timestampResolveBuffer = wgpuDeviceCreateBuffer(_device, &resolveDesc);
+
+        const WGPUBufferDescriptor readbackDesc{
+            .label = toWGPUStringView("VkmGpuProfilerTimestampReadback"),
+            .usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead,
+            .size  = resolveSize,
+        };
+        _timestampReadbackBuffer = wgpuDeviceCreateBuffer(_device, &readbackDesc);
+
+        if (_timestampResolveBuffer == nullptr || _timestampReadbackBuffer == nullptr)
+        {
+            VKM_DEBUG_ERROR("Failed to create the WebGPU timestamp readback buffers; GPU profiling is disabled");
+            destroyGpuTimestampPool();
+            return false;
+        }
+
+        _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::TimestampQuery;
+        return true;
+    }
+
+    void VkmDriverWebGPU::destroyGpuTimestampPool()
+    {
+        if (_timestampReadbackBuffer != nullptr)
+        {
+            wgpuBufferRelease(_timestampReadbackBuffer);
+            _timestampReadbackBuffer = nullptr;
+        }
+        if (_timestampResolveBuffer != nullptr)
+        {
+            wgpuBufferRelease(_timestampResolveBuffer);
+            _timestampResolveBuffer = nullptr;
+        }
+        if (_timestampQuerySet != nullptr)
+        {
+            wgpuQuerySetRelease(_timestampQuerySet);
+            _timestampQuerySet = nullptr;
+        }
+    }
+
+    bool VkmDriverWebGPU::resolveGpuTimestamps(const uint32_t firstSlot, const uint32_t count, uint64_t* outTicks)
+    {
+        if (_timestampReadbackBuffer == nullptr || count == 0 || outTicks == nullptr)
+        {
+            return false;
+        }
+
+        // The GPU-side resolve+copy was already recorded by VkmCommandBufferWebGPU::
+        // onResolveGpuZones, and the caller only reaches here once that submission completed, so
+        // this map returns immediately -- it is the same blocking map readbackTexture already
+        // performs through VkmStagingBufferWebGPU.
+        // size_t rather than uint64_t: the map/get-range entry points take size_t, which is 32-bit
+        // on wasm.
+        const size_t offset = static_cast<size_t>(firstSlot) * sizeof(uint64_t);
+        const size_t size = static_cast<size_t>(count) * sizeof(uint64_t);
+
+        MapAsyncResult result;
+        const WGPUBufferMapCallbackInfo callbackInfo{
+            .mode      = WGPUCallbackMode_AllowSpontaneous,
+            .callback  = onTimestampBufferMapped,
+            .userdata1 = &result,
+        };
+        wgpuBufferMapAsync(_timestampReadbackBuffer, WGPUMapMode_Read, offset, size, callbackInfo);
+        while (result.done == false)
+        {
+            emscripten_sleep(1);
+        }
+        if (result.status != WGPUMapAsyncStatus_Success)
+        {
+            return false;
+        }
+
+        const void* mapped = wgpuBufferGetConstMappedRange(_timestampReadbackBuffer, offset, size);
+        if (mapped == nullptr)
+        {
+            wgpuBufferUnmap(_timestampReadbackBuffer);
+            return false;
+        }
+        std::memcpy(outTicks, mapped, size);
+        wgpuBufferUnmap(_timestampReadbackBuffer);
+        return true;
     }
 
     VkmPipelineStateBase* VkmDriverWebGPU::newPipelineStateInner()

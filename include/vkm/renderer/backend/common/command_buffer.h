@@ -121,10 +121,42 @@ namespace vkm
 
         void setPushConstants(const void* data, uint32_t size, uint32_t offset = 0);
 
-        // GPU frame-time profiling hooks for the engine debug overlay. Only Vulkan overrides
-        // these with real behavior; Metal/WebGPU keep the empty default (reports 0).
-        virtual void writeGpuTimestampBegin() {}
-        virtual void writeGpuTimestampEnd() {}
+        /*
+        * @brief Opens a GPU-timed zone: the backend arranges for a timestamp to be written into
+        * `beginSlot` at this point in the command stream, and remembers `endSlot` for the
+        * matching endGpuZone(). Zones nest.
+        *
+        * Both slots are supplied up front because WebGPU has no encoder-level timestamp write at
+        * all -- it can only express a pair as a pass descriptor's beginningOfPassWriteIndex /
+        * endOfPassWriteIndex, which must be filled before the pass is opened.
+        *
+        * Slots are indices into the driver's timestamp pool (VkmDriverBase::
+        * initializeGpuTimestampPool); VkmGpuProfiler owns their allocation. Both calls no-op on
+        * a backend without timestamp support.
+        */
+        void beginGpuZone(uint32_t beginSlot, uint32_t endSlot);
+
+        /*
+        * @brief Closes the innermost open zone. Returns false when the backend could not place
+        * this zone's timestamps anywhere, so the caller drops it instead of reporting a span
+        * that was never measured.
+        *
+        * Only WebGPU ever returns false: its timestamps ride a pass descriptor, so a zone that
+        * enclosed no render or compute pass (a transfer subgraph, or the outer zone wrapping a
+        * whole submission) has nowhere to write. Vulkan and Metal always return true.
+        */
+        bool endGpuZone();
+
+        /*
+        * @brief Records whatever this backend needs in order for slots [firstSlot, firstSlot +
+        * count) to be readable once this command buffer has completed. Must be called after the
+        * outermost zone closed and before endCommandBuffer().
+        *
+        * A no-op on Vulkan and Metal, whose pools are read back directly from the CPU. WebGPU
+        * has to encode a resolve into the same command buffer, because a query set can only be
+        * read through a GPU-side resolve into a buffer.
+        */
+        void resolveGpuZones(uint32_t firstSlot, uint32_t count);
 
         inline const VkmGpuEventTimelineObject& getGpuEventTimelineObject() const { return _gpuEventTimelineObject; }
 
@@ -201,6 +233,20 @@ namespace vkm
         virtual void onSetDebugName(const char* name) = 0;
         virtual void onPushDebugGroup(const char* name) = 0;
         virtual void onPopDebugGroup() = 0;
+
+        /*
+        * @brief Called by beginCommandBuffer() before anything is recorded. Backends discard
+        * per-use state here for the same reason the base class clears its bind history: command
+        * buffers are pooled and reused across frames.
+        */
+        virtual void onBeginCommandBuffer() {}
+
+        // Empty defaults rather than pure virtuals: a backend without timestamp support reports
+        // that through VkmDriverBase::initializeGpuTimestampPool() returning false, and then
+        // never sees these called at all.
+        virtual void onBeginGpuZone(uint32_t beginSlot, uint32_t endSlot) { (void)beginSlot; (void)endSlot; }
+        virtual bool onEndGpuZone() { return false; }
+        virtual void onResolveGpuZones(uint32_t firstSlot, uint32_t count) { (void)firstSlot; (void)count; }
 
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         virtual void onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset) = 0;
