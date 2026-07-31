@@ -893,8 +893,15 @@ TEST_CASE("VkmDriverWebGPU - initialization succeeds") {
     SUBCASE("compute command queue is created") {
         CHECK(f.driver->getCommandQueue(vkm::VkmCommandQueueType::Compute, 0) != nullptr);
     }
-    SUBCASE("driver capability flags are None on WebGPU") {
-        CHECK(f.driver->getDriverCapabilityFlags() == vkm::VkmDriverCapabilityFlags::None);
+    SUBCASE("driver capability flags expose nothing beyond the adapter's timestamp support") {
+        // WebGPU still implements none of the texture/buffer capabilities. TimestampQuery is the
+        // one exception and is adapter-dependent -- VkmGpuProfiler's pool is only created when the
+        // adapter offers the optional timestamp-query feature -- so mask it out rather than
+        // assert a value that changes with the machine the test runs on.
+        constexpr uint32_t kTimestampQuery =
+            static_cast<uint32_t>(vkm::VkmDriverCapabilityFlags::TimestampQuery);
+        const uint32_t flags = static_cast<uint32_t>(f.driver->getDriverCapabilityFlags());
+        CHECK((flags & ~kTimestampQuery) == static_cast<uint32_t>(vkm::VkmDriverCapabilityFlags::None));
     }
 }
 

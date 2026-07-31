@@ -259,6 +259,25 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_ESCAPE_RE.sub("", text)
 
 
+def _page_console(output: str) -> str:
+    """Keep only the lines the wasm page itself printed, unwrapped from Chrome's log format.
+
+    Chrome runs with --v=1, so its own verbose logging outnumbers the test output by orders of
+    magnitude and a plain tail of the capture is pure browser noise -- it names neither the
+    failing test nor the assertion. Falls back to the raw capture when nothing matches, so a
+    crash before the first console write still reports something."""
+    lines = []
+    for line in output.splitlines():
+        _, marker, rest = line.partition("INFO:CONSOLE")
+        if not marker:
+            continue
+        rest = rest.partition("] ")[2]
+        # Chrome appends `, source: <url> (<line>)` to every console message.
+        rest = rest.rsplit(", source: ", 1)[0].strip()
+        lines.append(rest.strip('"'))
+    return "\n".join(lines) if lines else output
+
+
 def _capture_emsdk_env(emsdk_dir: Path) -> dict:
     """Capture the environment variables emsdk_env.sh/.bat sets, once, as a plain dict —
     faithful to the proven `source emsdk_env.sh && emcmake cmake ...` pattern (see
@@ -353,10 +372,10 @@ def run_webgpu_tests_headless_chrome(chrome: str, build_dir: Path, timeout_s: in
         return True
     if "[doctest] Status: FAILURE!" in output:
         print("[FAIL] doctest reported test failures:")
-        print(output[-4000:])
+        print(_page_console(output)[-6000:])
         return False
     print(f"[FAIL] doctest completion marker not found within {timeout_s}s (crash or hang?).")
-    print(output[-4000:])
+    print(_page_console(output)[-6000:])
     return False
 
 
