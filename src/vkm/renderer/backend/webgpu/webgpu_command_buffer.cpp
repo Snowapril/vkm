@@ -307,6 +307,14 @@ namespace vkm
         // image layouts, and one pass's writes are visible to the next by specification.
     }
 
+    void VkmCommandBufferWebGPU::onBindPerPassResources(VkmPerPassResourceTableBase* table)
+    {
+        (void)table;
+        // Pairs with VkmDriver*::newPerPassResourceTableInner: set 2 is Vulkan-only so far, so no
+        // table can exist to bind here.
+        VKM_DEBUG_ERROR("bindPerPassResources is not implemented on this backend yet");
+    }
+
     void VkmCommandBufferWebGPU::onSetDebugName(const char* name)
     {
         wgpuCommandEncoderSetLabel(_encoder, toWGPUStringView(name));

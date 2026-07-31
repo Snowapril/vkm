@@ -3,6 +3,7 @@
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
+#include <vkm/renderer/backend/common/per_pass_resource_table.h>
 
 namespace vkm
 {
@@ -205,6 +206,30 @@ namespace vkm
             return;
         }
         onBarrierTextureForShaderRead(texture);
+    }
+
+    void VkmCommandBufferBase::bindPerPassResources(VkmPerPassResourceTableBase* table)
+    {
+        if (!_isRecording || _boundPipelineState == nullptr)
+        {
+            VKM_DEBUG_ERROR("bindPerPassResources requires a bound pipeline");
+            return;
+        }
+        if (table == nullptr)
+        {
+            VKM_DEBUG_ERROR("bindPerPassResources was given a null table");
+            return;
+        }
+        if (table->getPipelineState() != _boundPipelineState)
+        {
+            // Set 2's layout comes from the pipeline's own declaration, so binding a table built
+            // against a different pipeline would describe a different set. Caught here rather than
+            // left to each backend, where it surfaces as a layout-compatibility validation error
+            // far from its cause.
+            VKM_DEBUG_ERROR("bindPerPassResources was given a table built for a different pipeline");
+            return;
+        }
+        onBindPerPassResources(table);
     }
 
     void VkmCommandBufferBase::setPushConstants(const void* data, uint32_t size, uint32_t offset)

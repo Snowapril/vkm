@@ -3,6 +3,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
+#include <vkm/renderer/backend/vulkan/vulkan_per_pass_resource_table.h>
 #include <vkm/renderer/backend/vulkan/vulkan_util.h>
 #include <vkm/renderer/engine.h>
 
@@ -236,6 +237,11 @@ namespace vkm
         // matches selectSwapSurfaceFormat()'s BGRA8_UNORM/SRGB_NONLINEAR preference.
         (void)enableHdr;
         return VkmFormat::BGRA8_UNORM;
+    }
+
+    VkmPerPassResourceTableBase* VkmDriverVulkan::newPerPassResourceTableInner()
+    {
+        return new VkmPerPassResourceTableVulkan(this);
     }
 
     VkmSwapChainBase* VkmDriverVulkan::newSwapChainInner()

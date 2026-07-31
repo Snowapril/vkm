@@ -73,6 +73,7 @@ namespace vkm
         virtual void onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) override final;
         virtual void onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer) override final;
         virtual void onBarrierTextureForShaderRead(VkmResourceHandle texture) override final;
+        virtual void onBindPerPassResources(VkmPerPassResourceTableBase* table) override final;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) override final;
         virtual void onSetDebugName(const char* name) override final;
         virtual void onPushDebugGroup(const char* name) override final;

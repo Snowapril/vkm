@@ -552,9 +552,18 @@ gate, not here. Phase 1's gate is the **compile** path only — that is what was
 
 ### Phase 2 — Shared infrastructure A: per-pass binding, barriers, threadgroup sizes
 Blocks *any* multi-pass compute work, and therefore **both** GI tiers. Pre-existing `TODO.md:8` items.
-- [ ] Implement **descriptor set 2 (per-pass)** for pass-owned buffers/storage images, plus its
-      PSO-JSON representation (`TODO.md:16`). Note every pipeline layout currently declares sets 0
-      and 1 and binds both unconditionally
+- [x] **Descriptor set 2 (per-pass), Vulkan.** PSO JSON declares `per_pass_resources` (sampled
+      texture / sampler / storage buffer / uniform buffer, with shader visibility derived from the
+      type); `VkmPerPassResourceTable` binds them via `commandBuffer->bindPerPassResources()`.
+      Tables are **immutable** — that removes the update-while-in-flight hazard entirely, and the
+      cases that "change" want a rebuilt table anyway (a resized G-buffer recreated its textures; a
+      ping-ponged reservoir pair reads better as two tables selected by parity). Verified end to end
+      with a compute pass whose only resources are in set 2
+- [ ] Descriptor set 2 on **Metal** (argument buffer at a reserved index + vkm-compiler MSL binding
+      pins) and **WebGPU** (bind group 2). Both are error stubs today
+- [ ] **Note:** set 2 is what unblocks WebGPU sampling at all — `registerTexture` is a hard error
+      there because WGSL has no runtime-sized arrays, so the low-spec tier cannot sample a probe
+      atlas until set 2 lands on WebGPU
 - [x] **Texture barrier for shader reads.** Added `barrierTextureForShaderRead(texture)`, named for
       its destination like the existing `barrierIndirectArgumentBuffer` and equally coarse (it takes
       no source state: Vulkan already tracks the texture's layout, and the other backends have none).
@@ -973,4 +982,5 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-07-30 | 1 | `ray_query` PSO opt-in implemented (`VkmShaderStageDescriptor::requiresRayQuery` → `cs_6_5` + `-fspv-target-env=vulkan1.2`), covered by `TestPsoConfig`. End-to-end through `vkm-compiler`: **Vulkan passes** (SPIR-V 1.5, validates, ray query + descriptor indexing, using the real bindless macros); **Metal blocked** on registering the AS as a set-0 binding (§4.4) — Phase 5 work, not a toolchain gap. Found that `-fspv-extension` is a whitelist that would break every bindless shader; it is now deliberately not passed. CI Ubuntu runners are all 22.04 (Mesa 23.2.x), so Vulkan RT will have no CI coverage until bumped. Full suite: 164/164, 18602 assertions, Metal validation clean. |
 | 2026-07-30 | 2 | Compute threadgroup size now comes from the shader's compiled SPIR-V via `VkmShaderCacheHeader::threadGroupSize` (cache v3) rather than the engine-global `kVkmComputeThreadGroupSizeX`, so 2D kernels can declare `[numthreads(8, 8, 1)]`. Metal reads it off the bound pipeline at dispatch. Verified end to end with an 8x8x1 shader on both targets; the Metal GPU cull test (visible count 1 -> 0 -> 1) covers the changed dispatch path. |
 | 2026-07-31 | 2 | Added `barrierTextureForShaderRead`: the render-pass-writes -> shader-samples hand-off the engine's implicit-layout convention could not express. Real work on Vulkan only; Metal and WebGPU documented no-ops. Verified on Vulkan (170 tests) and Metal (166), plus a wasm build for the WebGPU stub; the new tests were checked to actually fail when the transition is sabotaged. |
+| 2026-07-31 | 2 | Descriptor set 2 (per-pass resources) implemented on **Vulkan**: PSO JSON declaration, per-PSO `VkDescriptorSetLayout`, an immutable `VkmPerPassResourceTable`, and `bindPerPassResources()`. Verified end to end by a compute pass whose only resources are a set-2 uniform buffer and storage buffer, reading back `base + threadId` with validation clean. Metal and WebGPU are error stubs. This is the first genuinely per-PSO descriptor set in the engine, so a pipeline declaring it is no longer layout-compatible with one that does not. |
 | 2026-07-30 | 4 | Low-spec tier must be **fully dynamic** (no bake) → technique decided: raster-updated dynamic probe volume (DDGI-style octahedral irradiance + distance moments, Chebyshev visibility) plus an additive SSGI contact term. Storage/sampling are update-mechanism-agnostic, so Phase 5's rays can later refresh the same volume, and ReSTIR GI can query it for multi-bounce `L_o`. |

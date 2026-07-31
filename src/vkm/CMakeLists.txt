@@ -40,6 +40,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_resource.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/texture.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/buffer.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/per_pass_resource_table.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/staging_buffer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/sampler.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/texture_view.h
@@ -86,6 +87,7 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/backend/common/render_resource.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/texture.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/buffer.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/per_pass_resource_table.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/staging_buffer.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/sampler.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/texture_view.cpp
@@ -161,6 +163,7 @@ if (VKM_USE_VULKAN_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_texture.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_buffer.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_per_pass_resource_table.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_staging_buffer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_sampler.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_texture_view.h
@@ -178,6 +181,7 @@ if (VKM_USE_VULKAN_API)
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_texture.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_buffer.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_per_pass_resource_table.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_staging_buffer.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_sampler.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_texture_view.cpp

@@ -567,6 +567,24 @@ namespace vkm
         return pipelineState;
     }
 
+    VkmPerPassResourceTableBase* VkmDriverBase::newPerPassResourceTable(
+        const VkmPipelineStateBase* pipelineState,
+        const std::vector<VkmPerPassResourceEntry>& entries,
+        std::string* outError)
+    {
+        VkmPerPassResourceTableBase* table = newPerPassResourceTableInner();
+        if (table == nullptr)
+        {
+            return nullptr;
+        }
+        if (!table->initialize(pipelineState, entries, outError))
+        {
+            delete table;
+            return nullptr;
+        }
+        return table;
+    }
+
     VkmCommandQueueBase* VkmDriverBase::newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name)
     {
         VkmCommandQueueBase* commandQueue = newCommandQueueInner();

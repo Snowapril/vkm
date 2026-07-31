@@ -374,6 +374,15 @@ namespace vkm
         return VkmFormat::BGRA8_UNORM;
     }
 
+    VkmPerPassResourceTableBase* VkmDriverWebGPU::newPerPassResourceTableInner()
+    {
+        // Set 2 is implemented on Vulkan only so far. Declared here because the base class makes it
+        // pure virtual, per the "no new pure virtual without every backend implementing it" rule in
+        // common/AGENTS.md -- the same error-stub shape copyTexture/registerTexture use.
+        VKM_DEBUG_ERROR("Per-pass resource tables (descriptor set 2) are not implemented on this backend yet");
+        return nullptr;
+    }
+
     VkmSwapChainBase* VkmDriverWebGPU::newSwapChainInner()
     {
         return new VkmSwapChainWebGPU(this);

@@ -530,6 +530,14 @@ namespace vkm
         // deliberately records nothing rather than forcing one.
     }
 
+    void VkmCommandBufferMetal::onBindPerPassResources(VkmPerPassResourceTableBase* table)
+    {
+        (void)table;
+        // Pairs with VkmDriver*::newPerPassResourceTableInner: set 2 is Vulkan-only so far, so no
+        // table can exist to bind here.
+        VKM_DEBUG_ERROR("bindPerPassResources is not implemented on this backend yet");
+    }
+
     void VkmCommandBufferMetal::onSetPushConstants(const void* data, uint32_t size, uint32_t offset)
     {
         // Each call fills a fresh ring entry, so a partial update at a non-zero offset

@@ -16,6 +16,7 @@ set(SRCS
     ${SRC_DIR}/TestMemoryTracker.cpp
     ${SRC_DIR}/TestShaderCacheUtil.cpp
     ${SRC_DIR}/TestTextureShaderReadBarrier.cpp
+    ${SRC_DIR}/TestPerPassResources.cpp
     ${SRC_DIR}/TestPipelineStateManager.cpp
     ${SRC_DIR}/TestBindlessSlotAllocator.cpp
     ${SRC_DIR}/TestInputHandler.cpp
@@ -92,6 +93,17 @@ if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
         EXTRA_DEPENDS  "${ROOT_DIR}/src/samples/skybox/skybox.hlsl")
 endif()
 
+# TestPerPassResources dispatches a compute shader whose only resources live in descriptor set 2.
+# Vulkan-only: set 2 is implemented there first, and the other backends' newPerPassResourceTable
+# is still an error stub.
+if (VKM_USE_VULKAN_API)
+    vkm_add_shader_cache_target(
+        TARGET_NAME   tests_per_pass_shaders
+        OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
+        PSO_JSON_FILES "${ROOT_DIR}/resources/tests/per_pass/renderpass.json"
+        EXTRA_DEPENDS  "${ROOT_DIR}/resources/tests/per_pass/per_pass_resources.hlsl")
+endif()
+
 # TestSceneModelRenderMetal draws an imported glTF mesh with the model_viewer sample's PSO.
 # It is Metal-only (real-pixel output is only verified on the backend this machine can run,
 # like TestMetalBindlessTriangle), so its shader cache is built only for the Metal backend.
@@ -161,6 +173,15 @@ if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
         PRIVATE
         TEST_SKYBOX_SAMPLE_DIR="${ROOT_DIR}/src/samples/skybox/"
         TEST_SKYBOX_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
+    )
+endif()
+
+if (VKM_USE_VULKAN_API)
+    add_dependencies(${target} tests_per_pass_shaders)
+    target_compile_definitions(${target}
+        PRIVATE
+        TEST_PER_PASS_PSO_DIR="${ROOT_DIR}/resources/tests/per_pass/"
+        TEST_PER_PASS_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
     )
 endif()
 

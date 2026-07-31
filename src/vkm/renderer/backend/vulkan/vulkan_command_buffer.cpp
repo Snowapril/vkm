@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_staging_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_pipeline_state.h>
+#include <vkm/renderer/backend/vulkan/vulkan_per_pass_resource_table.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
 #include <vkm/renderer/backend/vulkan/vulkan_frame_constant_manager.h>
@@ -463,6 +464,22 @@ namespace vkm
                               textureVulkan->getCurrentLayout(),
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, aspectMask);
         textureVulkan->setCurrentLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    void VkmCommandBufferVulkan::onBindPerPassResources(VkmPerPassResourceTableBase* table)
+    {
+        VkmPerPassResourceTableVulkan* tableVulkan = static_cast<VkmPerPassResourceTableVulkan*>(table);
+        VkDescriptorSet descriptorSet = tableVulkan->getDescriptorSet();
+
+        // The bound pipeline is the one the table was built against (checked in the base class), so
+        // its layout is the right one to bind against and kVkmPerPassSetIndex is the right index.
+        const VkmPipelineStateVulkan* pipelineStateVulkan =
+            static_cast<const VkmPipelineStateVulkan*>(getBoundPipelineState());
+        const VkPipelineBindPoint bindPoint = pipelineStateVulkan->isCompute()
+                                                  ? VK_PIPELINE_BIND_POINT_COMPUTE
+                                                  : VK_PIPELINE_BIND_POINT_GRAPHICS;
+        vkCmdBindDescriptorSets(_vkCommandBuffer, bindPoint, pipelineStateVulkan->getPipelineLayout(),
+                                kVkmPerPassSetIndex, 1, &descriptorSet, 0, nullptr);
     }
 
     void VkmCommandBufferVulkan::onSetPushConstants(const void* data, uint32_t size, uint32_t offset)
