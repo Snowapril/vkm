@@ -17,6 +17,7 @@ set(SRCS
     ${SRC_DIR}/TestShaderCacheUtil.cpp
     ${SRC_DIR}/TestTextureShaderReadBarrier.cpp
     ${SRC_DIR}/TestPerPassResources.cpp
+    ${SRC_DIR}/TestGBuffer.cpp
     ${SRC_DIR}/TestPipelineStateManager.cpp
     ${SRC_DIR}/TestBindlessSlotAllocator.cpp
     ${SRC_DIR}/TestInputHandler.cpp
@@ -50,6 +51,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestCubemapTextureMetal.mm
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
         ${SRC_DIR}/TestPerPassResourcesMetal.mm
+        ${SRC_DIR}/TestGBufferMetal.mm
     )
 endif()
 
@@ -68,6 +70,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestCubemapTextureMetal.mm
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
         ${SRC_DIR}/TestPerPassResourcesMetal.mm
+        ${SRC_DIR}/TestGBufferMetal.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++"
     )
 endif()
