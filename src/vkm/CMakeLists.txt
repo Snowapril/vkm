@@ -215,6 +215,7 @@ if (VKM_USE_METAL_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_pipeline_state.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_util.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_buffer.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_per_pass_resource_table.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_staging_buffer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_sampler.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_texture_view.h
@@ -233,6 +234,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_pipeline_state.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_util.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_buffer.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_per_pass_resource_table.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_staging_buffer.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_sampler.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_texture_view.mm

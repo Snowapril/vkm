@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/metal/metal_driver.h>
+#include <vkm/renderer/backend/metal/metal_per_pass_resource_table.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_staging_buffer.h>
@@ -446,11 +447,7 @@ namespace vkm
 
     VkmPerPassResourceTableBase* VkmDriverMetal::newPerPassResourceTableInner()
     {
-        // Set 2 is implemented on Vulkan only so far. Declared here because the base class makes it
-        // pure virtual, per the "no new pure virtual without every backend implementing it" rule in
-        // common/AGENTS.md -- the same error-stub shape copyTexture/registerTexture use.
-        VKM_DEBUG_ERROR("Per-pass resource tables (descriptor set 2) are not implemented on this backend yet");
-        return nullptr;
+        return new VkmPerPassResourceTableMetal(this);
     }
 
     VkmSwapChainBase* VkmDriverMetal::newSwapChainInner()

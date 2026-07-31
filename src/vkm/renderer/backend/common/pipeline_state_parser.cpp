@@ -3,6 +3,7 @@
 #include <vkm/renderer/backend/common/pipeline_state_parser.h>
 
 #include <vkm/base/common.h>
+#include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/enum_string_util.h>
 
 #include <nlohmann/json.hpp>
@@ -408,6 +409,17 @@ namespace vkm
                 parseEnumField(state, resource, "type", fieldPrefix + ".type", kPerPassResourceTypeTable, binding.type);
                 if (state.failed())
                 {
+                    return false;
+                }
+
+                if (binding.binding >= kVkmPerPassResourceMaxBindings)
+                {
+                    // Capped engine-wide, not per backend: Metal reserves argument-table slots up
+                    // front, and letting a higher index parse would turn a pipeline that loads on
+                    // Vulkan into a runtime failure there only.
+                    state.fail("Field '" + fieldPrefix + ".binding' is " + std::to_string(binding.binding) +
+                               ", but per-pass bindings must be below " +
+                               std::to_string(kVkmPerPassResourceMaxBindings));
                     return false;
                 }
 

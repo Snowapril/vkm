@@ -49,6 +49,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestSceneModelRenderMetal.mm
         ${SRC_DIR}/TestCubemapTextureMetal.mm
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
+        ${SRC_DIR}/TestPerPassResourcesMetal.mm
     )
 endif()
 
@@ -66,6 +67,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestSceneModelRenderMetal.mm
         ${SRC_DIR}/TestCubemapTextureMetal.mm
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
+        ${SRC_DIR}/TestPerPassResourcesMetal.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++"
     )
 endif()
@@ -93,10 +95,11 @@ if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
         EXTRA_DEPENDS  "${ROOT_DIR}/src/samples/skybox/skybox.hlsl")
 endif()
 
-# TestPerPassResources dispatches a compute shader whose only resources live in descriptor set 2.
-# Vulkan-only: set 2 is implemented there first, and the other backends' newPerPassResourceTable
-# is still an error stub.
-if (VKM_USE_VULKAN_API)
+# TestPerPassResources dispatches a compute shader whose only resources live in descriptor set 2,
+# on both backends that implement it -- Vulkan allocates a descriptor set, Metal binds discretely
+# onto the argument table, and the same expected values across both is what proves the PSO
+# declaration means the same thing on each. WebGPU's newPerPassResourceTable is still a stub.
+if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
     vkm_add_shader_cache_target(
         TARGET_NAME   tests_per_pass_shaders
         OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
@@ -176,7 +179,7 @@ if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
     )
 endif()
 
-if (VKM_USE_VULKAN_API)
+if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
     add_dependencies(${target} tests_per_pass_shaders)
     target_compile_definitions(${target}
         PRIVATE

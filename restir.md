@@ -559,8 +559,15 @@ Blocks *any* multi-pass compute work, and therefore **both** GI tiers. Pre-exist
       cases that "change" want a rebuilt table anyway (a resized G-buffer recreated its textures; a
       ping-ponged reservoir pair reads better as two tables selected by parity). Verified end to end
       with a compute pass whose only resources are in set 2
-- [ ] Descriptor set 2 on **Metal** (argument buffer at a reserved index + vkm-compiler MSL binding
-      pins) and **WebGPU** (bind group 2). Both are error stubs today
+- [x] **Descriptor set 2 on Metal.** Bound *discretely* rather than as a second argument buffer —
+      the same choice set 1 already makes, and for the same reason: it keeps set 2 out of the
+      `pad_argument_buffer_resources` walk, which needs a registered base type for every id it steps
+      over and so cannot cope with the sparse binding indices a PSO may declare. (That walk is also
+      exactly what blocks the Metal ray-query path — see §4.4.) vkm-compiler pins each declared
+      binding per-PSO via `add_msl_resource_binding`; the runtime replays the resolved entries onto
+      the argument table. Verified by running the *same* shader and expected values as Vulkan
+- [ ] Descriptor set 2 on **WebGPU** (bind group 2). Still an error stub — and the one that matters
+      most, since it is what would let WebGPU sample a texture at all
 - [ ] **Note:** set 2 is what unblocks WebGPU sampling at all — `registerTexture` is a hard error
       there because WGSL has no runtime-sized arrays, so the low-spec tier cannot sample a probe
       atlas until set 2 lands on WebGPU
@@ -983,4 +990,5 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-07-30 | 2 | Compute threadgroup size now comes from the shader's compiled SPIR-V via `VkmShaderCacheHeader::threadGroupSize` (cache v3) rather than the engine-global `kVkmComputeThreadGroupSizeX`, so 2D kernels can declare `[numthreads(8, 8, 1)]`. Metal reads it off the bound pipeline at dispatch. Verified end to end with an 8x8x1 shader on both targets; the Metal GPU cull test (visible count 1 -> 0 -> 1) covers the changed dispatch path. |
 | 2026-07-31 | 2 | Added `barrierTextureForShaderRead`: the render-pass-writes -> shader-samples hand-off the engine's implicit-layout convention could not express. Real work on Vulkan only; Metal and WebGPU documented no-ops. Verified on Vulkan (170 tests) and Metal (166), plus a wasm build for the WebGPU stub; the new tests were checked to actually fail when the transition is sabotaged. |
 | 2026-07-31 | 2 | Descriptor set 2 (per-pass resources) implemented on **Vulkan**: PSO JSON declaration, per-PSO `VkDescriptorSetLayout`, an immutable `VkmPerPassResourceTable`, and `bindPerPassResources()`. Verified end to end by a compute pass whose only resources are a set-2 uniform buffer and storage buffer, reading back `base + threadId` with validation clean. Metal and WebGPU are error stubs. This is the first genuinely per-PSO descriptor set in the engine, so a pipeline declaring it is no longer layout-compatible with one that does not. |
+| 2026-07-31 | 2 | Descriptor set 2 on **Metal**, via discrete argument-table bindings (not a second argument buffer) so it stays out of the `pad_argument_buffer_resources` walk, mirroring set 1. vkm-compiler pins each declared binding per-PSO. The cross-backend test now runs the same shader and expected values on Vulkan and Metal, which is what shows the declaration means the same thing on both. Metal 169 tests, Vulkan 173, wasm builds. |
 | 2026-07-30 | 4 | Low-spec tier must be **fully dynamic** (no bake) → technique decided: raster-updated dynamic probe volume (DDGI-style octahedral irradiance + distance moments, Chebyshev visibility) plus an additive SSGI contact term. Storage/sampling are update-mechanism-agnostic, so Phase 5's rays can later refresh the same volume, and ReSTIR GI can query it for multi-bounce `L_o`. |

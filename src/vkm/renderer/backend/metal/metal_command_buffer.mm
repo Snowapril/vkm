@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/metal/metal_pipeline_state.h>
+#include <vkm/renderer/backend/metal/metal_per_pass_resource_table.h>
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_staging_buffer.h>
 
@@ -532,10 +533,12 @@ namespace vkm
 
     void VkmCommandBufferMetal::onBindPerPassResources(VkmPerPassResourceTableBase* table)
     {
-        (void)table;
-        // Pairs with VkmDriver*::newPerPassResourceTableInner: set 2 is Vulkan-only so far, so no
-        // table can exist to bind here.
-        VKM_DEBUG_ERROR("bindPerPassResources is not implemented on this backend yet");
+        // Metal binds set 2 discretely onto the same argument table bindPipeline() already
+        // attached, so this only has to replay the table's resolved entries -- there is no
+        // descriptor set to bind, and no encoder state beyond the argument table itself.
+        VkmBindlessResourceManagerMetal* bindlessManager =
+            static_cast<VkmDriverMetal*>(_driver)->getBindlessResourceManager();
+        static_cast<VkmPerPassResourceTableMetal*>(table)->applyTo(bindlessManager->getArgumentTable());
     }
 
     void VkmCommandBufferMetal::onSetPushConstants(const void* data, uint32_t size, uint32_t offset)

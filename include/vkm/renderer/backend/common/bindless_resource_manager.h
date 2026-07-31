@@ -97,7 +97,38 @@ namespace vkm
     // argument buffer. Kept here so the argument table's bind count stays derivable from the
     // one buffer-index map.
     inline constexpr uint32_t kVkmMetalFrameConstantBufferIndex   = 4;
-    inline constexpr uint32_t kVkmMetalArgumentTableBufferBindCount = kVkmMetalFrameConstantBufferIndex + 1;
+
+    /*
+    * @brief Largest set-2 binding index a PSO may declare.
+    *
+    * An engine-wide limit rather than a Metal-only one, so a PSO that loads on Vulkan loads
+    * everywhere: Metal has to reserve argument-table slots up front, and a per-backend cap would
+    * turn a valid pipeline into a runtime failure on one backend only.
+    */
+    inline constexpr uint32_t kVkmPerPassResourceMaxBindings = 16;
+
+    /*
+    * @brief Set 2 (per-pass) on Metal: discrete bindings, one Metal index per declared binding.
+    *
+    * Discrete for the same reason set 1 is -- it keeps set 2 out of the padding walk
+    * pad_argument_buffer_resources drives, which needs a registered base type for every id it
+    * steps over and cannot cope with the sparse binding indices a PSO is allowed to declare.
+    *
+    * Metal keeps separate index spaces for buffers, textures and samplers. The buffer space
+    * continues after set 1's; the texture and sampler spaces start at 0, because set 0's bindless
+    * textures and sampler live *inside* its argument buffer rather than in argument-table slots,
+    * leaving both spaces otherwise unused.
+    */
+    inline constexpr uint32_t kVkmMetalPerPassBufferIndexBase  = kVkmMetalFrameConstantBufferIndex + 1;
+    inline constexpr uint32_t kVkmMetalPerPassTextureIndexBase = 0;
+    inline constexpr uint32_t kVkmMetalPerPassSamplerIndexBase = 0;
+
+    inline constexpr uint32_t kVkmMetalArgumentTableBufferBindCount =
+        kVkmMetalPerPassBufferIndexBase + kVkmPerPassResourceMaxBindings;
+    inline constexpr uint32_t kVkmMetalArgumentTableTextureBindCount =
+        kVkmMetalPerPassTextureIndexBase + kVkmPerPassResourceMaxBindings;
+    inline constexpr uint32_t kVkmMetalArgumentTableSamplerBindCount =
+        kVkmMetalPerPassSamplerIndexBase + kVkmPerPassResourceMaxBindings;
     inline constexpr uint32_t kVkmMetalBindlessTextureIdBase     = 0;
     inline constexpr uint32_t kVkmMetalBindlessBufferIdBase      = kVkmBindlessTextureCapacity;
     inline constexpr uint32_t kVkmMetalBindlessIndexBufferIdBase = kVkmBindlessTextureCapacity + kVkmBindlessBufferCapacity;

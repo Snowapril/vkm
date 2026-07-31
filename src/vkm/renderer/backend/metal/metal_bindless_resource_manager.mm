@@ -96,6 +96,11 @@ namespace vkm
         // buffer, 3 = push constants, 4 = the set-1 frame constants
         // (see common/bindless_resource_manager.h).
         argTableDesc.maxBufferBindCount = kVkmMetalArgumentTableBufferBindCount;
+        // Set 2 (per-pass) binds discretely, so its textures and samplers occupy real
+        // argument-table slots rather than living inside an argument buffer the way set 0's do.
+        // Both index spaces are otherwise unused, so they start at 0.
+        argTableDesc.maxTextureBindCount = kVkmMetalArgumentTableTextureBindCount;
+        argTableDesc.maxSamplerStateBindCount = kVkmMetalArgumentTableSamplerBindCount;
         argTableDesc.label = @"VkmBindlessArgumentTable";
         NSError* error = nil;
         _argumentTable = [device newArgumentTableWithDescriptor:argTableDesc error:&error];
