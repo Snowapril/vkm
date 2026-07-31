@@ -208,6 +208,18 @@ namespace vkm
             VKM_ASSERT(false, "Unsupported vertex attribute base type/component count combination");
             return WGPUVertexFormat_Float32;
         }
+
+        // Shader visibility for a set-2 binding, derived from its type rather than declared (see
+        // VkmPerPassResourceType). Storage buffers are compute-only because WebGPU forbids
+        // writable storage in the vertex stage -- the constraint that shaped the common enum.
+        WGPUShaderStage toWGPUShaderStage(VkmPerPassResourceType type)
+        {
+            if (type == VkmPerPassResourceType::StorageBuffer)
+            {
+                return WGPUShaderStage_Compute;
+            }
+            return WGPUShaderStage_Vertex | WGPUShaderStage_Fragment | WGPUShaderStage_Compute;
+        }
     } // namespace
 
     VkmPipelineStateWebGPU::VkmPipelineStateWebGPU(VkmDriverBase* driver)
@@ -242,13 +254,62 @@ namespace vkm
         // VkmFrameConstantManagerWebGPU), mirroring Vulkan's two-set pipeline layout in
         // VkmPipelineStateVulkan::createInner. Both are declared even for shaders that use
         // neither. Groups 2-3 remain reserved (see common/frame_constants.h).
-        const WGPUBindGroupLayout bindGroupLayouts[2]{
+        WGPUBindGroupLayout bindGroupLayouts[3]{
             driverWebGPU->getBindlessResourceManager()->getBindGroupLayout(),
             driverWebGPU->getFrameConstantManager()->getBindGroupLayout(),
+            nullptr,
         };
+        uint32_t bindGroupLayoutCount = 2;
+
+        // Group 2 is this pipeline's own, built from its `perPassResources` declaration. WGSL has
+        // no runtime-sized arrays -- the reason the bindless texture path does not exist on this
+        // backend at all -- but these are fixed bindings, so they are ordinary bind-group entries.
+        if (!desc.perPassResources.empty())
+        {
+            std::vector<WGPUBindGroupLayoutEntry> perPassEntries;
+            perPassEntries.reserve(desc.perPassResources.size());
+            for (const VkmPerPassResourceBinding& resource : desc.perPassResources)
+            {
+                WGPUBindGroupLayoutEntry entry{};
+                entry.binding = resource.binding;
+                entry.visibility = toWGPUShaderStage(resource.type);
+                switch (resource.type)
+                {
+                    case VkmPerPassResourceType::SampledTexture:
+                        entry.texture.sampleType = WGPUTextureSampleType_Float;
+                        entry.texture.viewDimension = WGPUTextureViewDimension_2D;
+                        break;
+                    case VkmPerPassResourceType::Sampler:
+                        entry.sampler.type = WGPUSamplerBindingType_Filtering;
+                        break;
+                    case VkmPerPassResourceType::StorageBuffer:
+                        entry.buffer.type = WGPUBufferBindingType_Storage;
+                        break;
+                    case VkmPerPassResourceType::UniformBuffer:
+                        entry.buffer.type = WGPUBufferBindingType_Uniform;
+                        break;
+                }
+                perPassEntries.push_back(entry);
+            }
+
+            WGPUBindGroupLayoutDescriptor perPassLayoutDesc{};
+            perPassLayoutDesc.label = toWGPUStringView("VkmPipelineStateWebGPU PerPassLayout");
+            perPassLayoutDesc.entryCount = perPassEntries.size();
+            perPassLayoutDesc.entries = perPassEntries.data();
+            _perPassBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &perPassLayoutDesc);
+            if (_perPassBindGroupLayout == nullptr)
+            {
+                if (outError != nullptr)
+                    *outError = "Failed to create the group-2 layout for " + desc.name;
+                return false;
+            }
+            bindGroupLayouts[2] = _perPassBindGroupLayout;
+            bindGroupLayoutCount = 3;
+        }
+
         WGPUPipelineLayoutDescriptor pipelineLayoutDesc{};
         pipelineLayoutDesc.label = toWGPUStringView("VkmPipelineStateWebGPU BindlessLayout");
-        pipelineLayoutDesc.bindGroupLayoutCount = 2;
+        pipelineLayoutDesc.bindGroupLayoutCount = bindGroupLayoutCount;
         pipelineLayoutDesc.bindGroupLayouts = bindGroupLayouts;
 
         WGPUPipelineLayout pipelineLayout = wgpuDeviceCreatePipelineLayout(device, &pipelineLayoutDesc);
@@ -468,6 +529,11 @@ namespace vkm
 
     void VkmPipelineStateWebGPU::destroyInner()
     {
+        if (_perPassBindGroupLayout != nullptr)
+        {
+            wgpuBindGroupLayoutRelease(_perPassBindGroupLayout);
+            _perPassBindGroupLayout = nullptr;
+        }
         if (_renderPipeline != nullptr)
         {
             wgpuRenderPipelineRelease(_renderPipeline);

@@ -306,6 +306,7 @@ if (VKM_USE_WEBGPU_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_swapchain.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_texture.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_buffer.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_per_pass_resource_table.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_staging_buffer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_sampler.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_texture_view.h
@@ -324,6 +325,7 @@ if (VKM_USE_WEBGPU_API)
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_swapchain.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_texture.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_buffer.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_per_pass_resource_table.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_staging_buffer.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_sampler.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_texture_view.cpp

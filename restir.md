@@ -566,8 +566,16 @@ Blocks *any* multi-pass compute work, and therefore **both** GI tiers. Pre-exist
       exactly what blocks the Metal ray-query path — see §4.4.) vkm-compiler pins each declared
       binding per-PSO via `add_msl_resource_binding`; the runtime replays the resolved entries onto
       the argument table. Verified by running the *same* shader and expected values as Vulkan
-- [ ] Descriptor set 2 on **WebGPU** (bind group 2). Still an error stub — and the one that matters
-      most, since it is what would let WebGPU sample a texture at all
+- [x] **Descriptor set 2 on WebGPU** (bind group 2). The most natural of the three — a bind group
+      *is* this concept, and WebGPU's own model already treats one as immutable. **Compile-verified
+      only**, see the risk below
+- [ ] ⚠ **Make WebGPU runtime-verifiable — blocks trusting Phase 4 there.** The WebGPU suite does
+      run locally (headless Chrome, and it passes), but no shader can be *compiled* for it:
+      `VKM_COMPILER_ENABLE_WGSL` is OFF and turning it on builds Tint through a full Dawn
+      ExternalProject that no local or CI configuration provides (`TODO.md:11,23`). So the set-2
+      test is excluded on WebGPU, and its group-2 path has never executed. This is a pre-existing
+      engine limitation affecting *all* WebGPU shader work, not something set 2 introduced — but
+      Phase 4 puts real weight on that backend, so it should be resolved before, not after
 - [ ] **Note:** set 2 is what unblocks WebGPU sampling at all — `registerTexture` is a hard error
       there because WGSL has no runtime-sized arrays, so the low-spec tier cannot sample a probe
       atlas until set 2 lands on WebGPU
@@ -991,4 +999,5 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-07-31 | 2 | Added `barrierTextureForShaderRead`: the render-pass-writes -> shader-samples hand-off the engine's implicit-layout convention could not express. Real work on Vulkan only; Metal and WebGPU documented no-ops. Verified on Vulkan (170 tests) and Metal (166), plus a wasm build for the WebGPU stub; the new tests were checked to actually fail when the transition is sabotaged. |
 | 2026-07-31 | 2 | Descriptor set 2 (per-pass resources) implemented on **Vulkan**: PSO JSON declaration, per-PSO `VkDescriptorSetLayout`, an immutable `VkmPerPassResourceTable`, and `bindPerPassResources()`. Verified end to end by a compute pass whose only resources are a set-2 uniform buffer and storage buffer, reading back `base + threadId` with validation clean. Metal and WebGPU are error stubs. This is the first genuinely per-PSO descriptor set in the engine, so a pipeline declaring it is no longer layout-compatible with one that does not. |
 | 2026-07-31 | 2 | Descriptor set 2 on **Metal**, via discrete argument-table bindings (not a second argument buffer) so it stays out of the `pad_argument_buffer_resources` walk, mirroring set 1. vkm-compiler pins each declared binding per-PSO. The cross-backend test now runs the same shader and expected values on Vulkan and Metal, which is what shows the declaration means the same thing on both. Metal 169 tests, Vulkan 173, wasm builds. |
+| 2026-07-31 | 2 | Descriptor set 2 on **WebGPU** (bind group 2), completing set 2 on all three backends. Compile-verified only: the WebGPU suite runs in headless Chrome and passes, but no shader can be compiled for that backend without a Tint/Dawn build, so the group-2 path has not executed. Flagged as a Phase 4 risk. |
 | 2026-07-30 | 4 | Low-spec tier must be **fully dynamic** (no bake) → technique decided: raster-updated dynamic probe volume (DDGI-style octahedral irradiance + distance moments, Chebyshev visibility) plus an additive SSGI contact term. Storage/sampling are update-mechanism-agnostic, so Phase 5's rays can later refresh the same volume, and ReSTIR GI can query it for multi-bounce `L_o`. |

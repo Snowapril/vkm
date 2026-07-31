@@ -78,3 +78,4 @@
 - The GPU profiler only ever records a Graphics queue 0 timeline because `VkmRenderGraph::execute()` submits nowhere else.
 - `VkmGpuProfiler` skips a submission's timing when all `kMaxPendingSubmissions` timestamp slot buckets are still in flight.
 - `VkmGpuProfilerInspector` has no unit-test coverage; only the collector and the trace format are tested.
+- Descriptor set 2 (per-pass resources) on WebGPU is compile-verified only: no shader can be built for that backend without a Tint/Dawn build, so its bind-group-2 path has never executed.

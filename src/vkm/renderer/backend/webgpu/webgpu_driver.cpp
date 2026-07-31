@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/webgpu/webgpu_driver.h>
+#include <vkm/renderer/backend/webgpu/webgpu_per_pass_resource_table.h>
 #include <vkm/renderer/backend/webgpu/webgpu_util.h>
 #include <vkm/renderer/backend/webgpu/webgpu_swapchain.h>
 #include <vkm/renderer/backend/webgpu/webgpu_texture.h>
@@ -376,11 +377,7 @@ namespace vkm
 
     VkmPerPassResourceTableBase* VkmDriverWebGPU::newPerPassResourceTableInner()
     {
-        // Set 2 is implemented on Vulkan only so far. Declared here because the base class makes it
-        // pure virtual, per the "no new pure virtual without every backend implementing it" rule in
-        // common/AGENTS.md -- the same error-stub shape copyTexture/registerTexture use.
-        VKM_DEBUG_ERROR("Per-pass resource tables (descriptor set 2) are not implemented on this backend yet");
-        return nullptr;
+        return new VkmPerPassResourceTableWebGPU(this);
     }
 
     VkmSwapChainBase* VkmDriverWebGPU::newSwapChainInner()
