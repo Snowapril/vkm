@@ -609,10 +609,15 @@ Also shared by both tiers.
       albedo, roughness/metallic, material ID, **3-component motion vectors**
 - [ ] **Previous-frame G-buffer** (double-buffered) — temporal reuse reads last frame's
       normal/depth/material to reject taps and evaluates `p̂` in the previous domain
-- [ ] Extend `VkmFrameConstants`: `_prevView`, `_prevViewProjection`, inverses, `_frameIndex`,
-      `_viewportSize`/`_invViewportSize`, jitter, previous camera position. Lockstep across
-      `frame_constants.h`, `vkm_frame_constants.hlsli`, the `static_assert`, and vkm-compiler's
-      Metal binding pins (`frame_constants.h:27-31`)
+- [x] **Extended `VkmFrameConstants`** (272 -> 368 bytes, stride unchanged at 512): added
+      `_prevViewProjection`, `_viewportSize` (xy = pixels, zw = reciprocal) and `_frameIndex`
+      (monotonic, distinct from the 0..FRAME_COUNT-1 slot index). The engine owns the two
+      frame-to-frame fields since a camera holds no such state, and seeds `_prevViewProjection`
+      with the current matrix on the first frame so reprojection starts as the identity rather
+      than a violent cut. `TestCamera` now pins every member offset — the C++ struct, the HLSL
+      mirror and vkm-compiler's Metal pin are three halves of one ABI that nothing else checks.
+      Deliberately **not** added: jitter and previous camera position, which have no consumer
+      until TAA (Phase 9)
 - [ ] Reconstruct world position from depth + inverse view-projection rather than storing it
 - [ ] Fullscreen-pass HLSL building block + live tone mapping
 - [ ] PBR BRDF evaluation reading the already-imported `VkmMaterialData`

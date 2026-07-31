@@ -62,9 +62,34 @@ namespace vkm
         glm::mat4 _projection{ 1.0f };                            // offset  64
         glm::mat4 _viewProjection{ 1.0f };                        // offset 128
         glm::mat4 _inverseViewProjection{ 1.0f };                 // offset 192
-        glm::vec4 _cameraPositionWorld{ 0.0f, 0.0f, 0.0f, 1.0f }; // offset 256, xyz = world eye
+
+        /*
+        * @brief Last frame's _viewProjection, for reprojecting a world position into the previous
+        * frame's screen space.
+        *
+        * Filled by the engine rather than the camera: the camera holds no frame-to-frame state,
+        * and "previous" is a property of the frame loop. Equal to _viewProjection on the first
+        * frame after a camera becomes active, so reprojection is the identity rather than a jump
+        * from an identity matrix.
+        */
+        glm::mat4 _prevViewProjection{ 1.0f };                    // offset 256
+
+        glm::vec4 _cameraPositionWorld{ 0.0f, 0.0f, 0.0f, 1.0f }; // offset 320, xyz = world eye
+
+        // xy = viewport size in pixels, zw = its reciprocal. Screen-space passes need both, and
+        // the reciprocal is worth carrying rather than recomputing per invocation.
+        glm::vec4 _viewportSize{ 0.0f, 0.0f, 0.0f, 0.0f };        // offset 336
+
+        /*
+        * @brief x = monotonically increasing frame counter; yzw reserved.
+        *
+        * Distinct from the frame *slot* index (0..FRAME_COUNT-1) the engine cycles through: a
+        * stochastic pass needs a value that never repeats, to decorrelate its sampling between
+        * frames. A uvec4 rather than a bare uint so the struct keeps its 16-byte member alignment.
+        */
+        glm::uvec4 _frameIndex{ 0u, 0u, 0u, 0u };                 // offset 352
     };
-    static_assert(sizeof(VkmFrameConstants) == 272,
+    static_assert(sizeof(VkmFrameConstants) == 368,
                   "VkmFrameConstants must match VkmFrameConstants in shaders/vkm_frame_constants.hlsli");
 
     // Byte stride between two frame slots' regions: the struct rounded up to the alignment

@@ -186,6 +186,9 @@ namespace vkm
 #endif // VKM_GPU_CAPTURE
 
         _currentFrameIndex = (_currentFrameIndex + 1) % FRAME_COUNT;
+        // Monotonic, unlike the slot index above. Wrapping after 2^32 frames is fine: it only
+        // ever seeds hashes, and at 60 fps that is over two years of continuous running.
+        ++_frameCounter;
     }
 
     uint32_t VkmEngine::findWindowIndex(const void* nativeHandle) const
@@ -494,7 +497,23 @@ namespace vkm
                     const glm::uvec2 cameraExtent = windowContext._swapChain->getExtent();
                     _activeCamera->setViewportSize(cameraExtent.x, cameraExtent.y);
                     _activeCamera->fillFrameConstants(frameConstants);
+
+                    // The camera fills everything derivable from this frame alone; the two
+                    // frame-to-frame fields are the engine's. Seeding _prevViewProjection with
+                    // the current matrix on the first frame makes reprojection the identity
+                    // there, instead of reprojecting against the identity matrix and reading as
+                    // a violent camera cut.
+                    frameConstants._prevViewProjection =
+                        _hasPrevViewProjection ? _prevViewProjection : frameConstants._viewProjection;
+                    _prevViewProjection = frameConstants._viewProjection;
+                    _hasPrevViewProjection = true;
                 }
+                else
+                {
+                    // No camera: nothing sensible to reproject against next frame either.
+                    _hasPrevViewProjection = false;
+                }
+                frameConstants._frameIndex = glm::uvec4(_frameCounter, 0u, 0u, 0u);
                 _driver->getFrameConstantManager()->update(_currentFrameIndex, frameConstants);
             }
 
