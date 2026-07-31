@@ -62,6 +62,8 @@ namespace vkm
         static VkmFormat getDepthFormat();
 
         VkmGBuffer() = default;
+        // Releases anything still held. The driver must outlive the G-buffer, as for any other
+        // object holding driver resources.
         ~VkmGBuffer();
 
         VkmGBuffer(const VkmGBuffer&) = delete;

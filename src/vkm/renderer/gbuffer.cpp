@@ -52,9 +52,10 @@ namespace vkm
 
     VkmGBuffer::~VkmGBuffer()
     {
-        // Not destroy(): a driver-owning caller may already be gone. Leaking here would be a bug,
-        // so this asserts rather than silently tidying up.
-        VKM_ASSERT(_driver == nullptr, "VkmGBuffer destroyed without destroy() being called first");
+        // Cleans up rather than asserting that destroy() was already called. An assert here fires
+        // during stack unwinding whenever anything else fails first, which turns an ordinary
+        // failure into a crash inside the signal handler and hides the original cause entirely.
+        destroy();
     }
 
     bool VkmGBuffer::initialize(VkmDriverBase* driver, const glm::uvec2& extent)
@@ -198,10 +199,13 @@ namespace vkm
 
             VkmTextureInfo info{};
             // Written as an attachment, then sampled by the lighting/GI passes -- which is what
-            // barrierTextureForShaderRead() exists to hand off.
+            // barrierTextureForShaderRead() exists to hand off. TransferSrc as well, so a channel
+            // can be read back: the debug views this buffer exists to be inspected through, and
+            // the render graph's capture snapshots, both copy out of it.
             info._flags = static_cast<VkmResourceCreateInfo>(
                 static_cast<uint32_t>(VkmResourceCreateInfo::AllowColorAttachment) |
-                static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead));
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferSrc));
             info._extent = glm::uvec3(extent, 1);
             info._numMipLevels = 1;
             info._numArrayLayers = 1;
@@ -221,7 +225,8 @@ namespace vkm
         VkmTextureInfo depthInfo{};
         depthInfo._flags = static_cast<VkmResourceCreateInfo>(
             static_cast<uint32_t>(VkmResourceCreateInfo::AllowDepthStencilAttachment) |
-            static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead));
+            static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
+            static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferSrc));
         depthInfo._extent = glm::uvec3(extent, 1);
         depthInfo._numMipLevels = 1;
         depthInfo._numArrayLayers = 1;

@@ -1,0 +1,30 @@
+{
+    "name": "gbuffer_pso",
+    "primitive_topology": "triangle_list",
+    "rasterization_state": {
+        "fill_mode": "solid",
+        "cull_mode": "back",
+        "front_face": "counter_clockwise"
+    },
+    "depth_stencil_state": {
+        "depth_test_enable": true,
+        "depth_write_enable": true,
+        "depth_compare_op": "less_or_equal",
+        "depth_stencil_format": "d32_sfloat",
+        "stencil_test_enable": false
+    },
+    "color_attachments": [
+        { "format": "r16g16b16a16_sfloat" },
+        { "format": "r8g8b8a8_unorm" },
+        { "format": "r16g16b16a16_sfloat" }
+    ],
+    "shaders": {
+        "vertex": { "filepath": "gbuffer.hlsl", "entry_point": "VSMain" },
+        "fragment": { "filepath": "gbuffer.hlsl", "entry_point": "PSMain" }
+    },
+    "options": {
+        "standard_pbr":  { "definitions": { "VKM_VERTEX_LAYOUT_STANDARD_PBR":  true } },
+        "compact":       { "definitions": { "VKM_VERTEX_LAYOUT_COMPACT":       true } },
+        "position_only": { "definitions": { "VKM_VERTEX_LAYOUT_POSITION_ONLY": true } }
+    }
+}

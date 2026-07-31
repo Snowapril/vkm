@@ -52,6 +52,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
         ${SRC_DIR}/TestPerPassResourcesMetal.mm
         ${SRC_DIR}/TestGBufferMetal.mm
+        ${SRC_DIR}/TestGBufferRenderMetal.mm
     )
 endif()
 
@@ -71,6 +72,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
         ${SRC_DIR}/TestPerPassResourcesMetal.mm
         ${SRC_DIR}/TestGBufferMetal.mm
+        ${SRC_DIR}/TestGBufferRenderMetal.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++"
     )
 endif()
