@@ -74,6 +74,13 @@ namespace vkm
             { "clockwise", VkmFrontFace::Clockwise },
         };
 
+        const std::unordered_map<std::string_view, VkmPerPassResourceType> kPerPassResourceTypeTable = {
+            { "sampled_texture", VkmPerPassResourceType::SampledTexture },
+            { "sampler", VkmPerPassResourceType::Sampler },
+            { "storage_buffer", VkmPerPassResourceType::StorageBuffer },
+            { "uniform_buffer", VkmPerPassResourceType::UniformBuffer },
+        };
+
         const std::unordered_map<std::string_view, VkmCompareOp> kCompareOpTable = {
             { "never", VkmCompareOp::Never },
             { "less", VkmCompareOp::Less },
@@ -367,6 +374,57 @@ namespace vkm
             parseUint32Field(state, obj, "stencil_reference", fieldPrefix + ".stencil_reference", out.stencilReference);
         }
 
+        /*
+        * @brief Parses a "per_pass_resources" JSON array (this PSO's descriptor set 2) into `out`.
+        *
+        * Binding indices are explicit rather than positional so the JSON reads the same way the
+        * shader does (register(t0, space2) and friends), and duplicates are rejected here: every
+        * backend would either reject or silently alias them, and a silent alias is the worse of
+        * the two to debug.
+        */
+        bool parsePerPassResourcesArray(ParseState& state, const Json& resources,
+            const std::string& fieldNamePrefix, std::vector<VkmPerPassResourceBinding>& out)
+        {
+            if (!resources.is_array())
+            {
+                state.fail("Field '" + fieldNamePrefix + "' must be an array");
+                return false;
+            }
+            out.clear();
+            out.reserve(resources.size());
+            for (size_t i = 0; i < resources.size(); ++i)
+            {
+                const Json& resource = resources.at(i);
+                const std::string fieldPrefix = fieldNamePrefix + "[" + std::to_string(i) + "]";
+
+                if (!resource.is_object() || !resource.contains("type"))
+                {
+                    state.fail("Missing required field '" + fieldPrefix + ".type'");
+                    return false;
+                }
+
+                VkmPerPassResourceBinding binding{};
+                parseUint32Field(state, resource, "binding", fieldPrefix + ".binding", binding.binding);
+                parseEnumField(state, resource, "type", fieldPrefix + ".type", kPerPassResourceTypeTable, binding.type);
+                if (state.failed())
+                {
+                    return false;
+                }
+
+                for (const VkmPerPassResourceBinding& existing : out)
+                {
+                    if (existing.binding == binding.binding)
+                    {
+                        state.fail("Field '" + fieldPrefix + ".binding' repeats binding " +
+                                   std::to_string(binding.binding) + " within '" + fieldNamePrefix + "'");
+                        return false;
+                    }
+                }
+                out.push_back(binding);
+            }
+            return true;
+        }
+
         // Parses a "color_attachments" JSON array into `out` (whole-array replace). Shared by
         // the base parse and the option-overlay parse.
         bool parseColorAttachmentsArray(ParseState& state, const Json& colorAttachments,
@@ -654,6 +712,15 @@ namespace vkm
             {
                 desc.colorAttachments.clear();
                 if (!parseColorAttachmentsArray(state, root.at("color_attachments"), "color_attachments", desc.colorAttachments))
+                {
+                    return false;
+                }
+            }
+
+            if (root.contains("per_pass_resources"))
+            {
+                if (!parsePerPassResourcesArray(state, root.at("per_pass_resources"), "per_pass_resources",
+                                                desc.perPassResources))
                 {
                     return false;
                 }

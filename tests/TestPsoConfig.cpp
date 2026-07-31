@@ -211,6 +211,126 @@ TEST_CASE("VkmPipelineStateDescriptor - shader stage ray_query flag") {
     }
 }
 
+TEST_CASE("VkmPipelineStateDescriptor - per-pass resource (set 2) declaration") {
+    SUBCASE("absent per_pass_resources leaves the pipeline on sets 0 and 1 only") {
+        const std::string jsonText = R"({
+            "shaders": { "vertex": { "filepath": "triangle.vert" } }
+        })";
+
+        std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromString(jsonText);
+        REQUIRE(result.has_value());
+        CHECK(result->perPassResources.empty());
+    }
+
+    SUBCASE("every resource type parses, in declared order") {
+        const std::string jsonText = R"({
+            "shaders": { "compute": { "filepath": "gi.hlsl", "entry_point": "CSMain" } },
+            "per_pass_resources": [
+                { "binding": 0, "type": "sampled_texture" },
+                { "binding": 1, "type": "sampler" },
+                { "binding": 2, "type": "storage_buffer" },
+                { "binding": 3, "type": "uniform_buffer" }
+            ]
+        })";
+
+        std::string outError;
+        std::optional<vkm::VkmPipelineStateDescriptor> result =
+            vkm::parsePipelineStateFromString(jsonText, &outError);
+        REQUIRE_MESSAGE(result.has_value(), outError);
+
+        REQUIRE(result->perPassResources.size() == 4);
+        CHECK(result->perPassResources[0].binding == 0);
+        CHECK(result->perPassResources[0].type == vkm::VkmPerPassResourceType::SampledTexture);
+        CHECK(result->perPassResources[1].type == vkm::VkmPerPassResourceType::Sampler);
+        CHECK(result->perPassResources[2].type == vkm::VkmPerPassResourceType::StorageBuffer);
+        CHECK(result->perPassResources[3].type == vkm::VkmPerPassResourceType::UniformBuffer);
+    }
+
+    SUBCASE("binding indices need not be contiguous or ordered") {
+        // They mirror register(t#, space2) in the shader, which is under no such obligation.
+        const std::string jsonText = R"({
+            "shaders": { "compute": { "filepath": "gi.hlsl" } },
+            "per_pass_resources": [
+                { "binding": 7, "type": "sampled_texture" },
+                { "binding": 2, "type": "uniform_buffer" }
+            ]
+        })";
+
+        std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromString(jsonText);
+        REQUIRE(result.has_value());
+        REQUIRE(result->perPassResources.size() == 2);
+        CHECK(result->perPassResources[0].binding == 7);
+        CHECK(result->perPassResources[1].binding == 2);
+    }
+
+    SUBCASE("a repeated binding index fails to parse") {
+        // Backends would either reject this or silently alias the two; the silent alias is the
+        // worse outcome, so it is rejected here instead.
+        const std::string jsonText = R"({
+            "shaders": { "compute": { "filepath": "gi.hlsl" } },
+            "per_pass_resources": [
+                { "binding": 1, "type": "sampled_texture" },
+                { "binding": 1, "type": "uniform_buffer" }
+            ]
+        })";
+
+        std::string outError;
+        std::optional<vkm::VkmPipelineStateDescriptor> result =
+            vkm::parsePipelineStateFromString(jsonText, &outError);
+        CHECK_FALSE(result.has_value());
+        CHECK(outError.find("per_pass_resources[1].binding") != std::string::npos);
+    }
+
+    SUBCASE("an unknown resource type fails to parse") {
+        const std::string jsonText = R"({
+            "shaders": { "compute": { "filepath": "gi.hlsl" } },
+            "per_pass_resources": [ { "binding": 0, "type": "acceleration_structure" } ]
+        })";
+
+        std::string outError;
+        std::optional<vkm::VkmPipelineStateDescriptor> result =
+            vkm::parsePipelineStateFromString(jsonText, &outError);
+        CHECK_FALSE(result.has_value());
+        CHECK(outError.find("per_pass_resources[0].type") != std::string::npos);
+    }
+
+    SUBCASE("a non-array per_pass_resources fails to parse") {
+        const std::string jsonText = R"({
+            "shaders": { "compute": { "filepath": "gi.hlsl" } },
+            "per_pass_resources": { "binding": 0, "type": "sampler" }
+        })";
+
+        std::string outError;
+        std::optional<vkm::VkmPipelineStateDescriptor> result =
+            vkm::parsePipelineStateFromString(jsonText, &outError);
+        CHECK_FALSE(result.has_value());
+        CHECK(outError.find("per_pass_resources") != std::string::npos);
+    }
+
+    SUBCASE("the declaration survives option expansion") {
+        // Set 2 shapes the pipeline layout, so it has to reach the per-variant descriptors the
+        // backends actually build pipelines from.
+        const std::string jsonText = R"({
+            "name": "gi_pso",
+            "shaders": { "compute": { "filepath": "gi.hlsl" } },
+            "per_pass_resources": [ { "binding": 0, "type": "storage_buffer" } ],
+            "options": { "default": {} }
+        })";
+
+        std::string outError;
+        std::optional<vkm::VkmPipelineStateDescriptor> result =
+            vkm::parsePipelineStateFromString(jsonText, &outError);
+        REQUIRE_MESSAGE(result.has_value(), outError);
+
+        std::optional<std::vector<vkm::VkmPipelineStateDescriptor>> variants =
+            vkm::expandPipelineStateOptions(*result, vkm::VkmShaderCacheBackend::Vulkan, &outError);
+        REQUIRE_MESSAGE(variants.has_value(), outError);
+        REQUIRE(variants->size() == 1);
+        REQUIRE((*variants)[0].perPassResources.size() == 1);
+        CHECK((*variants)[0].perPassResources[0].type == vkm::VkmPerPassResourceType::StorageBuffer);
+    }
+}
+
 TEST_CASE("VkmPipelineStateDescriptor - malformed JSON text fails to parse") {
     std::optional<vkm::VkmPipelineStateDescriptor> result = vkm::parsePipelineStateFromString("{ not valid json");
     CHECK_FALSE(result.has_value());

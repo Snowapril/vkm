@@ -161,6 +161,58 @@ namespace vkm
         bool requiresRayQuery = false;
     };
 
+    /*
+    * @brief One resource kind a pass can declare at descriptor set 2.
+    *
+    * Set 2 is the per-pass set (see common/frame_constants.h). Unlike set 0, its contents are
+    * declared by each PSO rather than being engine-global, and unlike set 0 the bindings are
+    * fixed rather than runtime-sized arrays. That is what makes it work on WebGPU: WGSL has no
+    * runtime-sized arrays, which is the whole reason the bindless texture path is Vulkan/Metal
+    * only (VkmDriverCapabilityFlags::TextureUpload), so a shader there can sample nothing at all.
+    * A fixed binding is an ordinary WGSL bind-group entry.
+    */
+    enum class VkmPerPassResourceType : uint8_t
+    {
+        // Texture2D at register(t#, space2). Read-only; pairs with a Sampler binding.
+        SampledTexture = 0,
+        // SamplerState at register(s#, space2). Separate from the texture so one sampler can
+        // serve several, matching HLSL/SPIR-V rather than Metal's combined view.
+        Sampler = 1,
+        /*
+        * RWStructuredBuffer at register(u#, space2).
+        *
+        * Compute-visible only, for the same reason set 0's two read-write singletons are
+        * (bindless_resource_manager.h): WebGPU forbids writable storage in the vertex stage, and
+        * a buffer used as writable storage inside a render pass's usage scope may not also be
+        * fetched as an indirect argument in that scope.
+        */
+        StorageBuffer = 2,
+        // ConstantBuffer at register(b#, space2): per-pass constants that outgrow the 128-byte
+        // vertex-only push-constant range, and that the fragment stage can actually read.
+        UniformBuffer = 3,
+    };
+
+    /*
+    * @brief One entry in a PSO's set-2 declaration.
+    *
+    * Shader visibility is derived from `type` rather than declared, so a PSO cannot accidentally
+    * ask for a combination a backend rejects -- see the StorageBuffer note above.
+    */
+    struct VkmPerPassResourceBinding
+    {
+        uint32_t binding = 0;
+        VkmPerPassResourceType type = VkmPerPassResourceType::SampledTexture;
+
+        inline bool operator==(const VkmPerPassResourceBinding& other) const noexcept
+        {
+            return binding == other.binding && type == other.type;
+        }
+        inline bool operator!=(const VkmPerPassResourceBinding& other) const noexcept
+        {
+            return !(*this == other);
+        }
+    };
+
     enum class VkmVertexAttributeBaseType : uint8_t
     {
         Float = 0,
@@ -264,6 +316,18 @@ namespace vkm
         // perInstance are independently optional (e.g. a fullscreen-quad shader
         // with no vertex buffer at all would leave both unset).
         VkmVertexInputLayoutDescriptor vertexInputLayout;
+
+        /*
+        * @brief This pipeline's descriptor set 2 (per-pass) declaration, in the order given in the
+        * JSON `per_pass_resources` array. Empty for a pipeline that reaches only sets 0 and 1,
+        * which is every pipeline that predates set 2.
+        *
+        * Sets 0 and 1 are engine-global and identical for every pipeline, which is what let bind
+        * sites stay free of per-PSO knowledge. Set 2 is the first thing that is genuinely per-PSO,
+        * so a pipeline declaring it is no longer layout-compatible with one that does not, and
+        * whatever binds its resources has to know this list.
+        */
+        std::vector<VkmPerPassResourceBinding> perPassResources;
 
         // vertexShader is the only field the parser treats as required.
         std::optional<VkmShaderStageDescriptor> vertexShader;
