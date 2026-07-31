@@ -3,6 +3,10 @@
 
 #include <doctest/doctest.h>
 
+#include <vkm/renderer/backend/common/buffer.h>
+#include <vkm/renderer/backend/common/per_pass_resource_table.h>
+#include <vkm/renderer/backend/common/sampler.h>
+#include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/frame_constants.h>
@@ -16,6 +20,7 @@
 #include <vkm/renderer/scene/vertex_layout.h>
 
 #include <glm/ext/matrix_transform.hpp>
+#include <glm/matrix.hpp>
 
 #include <cmath>
 #include <string>
@@ -71,7 +76,17 @@ namespace vkmtest
         return decodeHalf(bits);
     }
 
-    inline void runGBufferRenderTest(vkm::VkmDriverBase* driver)
+    /*
+    * @brief Imports the fixture triangle, builds a scene, and rasterizes it into `gbuffer`.
+    *
+    * Shared by the G-buffer channel checks and the deferred-lighting test, which needs a filled
+    * G-buffer to read. Returns the view-projection used, since a consumer reconstructing world
+    * positions needs the same one.
+    */
+    inline glm::mat4 fillGBuffer(vkm::VkmDriverBase* driver,
+                                 vkm::VkmPipelineStateManager& manager,
+                                 vkm::VkmScene& scene,
+                                 vkm::VkmGBuffer& gbuffer)
     {
         vkm::VkmGltfImportOptions importOptions;
         importOptions._optimizeMeshes = false;
@@ -81,13 +96,11 @@ namespace vkmtest
         REQUIRE(vkm::importGltfModel(std::string(RESOURCES_DIR) + "tests/gltf_triangle.gltf",
                                      &model, &error, importOptions));
 
-        vkm::VkmPipelineStateManager manager(driver);
         std::string psoError;
         REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(TEST_ENGINE_PIPELINE_DIR, TEST_ENGINE_SHADER_CACHE_DIR,
                                                                 vkm::VkmPipelineStateOrigin::Engine, &psoError),
                         psoError);
 
-        vkm::VkmScene scene;
         REQUIRE(scene.addModel(model, &error));
         REQUIRE(scene.build(driver, &manager, &error));
 
@@ -97,7 +110,6 @@ namespace vkmtest
         vkm::VkmPipelineStateBase* pso = manager.getPipelineState(psoName, vkm::VkmPipelineStateOrigin::Engine);
         REQUIRE(pso != nullptr);
 
-        vkm::VkmGBuffer gbuffer;
         REQUIRE(gbuffer.initialize(driver, glm::uvec2(kGBufferRenderSize, kGBufferRenderSize)));
 
         // Same placement as the scene-model render test: the fixture triangle spans x,y in [0,1]
@@ -113,6 +125,9 @@ namespace vkmtest
 
         vkm::VkmFrameConstants frameConstants{};
         frameConstants._viewProjection = viewProjection;
+        // The deferred lighting pass reconstructs world positions through this, so it has to be
+        // the real inverse rather than the default identity.
+        frameConstants._inverseViewProjection = glm::inverse(viewProjection);
         // A still camera: the motion vectors must come out exactly zero, which is a far stronger
         // statement than "small". Any sign error, Y-flip mistake or stale matrix breaks it.
         frameConstants._prevViewProjection = viewProjection;
@@ -155,6 +170,16 @@ namespace vkmtest
         renderGraph.execute();
         renderGraph.ensureCompleted();
 
+        return viewProjection;
+    }
+
+    inline void runGBufferRenderTest(vkm::VkmDriverBase* driver)
+    {
+        vkm::VkmPipelineStateManager manager(driver);
+        vkm::VkmScene scene;
+        vkm::VkmGBuffer gbuffer;
+        fillGBuffer(driver, manager, scene, gbuffer);
+
         // A pixel well inside the covered lower-left half, matching the scene-model test's choice.
         const uint32_t sampleX = kGBufferRenderSize / 4;
         const uint32_t sampleY = kGBufferRenderSize * 3 / 4;
@@ -191,6 +216,172 @@ namespace vkmtest
             CHECK(readHalfComponent(texel, 1) == 0.0f);
         }
 
+        gbuffer.destroy();
+    }
+
+    /*
+    * @brief Fills the G-buffer, hands it to the fullscreen lighting pass through descriptor set 2,
+    * and checks the shaded result.
+    *
+    * Several threads meet here, which is the point of testing them together:
+    *   - set 2 carrying sampled textures, a sampler and a uniform buffer (the buffer-only test
+    *     never exercised the texture or sampler paths, and their Metal indices are pinned by
+    *     vkm-compiler from the same declaration the runtime binds against),
+    *   - barrierTextureForShaderRead handing an attachment over to be sampled, which until now was
+    *     only checked by its tracked layout rather than by pixels, and
+    *   - the fullscreen triangle and PBR evaluation themselves.
+    */
+    inline void runDeferredLightingTest(vkm::VkmDriverBase* driver)
+    {
+        vkm::VkmPipelineStateManager manager(driver);
+        vkm::VkmScene scene;
+        vkm::VkmGBuffer gbuffer;
+        // The lighting pass reconstructs world positions from set 1's inverseViewProjection,
+        // which the fill already published, so the returned matrix is not needed again here.
+        fillGBuffer(driver, manager, scene, gbuffer);
+
+        vkm::VkmPipelineStateBase* lightingPso =
+            manager.getPipelineState("deferred_lighting_pso", vkm::VkmPipelineStateOrigin::Engine);
+        REQUIRE(lightingPso != nullptr);
+
+        vkm::VkmSamplerInfo samplerInfo{};
+        samplerInfo._debugName = "DeferredLightingSampler";
+        vkm::VkmSampler* sampler = driver->newSampler(samplerInfo);
+        REQUIRE(sampler != nullptr);
+
+        struct LightConstants
+        {
+            float directionToLight[4];
+            float radiance[4];
+        };
+
+        // Head-on with the fixture's +Z normals, so nDotL saturates and the material's colour
+        // reaches the output as strongly as it can.
+        const auto makeLightBuffer = [&](float intensity) {
+            vkm::VkmBufferInfo info{};
+            info._flags = vkm::VkmResourceCreateInfo::AllowShaderRead | vkm::VkmResourceCreateInfo::AllowTransferDst;
+            info._size = sizeof(LightConstants);
+            info._debugName = "DeferredLightConstants";
+            vkm::VkmBuffer* buffer = driver->newBuffer(info);
+            REQUIRE(buffer != nullptr);
+            const LightConstants constants{{0.0f, 0.0f, 1.0f, 0.0f},
+                                           {intensity, intensity, intensity, 0.0f}};
+            REQUIRE(driver->uploadToBuffer(buffer->getHandle(), &constants, sizeof(constants)));
+            return buffer;
+        };
+
+        vkm::VkmTextureInfo lightingTargetInfo{};
+        lightingTargetInfo._flags = vkm::VkmResourceCreateInfo::AllowColorAttachment |
+                                    vkm::VkmResourceCreateInfo::AllowTransferSrc;
+        lightingTargetInfo._extent = glm::uvec3(kGBufferRenderSize, kGBufferRenderSize, 1);
+        lightingTargetInfo._numMipLevels = 1;
+        lightingTargetInfo._numArrayLayers = 1;
+        // Matches the PSO's declared colour attachment; HDR because a lighting result is not
+        // bounded to [0,1] before tone mapping.
+        lightingTargetInfo._format = vkm::VkmFormat::R16G16B16A16_SFLOAT;
+        lightingTargetInfo._debugName = "DeferredLightingTarget";
+        vkm::VkmTexture* lightingTarget = driver->newTexture(lightingTargetInfo);
+        REQUIRE(lightingTarget != nullptr);
+
+        vkm::VkmFrameBufferDescriptor lightingFb{};
+        lightingFb._width = kGBufferRenderSize;
+        lightingFb._height = kGBufferRenderSize;
+        lightingFb._renderPass._colorAttachmentCount = 1;
+        lightingFb._renderPass._colorAttachments[0]._attachmentId = 0;
+        lightingFb._renderPass._colorAttachments[0]._loadAction = vkm::VkmLoadAction::Clear;
+        lightingFb._renderPass._colorAttachments[0]._storeAction = vkm::VkmStoreAction::Store;
+        lightingFb._colorAttachments[0] = lightingTarget->getHandle();
+
+        // Renders the lighting pass with `intensity` and returns the readback. A table is
+        // immutable, so a different light means a different table -- which is exactly the usage
+        // the immutability was designed around.
+        const auto shadeWith = [&](float intensity) {
+            vkm::VkmBuffer* lightBuffer = makeLightBuffer(intensity);
+            const std::vector<vkm::VkmPerPassResourceEntry> entries{
+                { 0, gbuffer.getTexture(vkm::VkmGBuffer::Target::Normal) },
+                { 1, gbuffer.getTexture(vkm::VkmGBuffer::Target::BaseColorRoughness) },
+                { 2, gbuffer.getTexture(vkm::VkmGBuffer::Target::MotionMetallic) },
+                { 3, gbuffer.getDepthTexture() },
+                { 4, sampler->getHandle() },
+                { 5, lightBuffer->getHandle() },
+            };
+            std::string tableError;
+            vkm::VkmPerPassResourceTableBase* table =
+                driver->newPerPassResourceTable(lightingPso, entries, &tableError);
+            REQUIRE_MESSAGE(table != nullptr, tableError);
+
+            vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+            auto* barrierSubGraph = renderGraph.beginComputeSubGraph("GBufferToShaderRead");
+            barrierSubGraph->setComputeCallback([&gbuffer](vkm::VkmCommandBufferBase* commandBuffer) {
+                // The G-buffer pass left these as attachments; this is the hand-off to sampling.
+                for (uint32_t i = 0; i < vkm::VkmGBuffer::kTargetCount; ++i)
+                {
+                    commandBuffer->barrierTextureForShaderRead(
+                        gbuffer.getTexture(static_cast<vkm::VkmGBuffer::Target>(i)));
+                }
+                commandBuffer->barrierTextureForShaderRead(gbuffer.getDepthTexture());
+            });
+
+            auto* lightingSubGraph = renderGraph.beginGraphicsSubGraph(lightingFb);
+            lightingSubGraph->setRenderCallback([lightingPso, table](vkm::VkmCommandBufferBase* commandBuffer) {
+                commandBuffer->bindPipeline(lightingPso);
+                commandBuffer->bindPerPassResources(table);
+                commandBuffer->draw(3, 1, 0, 0); // one oversized triangle, no vertex buffer
+            });
+
+            renderGraph.compile();
+            renderGraph.execute();
+            renderGraph.ensureCompleted();
+
+            vkm::VkmTextureReadbackResult readback = driver->readbackTexture(lightingTarget->getHandle());
+            table->destroy();
+            delete table;
+            driver->getRenderResourcePool()->releaseResource(lightBuffer->getHandle());
+            return readback;
+        };
+
+        const uint32_t litX = kGBufferRenderSize / 4;
+        const uint32_t litY = kGBufferRenderSize * 3 / 4;
+        // The opposite corner, outside the lower-left half the triangle covers.
+        const uint32_t bgX = kGBufferRenderSize - 4;
+        const uint32_t bgY = 3;
+
+        const vkm::VkmTextureReadbackResult single = shadeWith(1.0f);
+        REQUIRE(single.channels == 8); // bytes per texel, RGBA16F
+        const auto texelAt = [&](const vkm::VkmTextureReadbackResult& readback, uint32_t x, uint32_t y) {
+            return &readback.pixels[(static_cast<size_t>(y) * readback.width + x) * readback.channels];
+        };
+
+        const float litR = readHalfComponent(texelAt(single, litX, litY), 0);
+        const float litG = readHalfComponent(texelAt(single, litX, litY), 1);
+        const float litB = readHalfComponent(texelAt(single, litX, litY), 2);
+
+        // Covered pixels are lit at all. If set 2 delivered nothing, every sample would read zero
+        // and this would be black.
+        CHECK(litR > 0.0f);
+        CHECK(litG > 0.0f);
+        CHECK(litB > 0.0f);
+
+        // The material is (0.25, 0.5, 0.75), and a mostly-dielectric surface keeps that ordering
+        // through the diffuse lobe. A shuffled or wrongly-bound base-colour texture breaks it.
+        CHECK(litR < litG);
+        CHECK(litG < litB);
+
+        // Never covered by geometry, so the depth early-out must reject it outright.
+        CHECK(readHalfComponent(texelAt(single, bgX, bgY), 0) == 0.0f);
+        CHECK(readHalfComponent(texelAt(single, bgX, bgY), 1) == 0.0f);
+        CHECK(readHalfComponent(texelAt(single, bgX, bgY), 2) == 0.0f);
+
+        // Doubling only the set-2 uniform buffer doubles the result. Nothing else changed, so this
+        // is what proves that buffer actually reaches the shader rather than the pass running on
+        // whatever happened to be bound.
+        const vkm::VkmTextureReadbackResult doubled = shadeWith(2.0f);
+        CHECK(readHalfComponent(texelAt(doubled, litX, litY), 0) == doctest::Approx(litR * 2.0f).epsilon(0.02));
+        CHECK(readHalfComponent(texelAt(doubled, litX, litY), 1) == doctest::Approx(litG * 2.0f).epsilon(0.02));
+        CHECK(readHalfComponent(texelAt(doubled, litX, litY), 2) == doctest::Approx(litB * 2.0f).epsilon(0.02));
+
+        driver->getRenderResourcePool()->releaseResource(lightingTarget->getHandle());
+        driver->getRenderResourcePool()->releaseResource(sampler->getHandle());
         gbuffer.destroy();
     }
 }

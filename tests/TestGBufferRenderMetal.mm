@@ -56,4 +56,10 @@ TEST_CASE("Metal G-buffer - a scene draw fills every channel") {
     vkmtest::runGBufferRenderTest(fixture.driver.get());
 }
 
+TEST_CASE("Metal deferred lighting - the G-buffer is sampled through set 2 and shaded") {
+    MetalGBufferRenderFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runDeferredLightingTest(fixture.driver.get());
+}
+
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE

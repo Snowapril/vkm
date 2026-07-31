@@ -619,8 +619,13 @@ Also shared by both tiers.
       Deliberately **not** added: jitter and previous camera position, which have no consumer
       until TAA (Phase 9)
 - [ ] Reconstruct world position from depth + inverse view-projection rather than storing it
-- [ ] Fullscreen-pass HLSL building block + live tone mapping
-- [ ] PBR BRDF evaluation reading the already-imported `VkmMaterialData`
+- [x] **Fullscreen-pass building block + PBR deferred lighting.** One oversized triangle from
+      `SV_VertexID` (no vertex/index buffer), sampling the G-buffer through **descriptor set 2** —
+      not the bindless arrays, so the pass has a path on WebGPU and needs no `VkmScene`. Cook-Torrance
+      GGX finally reads the `VkmMaterialData` that glTF import has carried unused. This is also
+      where `barrierTextureForShaderRead` got its pixel-level proof, and where set 2's *texture and
+      sampler* paths were first exercised (the earlier test used buffers only)
+- [ ] Tone mapping into the live pipeline (`tonemap.frag` is still dead GLSL with no PSO — `TODO.md:14`)
 - [ ] Hash-based stateless RNG seeded per (pixel, frame, pass)
 
 **Gate:** G-buffer channels visualizable via a debug view; reprojection debug view stable under
@@ -1005,4 +1010,5 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-07-31 | 2 | Descriptor set 2 (per-pass resources) implemented on **Vulkan**: PSO JSON declaration, per-PSO `VkDescriptorSetLayout`, an immutable `VkmPerPassResourceTable`, and `bindPerPassResources()`. Verified end to end by a compute pass whose only resources are a set-2 uniform buffer and storage buffer, reading back `base + threadId` with validation clean. Metal and WebGPU are error stubs. This is the first genuinely per-PSO descriptor set in the engine, so a pipeline declaring it is no longer layout-compatible with one that does not. |
 | 2026-07-31 | 2 | Descriptor set 2 on **Metal**, via discrete argument-table bindings (not a second argument buffer) so it stays out of the `pad_argument_buffer_resources` walk, mirroring set 1. vkm-compiler pins each declared binding per-PSO. The cross-backend test now runs the same shader and expected values on Vulkan and Metal, which is what shows the declaration means the same thing on both. Metal 169 tests, Vulkan 173, wasm builds. |
 | 2026-07-31 | 2 | Descriptor set 2 on **WebGPU** (bind group 2), completing set 2 on all three backends. Compile-verified only: the WebGPU suite runs in headless Chrome and passes, but no shader can be compiled for that backend without a Tint/Dawn build, so the group-2 path has not executed. Flagged as a Phase 4 risk. |
+| 2026-08-01 | 3 | G-buffer filled by a real MRT scene pass (`gbuffer.hlsl`) with camera motion vectors, then consumed by a fullscreen PBR deferred-lighting pass reading it through descriptor set 2. Verified on Metal by rendering the fixture scene and checking the shaded output: the lit pixel is non-black with the material's colour ordering preserved, uncovered pixels are exactly black, and doubling only the set-2 light buffer doubles the result. Metal 175 tests. |
 | 2026-07-30 | 4 | Low-spec tier must be **fully dynamic** (no bake) → technique decided: raster-updated dynamic probe volume (DDGI-style octahedral irradiance + distance moments, Chebyshev visibility) plus an additive SSGI contact term. Storage/sampling are update-mechanism-agnostic, so Phase 5's rays can later refresh the same volume, and ReSTIR GI can query it for multi-bounce `L_o`. |

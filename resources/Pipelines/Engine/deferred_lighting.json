@@ -1,0 +1,29 @@
+{
+    "name": "deferred_lighting_pso",
+    "primitive_topology": "triangle_list",
+    "rasterization_state": {
+        "fill_mode": "solid",
+        "cull_mode": "none",
+        "front_face": "counter_clockwise"
+    },
+    "depth_stencil_state": {
+        "depth_test_enable": false,
+        "depth_write_enable": false,
+        "stencil_test_enable": false
+    },
+    "color_attachments": [
+        { "format": "r16g16b16a16_sfloat" }
+    ],
+    "per_pass_resources": [
+        { "binding": 0, "type": "sampled_texture" },
+        { "binding": 1, "type": "sampled_texture" },
+        { "binding": 2, "type": "sampled_texture" },
+        { "binding": 3, "type": "sampled_texture" },
+        { "binding": 4, "type": "sampler" },
+        { "binding": 5, "type": "uniform_buffer" }
+    ],
+    "shaders": {
+        "vertex": { "filepath": "deferred_lighting.hlsl", "entry_point": "VSMain" },
+        "fragment": { "filepath": "deferred_lighting.hlsl", "entry_point": "PSMain" }
+    }
+}
