@@ -5,6 +5,8 @@
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <webgpu/webgpu.h>
 
+#include <vector>
+
 namespace vkm
 {
     class VkmCommandBufferWebGPU final : public VkmCommandBufferBase
@@ -43,14 +45,40 @@ namespace vkm
         virtual void onSetDebugName(const char* name) override final;
         virtual void onPushDebugGroup(const char* name) override final;
         virtual void onPopDebugGroup() override final;
+        virtual void onBeginCommandBuffer() override final;
+        virtual void onBeginGpuZone(uint32_t beginSlot, uint32_t endSlot) override final;
+        virtual bool onEndGpuZone() override final;
+        virtual void onResolveGpuZones(uint32_t firstSlot, uint32_t count) override final;
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
         virtual void onWriteCompletionMarker(VkmResourceHandle markerBuffer, VkmResourceHandle oneBuffer, uint32_t offset) override final;
         virtual void onEndCommandBuffer() override final;
 #endif // VKM_ENABLE_GPU_BREAD_CRUMBS
 
     private:
+        /*
+        * @brief Fills `outTimestampWrites` from the innermost GPU zone that has not yet been
+        * given a pass to write into, and returns whether there was one.
+        *
+        * WebGPU has no encoder-level timestamp write, so a zone's begin/end pair can only be
+        * carried by one render or compute pass descriptor. The innermost open zone wins, which
+        * is what makes a subgraph's zone -- rather than the outer submission-wide one -- the one
+        * that gets measured.
+        */
+        bool takePendingGpuZone(WGPUPassTimestampWrites* outTimestampWrites);
+
         WGPUCommandEncoder _encoder{nullptr};
         WGPURenderPassEncoder _renderPassEncoder{nullptr};
         WGPUComputePassEncoder _computePassEncoder{nullptr};
+
+        // GPU zones currently open, innermost last. `_attached` flips once a pass has taken the
+        // pair, which is what endGpuZone() reports back so the profiler can drop a zone that
+        // enclosed no pass at all.
+        struct OpenGpuZone
+        {
+            uint32_t _beginSlot = 0;
+            uint32_t _endSlot = 0;
+            bool _attached = false;
+        };
+        std::vector<OpenGpuZone> _openGpuZones;
     };
 } // namespace vkm

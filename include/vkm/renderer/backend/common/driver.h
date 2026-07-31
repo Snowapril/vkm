@@ -28,6 +28,8 @@ namespace vkm
     class VkmPipelineStateBase;
     class VkmDeferredResourceReclaimer;
     class VkmGpuCrashHandler;
+    class VkmGpuProfiler;
+    class VkmCommandBufferBase;
     class VkmBindlessResourceManagerBase;
     class VkmFrameConstantManagerBase;
 
@@ -57,6 +59,12 @@ namespace vkm
         // enables wherever the GPU offers it. WebGPU has no such concept, and neither does a
         // Vulkan driver without that feature -- both report 0 rather than failing.
         BufferDeviceAddress     = 0x00000010,
+        // Backend can write GPU timestamps into a pool of slots and read them back, which is
+        // what VkmGpuProfiler needs to time render graph subgraphs. Set by each backend from
+        // initializeGpuTimestampPool() -- it is a runtime answer, not a compile-time one
+        // (Vulkan needs timestampComputeAndGraphics, WebGPU needs the optional timestamp-query
+        // feature), so it is only meaningful after driver initialization.
+        TimestampQuery          = 0x00000020,
     };
 
     inline VkmDriverCapabilityFlags operator|(VkmDriverCapabilityFlags lhs, VkmDriverCapabilityFlags rhs)
@@ -313,6 +321,50 @@ namespace vkm
         */
         inline VkmGpuCrashHandler* getGpuCrashHandler() const { return _gpuCrashHandler.get(); }
 
+        /*
+        * @brief get the per-subgraph GPU profiler driven by VkmRenderGraph::execute() and read by
+        * the debug overlay's "GPU" stat and VkmGpuProfilerInspector. Never null after
+        * initialize(); reports isSupported() == false on a device without timestamp queries.
+        */
+        inline VkmGpuProfiler* getGpuProfiler() const { return _gpuProfiler.get(); }
+
+        /*
+        * @brief GPU timestamp pool services, used only by VkmGpuProfiler.
+        *
+        * @details Virtual with a default that declines rather than pure virtual: a backend that
+        * cannot (or does not yet) time GPU work says so by leaving initializeGpuTimestampPool()
+        * returning false, and then none of the others is ever called. `slotCount` is a flat
+        * array of timestamp slots; the profiler owns how they are partitioned.
+        *
+        * A backend that returns true must also raise VkmDriverCapabilityFlags::TimestampQuery.
+        */
+        virtual bool initializeGpuTimestampPool(uint32_t slotCount) { (void)slotCount; return false; }
+        virtual void destroyGpuTimestampPool() {}
+
+        // Nanoseconds per raw timestamp tick (Vulkan's VkPhysicalDeviceLimits::timestampPeriod;
+        // 1.0 on backends whose timestamps are already nanoseconds).
+        virtual double getGpuTimestampPeriodNs() const { return 1.0; }
+
+        /*
+        * @brief Records the reset of slots [firstSlot, firstSlot + count) into `commandBuffer`,
+        * ahead of the writes that will fill them. Must be recorded outside a render pass.
+        * Vulkan requires this before a slot can be read back at all.
+        */
+        virtual void resetGpuTimestampSlots(VkmCommandBufferBase* commandBuffer, uint32_t firstSlot, uint32_t count)
+        {
+            (void)commandBuffer; (void)firstSlot; (void)count;
+        }
+
+        /*
+        * @brief Reads `count` raw timestamp ticks starting at `firstSlot` into `outTicks`.
+        * Callers only ask once the submission that wrote them has completed, so a false return
+        * means the read genuinely failed rather than "not yet".
+        */
+        virtual bool resolveGpuTimestamps(uint32_t firstSlot, uint32_t count, uint64_t* outTicks)
+        {
+            (void)firstSlot; (void)count; (void)outTicks; return false;
+        }
+
     protected:
         VkmCommandQueueBase* newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
 
@@ -371,6 +423,7 @@ namespace vkm
         std::unique_ptr<VkmRenderResourcePool> _renderResourcePool;
         std::unique_ptr<VkmDeferredResourceReclaimer> _deferredReclaimer;
         std::unique_ptr<VkmGpuCrashHandler> _gpuCrashHandler;
+        std::unique_ptr<VkmGpuProfiler> _gpuProfiler;
         VkmEngineLaunchOptions _launchOptions{};
         bool _debugNamingEnabled{false};
         VkmFormat _swapChainColorFormat{VkmFormat::Undefined};

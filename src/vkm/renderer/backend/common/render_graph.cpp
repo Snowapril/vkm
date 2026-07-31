@@ -10,6 +10,7 @@
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/gpu_crash_handler.h>
+#include <vkm/renderer/backend/common/gpu_profiler.h>
 #include <vkm/renderer/backend/common/render_graph_capture.h>
 #include <vkm/base/cpu_profiler.h>
 
@@ -113,7 +114,18 @@ namespace vkm
         // group below and by each subgraph's completion marker.
         commandBuffer->setDebugName(("RenderGraph.Frame" + std::to_string(_frameIndex)).c_str());
         commandBuffer->beginCommandBuffer();
-        commandBuffer->writeGpuTimestampBegin();
+
+        // One zone for the whole submission plus one per subgraph. The count is exact because
+        // the profiler resets precisely the timestamp slots it is told will be written -- see
+        // VkmGpuProfiler::beginSubmission.
+        VkmGpuProfiler* gpuProfiler = _driver->getGpuProfiler();
+        const uint32_t profileSubmission = gpuProfiler->beginSubmission(
+            commandQueue, commandBuffer, 1 + static_cast<uint32_t>(_subGraphs.size()));
+        // Every zone call below already no-ops on an invalid submission; this is checked anyway so
+        // that a backend without timestamp support does not pay internName()'s mutex and string
+        // allocation once per subgraph per frame.
+        const bool gpuProfiling = profileSubmission != VkmGpuProfiler::kInvalidSubmission;
+        gpuProfiler->beginZone(commandBuffer, profileSubmission, "Frame", INVALID_VALUE32, /*depth*/ 0);
 
         if (options.capture != nullptr)
         {
@@ -128,6 +140,15 @@ namespace vkm
             // collapsible scope (e.g. "TrianglePass", "EngineImGuiOverlay"). Self-gated on
             // enableGpuCapture; a no-op otherwise.
             commandBuffer->pushDebugGroup(subGraph->getName().c_str());
+            if (gpuProfiling)
+            {
+                // Interned for the same reason VKM_PROFILE_SCOPE_DYNAMIC below does it: subgraph
+                // names come from a small fixed set, and a GPU zone outlives the frame that
+                // recorded it by several more (it is only read once the GPU has finished).
+                gpuProfiler->beginZone(commandBuffer, profileSubmission,
+                                       VkmCpuProfiler::internName(subGraph->getName()),
+                                       subGraph->getSubGraphId(), /*depth*/ 1);
+            }
             {
                 // Named after the subgraph, so the flame chart reads the same way the GPU debug
                 // group above does. Subgraph names come from a small fixed set, which is what
@@ -135,6 +156,7 @@ namespace vkm
                 VKM_PROFILE_SCOPE_DYNAMIC(subGraph->getName());
                 subGraph->commit(commandBuffer);
             }
+            gpuProfiler->endZone(commandBuffer, profileSubmission);
             commandBuffer->popDebugGroup();
 
             if (options.capture != nullptr)
@@ -157,7 +179,9 @@ namespace vkm
 #endif // VKM_ENABLE_GPU_BREAD_CRUMBS
         }
 
-        commandBuffer->writeGpuTimestampEnd();
+        // Closing the outermost zone is also what lets the backend record its resolve into this
+        // same command buffer, so it has to happen before endCommandBuffer().
+        gpuProfiler->endZone(commandBuffer, profileSubmission);
         commandBuffer->endCommandBuffer();
 
         CommandSubmitInfo submitInfo;
@@ -170,6 +194,9 @@ namespace vkm
             VKM_PROFILE_SCOPE("CommandQueue::submit");
             _lastSubmitInfo = commandQueue->submit(submitInfo);
         }
+
+        // The profiler will not read this submission's timestamps until this timeline completes.
+        gpuProfiler->endSubmission(profileSubmission, _lastSubmitInfo);
 
         // Hand the command buffer back for reuse. submit() and recordSubmission() have already
         // copied everything they keep, and beginCommandBuffer() resets the per-use state, so the

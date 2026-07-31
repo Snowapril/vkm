@@ -1,10 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
-#include <vkm/renderer/imgui/cpu_profiler_inspector.h>
-
-#if defined(ENABLE_CHROME_TRACING)
+#include <vkm/renderer/imgui/gpu_profiler_inspector.h>
 #include <vkm/base/common.h>
-#endif // ENABLE_CHROME_TRACING
 
 #include "profiler_chart_common.h"
 
@@ -22,40 +19,60 @@ namespace vkm
     namespace
     {
         // Largest depth used by any zone in the timeline, so the caller can reserve rows.
-        uint16_t maxDepth(const VkmProfileThreadTimeline& timeline)
+        uint16_t maxDepth(const VkmGpuQueueTimeline& timeline)
         {
             uint16_t depth = 0;
-            for (const VkmProfileZone& zone : timeline._zones)
+            for (const VkmGpuProfileZone& zone : timeline._zones)
             {
                 depth = std::max(depth, zone._depth);
             }
             return depth;
         }
+
+        const char* queueTypeName(const VkmCommandQueueType queueType)
+        {
+            switch (queueType)
+            {
+                case VkmCommandQueueType::Graphics: return "Graphics";
+                case VkmCommandQueueType::Compute:  return "Compute";
+                case VkmCommandQueueType::Transfer: return "Transfer";
+                default:                            return "Unknown";
+            }
+        }
     } // namespace
 
-    void VkmCpuProfilerInspector::draw()
+    void VkmGpuProfilerInspector::draw(VkmGpuProfiler* profiler)
     {
-        if (!_visible)
+        if (!_visible || profiler == nullptr)
         {
             return;
         }
 
         ImGui::SetNextWindowSize(ImVec2(900, 520), ImGuiCond_FirstUseEver);
-        if (!ImGui::Begin("CPU Profiler", &_visible))
+        if (!ImGui::Begin("GPU Profiler", &_visible))
         {
             ImGui::End();
             return;
         }
 
-        drawToolbar();
+        if (!profiler->isSupported())
+        {
+            // A capability, not a failure -- say so plainly rather than showing an empty chart
+            // that looks like the GPU did no work.
+            ImGui::TextDisabled("This backend does not support GPU timestamp queries.");
+            ImGui::End();
+            return;
+        }
+
+        drawToolbar(*profiler);
         ImGui::Separator();
 
-        const size_t displayIndex = drawFrameHistory();
+        const size_t displayIndex = drawFrameHistory(*profiler);
 
-        VkmProfileFrame frame;
-        if (displayIndex != kNoFrame && VkmCpuProfiler::singleton().copyFrame(displayIndex, frame))
+        VkmGpuProfileFrame frame;
+        if (displayIndex != kNoFrame && profiler->copyFrame(displayIndex, frame))
         {
-            drawFlameChart(frame);
+            drawQueueTimelines(frame);
         }
         else
         {
@@ -65,18 +82,19 @@ namespace vkm
         ImGui::End();
     }
 
-    void VkmCpuProfilerInspector::drawToolbar()
+    void VkmGpuProfilerInspector::drawToolbar(VkmGpuProfiler& profiler)
     {
-        VkmCpuProfiler& profiler = VkmCpuProfiler::singleton();
         const bool capturing = profiler.isCapturing();
 
         if (ImGui::Button(capturing ? "Stop capture" : "Start capture"))
         {
-            // Resuming clears the ring (see VkmCpuProfiler::setCapturing), so drop the pin too
+            // Resuming clears the ring (see VkmGpuProfiler::setCapturing), so drop the pin too
             // rather than leaving it pointing at a frame number that no longer exists.
             profiler.setCapturing(!capturing);
             _hasPinnedFrame = false;
         }
+        ImGui::SetItemTooltip("Only controls the frame history. Timestamps are always recorded, "
+                              "which is what keeps the overlay's GPU stat live.");
 
         ImGui::SameLine();
         if (ImGui::Button("Clear"))
@@ -89,20 +107,20 @@ namespace vkm
         ImGui::SameLine();
         if (ImGui::Button("Export Chrome trace"))
         {
-            // Lives here rather than behind a hotkey because capture is tied to this window
-            // being open -- a global key pressed with the window closed would export nothing.
-            static constexpr const char* kChromeTracePath = "vkm_cpu_trace.json";
+            static constexpr const char* kChromeTracePath = "vkm_gpu_trace.json";
             if (profiler.exportChromeTrace(kChromeTracePath))
             {
-                VKM_DEBUG_LOG("Wrote CPU profile to vkm_cpu_trace.json");
+                VKM_DEBUG_LOG("Wrote GPU profile to vkm_gpu_trace.json");
             }
             else
             {
-                VKM_DEBUG_ERROR("Failed to write vkm_cpu_trace.json");
+                VKM_DEBUG_ERROR("Failed to write vkm_gpu_trace.json");
             }
         }
-        ImGui::SetItemTooltip("Write the collected frames to vkm_cpu_trace.json in the working "
-                              "directory; open it in chrome://tracing or ui.perfetto.dev.");
+        ImGui::SetItemTooltip("Write the collected frames to vkm_gpu_trace.json in the working "
+                              "directory; open it in chrome://tracing or ui.perfetto.dev. GPU "
+                              "timestamps are on the GPU's own clock, so this cannot be overlaid "
+                              "on the CPU trace.");
 #endif // ENABLE_CHROME_TRACING
 
         ImGui::SameLine();
@@ -126,20 +144,20 @@ namespace vkm
         {
             _fitRequested = true;
         }
-        ImGui::SetItemTooltip("Reset the flame chart's zoom and pan to span the whole frame.");
+        ImGui::SetItemTooltip("Reset the chart's zoom and pan to span the whole frame.");
 
         ImGui::SameLine();
         ImGui::SetNextItemWidth(180.0f);
         ImGui::SliderFloat("Zoom", &_pixelsPerMs, 1.0f, 20000.0f, "%.0f px/ms", ImGuiSliderFlags_Logarithmic);
     }
 
-    size_t VkmCpuProfilerInspector::drawFrameHistory()
+    size_t VkmGpuProfilerInspector::drawFrameHistory(VkmGpuProfiler& profiler)
     {
-        const std::vector<VkmProfileFrameSummary> summaries = VkmCpuProfiler::singleton().copyFrameSummaries();
+        const std::vector<VkmGpuProfileFrameSummary> summaries = profiler.copyFrameSummaries();
 
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         const float width = std::max(ImGui::GetContentRegionAvail().x, 1.0f);
-        ImGui::InvisibleButton("##frameHistory", ImVec2(width, kHistoryHeight));
+        ImGui::InvisibleButton("##gpuFrameHistory", ImVec2(width, kHistoryHeight));
 
         ImDrawList* drawList = ImGui::GetWindowDrawList();
         const ImVec2 bottomRight(origin.x + width, origin.y + kHistoryHeight);
@@ -152,12 +170,12 @@ namespace vkm
             return kNoFrame;
         }
 
-        // Fixed slot width (rather than width / summaries.size()) so bars keep their size as
-        // the ring fills and then scroll, instead of continuously squashing.
-        const float slotWidth = std::max(width / static_cast<float>(VkmCpuProfiler::kMaxFrameHistory), 1.0f);
+        // Fixed slot width (rather than width / summaries.size()) so bars keep their size as the
+        // ring fills and then scroll, instead of continuously squashing.
+        const float slotWidth = std::max(width / static_cast<float>(VkmGpuProfiler::kMaxFrameHistory), 1.0f);
 
         float peakMs = kFrameBudgetMs;
-        for (const VkmProfileFrameSummary& summary : summaries)
+        for (const VkmGpuProfileFrameSummary& summary : summaries)
         {
             peakMs = std::max(peakMs, nsToMs(summary._durationNs));
         }
@@ -184,7 +202,9 @@ namespace vkm
             const float x0 = origin.x + static_cast<float>(i) * slotWidth;
             const float x1 = x0 + std::max(slotWidth - 1.0f, 1.0f);
 
-            ImU32 color = (durationMs > kFrameBudgetMs) ? IM_COL32(214, 106, 96, 255) : IM_COL32(96, 168, 214, 255);
+            // Green rather than the CPU chart's blue, so a screenshot of one window is never
+            // mistaken for the other.
+            ImU32 color = (durationMs > kFrameBudgetMs) ? IM_COL32(214, 106, 96, 255) : IM_COL32(110, 190, 130, 255);
             if (_hasPinnedFrame && summaries[i]._frameNumber == _pinnedFrameNumber)
             {
                 color = IM_COL32(240, 220, 120, 255);
@@ -200,7 +220,7 @@ namespace vkm
 
         if (hoveredIndex >= 0)
         {
-            const VkmProfileFrameSummary& summary = summaries[static_cast<size_t>(hoveredIndex)];
+            const VkmGpuProfileFrameSummary& summary = summaries[static_cast<size_t>(hoveredIndex)];
             ImGui::SetTooltip("frame #%u\n%.3f ms", summary._frameNumber, nsToMs(summary._durationNs));
 
             if (ImGui::IsItemClicked())
@@ -210,10 +230,10 @@ namespace vkm
                 _hasPinnedFrame = true;
                 _pinnedFrameNumber = summary._frameNumber;
                 _fitRequested = true;
-                // The range was measured against a different frame's timeline; carrying it
-                // over would show totals for zones that are no longer on screen.
+                // The range was measured against a different frame's timeline; carrying it over
+                // would show totals for zones that are no longer on screen.
                 _hasSelection = false;
-                VkmCpuProfiler::singleton().setCapturing(false);
+                profiler.setCapturing(false);
             }
         }
 
@@ -227,7 +247,7 @@ namespace vkm
         return displayIndex;
     }
 
-    void VkmCpuProfilerInspector::drawSelectionSummary(const VkmProfileFrame& frame)
+    void VkmGpuProfilerInspector::drawSelectionSummary(const VkmGpuProfileFrame& frame)
     {
         if (!_hasSelection)
         {
@@ -244,7 +264,7 @@ namespace vkm
 
         const uint64_t beginNs = frame._beginNs + static_cast<uint64_t>(static_cast<double>(beginMs) * 1e6);
         const uint64_t endNs = frame._beginNs + static_cast<uint64_t>(static_cast<double>(endMs) * 1e6);
-        const std::vector<VkmProfileScopeTotal> totals = vkmAggregateProfileRange(frame, beginNs, endNs);
+        const std::vector<VkmGpuProfileZoneTotal> totals = vkmAggregateGpuProfileRange(frame, beginNs, endNs);
 
         ImGui::Text("Selection %.4f ms", spanMs);
         ImGui::SameLine();
@@ -263,7 +283,7 @@ namespace vkm
 
         if (totals.empty())
         {
-            ImGui::TextDisabled("No scopes ran in this range.");
+            ImGui::TextDisabled("No GPU work ran in this range.");
             return;
         }
 
@@ -271,18 +291,18 @@ namespace vkm
                                                 ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY;
         const int rowCount = std::min(kMaxSelectionRows, static_cast<int>(totals.size()));
         const float tableHeight = static_cast<float>(rowCount + 1) * ImGui::GetTextLineHeightWithSpacing();
-        if (ImGui::BeginTable("##selectionTotals", 4, kTableFlags, ImVec2(0.0f, tableHeight)))
+        if (ImGui::BeginTable("##gpuSelectionTotals", 4, kTableFlags, ImVec2(0.0f, tableHeight)))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
-            ImGui::TableSetupColumn("Scope");
+            ImGui::TableSetupColumn("Subgraph");
             ImGui::TableSetupColumn("Total");
-            ImGui::TableSetupColumn("Calls");
+            ImGui::TableSetupColumn("Count");
             ImGui::TableSetupColumn("% of range");
             ImGui::TableHeadersRow();
 
             for (int row = 0; row < rowCount; ++row)
             {
-                const VkmProfileScopeTotal& entry = totals[static_cast<size_t>(row)];
+                const VkmGpuProfileZoneTotal& entry = totals[static_cast<size_t>(row)];
                 const float totalMs = nsToMs(entry._totalNs);
 
                 ImGui::TableNextRow();
@@ -300,27 +320,26 @@ namespace vkm
 
         if (static_cast<int>(totals.size()) > rowCount)
         {
-            ImGui::TextDisabled("Showing %d of %zu scopes (longest first).", rowCount, totals.size());
+            ImGui::TextDisabled("Showing %d of %zu zones (longest first).", rowCount, totals.size());
         }
-        ImGui::TextDisabled("Inclusive of nested scopes and summed across threads, so the "
-                            "percentages can exceed 100%%.");
+        ImGui::TextDisabled("Includes the submission-wide zone around the subgraphs, and sums "
+                            "across queues, so the percentages can exceed 100%%.");
     }
 
-    void VkmCpuProfilerInspector::drawFlameChart(const VkmProfileFrame& frame)
+    void VkmGpuProfilerInspector::drawQueueTimelines(const VkmGpuProfileFrame& frame)
     {
         const float frameMs = std::max(nsToMs(frame.getDurationNs()), 0.001f);
 
-        ImGui::Text("Frame #%u  %.3f ms  %zu thread(s)", frame._frameNumber, frameMs, frame._threads.size());
+        ImGui::Text("Frame #%u  %.3f ms  %zu queue(s)", frame._frameNumber, frameMs, frame._queues.size());
 
         drawSelectionSummary(frame);
 
-        ImGui::BeginChild("##flameChart", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
+        ImGui::BeginChild("##gpuChart", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
         const float chartWidth = std::max(ImGui::GetContentRegionAvail().x, 1.0f);
-        // Stay pending until a frame with real content arrives: the first frame of a capture is
-        // always empty (beginFrame() closes a frame that nothing was recorded into yet), and
-        // fitting to its zero duration would leave the chart zoomed in by six orders of magnitude.
+        // Stay pending until a frame with real content arrives: fitting to a zero-duration frame
+        // would leave the chart zoomed in by six orders of magnitude.
         if (_fitRequested && frame.getDurationNs() > 0)
         {
             _pixelsPerMs = chartWidth / frameMs;
@@ -330,16 +349,15 @@ namespace vkm
 
         const float chartLeft = ImGui::GetCursorScreenPos().x;
 
-        // Ruler geometry has to be captured before the strip is emitted: emitting it advances
-        // the cursor, and chartBottom is measured from what is left below it.
+        // Ruler geometry has to be captured before the strip is emitted: emitting it advances the
+        // cursor, and chartBottom is measured from what is left below it.
         const ImVec2 rulerOrigin = ImGui::GetCursorScreenPos();
         const float rulerBottom = rulerOrigin.y + kRulerHeight;
         const float chartBottom = rulerOrigin.y + ImGui::GetContentRegionAvail().y;
 
-        // The ruler is the one place a drag selects a range; everywhere else a drag still pans,
-        // which is the gesture this chart already had.
+        // The ruler is the one place a drag selects a range; everywhere else a drag pans.
         ImGui::SetCursorScreenPos(rulerOrigin);
-        ImGui::InvisibleButton("##ruler", ImVec2(chartWidth, kRulerHeight));
+        ImGui::InvisibleButton("##gpuRuler", ImVec2(chartWidth, kRulerHeight));
         const bool rulerActive = ImGui::IsItemActive();
         const float msAtMouse = _panMs + (ImGui::GetIO().MousePos.x - chartLeft) / _pixelsPerMs;
 
@@ -374,7 +392,7 @@ namespace vkm
         }
         _zoomToSelectionRequested = false;
 
-        // Wheel zooms about the cursor (so the scope under the pointer stays put), left-drag pans.
+        // Wheel zooms about the cursor (so the zone under the pointer stays put), left-drag pans.
         // Suppressed while the ruler owns the drag, so selecting cannot also pan the chart out
         // from under the selection.
         if (!rulerActive && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows))
@@ -415,9 +433,12 @@ namespace vkm
             drawList->AddText(ImVec2(x + 3.0f, rulerOrigin.y + 2.0f), IM_COL32(150, 150, 160, 255), label);
         }
 
-        for (const VkmProfileThreadTimeline& timeline : frame._threads)
+        for (const VkmGpuQueueTimeline& timeline : frame._queues)
         {
-            ImGui::SeparatorText(timeline._threadName.c_str());
+            char header[128];
+            std::snprintf(header, sizeof(header), "%s  (%s queue %u)", timeline._queueName.c_str(),
+                          queueTypeName(timeline._queueType), timeline._queueIndex);
+            ImGui::SeparatorText(header);
             if (timeline._overflowed)
             {
                 ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.3f, 1.0f),
@@ -427,7 +448,7 @@ namespace vkm
             const ImVec2 rowsOrigin = ImGui::GetCursorScreenPos();
             const float rowsHeight = static_cast<float>(maxDepth(timeline) + 1) * (kZoneRowHeight + kZoneRowGap);
 
-            for (const VkmProfileZone& zone : timeline._zones)
+            for (const VkmGpuProfileZone& zone : timeline._zones)
             {
                 const float beginMs = nsToMs(zone._beginNs - frame._beginNs);
                 const float endMs = nsToMs(zone._endNs - frame._beginNs);
@@ -455,8 +476,15 @@ namespace vkm
                 if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
                     ImGui::IsMouseHoveringRect(topLeft, bottomRight))
                 {
-                    ImGui::SetTooltip("%s\n%.4f ms\nstart %.4f ms  depth %u", zone._name, endMs - beginMs, beginMs,
-                                      static_cast<unsigned int>(zone._depth));
+                    if (zone._subGraphId == INVALID_VALUE32)
+                    {
+                        ImGui::SetTooltip("%s\n%.4f ms\nstart %.4f ms", zone._name, endMs - beginMs, beginMs);
+                    }
+                    else
+                    {
+                        ImGui::SetTooltip("%s\n%.4f ms\nstart %.4f ms  subgraph #%u", zone._name,
+                                          endMs - beginMs, beginMs, zone._subGraphId);
+                    }
                 }
             }
 

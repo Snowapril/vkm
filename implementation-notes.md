@@ -654,6 +654,53 @@ Two entries turned out to describe less than was actually wrong.
   assigning it, so its guard can never fire; the taskflow include paths in `CMakeLists.txt:265`
   and `tests/CMakeLists.txt:116` are now fully orphaned.
 
+## 2026-07-30 — Per-subgraph GPU profiler + per-queue timeline viewer
+
+- The CPU side could answer "where did the frame go"; the GPU side could not. `VkmGpuTimerVulkan`
+  timed **whole frames**, on Vulkan only, and reached the debug overlay through a
+  `static_cast<VkmDriverVulkan*>` in `engine.cpp` — Metal and WebGPU showed "GPU: n/a". New
+  `renderer/backend/common/gpu_profiler.{h,cpp}` (`VkmGpuProfiler`) times each render graph
+  subgraph and groups zones by the command queue that ran them; `renderer/imgui/
+  gpu_profiler_inspector.{h,cpp}` (F6, or `--gv_gpu_profile=1`) draws them in milliseconds.
+  `vulkan_gpu_timer.{h,cpp}` is deleted and the overlay's stat is now backend-free.
+- Same collector/front-end split as the CPU profiler, and the same interaction model on purpose:
+  history strip, pin-a-frame, ruler drag-select, wheel-zoom about the cursor. `zoneColor()` and
+  `chooseGridStepMs()` moved out of the CPU inspector's anonymous namespace into
+  `imgui/profiler_chart_common.h` so a subgraph gets the **same** color in both charts — which is
+  what makes reading them side by side worth anything.
+- Recording is always on where the device supports timestamps; only the frame *history ring* is
+  gated on `isCapturing()`. That is what keeps the always-visible overlay stat alive with the
+  window closed, and it is the one place this deliberately differs from the CPU profiler.
+- Slots are a ring of fixed buckets, not a frame-indexed ring. `VkmGpuTimerVulkan` keyed its pool
+  by frame slot (`2 * FRAME_COUNT` queries), which `implementation-notes.md` already noted breaks
+  with multiple windows submitting per frame. Buckets are handed out and retired in submission
+  order, so `collect()` can stop at the first one the GPU has not finished, and it never blocks:
+  it resolves only submissions whose `VkmGpuEventTimelineObject` has already completed.
+- `beginSubmission()` takes an exact zone count and resets exactly `2 * zoneCount` slots. Reserving
+  more would be worse than wasteful on Vulkan: a slot that is reset but never written stays
+  permanently unavailable to `vkGetQueryPoolResults` (`VUID-vkGetQueryPoolResults-None-09401`).
+- Metal writes timestamps at **command-buffer** scope
+  (`[MTL4CommandBuffer writeTimestampIntoHeap:atIndex:]`), like `pushDebugGroup` already does, not
+  through the per-encoder `writeTimestampWithGranularity:` variants. That is what lets a zone wrap
+  a whole subgraph without splitting an encoder, and `VkmCommandEncoderMetal` is untouched. Ticks
+  are scaled by `1e9 / [MTLDevice queryTimestampFrequency]` rather than assumed to be nanoseconds.
+- WebGPU forced the shape of the seam. It has no encoder-level timestamp write at all — a
+  begin/end pair can only ride one pass descriptor's
+  `beginningOfPassWriteIndex`/`endOfPassWriteIndex`, which must be filled *before* the pass opens.
+  Hence `beginGpuZone(beginSlot, endSlot)` receives both slots up front on every backend, and
+  `endGpuZone()` returns a bool: a zone that enclosed no pass (a transfer subgraph, or the
+  submission-wide zone around the subgraphs) is never written there, and the profiler drops it
+  rather than report a span it never measured. Consequently `getLastFrameGpuTimeMs()` latches the
+  submission's whole *span* rather than specifically its depth-0 zone.
+- `vkmWriteGpuChromeTrace()` is a free function that `exportChromeTrace()` forwards its ring to,
+  so the format is testable from hand-built frames — the profiler cannot produce one without a
+  device. It uses pid 2 (the CPU export uses 1) so both JSONs load into one viewer without their
+  rows colliding. The two are still on different clocks and cannot be overlaid; logged in `TODO.md`.
+- Tests: `TestGpuProfiler.cpp` covers range aggregation and the trace format with no device;
+  `TestGpuProfilerCapture.mm` drives a real two-subgraph render graph through `VkmRenderGraph` only
+  (per `tests/CLAUDE.md`) and asserts a `MainGraphics` timeline whose depth-0 zone contains both
+  depth-1 subgraph zones with real elapsed time.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:
@@ -664,6 +711,32 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Did instead: <the conservative option taken>
 - Why: <the edge case that forced it>
 ```
+
+### 2026-07-30 — VkmDriverMetal's destructor releases the timestamp counter heap
+- Planned: the timestamp pool is created in `initializeGpuTimestampPool()` and released in
+  `destroyGpuTimestampPool()`, which `VkmDriverBase::destroy()` calls -- the same lifetime every
+  other driver-owned object has.
+- Did instead: `~VkmDriverMetal()` also calls `destroyGpuTimestampPool()`, making it the one thing
+  that destructor does.
+- Why: several Metal unit-test fixtures only `delete driver` without calling `destroy()`
+  (`TestBackbufferReadback.mm`, `TestMetalDriver.mm`, `TestRenderGraphCapture.mm`), which was
+  harmless while nothing they leaked was scarce. A leaked `MTL4CounterHeap` is not harmless: once
+  roughly thirty accumulate in one process, `newCounterHeapWithDescriptor:` **segfaults inside the
+  AGX driver** rather than returning nil -- which is how the whole suite began failing at
+  `TestSceneModelRenderMetal.mm`, a test that passes in isolation. The conservative option was to
+  make the resource I added clean up after itself in its owner's destructor, rather than rework
+  four existing fixtures' teardown and risk tripping other end-of-life assertions. Releasing twice
+  is safe: `destroyGpuTimestampPool()` nils the handle.
+
+### 2026-07-30 — `--gv_gpu_profile=1` only sets visibility, it does not start capture
+- Planned: mirror `gv_cpu_profile`'s startup block exactly -- `setVisible(true)` plus an explicit
+  `setCapturing(true)`.
+- Did instead: `setVisible(gv_gpu_profile.get())` and nothing else.
+- Why: `initializeEngine()` runs before `_driver->initialize()`, so there is no `VkmGpuProfiler` to
+  start there and `_driver->getGpuProfiler()` segfaulted. The CPU profiler's equivalent works only
+  because it is a process-wide singleton with no driver behind it. No replacement call is needed:
+  `update()`'s visibility-edge check already sees the window open on the first frame and starts
+  capture then. Caught by running the sample, not by any test -- the inspector has no coverage.
 
 ### 2026-07-28 — Metal's front-face mapping is 1:1, not inverted
 - Planned: mirror `vulkan_pipeline_state.cpp`'s `toVkFrontFace` and map

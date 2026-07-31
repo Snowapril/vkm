@@ -70,3 +70,11 @@
 - CPU profiler zones are wall-clock intervals, not per-thread CPU time (no thread-CPU-clock sampling on any platform).
 - `VkmCpuProfiler` never destroys a thread's recording state, so a process that churns threads leaks one `ThreadState` per thread ever created.
 - The CPU profiler's flame chart shows only the frame-driver and reclaimer threads; nothing else in the engine is instrumented or threaded yet.
+- GPU profiler zones use GPU-domain timestamps with no CPU-clock correlation, so `vkm_gpu_trace.json` and `vkm_cpu_trace.json` cannot be overlaid on one timeline.
+- WebGPU GPU profiler timestamps ride a pass descriptor (there is no encoder-level write), so a transfer subgraph and the submission-wide zone record nothing there.
+- A subgraph that opens more than one pass is timed only across its first one on WebGPU.
+- WebGPU GPU timestamp values are quantized by the browser (100 us in Chrome), so sub-0.1 ms subgraphs read as 0.
+- WebGPU GPU timestamp resolve blocks on a buffer map, the same main-thread block `readbackTexture` already has.
+- The GPU profiler only ever records a Graphics queue 0 timeline because `VkmRenderGraph::execute()` submits nowhere else.
+- `VkmGpuProfiler` skips a submission's timing when all `kMaxPendingSubmissions` timestamp slot buckets are still in flight.
+- `VkmGpuProfilerInspector` has no unit-test coverage; only the collector and the trace format are tested.

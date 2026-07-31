@@ -14,6 +14,7 @@
 #include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
 
 #import <Metal/MTLDevice.h>
+#import <Metal/MTL4Counters.h>
 #import <Metal/MTLHeap.h>
 
 #include <TargetConditionals.h>
@@ -40,7 +41,12 @@ namespace vkm
 
     VkmDriverMetal::~VkmDriverMetal()
     {
-
+        // Deliberately the one thing this destructor does. Everything else the driver owns is
+        // released by destroy(), but several unit-test fixtures only `delete driver`, and a
+        // leaked MTL4CounterHeap is not merely wasteful: once enough of them accumulate in one
+        // process, newCounterHeapWithDescriptor: segfaults inside the AGX driver rather than
+        // returning nil. Releasing twice is safe -- destroyGpuTimestampPool() nils the handle.
+        destroyGpuTimestampPool();
     }
 
     VkmInitResult VkmDriverMetal::initializeInner(const VkmEngineLaunchOptions* options)
@@ -349,6 +355,88 @@ namespace vkm
         }
 
         return stats;
+    }
+
+    bool VkmDriverMetal::initializeGpuTimestampPool(const uint32_t slotCount)
+    {
+        if (_mtlDevice == nil)
+        {
+            return false;
+        }
+
+        MTL4CounterHeapDescriptor* descriptor = [[MTL4CounterHeapDescriptor alloc] init]; // MRC
+        descriptor.type = MTL4CounterHeapTypeTimestamp;
+        descriptor.count = slotCount;
+        _timestampCounterHeap = [_mtlDevice newCounterHeapWithDescriptor:descriptor error:nil];
+        [descriptor release]; // MRC
+
+        if (_timestampCounterHeap == nil)
+        {
+            VKM_DEBUG_INFO("Failed to create the GPU timestamp counter heap; GPU profiling is disabled");
+            return false;
+        }
+        _timestampCounterHeap.label = @"VkmGpuProfilerTimestamps";
+
+        // Queried rather than assumed to be nanoseconds: the heap stores raw GPU ticks, and
+        // their rate is a device property.
+        const uint64_t timestampFrequency = [_mtlDevice queryTimestampFrequency];
+        if (timestampFrequency == 0)
+        {
+            VKM_DEBUG_INFO("Metal reports a zero GPU timestamp frequency; GPU profiling is disabled");
+            destroyGpuTimestampPool();
+            return false;
+        }
+        _timestampPeriodNs = 1'000'000'000.0 / static_cast<double>(timestampFrequency);
+
+        _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::TimestampQuery;
+        return true;
+    }
+
+    void VkmDriverMetal::destroyGpuTimestampPool()
+    {
+        if (_timestampCounterHeap != nil)
+        {
+            [_timestampCounterHeap release]; // MRC
+            _timestampCounterHeap = nil;
+        }
+    }
+
+    void VkmDriverMetal::resetGpuTimestampSlots(VkmCommandBufferBase* commandBuffer, const uint32_t firstSlot,
+                                                const uint32_t count)
+    {
+        // Nothing is recorded into the command buffer: invalidating a counter range takes effect
+        // immediately on the CPU timeline, and the profiler only ever resets slots whose previous
+        // submission has already been resolved.
+        (void)commandBuffer;
+        if (_timestampCounterHeap == nil || count == 0)
+        {
+            return;
+        }
+        [_timestampCounterHeap invalidateCounterRange:NSMakeRange(firstSlot, count)];
+    }
+
+    bool VkmDriverMetal::resolveGpuTimestamps(const uint32_t firstSlot, const uint32_t count, uint64_t* outTicks)
+    {
+        if (_timestampCounterHeap == nil || count == 0 || outTicks == nullptr)
+        {
+            return false;
+        }
+
+        // CPU-timeline resolve, which is only valid once the writing work has finished -- the
+        // profiler guarantees that by waiting on the submission's timeline first. This avoids the
+        // GPU-side resolveCounterHeap path and the buffer + fence it would need.
+        NSData* resolved = [_timestampCounterHeap resolveCounterRange:NSMakeRange(firstSlot, count)];
+        if (resolved == nil || resolved.length < sizeof(MTL4TimestampHeapEntry) * count)
+        {
+            return false;
+        }
+
+        const MTL4TimestampHeapEntry* entries = static_cast<const MTL4TimestampHeapEntry*>(resolved.bytes);
+        for (uint32_t index = 0; index < count; ++index)
+        {
+            outTicks[index] = entries[index].timestamp;
+        }
+        return true;
     }
 
     VkmPipelineStateBase* VkmDriverMetal::newPipelineStateInner()

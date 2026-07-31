@@ -15,6 +15,7 @@
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/gpu_crash_handler.h>
+#include <vkm/renderer/backend/common/gpu_profiler.h>
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/frame_constants.h>
 
@@ -35,6 +36,7 @@ namespace vkm
         _renderResourcePool.reset(newRenderResourcePoolInner());
         _deferredReclaimer = std::make_unique<VkmDeferredResourceReclaimer>(this);
         _gpuCrashHandler = std::make_unique<VkmGpuCrashHandler>(this);
+        _gpuProfiler = std::make_unique<VkmGpuProfiler>(this);
 
         if (options != nullptr)
         {
@@ -76,6 +78,13 @@ namespace vkm
             return VkmInitResult{VkmInitResultCode::Failed, "Failed post-initialization"};
         }
 
+        // After the device and the command queues exist, since the timestamp pool is a device
+        // object and the profiler labels its timelines by queue.
+        if (_gpuProfiler->initialize() == false)
+        {
+            return VkmInitResult{VkmInitResultCode::Failed, "Failed to initialize GPU profiler"};
+        }
+
         _deferredReclaimer->start();
 
         return VkmInitResult{VkmInitResultCode::Success, ""};
@@ -99,6 +108,12 @@ namespace vkm
         if (_deferredReclaimer)
         {
             _deferredReclaimer->stop();
+        }
+
+        // Before destroyInner(), which tears down the device the timestamp pool belongs to.
+        if (_gpuProfiler)
+        {
+            _gpuProfiler->destroy();
         }
 
         destroyInner();

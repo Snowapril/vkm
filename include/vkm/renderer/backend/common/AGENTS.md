@@ -522,6 +522,61 @@ WebGPU implements it via `wgpuQueueWriteBuffer()`, which per spec takes effect b
 instead (cheap/synchronous on Vulkan/Metal; a real async `wgpuBufferMapAsync(Read)` round trip
 on WebGPU, best-effort since the device may already be unusable by then).
 
+## Per-Subgraph GPU Timestamps
+
+`VkmGpuProfiler` (`common/gpu_profiler.h`, owned by `VkmDriverBase` alongside
+`VkmGpuCrashHandler`) times each render graph subgraph on the GPU and groups the results by the
+command queue they ran on. Unlike the completion markers above, this is **not** gated on a
+compile-time flag: recording is always on wherever the device supports timestamp queries,
+because the debug overlay's always-visible "GPU: x.xx ms" stat reads the same collector.
+`isCapturing()` only decides whether resolved frames are kept in the 240-frame history ring that
+`VkmGpuProfilerInspector` (F6) draws.
+
+**Slot model.** The driver is asked for one flat pool of `kTimestampSlotCount` timestamp slots.
+The profiler partitions it into `kMaxPendingSubmissions` fixed buckets of
+`2 * kMaxZonesPerSubmission` slots, handed out and retired in submission order, so allocation is
+a bucket index rather than interval arithmetic and `collect()` can stop at the first bucket the
+GPU has not finished. Zone `i` of a submission owns slots `2i` (begin) and `2i+1` (end).
+
+**Recording.** `VkmRenderGraph::execute()` calls `beginSubmission(queue, cb, 1 + subGraphCount)`
+right after `beginCommandBuffer()`, wraps the whole submission in a depth-0 `"Frame"` zone, and
+each subgraph in a depth-1 zone named after it (interned via `VkmCpuProfiler::internName`, so a
+GPU zone's name outlives the frame that recorded it -- it is only read once the GPU is done).
+`beginSubmission` records the backend's reset for **exactly** the `2 * zoneCount` slots that will
+be written: a Vulkan slot that is reset but never written stays permanently unavailable to
+`vkGetQueryPoolResults` (`VUID-vkGetQueryPoolResults-None-09401`), so nothing may be reserved
+that is not written.
+
+**Resolution.** `endSubmission()` hands over the submit's `VkmGpuEventTimelineObject`;
+`VkmEngine::loopInner()` calls `collect()` once per frame, which resolves only submissions whose
+timeline has already completed (the same non-blocking `queryLastCompletedTimeline()` poll the
+breadcrumbs use) and therefore never stalls.
+
+**The command-buffer seam** is `beginGpuZone(beginSlot, endSlot)` / `endGpuZone()` /
+`resolveGpuZones(firstSlot, count)`, all empty-default virtuals. Both slots are handed over at
+*begin* time purely for WebGPU's sake (see below). Closing the outermost zone is what triggers
+`resolveGpuZones()`, so it must happen before `endCommandBuffer()`.
+
+| Backend | Pool | Write | Resolve |
+|---|---|---|---|
+| Vulkan | `VkQueryPool` of `VK_QUERY_TYPE_TIMESTAMP` | `vkCmdWriteTimestamp2` at `TOP_OF_PIPE` / `BOTTOM_OF_PIPE`; legal inside a render pass | `vkGetQueryPoolResults`, masked to the graphics family's `timestampValidBits` |
+| Metal | `MTL4CounterHeap` (`MTL4CounterHeapTypeTimestamp`) | `[MTL4CommandBuffer writeTimestampIntoHeap:atIndex:]` -- **command-buffer** scope, like `pushDebugGroup`, so no encoder is split | `[heap resolveCounterRange:]` on the CPU timeline |
+| WebGPU | `WGPUQuerySet` + a `QueryResolve` buffer and a `MapRead` copy | pass descriptor `timestampWrites` only | `wgpuCommandEncoderResolveQuerySet` + buffer-to-buffer copy, recorded in the same command buffer; blocking `wgpuBufferMapAsync` afterwards |
+
+**Why `endGpuZone()` returns a bool.** WebGPU has no encoder-level timestamp write at all: a
+begin/end pair can only be carried by one render or compute pass descriptor
+(`beginningOfPassWriteIndex` / `endOfPassWriteIndex`), which must be filled *before* the pass is
+opened -- hence both slots arriving at `beginGpuZone`. `VkmCommandBufferWebGPU` keeps a stack of
+open zones and gives each new pass the innermost not-yet-attached one, so a subgraph's zone wins
+over the submission-wide zone around it. A zone that enclosed no pass (a transfer subgraph, or
+that outer zone) is therefore never written, and `endGpuZone()` returning false is how the
+profiler learns to drop it rather than report a span it never measured. Vulkan and Metal always
+return true. Consequences are recorded in `TODO.md`.
+
+`getGpuTimestampPeriodNs()` converts raw ticks to nanoseconds: Vulkan's
+`VkPhysicalDeviceLimits::timestampPeriod`, `1e9 / [MTLDevice queryTimestampFrequency]` on Metal,
+`1.0` on WebGPU (the spec defines its timestamps as nanoseconds).
+
 ## VkmCommandQueueType
 
 ```cpp

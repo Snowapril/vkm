@@ -35,6 +35,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_queue.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/driver.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/gpu_crash_handler.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/gpu_profiler.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_resource_pool.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_resource.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/texture.h
@@ -80,6 +81,7 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/backend/common/command_queue.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/driver.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/gpu_crash_handler.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/gpu_profiler.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_resource_pool.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_resource.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/texture.cpp
@@ -111,12 +113,15 @@ if (VKM_ENABLE_IMGUI)
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/render_graph_inspector.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/memory_inspector.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/cpu_profiler_inspector.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/gpu_profiler_inspector.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/imgui/imgui_renderer.cpp
         ${SRC_DIR}/vkm/renderer/imgui/render_graph_inspector.cpp
         ${SRC_DIR}/vkm/renderer/imgui/memory_inspector.cpp
+        ${SRC_DIR}/vkm/renderer/imgui/profiler_chart_common.h
         ${SRC_DIR}/vkm/renderer/imgui/cpu_profiler_inspector.cpp
+        ${SRC_DIR}/vkm/renderer/imgui/gpu_profiler_inspector.cpp
     )
 endif()
 
@@ -167,7 +172,6 @@ if (VKM_USE_VULKAN_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_pipeline_state.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_frame_constant_manager.h
-        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_timer.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_driver.cpp
@@ -185,7 +189,6 @@ if (VKM_USE_VULKAN_API)
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_pipeline_state.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_frame_constant_manager.cpp
-        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_timer.cpp
     )
     if (VKM_ENABLE_IMGUI)
         list(APPEND PUBLIC_HDRS
