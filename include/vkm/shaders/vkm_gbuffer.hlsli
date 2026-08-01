@@ -10,7 +10,8 @@
 //
 //   target 0  RGBA16F  xy = octahedral shading normal, zw = octahedral geometric normal
 //   target 1  RGBA8    rgb = base colour, a = roughness
-//   target 2  RGBA16F  xy = screen-space motion vector (UV units), z = metallic, w reserved
+//   target 2  RGBA16F  xy = screen-space motion vector (UV units), z = metallic,
+//                      w = distance from the camera (0 where no geometry was drawn)
 //   depth     D32      hardware depth
 //
 // Two normals, because they answer different questions: the shading normal drives lighting and
@@ -82,6 +83,25 @@ float2 vkmComputeMotionVector(float4 currentClip, float4 previousClip)
     const float2 previousNdc = previousClip.xy / previousClip.w;
     const float2 ndcMotion = currentNdc - previousNdc;
     return float2(ndcMotion.x * 0.5, ndcMotion.y * -0.5);
+}
+
+/*
+* @brief World position from a pixel's UV and its stored camera distance.
+*
+* Consumers read distance out of the G-buffer rather than sampling the depth attachment. Depth is
+* still written and still depth-tests; it is simply never bound as a texture, because WebGPU
+* validates a depth-format view against a depth sample type and would reject it as an ordinary
+* sampled texture -- and because half-float *hardware* depth would be far too imprecise to
+* reconstruct from, while a linear distance at the same width is not.
+*/
+float3 vkmReconstructWorldPosition(float2 uv, float distanceFromCamera,
+                                   float4x4 inverseViewProjection, float3 cameraPositionWorld)
+{
+    // UV is +Y down, clip space is +Y up.
+    const float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    const float4 farPointH = mul(inverseViewProjection, float4(ndc, 1.0, 1.0));
+    const float3 rayDirection = normalize(farPointH.xyz / farPointH.w - cameraPositionWorld);
+    return cameraPositionWorld + rayDirection * distanceFromCamera;
 }
 
 #endif // VKM_GBUFFER_HLSLI

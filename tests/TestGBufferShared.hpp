@@ -5,6 +5,7 @@
 
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
+#include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/gbuffer.h>
 

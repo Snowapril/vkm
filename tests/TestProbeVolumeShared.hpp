@@ -7,6 +7,7 @@
 
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
+#include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/backend/common/buffer.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
@@ -243,9 +244,9 @@ namespace vkmtest
         };
         vkm::VkmTexture* normalTexture =
             makeUploadableTexture(vkm::VkmGBuffer::getTargetFormat(vkm::VkmGBuffer::Target::Normal), "ProbeTestNormal");
-        // R32F would be the natural depth stand-in, but the engine exposes no single-channel
-        // format; RGBA32F carries the value in .r, which is all the shader samples.
-        vkm::VkmTexture* depthTexture = makeUploadableTexture(vkm::VkmFormat::R32G32B32A32_SFLOAT, "ProbeTestDepth");
+        // Stands in for the G-buffer's MotionMetallic target, whose .w carries camera distance.
+        vkm::VkmTexture* motionTexture = makeUploadableTexture(
+            vkm::VkmGBuffer::getTargetFormat(vkm::VkmGBuffer::Target::MotionMetallic), "ProbeTestMotion");
 
         const glm::mat4 viewProjection = glm::mat4(1.0f); // identity: NDC == world, depth 0.5 -> z 0.5
         vkm::VkmFrameConstants frameConstants{};
@@ -267,10 +268,16 @@ namespace vkmtest
             REQUIRE(driver->uploadToTexture(normalTexture->getHandle(),
                                             normals.data(), normals.size() * sizeof(uint16_t)));
 
-            // Depth 0.5, i.e. covered and, through the identity inverse, at world z = 0.5.
-            std::vector<float> depths(static_cast<size_t>(kSize) * kSize * 4, 0.5f);
-            REQUIRE(driver->uploadToTexture(depthTexture->getHandle(), depths.data(),
-                                            depths.size() * sizeof(float)));
+            // Camera distance 0.5 in .w. With an identity view-projection the camera sits at the
+            // origin looking down +Z, so the reconstructed position is about (0, 0, 0.5) -- well
+            // inside the probe grid below.
+            std::vector<uint16_t> motion(static_cast<size_t>(kSize) * kSize * 4, 0);
+            for (size_t i = 3; i < motion.size(); i += 4)
+            {
+                motion[i] = encodeHalf(0.5f);
+            }
+            REQUIRE(driver->uploadToTexture(motionTexture->getHandle(), motion.data(),
+                                            motion.size() * sizeof(uint16_t)));
         }
 
         vkm::VkmBufferInfo volumeBufferInfo{};
@@ -304,7 +311,7 @@ namespace vkmtest
         const auto shade = [&]() {
             const std::vector<vkm::VkmPerPassResourceEntry> entries{
                 { 0, normalTexture->getHandle() },
-                { 1, depthTexture->getHandle() },
+                { 1, motionTexture->getHandle() },
                 { 2, volume.getIrradianceTexture() },
                 { 3, volume.getDistanceTexture() },
                 { 4, sampler->getHandle() },
@@ -318,7 +325,7 @@ namespace vkmtest
             auto* barrierSubGraph = renderGraph.beginComputeSubGraph("ProbeInputsToShaderRead");
             barrierSubGraph->setComputeCallback([&](vkm::VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->barrierTextureForShaderRead(normalTexture->getHandle());
-                commandBuffer->barrierTextureForShaderRead(depthTexture->getHandle());
+                commandBuffer->barrierTextureForShaderRead(motionTexture->getHandle());
                 commandBuffer->barrierTextureForShaderRead(volume.getIrradianceTexture());
                 commandBuffer->barrierTextureForShaderRead(volume.getDistanceTexture());
             });
@@ -380,7 +387,7 @@ namespace vkmtest
         driver->getRenderResourcePool()->releaseResource(target->getHandle());
         driver->getRenderResourcePool()->releaseResource(volumeBuffer->getHandle());
         driver->getRenderResourcePool()->releaseResource(sampler->getHandle());
-        driver->getRenderResourcePool()->releaseResource(depthTexture->getHandle());
+        driver->getRenderResourcePool()->releaseResource(motionTexture->getHandle());
         driver->getRenderResourcePool()->releaseResource(normalTexture->getHandle());
         volume.destroy();
     }

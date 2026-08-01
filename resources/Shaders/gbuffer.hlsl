@@ -88,7 +88,7 @@ struct PSOutput
 {
     float4 normal : SV_TARGET0;             // xy = shading normal, zw = geometric normal
     float4 baseColorRoughness : SV_TARGET1; // rgb = base colour, a = roughness
-    float4 motionMetallic : SV_TARGET2;     // xy = motion (UV), z = metallic, w reserved
+    float4 motionMetallic : SV_TARGET2;     // xy = motion (UV), z = metallic, w = camera distance
 };
 
 float3 loadFloat3(uint slot, uint wordBase)
@@ -180,7 +180,12 @@ PSOutput PSMain(VSOutput input)
     PSOutput output;
     output.normal = vkmPackGBufferNormals(shadingNormal, geometricNormal);
     output.baseColorRoughness = float4(baseColor.rgb, metallicRoughness.y);
+    // Distance from the camera rather than hardware depth, so consumers reconstruct world
+    // positions from this instead of sampling the depth attachment. That matters beyond taste:
+    // WebGPU validates a depth-format view against a depth sample type, so binding the depth
+    // attachment as an ordinary sampled texture is invalid there.
     output.motionMetallic = float4(vkmComputeMotionVector(input.currentClip, input.previousClip),
-                                   metallicRoughness.x, 0.0);
+                                   metallicRoughness.x,
+                                   distance(input.worldPosition, g_VkmFrame.cameraPositionWorld.xyz));
     return output;
 }

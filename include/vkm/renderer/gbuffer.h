@@ -26,9 +26,12 @@ namespace vkm
     *
     *   Normal              RGBA16F  xy = octahedral shading normal, zw = octahedral geometric normal
     *   BaseColorRoughness  RGBA8    rgb = base colour, a = roughness
-    *   MotionMetallic      RGBA16F  xy = screen-space motion vector, z = metallic, w reserved
-    *   depth               D32      hardware depth; linear depth is reconstructed from it and the
-    *                                projection rather than stored again
+    *   MotionMetallic      RGBA16F  xy = screen-space motion vector, z = metallic,
+    *                                w = distance from the camera
+    *   depth               D32      hardware depth, for depth testing only -- never bound as a
+    *                                texture. WebGPU validates a depth-format view against a depth
+    *                                sample type, so consumers reconstruct world positions from the
+    *                                camera distance above instead of sampling this.
     *
     * Both normals are carried because they answer different questions: the shading normal is what
     * lighting and temporal-tap rejection use, while the *geometric* normal is what a secondary ray

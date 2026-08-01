@@ -272,9 +272,8 @@ namespace vkmtest
                 { 0, gbuffer.getTexture(vkm::VkmGBuffer::Target::Normal) },
                 { 1, gbuffer.getTexture(vkm::VkmGBuffer::Target::BaseColorRoughness) },
                 { 2, gbuffer.getTexture(vkm::VkmGBuffer::Target::MotionMetallic) },
-                { 3, gbuffer.getDepthTexture() },
-                { 4, sampler->getHandle() },
-                { 5, lightBuffer->getHandle() },
+                { 3, sampler->getHandle() },
+                { 4, lightBuffer->getHandle() },
             };
             std::string tableError;
             vkm::VkmPerPassResourceTableBase* table =
@@ -285,12 +284,12 @@ namespace vkmtest
             auto* barrierSubGraph = renderGraph.beginComputeSubGraph("GBufferToShaderRead");
             barrierSubGraph->setComputeCallback([&gbuffer](vkm::VkmCommandBufferBase* commandBuffer) {
                 // The G-buffer pass left these as attachments; this is the hand-off to sampling.
+                // Colour targets only: the depth attachment is never sampled (see gbuffer.h).
                 for (uint32_t i = 0; i < vkm::VkmGBuffer::kTargetCount; ++i)
                 {
                     commandBuffer->barrierTextureForShaderRead(
                         gbuffer.getTexture(static_cast<vkm::VkmGBuffer::Target>(i)));
                 }
-                commandBuffer->barrierTextureForShaderRead(gbuffer.getDepthTexture());
             });
 
             auto* lightingSubGraph = renderGraph.beginGraphicsSubGraph(lightingFb);

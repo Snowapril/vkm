@@ -23,7 +23,8 @@
 VKM_FRAME_CONSTANTS(g_VkmFrame);
 
 [[vk::binding(0, 2)]] Texture2D    g_GBufferNormal : register(t0, space2);
-[[vk::binding(1, 2)]] Texture2D    g_GBufferDepth  : register(t1, space2);
+// Camera distance rides in .w; the depth attachment is never bound (see vkm_gbuffer.hlsli).
+[[vk::binding(1, 2)]] Texture2D    g_GBufferMotion : register(t1, space2);
 [[vk::binding(2, 2)]] Texture2D    g_Irradiance    : register(t2, space2);
 [[vk::binding(3, 2)]] Texture2D    g_Distance      : register(t3, space2);
 [[vk::binding(4, 2)]] SamplerState g_Sampler       : register(s0, space2);
@@ -115,17 +116,15 @@ float3 sampleProbeVolume(float3 worldPosition, float3 normal)
 
 float4 PSMain(VSOutput input) : SV_TARGET0
 {
-    const float depth = g_GBufferDepth.Sample(g_Sampler, input.uv).r;
-    if (depth >= 1.0)
+    const float cameraDistance = g_GBufferMotion.Sample(g_Sampler, input.uv).w;
+    if (cameraDistance <= 0.0)
     {
         return float4(0.0, 0.0, 0.0, 1.0); // never covered by geometry
     }
 
     const float3 shadingNormal = vkmUnpackShadingNormal(g_GBufferNormal.Sample(g_Sampler, input.uv));
-
-    const float2 ndc = float2(input.uv.x * 2.0 - 1.0, 1.0 - input.uv.y * 2.0);
-    const float4 worldPositionH = mul(g_VkmFrame.inverseViewProjection, float4(ndc, depth, 1.0));
-    const float3 worldPosition = worldPositionH.xyz / worldPositionH.w;
+    const float3 worldPosition = vkmReconstructWorldPosition(
+        input.uv, cameraDistance, g_VkmFrame.inverseViewProjection, g_VkmFrame.cameraPositionWorld.xyz);
 
     return float4(sampleProbeVolume(worldPosition, shadingNormal), 1.0);
 }

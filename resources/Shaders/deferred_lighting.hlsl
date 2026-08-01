@@ -32,9 +32,8 @@ struct LightConstants
 [[vk::binding(0, 2)]] Texture2D            g_Normal             : register(t0, space2);
 [[vk::binding(1, 2)]] Texture2D            g_BaseColorRoughness : register(t1, space2);
 [[vk::binding(2, 2)]] Texture2D            g_MotionMetallic     : register(t2, space2);
-[[vk::binding(3, 2)]] Texture2D            g_Depth              : register(t3, space2);
-[[vk::binding(4, 2)]] SamplerState         g_Sampler            : register(s0, space2);
-[[vk::binding(5, 2)]] ConstantBuffer<LightConstants> g_Light    : register(b0, space2);
+[[vk::binding(3, 2)]] SamplerState         g_Sampler            : register(s0, space2);
+[[vk::binding(4, 2)]] ConstantBuffer<LightConstants> g_Light    : register(b0, space2);
 
 typedef VkmFullscreenVSOutput VSOutput;
 
@@ -70,10 +69,11 @@ float3 fresnelSchlick(float vDotH, float3 f0)
 
 float4 PSMain(VSOutput input) : SV_TARGET0
 {
-    const float depth = g_Depth.Sample(g_Sampler, input.uv).r;
-    // The G-buffer clears depth to 1.0 (far), so anything still at the far plane was never
-    // covered by geometry. Shading it would light the background as if it were a surface.
-    if (depth >= 1.0)
+    const float4 motionMetallic = g_MotionMetallic.Sample(g_Sampler, input.uv);
+    const float cameraDistance = motionMetallic.w;
+    // The G-buffer clears to zero, so a zero distance means no geometry covered this pixel.
+    // Shading it would light the background as if it were a surface.
+    if (cameraDistance <= 0.0)
     {
         return float4(0.0, 0.0, 0.0, 1.0);
     }
@@ -86,14 +86,10 @@ float4 PSMain(VSOutput input) : SV_TARGET0
     // Clamped away from zero: a perfectly smooth microfacet lobe is a delta that this analytic
     // form cannot represent, and it produces fireflies rather than a highlight.
     const float roughness = clamp(baseColorRoughness.a, 0.045, 1.0);
-    const float metallic = saturate(g_MotionMetallic.Sample(g_Sampler, input.uv).b);
+    const float metallic = saturate(motionMetallic.b);
 
-    // Reconstruct the world position from depth: UV to NDC, then through the inverse
-    // view-projection. The engine's clip space is +Y up with a [0,1] depth range.
-    const float2 ndc = float2(input.uv.x * 2.0 - 1.0, 1.0 - input.uv.y * 2.0);
-    const float4 clipPosition = float4(ndc, depth, 1.0);
-    const float4 worldPositionH = mul(g_VkmFrame.inverseViewProjection, clipPosition);
-    const float3 worldPosition = worldPositionH.xyz / worldPositionH.w;
+    const float3 worldPosition = vkmReconstructWorldPosition(
+        input.uv, cameraDistance, g_VkmFrame.inverseViewProjection, g_VkmFrame.cameraPositionWorld.xyz);
 
     const float3 viewDirection = normalize(g_VkmFrame.cameraPositionWorld.xyz - worldPosition);
     const float3 lightDirection = normalize(g_Light.directionToLight.xyz);
