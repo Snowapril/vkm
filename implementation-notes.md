@@ -1436,3 +1436,24 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
   had to diagnose and leaving the second instance in place would hand the next person the identical
   hour-long trail — the VMA assert fires inside a signal handler and recurses through backward-cpp,
   so it presents as a hang rather than as a leak (`TODO.md` documents that recursion).
+
+## 2026-08-01 — Wall-clock watchdog in scripts/run_tests.py
+
+`--test-timeout` (default 600 s, `0` disables) kills a backend's `UnitTests` run and reports FAIL,
+printing the last 80 lines the process managed to emit.
+
+This is a third layer over the two already in `UnitTests.cpp` (doctest's post-hoc check and the
+hang-watchdog thread), and it exists because both of those measure time spent *inside* a test case
+and are native-only. Neither can see a hang in fixture construction, in driver teardown after the
+last test, or inside a signal handler — and the probe-GI work hit exactly the third case: a VMA
+leak assert at Vulkan teardown aborts inside a handler that allocates, which recurses through
+backward-cpp and **spins** rather than idling, so it reads as a hung 100%-CPU process with no
+diagnosis. It ran 21 minutes before being killed by hand.
+
+Deliberately not wired to the WebGPU path: `run_webgpu_tests_headless_chrome`'s 60 s timeout is how
+a *successful* run ends (headless Chrome does not exit on its own; success is the completion marker
+in the page output), not a watchdog, so raising it would just make every wasm run take that long.
+A comment at that function says so, since "unify the two timeouts" is the obvious wrong cleanup.
+
+Verified both ways: `--test-timeout 1` kills a healthy Metal run and reports FAIL with output
+attached, and the default leaves Metal 193/193 and Vulkan 191/191 untouched.
