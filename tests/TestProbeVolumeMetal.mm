@@ -62,4 +62,10 @@ TEST_CASE("Metal probe capture - six cube faces share one render pass") {
     vkmtest::runProbeCaptureTest(fixture.driver.get());
 }
 
+TEST_CASE("Metal probe blend - a capture integrates into a directional octahedral map") {
+    MetalProbeVolumeFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runProbeBlendTest(fixture.driver.get());
+}
+
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE

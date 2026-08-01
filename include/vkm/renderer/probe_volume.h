@@ -83,6 +83,22 @@ namespace vkm
                   "VkmProbeCaptureConstants must match ProbeCaptureConstants in probe_capture.hlsl");
 
     /*
+    * @brief What the blend pass needs to turn one probe's capture into atlas contents.
+    *
+    * Mirrors ProbeBlendConstants in shaders/probe_blend.hlsl byte for byte.
+    */
+    struct VkmProbeBlendConstants
+    {
+        glm::mat4 _faceViewProjection[6]{};
+        glm::vec4 _probePositionWorld{0.0f, 0.0f, 0.0f, 1.0f};
+        // x = octahedral resolution, y = hysteresis, z = capture faces per row,
+        // w = capture face size in texels
+        glm::vec4 _blendParams{8.0f, 0.97f, 3.0f, 16.0f};
+    };
+    static_assert(sizeof(VkmProbeBlendConstants) == 6 * 64 + 32,
+                  "VkmProbeBlendConstants must match ProbeBlendConstants in probe_blend.hlsl");
+
+    /*
     * @brief Builds the six cube-face view-projections for a probe at `position`.
     *
     * @details Face order is +X, -X, +Y, -Y, +Z, -Z, matching the cubemap convention the engine

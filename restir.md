@@ -656,8 +656,12 @@ Technique decided in §5: **raster-updated dynamic probe volume + SSGI contact t
       per-draw hook, which is the only point where push constants can be set since it owns the bind.
       Radiance is forward-shaded (a probe stores what it saw), and distance rides in alpha for the
       moments the Chebyshev test needs
-- [ ] **4.2b Octahedral conversion + border fill + hysteresis blend** — turn a capture into atlas
-      contents
+- [x] **4.2b Octahedral conversion + border + hysteresis blend.** `probe_blend.hlsl`, two
+      permutations (irradiance / distance moments) from one source. Two details make it correct
+      rather than nearly so: a border texel is mapped to the interior texel it *mirrors* and that
+      direction is integrated — same answer as a copy pass, in one pass, with no read-after-write —
+      and the capture is sampled by projecting through the same face matrices the capture used,
+      so there is no second cube convention that can disagree with the first
 - [ ] **4.2c Per-frame probe budget (round-robin)** and the propagation-latency measurement
 - [x] **4.3 Probe sampling.** `probe_lighting.hlsl`: trilinear over the 8 surrounding probes,
       weighted by the **Chebyshev visibility test** against the distance atlas, plus normal bias and
@@ -1033,4 +1037,5 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-08-01 | 3 | Tone mapping migrated from dead GLSL to HLSL + PSO, fixing the missing white-point normalization and gamma encode it never applied. Fullscreen triangle factored into `vkm_fullscreen.hlsli` now that lighting and tone mapping both use it. **Phase 3 complete.** |
 | 2026-08-01 | 4 | Probe volume storage + the lookup pass. `probe_lighting.hlsl` samples 8 probes trilinearly with Chebyshev visibility weighting; verified on Metal against CPU-authored atlases, including that fully occluded probes contribute nothing. Found that the update pass is blocked on the RHI having no viewport control (six cube faces cannot share a render pass) — recorded as the next decision. |
 | 2026-08-01 | 4 | Added `setViewportAndScissor` to the RHI (all three backends), which unblocks the probe update: six cube faces can now share one render pass rather than needing six. Vulkan and Metal agree on the top-left origin, pinned by a test that also covers several viewports writing separate tiles in one pass. |
+| 2026-08-01 | 4 | Probe capture (six cube faces in one render pass, via the new viewport control) and probe blend (octahedral integration + border + hysteresis). The write path now reaches the atlases that the read path already samples. Verified on Metal: per-face capture correctness, and a directional octahedral map whose border matches its mirrored interior. |
 | 2026-07-30 | 4 | Low-spec tier must be **fully dynamic** (no bake) → technique decided: raster-updated dynamic probe volume (DDGI-style octahedral irradiance + distance moments, Chebyshev visibility) plus an additive SSGI contact term. Storage/sampling are update-mechanism-agnostic, so Phase 5's rays can later refresh the same volume, and ReSTIR GI can query it for multi-bounce `L_o`. |

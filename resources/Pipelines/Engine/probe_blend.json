@@ -1,0 +1,31 @@
+{
+    "name": "probe_blend_pso",
+    "primitive_topology": "triangle_list",
+    "rasterization_state": {
+        "fill_mode": "solid",
+        "cull_mode": "none",
+        "front_face": "counter_clockwise"
+    },
+    "depth_stencil_state": {
+        "depth_test_enable": false,
+        "depth_write_enable": false,
+        "stencil_test_enable": false
+    },
+    "color_attachments": [
+        { "format": "r16g16b16a16_sfloat" }
+    ],
+    "per_pass_resources": [
+        { "binding": 0, "type": "sampled_texture" },
+        { "binding": 1, "type": "sampled_texture" },
+        { "binding": 2, "type": "sampler" },
+        { "binding": 3, "type": "uniform_buffer" }
+    ],
+    "shaders": {
+        "vertex": { "filepath": "probe_blend.hlsl", "entry_point": "VSMain" },
+        "fragment": { "filepath": "probe_blend.hlsl", "entry_point": "PSMain" }
+    },
+    "options": {
+        "irradiance": { "definitions": { "VKM_PROBE_BLEND_IRRADIANCE": true } },
+        "distance":   { "definitions": { "VKM_PROBE_BLEND_DISTANCE":   true } }
+    }
+}

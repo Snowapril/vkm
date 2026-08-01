@@ -558,6 +558,181 @@ namespace vkmtest
         driver->getRenderResourcePool()->releaseResource(captureTarget->getHandle());
         driver->getRenderResourcePool()->releaseResource(captureBuffer->getHandle());
     }
+
+    /*
+    * @brief Blends a synthetic capture into the irradiance atlas and checks what landed.
+    *
+    * The capture is authored rather than rendered, so a failure here is the integration, the
+    * octahedral mapping or the border handling -- not the scene draw, which the capture test
+    * already covers. It is filled so that one hemisphere is bright and the other is black, which
+    * is what makes the result directional: an integration that ignored the cosine term, or an
+    * octahedral mapping that folded the wrong way, would produce a uniform atlas that still looks
+    * like "the probe has light in it".
+    */
+    inline void runProbeBlendTest(vkm::VkmDriverBase* driver)
+    {
+        constexpr uint32_t kFaceSize = 16;
+        constexpr uint32_t kFacesPerRow = 3;
+        constexpr uint32_t kResolution = 8;
+        constexpr uint32_t kCellSize = kResolution + 2; // one border texel each side
+
+        vkm::VkmPipelineStateManager manager(driver);
+        std::string psoError;
+        REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(TEST_ENGINE_PIPELINE_DIR, TEST_ENGINE_SHADER_CACHE_DIR,
+                                                                vkm::VkmPipelineStateOrigin::Engine, &psoError),
+                        psoError);
+        vkm::VkmPipelineStateBase* pso =
+            manager.getPipelineState("probe_blend_pso[irradiance]", vkm::VkmPipelineStateOrigin::Engine);
+        REQUIRE(pso != nullptr);
+
+        const glm::vec3 probePosition(0.0f, 0.0f, 0.0f);
+        vkm::VkmProbeBlendConstants blendConstants{};
+        vkm::vkmBuildProbeFaceViewProjections(probePosition, 0.05f, 100.0f, blendConstants._faceViewProjection);
+        blendConstants._probePositionWorld = glm::vec4(probePosition, 1.0f);
+        // Hysteresis 0 so this measures the integration alone rather than a blend against whatever
+        // the previous atlas held.
+        blendConstants._blendParams = glm::vec4(static_cast<float>(kResolution), 0.0f,
+                                                static_cast<float>(kFacesPerRow), static_cast<float>(kFaceSize));
+
+        // Capture: face 4 (+Z) fully bright, every other face black. So the probe "saw" light in
+        // exactly one hemisphere.
+        const glm::uvec2 captureExtent(kFaceSize * kFacesPerRow, kFaceSize * 2);
+        std::vector<uint16_t> capturePixels(static_cast<size_t>(captureExtent.x) * captureExtent.y * 4, 0);
+        for (uint32_t y = 0; y < kFaceSize; ++y)
+        {
+            for (uint32_t x = 0; x < kFaceSize; ++x)
+            {
+                // Face 4 sits at tile (1, 1) in a 3-per-row layout.
+                const uint32_t px = 1 * kFaceSize + x;
+                const uint32_t py = 1 * kFaceSize + y;
+                const size_t texel = (static_cast<size_t>(py) * captureExtent.x + px) * 4;
+                capturePixels[texel + 0] = encodeHalf(1.0f);
+                capturePixels[texel + 1] = encodeHalf(1.0f);
+                capturePixels[texel + 2] = encodeHalf(1.0f);
+                capturePixels[texel + 3] = encodeHalf(5.0f); // distance, unused by this permutation
+            }
+        }
+
+        const auto makeTexture = [&](const glm::uvec2& extent, vkm::VkmResourceCreateInfo flags, const char* name) {
+            vkm::VkmTextureInfo info{};
+            info._flags = flags;
+            info._extent = glm::uvec3(extent, 1);
+            info._numMipLevels = 1;
+            info._numArrayLayers = 1;
+            info._format = vkm::VkmFormat::R16G16B16A16_SFLOAT;
+            info._debugName = name;
+            vkm::VkmTexture* texture = driver->newTexture(info);
+            REQUIRE(texture != nullptr);
+            return texture;
+        };
+
+        vkm::VkmTexture* captureTexture = makeTexture(
+            captureExtent,
+            static_cast<vkm::VkmResourceCreateInfo>(
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowShaderRead) |
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowTransferDst)),
+            "ProbeBlendCapture");
+        REQUIRE(driver->uploadToTexture(captureTexture->getHandle(), capturePixels.data(),
+                                        capturePixels.size() * sizeof(uint16_t)));
+
+        // A single-probe atlas: the viewport covers exactly one cell, which is what the shader
+        // assumes its UV spans.
+        vkm::VkmTexture* previousTexture = makeTexture(
+            glm::uvec2(kCellSize, kCellSize),
+            static_cast<vkm::VkmResourceCreateInfo>(
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowShaderRead) |
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowTransferDst)),
+            "ProbeBlendPrevious");
+        std::vector<uint16_t> zeros(static_cast<size_t>(kCellSize) * kCellSize * 4, 0);
+        REQUIRE(driver->uploadToTexture(previousTexture->getHandle(), zeros.data(), zeros.size() * sizeof(uint16_t)));
+
+        vkm::VkmTexture* atlasTexture = makeTexture(
+            glm::uvec2(kCellSize, kCellSize),
+            static_cast<vkm::VkmResourceCreateInfo>(
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowColorAttachment) |
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowTransferSrc)),
+            "ProbeBlendAtlas");
+
+        vkm::VkmBufferInfo blendBufferInfo{};
+        blendBufferInfo._flags = vkm::VkmResourceCreateInfo::AllowShaderRead | vkm::VkmResourceCreateInfo::AllowTransferDst;
+        blendBufferInfo._size = sizeof(vkm::VkmProbeBlendConstants);
+        blendBufferInfo._debugName = "ProbeBlendConstants";
+        vkm::VkmBuffer* blendBuffer = driver->newBuffer(blendBufferInfo);
+        REQUIRE(blendBuffer != nullptr);
+        REQUIRE(driver->uploadToBuffer(blendBuffer->getHandle(), &blendConstants, sizeof(blendConstants)));
+
+        vkm::VkmSamplerInfo samplerInfo{};
+        samplerInfo._debugName = "ProbeBlendSampler";
+        vkm::VkmSampler* sampler = driver->newSampler(samplerInfo);
+        REQUIRE(sampler != nullptr);
+
+        std::string tableError;
+        vkm::VkmPerPassResourceTableBase* table = driver->newPerPassResourceTable(
+            pso,
+            {{ 0, captureTexture->getHandle() },
+             { 1, previousTexture->getHandle() },
+             { 2, sampler->getHandle() },
+             { 3, blendBuffer->getHandle() }},
+            &tableError);
+        REQUIRE_MESSAGE(table != nullptr, tableError);
+
+        vkm::VkmFrameBufferDescriptor fbDesc{};
+        fbDesc._width = kCellSize;
+        fbDesc._height = kCellSize;
+        fbDesc._renderPass._colorAttachmentCount = 1;
+        fbDesc._renderPass._colorAttachments[0]._attachmentId = 0;
+        fbDesc._renderPass._colorAttachments[0]._loadAction = vkm::VkmLoadAction::Clear;
+        fbDesc._renderPass._colorAttachments[0]._storeAction = vkm::VkmStoreAction::Store;
+        fbDesc._colorAttachments[0] = atlasTexture->getHandle();
+
+        vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+        auto* barrierSubGraph = renderGraph.beginComputeSubGraph("ProbeBlendInputs");
+        barrierSubGraph->setComputeCallback([&](vkm::VkmCommandBufferBase* commandBuffer) {
+            commandBuffer->barrierTextureForShaderRead(captureTexture->getHandle());
+            commandBuffer->barrierTextureForShaderRead(previousTexture->getHandle());
+        });
+        auto* blendSubGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
+        blendSubGraph->setRenderCallback([pso, table](vkm::VkmCommandBufferBase* commandBuffer) {
+            commandBuffer->bindPipeline(pso);
+            commandBuffer->bindPerPassResources(table);
+            commandBuffer->draw(3, 1, 0, 0);
+        });
+        renderGraph.compile();
+        renderGraph.execute();
+        renderGraph.ensureCompleted();
+
+        const vkm::VkmTextureReadbackResult readback = driver->readbackTexture(atlasTexture->getHandle());
+        REQUIRE(readback.channels == 8);
+        const auto texelAt = [&](uint32_t x, uint32_t y) {
+            return &readback.pixels[(static_cast<size_t>(y) * readback.width + x) * readback.channels];
+        };
+
+        // The octahedral centre is +Z, the hemisphere the capture lit, so the middle of the cell
+        // must carry most of the energy.
+        const float centre = readHalfComponent(texelAt(kCellSize / 2, kCellSize / 2), 0);
+        // The cell's interior corners are -Z, the hemisphere that was black.
+        const float corner = readHalfComponent(texelAt(1, 1), 0);
+
+        CHECK(centre > 0.2f);
+        // Directional, not uniform. An integration ignoring the cosine term, or an octahedral fold
+        // going the wrong way, would make these two equal while still looking "lit".
+        CHECK(corner < centre * 0.5f);
+
+        // The border replicates the opposite edge, so a border texel must not be black while its
+        // mirrored interior neighbour is lit -- the seam artifact the border exists to prevent.
+        const float topBorder = readHalfComponent(texelAt(kCellSize / 2, 0), 0);
+        const float mirroredInterior = readHalfComponent(texelAt(kCellSize - 1 - kCellSize / 2, 1), 0);
+        CHECK(topBorder == doctest::Approx(mirroredInterior).epsilon(0.05));
+
+        table->destroy();
+        delete table;
+        for (vkm::VkmResourceHandle handle : {atlasTexture->getHandle(), previousTexture->getHandle(),
+                                              captureTexture->getHandle(), blendBuffer->getHandle(),
+                                              sampler->getHandle()})
+        {
+            driver->getRenderResourcePool()->releaseResource(handle);
+        }
+    }
 }
 
 #endif // TEST_PROBE_VOLUME_SHARED_HPP
