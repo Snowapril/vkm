@@ -205,12 +205,22 @@ namespace vkm
         // only), so no coordinate-space compensation happens here. That upstream Y-flip
         // reverses screen-space winding, which toVkFrontFace() in vulkan_pipeline_state.cpp
         // accounts for.
+        // The pass-wide default; setViewportAndScissor() narrows it afterwards if a caller wants
+        // to pack several views into this attachment.
+        onSetViewportAndScissor(0, 0, frameBufferDesc._width, frameBufferDesc._height);
+    }
+
+    void VkmCommandBufferVulkan::onSetViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height)
+    {
+        // A plain positive-height viewport: the engine's +Y-up clip space reaches Vulkan's +Y-down
+        // NDC through vkm-compiler's -fvk-invert-y, so there is nothing to compensate here (see
+        // onBeginRenderPass).
         const VkViewport viewport{
-            .x = 0.0f, .y = 0.0f,
-            .width = static_cast<float>(frameBufferDesc._width), .height = static_cast<float>(frameBufferDesc._height),
+            .x = static_cast<float>(x), .y = static_cast<float>(y),
+            .width = static_cast<float>(width), .height = static_cast<float>(height),
             .minDepth = 0.0f, .maxDepth = 1.0f,
         };
-        const VkRect2D scissor{ {0, 0}, {frameBufferDesc._width, frameBufferDesc._height} };
+        const VkRect2D scissor{ {x, y}, {width, height} };
         vkCmdSetViewport(_vkCommandBuffer, 0, 1, &viewport);
         vkCmdSetScissor(_vkCommandBuffer, 0, 1, &scissor);
     }

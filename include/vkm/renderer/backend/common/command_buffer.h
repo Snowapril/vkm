@@ -41,6 +41,25 @@ namespace vkm
         void beginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc);
         void endRenderPass();
 
+        /*
+        * @brief Restricts subsequent draws to a sub-rectangle of the current render pass.
+        *
+        * @details Must be recorded inside a render pass. Coordinates are in pixels with the origin
+        * at the attachment's top-left, the same convention on every backend -- Vulkan's +Y-down NDC
+        * is already handled upstream by vkm-compiler's -fvk-invert-y, so nothing is compensated
+        * here.
+        *
+        * beginRenderPass() already sets both to cover the whole framebuffer, so a pass that draws
+        * to all of it never needs to call these. They exist for passes that pack several views into
+        * one attachment -- rendering a probe's six cube faces into one atlas in a single pass
+        * rather than six, which is the difference between one render pass per probe and six.
+        *
+        * Viewport and scissor are set together rather than separately: every current caller wants
+        * them to agree, and letting them drift apart silently clips geometry the viewport says is
+        * visible.
+        */
+        void setViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height);
+
         // Pipeline related
         void bindPipeline(VkmPipelineStateBase* pipelineState);
         void unbindPipeline();
@@ -260,6 +279,7 @@ namespace vkm
 
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) = 0;
         virtual void onEndRenderPass() = 0;
+        virtual void onSetViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height) = 0;
         virtual void onBindPipeline(VkmPipelineStateBase* pipelineState) = 0;
         virtual void onUnbindPipeline() = 0;
         virtual void onCopyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size) = 0;

@@ -19,6 +19,7 @@ set(SRCS
     ${SRC_DIR}/TestPerPassResources.cpp
     ${SRC_DIR}/TestGBuffer.cpp
     ${SRC_DIR}/TestProbeVolume.cpp
+    ${SRC_DIR}/TestViewport.cpp
     ${SRC_DIR}/TestPipelineStateManager.cpp
     ${SRC_DIR}/TestBindlessSlotAllocator.cpp
     ${SRC_DIR}/TestInputHandler.cpp
@@ -55,6 +56,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestGBufferMetal.mm
         ${SRC_DIR}/TestGBufferRenderMetal.mm
         ${SRC_DIR}/TestProbeVolumeMetal.mm
+        ${SRC_DIR}/TestViewportMetal.mm
     )
 endif()
 
@@ -76,6 +78,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestGBufferMetal.mm
         ${SRC_DIR}/TestGBufferRenderMetal.mm
         ${SRC_DIR}/TestProbeVolumeMetal.mm
+        ${SRC_DIR}/TestViewportMetal.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++"
     )
 endif()
@@ -113,6 +116,16 @@ if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
         OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
         PSO_JSON_FILES "${ROOT_DIR}/resources/tests/per_pass/renderpass.json"
         EXTRA_DEPENDS  "${ROOT_DIR}/resources/tests/per_pass/per_pass_resources.hlsl")
+endif()
+
+# TestViewport renders a constant-colour fullscreen triangle into part of an attachment, which is
+# the capability the probe update needs to pack several views into one render pass.
+if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
+    vkm_add_shader_cache_target(
+        TARGET_NAME   tests_viewport_shaders
+        OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
+        PSO_JSON_FILES "${ROOT_DIR}/resources/tests/viewport/renderpass.json"
+        EXTRA_DEPENDS  "${ROOT_DIR}/resources/tests/viewport/viewport_fill.hlsl")
 endif()
 
 # TestSceneModelRenderMetal draws an imported glTF mesh with the model_viewer sample's PSO.
@@ -188,6 +201,12 @@ if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
 endif()
 
 if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
+    add_dependencies(${target} tests_viewport_shaders)
+    target_compile_definitions(${target}
+        PRIVATE
+        TEST_VIEWPORT_PSO_DIR="${ROOT_DIR}/resources/tests/viewport/"
+        TEST_VIEWPORT_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
+    )
     add_dependencies(${target} tests_per_pass_shaders)
     target_compile_definitions(${target}
         PRIVATE

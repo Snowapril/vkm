@@ -117,6 +117,15 @@ namespace vkm
         _renderPassEncoder = nullptr;
     }
 
+    void VkmCommandBufferWebGPU::onSetViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height)
+    {
+        VKM_ASSERT(_renderPassEncoder != nullptr, "setViewportAndScissor outside a render pass");
+        wgpuRenderPassEncoderSetViewport(_renderPassEncoder, static_cast<float>(x), static_cast<float>(y),
+                                         static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f);
+        wgpuRenderPassEncoderSetScissorRect(_renderPassEncoder, static_cast<uint32_t>(x),
+                                            static_cast<uint32_t>(y), width, height);
+    }
+
     void VkmCommandBufferWebGPU::onBindPipeline(VkmPipelineStateBase* pipelineState)
     {
         VkmPipelineStateWebGPU* pipelineStateWebGPU = static_cast<VkmPipelineStateWebGPU*>(pipelineState);

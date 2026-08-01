@@ -59,6 +59,7 @@ namespace vkm
 
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) override final;
         virtual void onEndRenderPass() override final;
+        virtual void onSetViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height) override final;
         virtual void onBindPipeline(VkmPipelineStateBase* pipelineState) override final;
         virtual void onUnbindPipeline() override final;
         virtual void onCopyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size) override final;

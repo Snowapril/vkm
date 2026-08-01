@@ -79,6 +79,23 @@ namespace vkm
         onEndRenderPass();
     }
     
+    void VkmCommandBufferBase::setViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height)
+    {
+        if (!_isRecording || !_isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("setViewportAndScissor must be recorded inside a render pass");
+            return;
+        }
+        if (width == 0 || height == 0)
+        {
+            // A zero-area viewport draws nothing but is rejected outright rather than silently
+            // swallowing every subsequent draw in the pass.
+            VKM_DEBUG_ERROR("setViewportAndScissor was given a zero-sized rectangle");
+            return;
+        }
+        onSetViewportAndScissor(x, y, width, height);
+    }
+
     void VkmCommandBufferBase::bindPipeline(VkmPipelineStateBase* pipelineState)
     {
         _boundPipelineState = pipelineState;

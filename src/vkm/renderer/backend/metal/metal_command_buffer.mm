@@ -234,6 +234,21 @@ namespace vkm
         _commandEncoder.commit();
     }
 
+    void VkmCommandBufferMetal::onSetViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height)
+    {
+        id<MTL4RenderCommandEncoder> renderCommandEncoder = _commandEncoder.getActiveRenderCommandEncoder();
+        VKM_ASSERT(renderCommandEncoder != nil, "setViewportAndScissor outside a render pass");
+
+        const MTLViewport viewport{
+            .originX = static_cast<double>(x), .originY = static_cast<double>(y),
+            .width = static_cast<double>(width), .height = static_cast<double>(height),
+            .znear = 0.0, .zfar = 1.0,
+        };
+        [renderCommandEncoder setViewport:viewport];
+        [renderCommandEncoder setScissorRect:MTLScissorRect{
+            static_cast<NSUInteger>(x), static_cast<NSUInteger>(y), width, height}];
+    }
+
     void VkmCommandBufferMetal::onBindPipeline(VkmPipelineStateBase* pipelineState)
     {
         VkmPipelineStateMetal* pipelineStateMetal = static_cast<VkmPipelineStateMetal*>(pipelineState);
