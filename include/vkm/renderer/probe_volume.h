@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/common/renderer_common.h>
 
 #include <glm/vec2.hpp>
+#include <glm/mat4x4.hpp>
 #include <glm/vec4.hpp>
 #include <glm/vec3.hpp>
 
@@ -67,6 +68,30 @@ namespace vkm
     };
     static_assert(sizeof(VkmProbeVolumeConstants) == 64,
                   "VkmProbeVolumeConstants must match the struct in shaders/vkm_probe_volume.hlsli");
+
+    /*
+    * @brief One probe's six face view-projections, as the capture shader sees them.
+    *
+    * Mirrors ProbeCaptureConstants in shaders/probe_capture.hlsl byte for byte.
+    */
+    struct VkmProbeCaptureConstants
+    {
+        glm::mat4 _faceViewProjection[6]{};
+        glm::vec4 _probePositionWorld{0.0f, 0.0f, 0.0f, 1.0f};
+    };
+    static_assert(sizeof(VkmProbeCaptureConstants) == 6 * 64 + 16,
+                  "VkmProbeCaptureConstants must match ProbeCaptureConstants in probe_capture.hlsl");
+
+    /*
+    * @brief Builds the six cube-face view-projections for a probe at `position`.
+    *
+    * @details Face order is +X, -X, +Y, -Y, +Z, -Z, matching the cubemap convention the engine
+    * already uses for skybox faces. The near plane is deliberately small and the far plane is the
+    * caller's: a probe's usable range is what the Chebyshev test will later compare against, so
+    * clipping geometry closer than the far plane would record a wall as "nothing there".
+    */
+    void vkmBuildProbeFaceViewProjections(const glm::vec3& position, float nearZ, float farZ,
+                                          glm::mat4 outFaceViewProjections[6]);
 
     class VkmProbeVolume
     {

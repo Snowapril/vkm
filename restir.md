@@ -650,11 +650,15 @@ Technique decided in §5: **raster-updated dynamic probe volume + SSGI contact t
       far side of the map. The border is in from the start because the atlas layout is what every
       addressing helper and both shaders depend on. Distance uses RGBA16F with two channels unused —
       the engine has no two-channel format, same constraint the G-buffer hit
-- [ ] **4.2 Probe update pass** — round-robin a per-frame probe budget; rasterize a very low-res cube
-      view per probe reusing `VkmScene`'s existing cull/emit draw path, shade it, convert to
-      octahedral, blend into the atlases with hysteresis.
-      ✅ **Unblocked:** `setViewportAndScissor` now exists on all three backends, so a probe's six
-      cube faces can share one render pass instead of needing six
+- [x] **4.2a Probe capture.** `probe_capture.hlsl` renders the scene from one probe into six cube
+      faces packed in a **single render pass**, aimed by `setViewportAndScissor` and selected by a
+      pushed face index. Reuses `VkmScene`'s cull/emit path; `recordDrawBatches` gained an optional
+      per-draw hook, which is the only point where push constants can be set since it owns the bind.
+      Radiance is forward-shaded (a probe stores what it saw), and distance rides in alpha for the
+      moments the Chebyshev test needs
+- [ ] **4.2b Octahedral conversion + border fill + hysteresis blend** — turn a capture into atlas
+      contents
+- [ ] **4.2c Per-frame probe budget (round-robin)** and the propagation-latency measurement
 - [x] **4.3 Probe sampling.** `probe_lighting.hlsl`: trilinear over the 8 surrounding probes,
       weighted by the **Chebyshev visibility test** against the distance atlas, plus normal bias and
       a smoothed backface term. Addressing and the octahedral mapping live in

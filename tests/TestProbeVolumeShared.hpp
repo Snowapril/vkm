@@ -17,6 +17,9 @@
 #include <vkm/renderer/backend/common/render_graph.h>
 #include <vkm/renderer/backend/common/sampler.h>
 #include <vkm/renderer/gbuffer.h>
+#include <vkm/renderer/scene/gltf_importer.h>
+#include <vkm/renderer/scene/scene.h>
+#include <vkm/renderer/scene/vertex_layout.h>
 #include <vkm/renderer/probe_volume.h>
 
 #include <glm/matrix.hpp>
@@ -380,6 +383,180 @@ namespace vkmtest
         driver->getRenderResourcePool()->releaseResource(depthTexture->getHandle());
         driver->getRenderResourcePool()->releaseResource(normalTexture->getHandle());
         volume.destroy();
+    }
+
+    /*
+    * @brief Captures a scene from one probe into a packed six-face target and checks the faces.
+    *
+    * The whole point of this pass is that all six faces share ONE render pass, aimed by
+    * setViewportAndScissor. So the assertions are per face: the face pointing at geometry records
+    * it, the faces pointing away stay empty, and the recorded distance matches where the geometry
+    * actually is. A capture that rendered every face with the same matrix -- the likely failure if
+    * the pushed face index does not reach the vertex shader -- would light all six identically and
+    * otherwise look fine.
+    */
+    inline void runProbeCaptureTest(vkm::VkmDriverBase* driver)
+    {
+        constexpr uint32_t kFaceSize = 16;
+        constexpr uint32_t kFacesX = 3;
+        constexpr uint32_t kFacesY = 2;
+
+        vkm::VkmGltfImportOptions importOptions;
+        importOptions._optimizeMeshes = false;
+        vkm::VkmSceneModel model;
+        std::string error;
+        REQUIRE(vkm::importGltfModel(std::string(RESOURCES_DIR) + "tests/gltf_triangle.gltf",
+                                     &model, &error, importOptions));
+
+        vkm::VkmPipelineStateManager manager(driver);
+        std::string psoError;
+        REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(TEST_ENGINE_PIPELINE_DIR, TEST_ENGINE_SHADER_CACHE_DIR,
+                                                                vkm::VkmPipelineStateOrigin::Engine, &psoError),
+                        psoError);
+        const std::string psoName =
+            std::string("probe_capture_pso[") +
+            vkm::vkmVertexLayoutPresetName(vkm::VkmVertexLayoutPreset::StandardPBR) + "]";
+        vkm::VkmPipelineStateBase* pso = manager.getPipelineState(psoName, vkm::VkmPipelineStateOrigin::Engine);
+        REQUIRE(pso != nullptr);
+
+        vkm::VkmScene scene;
+        REQUIRE(scene.addModel(model, &error));
+        REQUIRE(scene.build(driver, &manager, &error));
+
+        // The fixture triangle spans x,y in [0,1] at z = 0. Put the probe a little in front of it
+        // on -Z, so exactly one face (+Z) looks at it and the opposite face (-Z) sees nothing.
+        const glm::vec3 probePosition(0.5f, 0.5f, -2.0f);
+        const float expectedDistance = 2.0f;
+        scene.setObjectTransform(0, glm::mat4(1.0f));
+
+        vkm::VkmProbeCaptureConstants captureConstants{};
+        vkm::vkmBuildProbeFaceViewProjections(probePosition, 0.05f, 100.0f, captureConstants._faceViewProjection);
+        captureConstants._probePositionWorld = glm::vec4(probePosition, 1.0f);
+
+        vkm::VkmBufferInfo captureBufferInfo{};
+        captureBufferInfo._flags = vkm::VkmResourceCreateInfo::AllowShaderRead | vkm::VkmResourceCreateInfo::AllowTransferDst;
+        captureBufferInfo._size = sizeof(vkm::VkmProbeCaptureConstants);
+        captureBufferInfo._debugName = "ProbeCaptureConstants";
+        vkm::VkmBuffer* captureBuffer = driver->newBuffer(captureBufferInfo);
+        REQUIRE(captureBuffer != nullptr);
+        REQUIRE(driver->uploadToBuffer(captureBuffer->getHandle(), &captureConstants, sizeof(captureConstants)));
+
+        std::string tableError;
+        vkm::VkmPerPassResourceTableBase* table = driver->newPerPassResourceTable(
+            pso, {{ 0, captureBuffer->getHandle() }}, &tableError);
+        REQUIRE_MESSAGE(table != nullptr, tableError);
+
+        const glm::uvec2 captureExtent(kFaceSize * kFacesX, kFaceSize * kFacesY);
+        const auto makeTarget = [&](vkm::VkmFormat format, vkm::VkmResourceCreateInfo extraFlags, const char* name) {
+            vkm::VkmTextureInfo info{};
+            info._flags = extraFlags;
+            info._extent = glm::uvec3(captureExtent, 1);
+            info._numMipLevels = 1;
+            info._numArrayLayers = 1;
+            info._format = format;
+            info._debugName = name;
+            vkm::VkmTexture* texture = driver->newTexture(info);
+            REQUIRE(texture != nullptr);
+            return texture;
+        };
+        vkm::VkmTexture* captureTarget = makeTarget(
+            vkm::VkmFormat::R16G16B16A16_SFLOAT,
+            static_cast<vkm::VkmResourceCreateInfo>(
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowColorAttachment) |
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowTransferSrc)),
+            "ProbeCaptureColor");
+        vkm::VkmTexture* captureDepth = makeTarget(
+            vkm::VkmFormat::D32_SFLOAT, vkm::VkmResourceCreateInfo::AllowDepthStencilAttachment, "ProbeCaptureDepth");
+
+        vkm::VkmFrameBufferDescriptor fbDesc{};
+        fbDesc._width = captureExtent.x;
+        fbDesc._height = captureExtent.y;
+        fbDesc._renderPass._colorAttachmentCount = 1;
+        fbDesc._renderPass._colorAttachments[0]._attachmentId = 0;
+        fbDesc._renderPass._colorAttachments[0]._loadAction = vkm::VkmLoadAction::Clear;
+        fbDesc._renderPass._colorAttachments[0]._storeAction = vkm::VkmStoreAction::Store;
+        fbDesc._colorAttachments[0] = captureTarget->getHandle();
+        vkm::VkmDepthStencilAttachmentDescriptor depthDesc{};
+        depthDesc._attachmentId = 1;
+        depthDesc._loadAction = vkm::VkmLoadAction::Clear;
+        depthDesc._storeAction = vkm::VkmStoreAction::Store;
+        depthDesc._clearDepth = 1.0f;
+        fbDesc._renderPass._depthStencilAttachment = depthDesc;
+        fbDesc._depthStencilAttachment = captureDepth->getHandle();
+
+        vkm::VkmFrameData frameData;
+        // Frustum planes must be the probe's, not the camera's: the cull pass runs against them,
+        // and culling with a stale frustum would reject the very geometry the probe should see.
+        vkm::vkmExtractFrustumPlanes(captureConstants._faceViewProjection[4], frameData._frustumPlanes);
+        // lightDirection points TOWARDS the light (the engine's convention), and the fixture's
+        // normals are +Z, so this is what saturates nDotL and makes the recorded radiance the
+        // material colour rather than zero.
+        frameData._lightDirection = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
+
+        std::vector<vkm::VkmResourceHandle> referenced;
+        scene.collectReferencedResources(&referenced);
+
+        vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+        auto* updateSubGraph = renderGraph.beginTransferSubGraph("SceneUpdate");
+        for (vkm::VkmResourceHandle handle : referenced) { updateSubGraph->addReferencedResource(handle); }
+        updateSubGraph->setTransferCallback([&scene, &frameData](vkm::VkmCommandBufferBase* commandBuffer) {
+            scene.recordUpdate(commandBuffer, /*frameIndex=*/0, frameData);
+        });
+        auto* cullSubGraph = renderGraph.beginComputeSubGraph("SceneCull");
+        for (vkm::VkmResourceHandle handle : referenced) { cullSubGraph->addReferencedResource(handle); }
+        cullSubGraph->setComputeCallback([&scene](vkm::VkmCommandBufferBase* commandBuffer) {
+            scene.recordCull(commandBuffer);
+        });
+
+        auto* captureSubGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
+        for (vkm::VkmResourceHandle handle : referenced) { captureSubGraph->addReferencedResource(handle); }
+        captureSubGraph->setRenderCallback([&scene, pso, table](vkm::VkmCommandBufferBase* commandBuffer) {
+            // All six faces in one pass: aim the viewport, push the face index, draw.
+            for (uint32_t face = 0; face < 6; ++face)
+            {
+                const uint32_t tileX = (face % kFacesX) * kFaceSize;
+                const uint32_t tileY = (face / kFacesX) * kFaceSize;
+                commandBuffer->setViewportAndScissor(static_cast<int32_t>(tileX), static_cast<int32_t>(tileY),
+                                                     kFaceSize, kFaceSize);
+                scene.recordDrawBatches(
+                    commandBuffer,
+                    [pso](const vkm::VkmScene::DrawBatch&) { return pso; },
+                    [table, face](vkm::VkmCommandBufferBase* cb, const vkm::VkmScene::DrawBatch&) {
+                        cb->bindPerPassResources(table);
+                        cb->setPushConstants(&face, sizeof(face));
+                    });
+            }
+        });
+
+        renderGraph.compile();
+        renderGraph.execute();
+        renderGraph.ensureCompleted();
+
+        const vkm::VkmTextureReadbackResult readback = driver->readbackTexture(captureTarget->getHandle());
+        REQUIRE(readback.channels == 8); // bytes per texel, RGBA16F
+
+        const auto faceCenterTexel = [&](uint32_t face) {
+            const uint32_t x = (face % kFacesX) * kFaceSize + kFaceSize / 2;
+            const uint32_t y = (face / kFacesX) * kFaceSize + kFaceSize / 2;
+            return &readback.pixels[(static_cast<size_t>(y) * readback.width + x) * readback.channels];
+        };
+
+        // Face 4 is +Z, the one looking at the triangle.
+        const uint8_t* facingTexel = faceCenterTexel(4);
+        CHECK(readHalfComponent(facingTexel, 0) > 0.0f);
+        CHECK(readHalfComponent(facingTexel, 3) == doctest::Approx(expectedDistance).epsilon(0.05));
+
+        // Face 5 is -Z, pointing directly away. Empty here is what shows each face used its own
+        // matrix: one shared matrix would have drawn the triangle into all six tiles.
+        const uint8_t* awayTexel = faceCenterTexel(5);
+        CHECK(readHalfComponent(awayTexel, 0) == 0.0f);
+        CHECK(readHalfComponent(awayTexel, 3) == 0.0f);
+
+        table->destroy();
+        delete table;
+        driver->getRenderResourcePool()->releaseResource(captureDepth->getHandle());
+        driver->getRenderResourcePool()->releaseResource(captureTarget->getHandle());
+        driver->getRenderResourcePool()->releaseResource(captureBuffer->getHandle());
     }
 }
 

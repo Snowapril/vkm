@@ -7,10 +7,42 @@
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/texture.h>
 
+#include <glm/ext/matrix_clip_space.hpp>
+#include <glm/ext/matrix_transform.hpp>
+#include <glm/trigonometric.hpp>
+
 #include <string>
 
 namespace vkm
 {
+    void vkmBuildProbeFaceViewProjections(const glm::vec3& position, float nearZ, float farZ,
+                                          glm::mat4 outFaceViewProjections[6])
+    {
+        // 90 degrees per face is what tiles a cube exactly. The engine's clip space is +Y up with a
+        // [0,1] depth range on every backend, hence the _ZO projection (see camera.h).
+        const glm::mat4 projection = glm::perspectiveRH_ZO(glm::radians(90.0f), 1.0f, nearZ, farZ);
+
+        // +X, -X, +Y, -Y, +Z, -Z. The up vectors are the standard cubemap ones: the poles use +Z
+        // and -Z because +Y/-Y are the view direction there and an up vector may not be parallel
+        // to it.
+        const glm::vec3 forward[6] = {
+            { 1.0f,  0.0f,  0.0f}, {-1.0f,  0.0f,  0.0f},
+            { 0.0f,  1.0f,  0.0f}, { 0.0f, -1.0f,  0.0f},
+            { 0.0f,  0.0f,  1.0f}, { 0.0f,  0.0f, -1.0f},
+        };
+        const glm::vec3 up[6] = {
+            {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+            {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -1.0f},
+            {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+        };
+
+        for (uint32_t face = 0; face < 6; ++face)
+        {
+            outFaceViewProjections[face] =
+                projection * glm::lookAtRH(position, position + forward[face], up[face]);
+        }
+    }
+
     VkmFormat VkmProbeVolume::getIrradianceFormat()
     {
         // HDR and signed-capable: indirect radiance is unbounded before tone mapping, and 8-bit

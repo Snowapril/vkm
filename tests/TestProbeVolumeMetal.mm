@@ -56,4 +56,10 @@ TEST_CASE("Metal probe lighting - the volume is sampled with visibility weightin
     vkmtest::runProbeLightingTest(fixture.driver.get());
 }
 
+TEST_CASE("Metal probe capture - six cube faces share one render pass") {
+    MetalProbeVolumeFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runProbeCaptureTest(fixture.driver.get());
+}
+
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE
