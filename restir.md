@@ -644,9 +644,12 @@ Technique decided in §5: **raster-updated dynamic probe volume + SSGI contact t
 - [ ] Define the **technique interface**: a technique owns its passes and resources and produces an
       indirect-radiance texture (+ optional confidence channel) for one shared composite pass
 - [ ] Runtime selection gated on `VkmDriverCapabilityFlags::RayTracing` + a quality setting, not `#ifdef`
-- [ ] **4.1 Probe volume storage** — camera-centred grid (clipmap if needed); per-probe octahedral
-      irradiance atlas (~8×8) **and** distance/moment atlas (~16×16). Both atlases from the start —
-      the moment map is what the Chebyshev test needs, and retrofitting it later is painful
+- [x] **4.1 Probe volume storage.** `VkmProbeVolume`: probe grid, both atlases (8×8 irradiance,
+      16×16 distance/moments), double-buffered for hysteresis blending, with a **one-texel border
+      per probe** so bilinear taps near an octahedral seam read the right neighbour rather than the
+      far side of the map. The border is in from the start because the atlas layout is what every
+      addressing helper and both shaders depend on. Distance uses RGBA16F with two channels unused —
+      the engine has no two-channel format, same constraint the G-buffer hit
 - [ ] **4.2 Probe update pass** — round-robin a per-frame probe budget; rasterize a very low-res cube
       view per probe reusing `VkmScene`'s existing cull/emit draw path, shade it, convert to
       octahedral, blend into the atlases with hysteresis
