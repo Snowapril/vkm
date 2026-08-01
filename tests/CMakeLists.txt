@@ -210,6 +210,15 @@ if (VKM_USE_METAL_API)
         PRIVATE
         TEST_MODEL_VIEWER_SAMPLE_DIR="${ROOT_DIR}/src/samples/model_viewer/"
         TEST_MODEL_VIEWER_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
+    )
+endif()
+
+# The engine PSO directory and its cache are backend-agnostic -- the cache is built for whichever
+# backend is configured -- so these are defined for every native backend rather than only Metal.
+# A Metal-only test body still has to *compile* in a Vulkan build when it lives in a shared header.
+if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
+    target_compile_definitions(${target}
+        PRIVATE
         TEST_ENGINE_PIPELINE_DIR="${ROOT_DIR}/resources/Pipelines/Engine/"
         TEST_ENGINE_SHADER_CACHE_DIR="${ROOT_DIR}/resources/Shaders/ShaderCache/"
     )

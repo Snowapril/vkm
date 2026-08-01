@@ -143,6 +143,19 @@ namespace vkm
     VkmResourceHandle VkmProbeVolume::getPrevIrradianceTexture() const { return _sets[1 - _currentSet]._irradiance; }
     VkmResourceHandle VkmProbeVolume::getPrevDistanceTexture() const { return _sets[1 - _currentSet]._distance; }
 
+    VkmProbeVolumeConstants VkmProbeVolume::makeConstants(float normalBias, float hysteresis) const
+    {
+        VkmProbeVolumeConstants constants{};
+        constants._originAndSpacingX =
+            glm::vec4(_descriptor._origin, _descriptor._spacing.x);
+        constants._spacingYZ = glm::vec4(_descriptor._spacing.y, _descriptor._spacing.z, 0.0f, 0.0f);
+        constants._probeCounts = glm::uvec4(_descriptor._probeCounts, 0u);
+        constants._atlasParams = glm::vec4(static_cast<float>(_descriptor._irradianceResolution),
+                                           static_cast<float>(_descriptor._distanceResolution),
+                                           normalBias, hysteresis);
+        return constants;
+    }
+
     bool VkmProbeVolume::createSet(AtlasSet& set, uint32_t setIndex)
     {
         const auto createAtlas = [&](const glm::uvec2& extent, VkmFormat format, const char* name,
@@ -155,7 +168,8 @@ namespace vkm
             info._flags = static_cast<VkmResourceCreateInfo>(
                 static_cast<uint32_t>(VkmResourceCreateInfo::AllowColorAttachment) |
                 static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
-                static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferSrc));
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferSrc) |
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst));
             info._extent = glm::uvec3(extent, 1);
             info._numMipLevels = 1;
             info._numArrayLayers = 1;

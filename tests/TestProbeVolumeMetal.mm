@@ -50,4 +50,10 @@ TEST_CASE("Metal probe volume - atlas addressing and history") {
     vkmtest::runProbeVolumeTest(fixture.driver.get());
 }
 
+TEST_CASE("Metal probe lighting - the volume is sampled with visibility weighting") {
+    MetalProbeVolumeFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runProbeLightingTest(fixture.driver.get());
+}
+
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE

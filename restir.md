@@ -652,9 +652,18 @@ Technique decided in §5: **raster-updated dynamic probe volume + SSGI contact t
       the engine has no two-channel format, same constraint the G-buffer hit
 - [ ] **4.2 Probe update pass** — round-robin a per-frame probe budget; rasterize a very low-res cube
       view per probe reusing `VkmScene`'s existing cull/emit draw path, shade it, convert to
-      octahedral, blend into the atlases with hysteresis
-- [ ] **4.3 Probe sampling** — trilinear over the 8 nearest probes, weighted by the **Chebyshev
-      visibility test**, plus normal bias and backface rejection
+      octahedral, blend into the atlases with hysteresis.
+      ⚠ **Blocked on an engine gap:** the command buffer exposes no viewport/scissor control, so six
+      cube faces cannot be packed into one render pass — it would be six passes per probe. Either add
+      viewport control to the RHI first, or accept the pass count and amortize hard. Decide before
+      implementing; this is the largest remaining unknown in Phase 4
+- [x] **4.3 Probe sampling.** `probe_lighting.hlsl`: trilinear over the 8 surrounding probes,
+      weighted by the **Chebyshev visibility test** against the distance atlas, plus normal bias and
+      a smoothed backface term. Addressing and the octahedral mapping live in
+      `vkm_probe_volume.hlsli`, shared with whatever fills the atlases. Tested by authoring the
+      atlases from the CPU, which isolates the read path — the two cases are "a visible grid returns
+      its irradiance" and "occluded probes contribute nothing", the second being exactly the wall
+      leak the distance atlas exists to prevent
 - [ ] **4.4 SSGI contact term** — depth-buffer ray march, added on top of the probe result. Keep it
       strictly additive and strictly in this tier (see the warning in §5)
 - [ ] **4.5 GI sample** with a runtime technique switcher and per-term debug views (probe irradiance,
@@ -1020,4 +1029,5 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-07-31 | 2 | Descriptor set 2 on **WebGPU** (bind group 2), completing set 2 on all three backends. Compile-verified only: the WebGPU suite runs in headless Chrome and passes, but no shader can be compiled for that backend without a Tint/Dawn build, so the group-2 path has not executed. Flagged as a Phase 4 risk. |
 | 2026-08-01 | 3 | G-buffer filled by a real MRT scene pass (`gbuffer.hlsl`) with camera motion vectors, then consumed by a fullscreen PBR deferred-lighting pass reading it through descriptor set 2. Verified on Metal by rendering the fixture scene and checking the shaded output: the lit pixel is non-black with the material's colour ordering preserved, uncovered pixels are exactly black, and doubling only the set-2 light buffer doubles the result. Metal 175 tests. |
 | 2026-08-01 | 3 | Tone mapping migrated from dead GLSL to HLSL + PSO, fixing the missing white-point normalization and gamma encode it never applied. Fullscreen triangle factored into `vkm_fullscreen.hlsli` now that lighting and tone mapping both use it. **Phase 3 complete.** |
+| 2026-08-01 | 4 | Probe volume storage + the lookup pass. `probe_lighting.hlsl` samples 8 probes trilinearly with Chebyshev visibility weighting; verified on Metal against CPU-authored atlases, including that fully occluded probes contribute nothing. Found that the update pass is blocked on the RHI having no viewport control (six cube faces cannot share a render pass) — recorded as the next decision. |
 | 2026-07-30 | 4 | Low-spec tier must be **fully dynamic** (no bake) → technique decided: raster-updated dynamic probe volume (DDGI-style octahedral irradiance + distance moments, Chebyshev visibility) plus an additive SSGI contact term. Storage/sampling are update-mechanism-agnostic, so Phase 5's rays can later refresh the same volume, and ReSTIR GI can query it for multi-bounce `L_o`. |

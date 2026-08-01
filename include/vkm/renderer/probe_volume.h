@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/common/renderer_common.h>
 
 #include <glm/vec2.hpp>
+#include <glm/vec4.hpp>
 #include <glm/vec3.hpp>
 
 #include <array>
@@ -49,6 +50,24 @@ namespace vkm
     * Both atlases are double-buffered: an update blends new samples into the previous frame's
     * values with hysteresis, so it must read one copy while writing the other.
     */
+    /*
+    * @brief The probe volume's parameters as a shader sees them.
+    *
+    * Mirrors VkmProbeVolumeConstants in shaders/vkm_probe_volume.hlsli byte for byte. Every member
+    * is 16-byte aligned so the glm layout matches HLSL cbuffer packing with no padding members,
+    * the same discipline VkmFrameConstants follows.
+    */
+    struct VkmProbeVolumeConstants
+    {
+        glm::vec4 _originAndSpacingX{0.0f, 0.0f, 0.0f, 1.0f};  // xyz = grid origin, w = spacing.x
+        glm::vec4 _spacingYZ{1.0f, 1.0f, 0.0f, 0.0f};          // x = spacing.y, y = spacing.z
+        glm::uvec4 _probeCounts{1u, 1u, 1u, 0u};               // xyz = probes per axis
+        // x = irradiance resolution, y = distance resolution, z = normal bias, w = hysteresis
+        glm::vec4 _atlasParams{8.0f, 16.0f, 0.25f, 0.97f};
+    };
+    static_assert(sizeof(VkmProbeVolumeConstants) == 64,
+                  "VkmProbeVolumeConstants must match the struct in shaders/vkm_probe_volume.hlsli");
+
     class VkmProbeVolume
     {
     public:
@@ -112,6 +131,10 @@ namespace vkm
         // The copy an update reads while writing the current one.
         VkmResourceHandle getPrevIrradianceTexture() const;
         VkmResourceHandle getPrevDistanceTexture() const;
+
+        // The parameters a shader needs to address this volume, filled from the descriptor.
+        // `normalBias` and `hysteresis` are tuning values the volume does not otherwise own.
+        VkmProbeVolumeConstants makeConstants(float normalBias = 0.25f, float hysteresis = 0.97f) const;
 
     private:
         struct AtlasSet

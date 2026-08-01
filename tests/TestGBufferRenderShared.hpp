@@ -3,6 +3,8 @@
 
 #include <doctest/doctest.h>
 
+#include "TestHalfFloatShared.hpp"
+
 #include <vkm/renderer/backend/common/buffer.h>
 #include <vkm/renderer/backend/common/per_pass_resource_table.h>
 #include <vkm/renderer/backend/common/sampler.h>
@@ -44,37 +46,6 @@ namespace vkmtest
     constexpr float kFixtureBaseColorR = 0.25f;
     constexpr float kFixtureBaseColorG = 0.5f;
     constexpr float kFixtureBaseColorB = 0.75f;
-
-    // Decodes an IEEE-754 binary16 as stored in an RGBA16F readback. Small enough to keep here
-    // rather than adding a half-float dependency for two assertions.
-    inline float decodeHalf(uint16_t bits)
-    {
-        const uint32_t sign = static_cast<uint32_t>(bits >> 15) & 0x1u;
-        const uint32_t exponent = static_cast<uint32_t>(bits >> 10) & 0x1Fu;
-        const uint32_t mantissa = static_cast<uint32_t>(bits) & 0x3FFu;
-
-        float value = 0.0f;
-        if (exponent == 0)
-        {
-            value = std::ldexp(static_cast<float>(mantissa), -24); // subnormal (and zero)
-        }
-        else if (exponent == 31)
-        {
-            value = mantissa == 0 ? INFINITY : NAN;
-        }
-        else
-        {
-            value = std::ldexp(static_cast<float>(mantissa + 1024u), static_cast<int>(exponent) - 25);
-        }
-        return sign != 0 ? -value : value;
-    }
-
-    inline float readHalfComponent(const uint8_t* texel, size_t component)
-    {
-        const uint16_t bits = static_cast<uint16_t>(texel[component * 2]) |
-                              static_cast<uint16_t>(static_cast<uint16_t>(texel[component * 2 + 1]) << 8);
-        return decodeHalf(bits);
-    }
 
     /*
     * @brief Imports the fixture triangle, builds a scene, and rasterizes it into `gbuffer`.
