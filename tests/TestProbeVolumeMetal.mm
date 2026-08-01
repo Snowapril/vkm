@@ -8,6 +8,7 @@
 #include <vkm/renderer/backend/metal/metal_driver.h>
 
 #include "TestProbeVolumeShared.hpp"
+#include "TestProbeVolumeUpdaterShared.hpp"
 
 #import <Metal/MTLDevice.h>
 
@@ -60,6 +61,19 @@ TEST_CASE("Metal probe capture - six cube faces share one render pass") {
     MetalProbeVolumeFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
     vkmtest::runProbeCaptureTest(fixture.driver.get());
+}
+
+TEST_CASE("Metal probe update - the round-robin budget refreshes every probe once per round") {
+    MetalProbeVolumeFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runProbeUpdateScheduleTest(fixture.driver.get());
+}
+
+TEST_CASE("Metal probe GI - a light change propagates at the rate the hysteresis predicts"
+          * doctest::timeout(20.0)) {
+    MetalProbeVolumeFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runProbeGiPropagationTest(fixture.driver.get());
 }
 
 TEST_CASE("Metal probe blend - a capture integrates into a directional octahedral map") {

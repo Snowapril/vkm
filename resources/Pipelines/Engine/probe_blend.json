@@ -12,13 +12,21 @@
         "stencil_test_enable": false
     },
     "color_attachments": [
-        { "format": "r16g16b16a16_sfloat" }
+        {
+            "format": "r16g16b16a16_sfloat",
+            "blend_enable": true,
+            "src_color_blend_factor": "src_alpha",
+            "dst_color_blend_factor": "one_minus_src_alpha",
+            "color_blend_op": "add",
+            "src_alpha_blend_factor": "one",
+            "dst_alpha_blend_factor": "zero",
+            "alpha_blend_op": "add"
+        }
     ],
     "per_pass_resources": [
         { "binding": 0, "type": "sampled_texture" },
-        { "binding": 1, "type": "sampled_texture" },
-        { "binding": 2, "type": "sampler" },
-        { "binding": 3, "type": "uniform_buffer" }
+        { "binding": 1, "type": "sampler" },
+        { "binding": 2, "type": "uniform_buffer" }
     ],
     "shaders": {
         "vertex": { "filepath": "probe_blend.hlsl", "entry_point": "VSMain" },

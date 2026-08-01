@@ -13,7 +13,7 @@ TEST_CASE("imports a large scene" * doctest::timeout(20.0)) { ... }
 Do not raise the default to accommodate one slow test — decorate that test instead, so the
 exception is visible where it applies.
 
-Two mechanisms, because they cover different failures:
+Three mechanisms, because they cover different failures:
 
 - **doctest's own check** is post-hoc: a test that overruns but *returns* is reported as an
   ordinary failure and the run continues through the remaining tests.
@@ -21,6 +21,13 @@ Two mechanisms, because they cover different failures:
   `kMinHangGraceSeconds` floor), naming the test and its file:line. This is what stops a test
   that never returns from hanging the whole run with no output — the failure mode that once left
   79 test cases unrun.
+- **A wall-clock watchdog in `scripts/run_tests.py`** (`--test-timeout`, default 600 s) kills the
+  whole binary and reports FAIL. The first two both measure time spent *inside* a test case, and
+  are native-only besides, so neither can see a hang in fixture construction, in driver teardown
+  after the last test, or inside a signal handler. The last of those is not hypothetical: a VMA
+  leak assert at driver teardown aborts inside a handler that allocates, which recurses through
+  backward-cpp and presents as a **spinning** process rather than an idle one, so nothing short
+  of an external kill ends it.
 
 `TestTimeBudget.cpp` guards both: it asserts no test is left unbudgeted, and it deliberately
 overruns a tight budget under `doctest::should_fail()` to prove overruns really do fail.

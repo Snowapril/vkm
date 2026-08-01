@@ -38,10 +38,39 @@ from pathlib import Path
 SCRIPT_DIR   = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent.resolve()
 
+# Wall-clock budget for one backend's test run. The whole native suite takes seconds on
+# Metal and a couple of minutes on Vulkan, so this is roughly two orders of magnitude of
+# headroom — generous enough that a loaded machine or a slow CI runner does not trip it,
+# tight enough that a hang is reported in minutes instead of never. Raise it with
+# --test-timeout rather than removing it.
+DEFAULT_TEST_TIMEOUT_SECONDS = 600
+
+# How much of a killed run's output to show. A process that dies inside a signal handler
+# can print without bound, so the tail is both the interesting part and the only part
+# worth keeping.
+_TIMEOUT_OUTPUT_TAIL_LINES = 80
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _decode(stream) -> str:
+    """subprocess hands back str or bytes depending on how the call was made, and on a
+    timeout it can hand back None if nothing was captured."""
+    if stream is None:
+        return ""
+    return stream if isinstance(stream, str) else stream.decode(errors="replace")
+
+
+def _tail(text: str, lines: int = _TIMEOUT_OUTPUT_TAIL_LINES) -> str:
+    """The last `lines` lines, marked when anything was dropped."""
+    split = text.splitlines()
+    if len(split) <= lines:
+        return text
+    dropped = len(split) - lines
+    return f"[... {dropped} earlier lines omitted ...]\n" + "\n".join(split[-lines:])
+
 
 def run_cmd(cmd: list, **kwargs) -> subprocess.CompletedProcess:
     """Print then execute a command. Returns the CompletedProcess."""
@@ -211,7 +240,8 @@ def cmake_build(build_dir: Path, build_type: str, jobs: int) -> bool:
     return result.returncode == 0
 
 
-def execute_tests(build_dir: Path, build_type: str, system: str, backend: str) -> str:
+def execute_tests(build_dir: Path, build_type: str, system: str, backend: str,
+                  timeout_s: int = DEFAULT_TEST_TIMEOUT_SECONDS) -> str:
     """Runs the built UnitTests binary. Returns 'PASS', 'FAIL', or 'SKIP'.
 
     A nonzero exit is always FAIL — hardware/driver gaps are handled gracefully
@@ -219,6 +249,13 @@ def execute_tests(build_dir: Path, build_type: str, system: str, backend: str) -
     never produce a nonzero exit, so a real failure here means a genuine regression.
     SKIP applies when the binary exits 0 but printed at least one "Skipping: "
     message (a GPU-dependent test self-skipped due to no compatible hardware).
+
+    Overrunning `timeout_s` kills the binary and reports FAIL. This is a second,
+    coarser watchdog than the per-test-case one inside UnitTests (see tests/CLAUDE.md):
+    that one only measures time spent *inside* a test case and is native-only, so it
+    cannot see a hang in a fixture, in driver teardown after the last test, or in a
+    signal handler. A wall-clock kill out here catches all three, and turns "CI sat
+    there for six hours" into a failure with output attached.
 
     Metal has no runtime-togglable validation layer — it's only enabled via the
     MTL_DEBUG_LAYER env var read at process start, so it's injected here for the
@@ -237,7 +274,22 @@ def execute_tests(build_dir: Path, build_type: str, system: str, backend: str) -
     env = {**os.environ, "MTL_DEBUG_LAYER": "1"} if backend == "metal" else None
 
     print(f">>> {test_bin}")
-    result = subprocess.run([str(test_bin)], capture_output=True, text=True, env=env)
+    try:
+        result = subprocess.run([str(test_bin)], capture_output=True, text=True, env=env,
+                                timeout=timeout_s if timeout_s > 0 else None)
+    except subprocess.TimeoutExpired as exc:
+        # The child is already killed by the time this is raised; exc carries whatever it
+        # managed to write first, which is the only clue to where it stopped.
+        print(_tail(_decode(exc.stdout) + _decode(exc.stderr)))
+        print(f"[FAIL] {backend} tests exceeded the {timeout_s}s watchdog and were killed.")
+        print("       The binary's own watchdog only covers time spent inside a test case, so a "
+              "hang in fixture setup, in driver teardown, or in a signal handler outruns it. Note "
+              "that a hang need not be idle: an abort inside a handler that itself allocates "
+              "recurses through backward-cpp and presents as a spinning process (see TODO.md).")
+        print("       Re-run a suspect subset with --test-case=\"<name>\" to narrow it, and check "
+              "for UnitTests processes left by other worktrees competing for the GPU.")
+        return "FAIL"
+
     print(result.stdout + result.stderr)
 
     if result.returncode != 0:
@@ -326,6 +378,9 @@ def _serve_directory(directory: Path, port: int) -> http.server.ThreadingHTTPSer
 
 
 def run_webgpu_tests_headless_chrome(chrome: str, build_dir: Path, timeout_s: int = 60) -> bool:
+    # Deliberately NOT wired to --test-timeout: this timeout is how a successful run ends
+    # (see the comment below), not a watchdog, so raising it would just make every webgpu
+    # run take that long. Success here is the completion marker in the page output.
     html_path = build_dir / "bin" / "UnitTests.html"
     if not html_path.exists():
         print(f"[ERROR] {html_path} not found after build.")
@@ -444,6 +499,11 @@ def main() -> None:
         help="Skip running bootstrap.py (useful in CI where bootstrap ran earlier)",
     )
     parser.add_argument(
+        "--test-timeout", type=int, default=DEFAULT_TEST_TIMEOUT_SECONDS, metavar="SECONDS",
+        help=f"Kill a backend's test run and fail it after this many seconds "
+             f"(default: {DEFAULT_TEST_TIMEOUT_SECONDS}; 0 disables the watchdog)",
+    )
+    parser.add_argument(
         "--jobs", type=int, default=os.cpu_count() or 1,
         help="Parallel build jobs (default: cpu count)",
     )
@@ -514,7 +574,8 @@ def main() -> None:
             results[name] = "FAIL"
             continue
 
-        results[name] = execute_tests(backend_build_dir, args.build_type, system, name)
+        results[name] = execute_tests(backend_build_dir, args.build_type, system, name,
+                                      args.test_timeout)
 
     # Summary
     print()
