@@ -1457,3 +1457,46 @@ A comment at that function says so, since "unify the two timeouts" is the obviou
 
 Verified both ways: `--test-timeout 1` kills a healthy Metal run and reports FAIL with output
 attached, and the default leaves Metal 193/193 and Vulkan 191/191 untouched.
+
+## 2026-08-02 — WebGPU shader compilation unlocked, and the four bugs it was hiding
+
+`restir.md` and `TODO.md` both recorded that WGSL output was unavailable because
+`VKM_COMPILER_ENABLE_WGSL=ON` needs a Dawn/tint build "no local or CI configuration provides".
+That was wrong on every count: Dawn is vendored and pinned in `bootstrap.json`, the CMake
+ExternalProject wiring already existed, `buildscripts/ShaderCompile.cmake` already accepted a
+`VKM_HOST_VKM_COMPILER`, and `scripts/run_sample.py` already built one. Only `run_tests.py` did not.
+
+- `scripts/run_tests.py` gained `build_host_vkm_compiler()` (ported from run_sample.py, which it
+  already duplicates most helpers with -- noted in TODO.md) and passes the result to the emcmake
+  configure.
+- `tests/CMakeLists.txt`: the engine PSO dir and cache are now defined for WebGPU too, at their
+  MEMFS paths; test-owned caches get their own `--preload-file` mount; the per-pass shader target
+  builds for WebGPU when a host compiler exists.
+- A `WebGPUPerPassFixture` registers the set-2 tests on that backend.
+
+**The four bugs.** None was reachable without actually running a shader there:
+
+1. `Sample()` in non-uniform control flow. WGSL allows `textureSample` only under uniform control
+   flow, and `probe_lighting` samples from a loop with `continue`s while both it and
+   `deferred_lighting` sample after an early return. Fixed by `SampleLevel(..., 0)` -- every texture
+   involved has one mip, so the implicit LOD could only ever have been 0. (Committed separately.)
+2. Staging buffers were created `mappedAtCreation` and left that way. WebGPU rejects any GPU or
+   queue use of a mapped buffer, so the first operation on every fresh staging buffer was invalid:
+   a readback is copied into before it is read, and `writeDirect()` is a queue write. That broke
+   `readbackTexture` and every `VkmScene` upload on that backend. Now created unmapped.
+   `map()` also had to switch to `wgpuBufferGetConstMappedRange` for read-only mappings.
+3. The compute path never bound bind group 1. The graphics path did, with a comment explaining that
+   WebGPU requires every group in the pipeline layout to be set -- the compute path returned early
+   before reaching it.
+4. Every unpublished bindless singleton bound the *same* placeholder buffer. WebGPU rejects a bind
+   group whose writable storage bindings overlap, and separately rejects one buffer used both
+   read-write and read-only in a synchronization scope. Distinct slices fix only the first, so each
+   singleton now has its own placeholder. This invalidated every WebGPU pass that did not populate
+   a scene -- i.e. most of what Phase 4 will do there.
+
+**Still open.** `runPerPassResourceTest` is skipped on WebGPU: `newBuffer` returns null for its
+256-byte storage buffer, with no Dawn validation error and no engine log. It had reached dispatch
+and readback in earlier iterations, so everything upstream works; the cause is unidentified.
+The validation half of the same test runs and passes.
+
+Verified: Metal 193/193 and Vulkan 191/191 Debug, 192/192 and 191/191 Release, WebGPU green.

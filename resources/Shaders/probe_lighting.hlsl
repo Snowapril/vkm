@@ -90,7 +90,7 @@ float3 sampleProbeVolume(float3 worldPosition, float3 normal)
         const float2 distanceUv =
             vkmProbeAtlasUv(probeCoord, counts, g_Volume.atlasParams.y,
                             vkmProbeDirectionToOctUv(-directionToProbe));
-        const float2 moments = g_Distance.Sample(g_Sampler, distanceUv).rg;
+        const float2 moments = g_Distance.SampleLevel(g_Sampler, distanceUv, 0).rg;
         weight *= vkmProbeChebyshevWeight(moments, distanceToProbe);
 
         if (weight <= 0.0)
@@ -101,7 +101,7 @@ float3 sampleProbeVolume(float3 worldPosition, float3 normal)
         const float2 irradianceUv =
             vkmProbeAtlasUv(probeCoord, counts, g_Volume.atlasParams.x,
                             vkmProbeDirectionToOctUv(normal));
-        accumulated += g_Irradiance.Sample(g_Sampler, irradianceUv).rgb * weight;
+        accumulated += g_Irradiance.SampleLevel(g_Sampler, irradianceUv, 0).rgb * weight;
         totalWeight += weight;
     }
 
@@ -116,13 +116,13 @@ float3 sampleProbeVolume(float3 worldPosition, float3 normal)
 
 float4 PSMain(VSOutput input) : SV_TARGET0
 {
-    const float cameraDistance = g_GBufferMotion.Sample(g_Sampler, input.uv).w;
+    const float cameraDistance = g_GBufferMotion.SampleLevel(g_Sampler, input.uv, 0).w;
     if (cameraDistance <= 0.0)
     {
         return float4(0.0, 0.0, 0.0, 1.0); // never covered by geometry
     }
 
-    const float3 shadingNormal = vkmUnpackShadingNormal(g_GBufferNormal.Sample(g_Sampler, input.uv));
+    const float3 shadingNormal = vkmUnpackShadingNormal(g_GBufferNormal.SampleLevel(g_Sampler, input.uv, 0));
     const float3 worldPosition = vkmReconstructWorldPosition(
         input.uv, cameraDistance, g_VkmFrame.inverseViewProjection, g_VkmFrame.cameraPositionWorld.xyz);
 

@@ -69,7 +69,7 @@ float3 fresnelSchlick(float vDotH, float3 f0)
 
 float4 PSMain(VSOutput input) : SV_TARGET0
 {
-    const float4 motionMetallic = g_MotionMetallic.Sample(g_Sampler, input.uv);
+    const float4 motionMetallic = g_MotionMetallic.SampleLevel(g_Sampler, input.uv, 0);
     const float cameraDistance = motionMetallic.w;
     // The G-buffer clears to zero, so a zero distance means no geometry covered this pixel.
     // Shading it would light the background as if it were a surface.
@@ -78,10 +78,10 @@ float4 PSMain(VSOutput input) : SV_TARGET0
         return float4(0.0, 0.0, 0.0, 1.0);
     }
 
-    const float4 packedNormals = g_Normal.Sample(g_Sampler, input.uv);
+    const float4 packedNormals = g_Normal.SampleLevel(g_Sampler, input.uv, 0);
     const float3 shadingNormal = vkmUnpackShadingNormal(packedNormals);
 
-    const float4 baseColorRoughness = g_BaseColorRoughness.Sample(g_Sampler, input.uv);
+    const float4 baseColorRoughness = g_BaseColorRoughness.SampleLevel(g_Sampler, input.uv, 0);
     const float3 baseColor = baseColorRoughness.rgb;
     // Clamped away from zero: a perfectly smooth microfacet lobe is a delta that this analytic
     // form cannot represent, and it produces fireflies rather than a highlight.

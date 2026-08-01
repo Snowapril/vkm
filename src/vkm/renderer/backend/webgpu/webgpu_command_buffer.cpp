@@ -152,6 +152,14 @@ namespace vkm
             const uint32_t computeZeroOffset = 0;
             wgpuComputePassEncoderSetBindGroup(_computePassEncoder, 0, computeBindlessManager->getBindGroup(),
                                                1, &computeZeroOffset);
+            // And group 1, for the same reason the graphics path below does it: WebGPU requires
+            // every group the pipeline layout declares to be set before a dispatch, referenced by
+            // the shader or not. Leaving it out costs "No bind group set at group index 1" and the
+            // whole command buffer.
+            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, 1,
+                                               static_cast<VkmDriverWebGPU*>(_driver)
+                                                   ->getFrameConstantManager()->getActiveBindGroup(),
+                                               0, nullptr);
             return;
         }
 

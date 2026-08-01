@@ -8,10 +8,16 @@
 // space2 matches VkmPerPassResourceType's documented register spaces; the vk::binding attributes
 // pin the same (binding, set) pairs the PSO JSON declares.
 
+// Padded with scalars rather than a uint3, because the two layouts disagree about that. HLSL packs
+// a uint3 into the remaining three slots of the row the uint started, giving 16 bytes; WGSL gives
+// vec3<u32> an alignment of 16, pushing it to offset 16 and the struct to 32. Scalars are 4-aligned
+// in both, so this is 16 bytes everywhere -- which is also what the C++ mirror declares.
 struct PassConstants
 {
     uint base;
-    uint3 _pad0;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
 };
 
 [[vk::binding(0, 2)]] ConstantBuffer<PassConstants> g_Pass : register(b0, space2);

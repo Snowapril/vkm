@@ -8,7 +8,7 @@
 - Design and implement descriptor sets 2 (per-pass) and 3 (per-draw) of the engine/user resource-binding convention (sets 0 bindless and 1 per-frame are implemented on all backends).
 - Set 1 has one frame-constants region per frame slot engine-wide, so a second scene-rendering window would render with the main swapchain's aspect ratio and share that region unsynchronized.
 - The frame-constant buffers bypass `newBuffer()` (no `VkmBuffer` is host-writable), so they are absent from the memory tracker, like the bindless managers' own buffers.
-- The WebGPU set-1 path is compile-verified only; emitting WGSL needs a `VKM_COMPILER_ENABLE_WGSL=ON` vkm-compiler (tint/dawn build) that no local or CI configuration provides yet.
+- The WebGPU set-1 path has no test that reads per-frame constants in a WGSL shader, though one can now be built (`scripts/run_tests.py` builds a WGSL-capable host vkm-compiler).
 - The common command-buffer interface has no compute dispatch entry point; Metal's `beginComputePass` scaffolding is never invoked.
 - `MTL4RenderPipelineDescriptor` has no depth/stencil attachment format properties in Metal4; `VkmPipelineStateMetal` can't validate/set depth-stencil format at pipeline-creation time, only at render-pass/encoder time.
 - Migrate vkm's remaining loose GLSL engine shaders (scene_object, test_shader) to HLSL+PSO json; tonemap and quad_screen were migrated and their GLSL deleted.
@@ -20,7 +20,7 @@
 - WebGPU bindless mega-buffers are fixed-capacity (16 MiB vertex / 8 MiB index) with no growth; registerBuffer fails hard when exhausted.
 - WebGPU bindless-registered buffers must be tightly packed engine VertexData/uint element arrays (typed mega-buffers; Vulkan/Metal treat them as opaque).
 - The Metal/WebGPU push-constant ring wraps after 1024 allocations with no per-frame reset; overlapping in-flight entries would be overwritten.
-- wasm.yml CI builds no WebGPU shader caches (needs a native host vkm-compiler + tint/dawn build wired in with an actions cache).
+- wasm.yml CI builds no WebGPU shader caches: `scripts/run_tests.py` does it now, but CI has no actions cache for the ~30-minute Dawn/tint build.
 - Extend `VkmResourcePoolType` with Graphics/Compute categories for narrower Metal residency sets.
 - Metal resources bound via `overrideExternalHandle()` rely on the caller registering them (`VkmRenderResourcePoolMetal::registerExternalAllocation`); the swapchain deliberately opts out because `CAMetalLayer.residencySet` already covers its drawables.
 - `VkmGpuCrashHandler` breadcrumbs are per-submission only; `VK_NV_device_diagnostic_checkpoints` (per-draw-call attribution on NVIDIA) was deliberately not implemented.
@@ -83,9 +83,10 @@
 - The GPU profiler only ever records a Graphics queue 0 timeline because `VkmRenderGraph::execute()` submits nowhere else.
 - `VkmGpuProfiler` skips a submission's timing when all `kMaxPendingSubmissions` timestamp slot buckets are still in flight.
 - `VkmGpuProfilerInspector` has no unit-test coverage; only the collector and the trace format are tested.
-- Descriptor set 2 (per-pass resources) on WebGPU is compile-verified only: no shader can be built for that backend without a Tint/Dawn build, so its bind-group-2 path has never executed.
+- The WebGPU per-pass compute test is skipped: `newBuffer` returns null for its storage buffer with no Dawn validation error and no engine log, and the cause is unknown.
 - A probe capture and a main camera view cannot cull in the same frame: VkmScene has one frame-data staging slot per frame.
 - The probe blend render pass loads and stores the whole atlas every frame to update at most the per-frame probe budget of cells.
 - VkmProbeVolumeUpdater's probe budget is capped at 32 by the Metal/WebGPU 1024-entry push-constant ring, which has no per-frame reset.
 - Probe capture, blend and update have GPU test coverage on Metal only; Vulkan covers the probe volume's addressing and the round-robin schedule.
 - The probe GI update converges too slowly at its default hysteresis: 2048 probes at budget 32 with hysteresis 0.97 take 4864 frames to shed 90% of a light change.
+- `scripts/run_tests.py` and `scripts/run_sample.py` duplicate about ten helper functions, including the host vkm-compiler build, instead of sharing a module.

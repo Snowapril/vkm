@@ -55,15 +55,19 @@ namespace vkm
             return false;
         }
 
-        // Stands in for any singleton binding nothing has published yet: a WebGPU bind group has to
-        // supply an entry for every layout entry, so there is no "leave it out" option.
-        _singletonPlaceholder = createBindlessBuffer(device, "VkmBindlessSingletonPlaceholder",
-                                                     kSingletonPlaceholderSize,
-                                                     WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
-        if (_singletonPlaceholder == nullptr)
+        // Stand in for any singleton binding nothing has published yet: a WebGPU bind group has to
+        // supply an entry for every layout entry, so there is no "leave it out" option. One buffer
+        // each -- see the member's comment for why sharing is not an option here.
+        for (uint32_t i = 0; i < static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count); ++i)
         {
-            VKM_DEBUG_ERROR("Failed to create the bindless singleton placeholder buffer");
-            return false;
+            _singletonPlaceholders[i] =
+                createBindlessBuffer(device, "VkmBindlessSingletonPlaceholder", kSingletonPlaceholderSize,
+                                     WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
+            if (_singletonPlaceholders[i] == nullptr)
+            {
+                VKM_DEBUG_ERROR("Failed to create a bindless singleton placeholder buffer");
+                return false;
+            }
         }
         _slotTableSize = slotTableSize;
 
@@ -146,7 +150,7 @@ namespace vkm
             WGPUBindGroupEntry& entry = bindEntries[kFirstSingletonBinding + i];
             entry.binding = kFirstSingletonBinding + i;
             const bool bound = _singletonBuffers[i] != nullptr;
-            entry.buffer = bound ? _singletonBuffers[i] : _singletonPlaceholder;
+            entry.buffer = bound ? _singletonBuffers[i] : _singletonPlaceholders[i];
             entry.size = bound ? _singletonSizes[i] : kSingletonPlaceholderSize;
         }
 
@@ -212,8 +216,15 @@ namespace vkm
             wgpuBindGroupLayoutRelease(_bindGroupLayout);
             _bindGroupLayout = nullptr;
         }
-        for (WGPUBuffer* buffer : {&_pushConstantRing, &_slotTable, &_indexMegaBuffer, &_vertexMegaBuffer,
-                                   &_singletonPlaceholder})
+        for (WGPUBuffer& placeholder : _singletonPlaceholders)
+        {
+            if (placeholder != nullptr)
+            {
+                wgpuBufferRelease(placeholder);
+                placeholder = nullptr;
+            }
+        }
+        for (WGPUBuffer* buffer : {&_pushConstantRing, &_slotTable, &_indexMegaBuffer, &_vertexMegaBuffer})
         {
             if (*buffer != nullptr)
             {

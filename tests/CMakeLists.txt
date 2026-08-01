@@ -106,11 +106,12 @@ if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
         EXTRA_DEPENDS  "${ROOT_DIR}/src/samples/skybox/skybox.hlsl")
 endif()
 
-# TestPerPassResources dispatches a compute shader whose only resources live in descriptor set 2,
-# on both backends that implement it -- Vulkan allocates a descriptor set, Metal binds discretely
-# onto the argument table, and the same expected values across both is what proves the PSO
-# declaration means the same thing on each. WebGPU's newPerPassResourceTable is still a stub.
-if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
+# TestPerPassResources dispatches a compute shader whose only resources live in descriptor set 2 --
+# Vulkan allocates a descriptor set, Metal binds discretely onto the argument table, WebGPU builds a
+# bind group, and the same expected values across all three is what proves the PSO declaration means
+# the same thing on each. WebGPU joins only when a host vkm-compiler can build it a WGSL cache
+# (see the elseif below); its bind-group-2 code has been implemented all along, just never executed.
+if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API OR (EMSCRIPTEN AND VKM_HOST_VKM_COMPILER))
     vkm_add_shader_cache_target(
         TARGET_NAME   tests_per_pass_shaders
         OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
@@ -213,6 +214,16 @@ if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
         TEST_PER_PASS_PSO_DIR="${ROOT_DIR}/resources/tests/per_pass/"
         TEST_PER_PASS_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
     )
+elseif (EMSCRIPTEN AND VKM_USE_WEBGPU_API AND VKM_HOST_VKM_COMPILER)
+    # The set-2 (bind group 2) path on WebGPU shipped compile-verified only, because nothing
+    # could build a WGSL shader to exercise it. With a host vkm-compiler it can run for real.
+    # The PSO json rides the resources/ mount; the cache rides the /shadercache one below.
+    add_dependencies(${target} tests_per_pass_shaders)
+    target_compile_definitions(${target}
+        PRIVATE
+        TEST_PER_PASS_PSO_DIR="/resources/tests/per_pass/"
+        TEST_PER_PASS_SHADER_CACHE_DIR="/shadercache/"
+    )
 endif()
 
 # The engine PSO cache holds the scene's culling / emit compute pipelines, which VkmEngine loads at
@@ -233,13 +244,25 @@ if (VKM_USE_METAL_API)
 endif()
 
 # The engine PSO directory and its cache are backend-agnostic -- the cache is built for whichever
-# backend is configured -- so these are defined for every native backend rather than only Metal.
-# A Metal-only test body still has to *compile* in a Vulkan build when it lives in a shared header.
+# backend is configured -- so these are defined for every backend rather than only Metal. A
+# Metal-only test body still has to *compile* in a Vulkan build when it lives in a shared header.
+#
+# WebGPU gets them too, but only when a host vkm-compiler was supplied: without one
+# vkm_add_shader_cache_target() skips, so the cache directory would hold no webgpu entries and
+# every lookup would fail at run time rather than compile time. Both directories live under
+# resources/, which the --preload-file below maps into MEMFS wholesale, so the paths are the
+# virtual ones there.
 if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
     target_compile_definitions(${target}
         PRIVATE
         TEST_ENGINE_PIPELINE_DIR="${ROOT_DIR}/resources/Pipelines/Engine/"
         TEST_ENGINE_SHADER_CACHE_DIR="${ROOT_DIR}/resources/Shaders/ShaderCache/"
+    )
+elseif (EMSCRIPTEN AND VKM_USE_WEBGPU_API AND VKM_HOST_VKM_COMPILER)
+    target_compile_definitions(${target}
+        PRIVATE
+        TEST_ENGINE_PIPELINE_DIR="/resources/Pipelines/Engine/"
+        TEST_ENGINE_SHADER_CACHE_DIR="/resources/Shaders/ShaderCache/"
     )
 endif()
 
@@ -277,4 +300,13 @@ if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
     target_link_options(${target} PRIVATE
         "SHELL:--preload-file ${ROOT_DIR}/resources@/resources"
     )
+
+    # Test-owned shader caches are generated into the build tree rather than into resources/,
+    # so they need their own mount. Only when a host vkm-compiler produced them: preloading a
+    # directory that does not exist fails the link.
+    if (VKM_HOST_VKM_COMPILER)
+        target_link_options(${target} PRIVATE
+            "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/ShaderCache@/shadercache"
+        )
+    endif()
 endif()

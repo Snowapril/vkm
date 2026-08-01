@@ -434,6 +434,65 @@ def run_webgpu_tests_headless_chrome(chrome: str, build_dir: Path, timeout_s: in
     return False
 
 
+def build_host_vkm_compiler(jobs: int, system: str):
+    """Build a native WGSL-capable vkm-compiler for the Emscripten build to consume.
+
+    vkm-compiler is a host tool, so the wasm tree cannot build its own; without one,
+    vkm_add_shader_cache_target() skips silently and the test binary ships with no
+    shader caches at all, which is why the WebGPU backend spent so long
+    "compile-verified only". A separate native tree provides the binary, handed to the
+    emcmake configure via -DVKM_HOST_VKM_COMPILER.
+
+    Kept in step with run_sample.py's identical function -- these two scripts already
+    duplicate most of their helpers; see TODO.md. Returns the path, or None."""
+    dawn_dir = PROJECT_ROOT / "dependencies" / "src" / "dawn"
+    if not dawn_dir.exists():
+        print("[INFO] Dawn source not found under dependencies/src/dawn, which tint needs for "
+              "WGSL output. Re-run bootstrap.py without skipping dawn.")
+        return None
+
+    if system == "Darwin" and metal4_available():
+        host_flags = {"VKM_USE_METAL_API": "ON", "VKM_USE_VULKAN_API": "OFF"}
+    elif vulkan_available():
+        host_flags = {"VKM_USE_VULKAN_API": "ON", "VKM_USE_METAL_API": "OFF"}
+    else:
+        print("[INFO] No native backend available to build the host vkm-compiler "
+              "(it links vkmcore, which needs metal or vulkan).")
+        return None
+
+    host_tools_dir = PROJECT_ROOT / "build" / "host-tools"
+    cmd = [
+        "cmake",
+        "-S", str(PROJECT_ROOT),
+        "-B", str(host_tools_dir),
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DBUILD_SAMPLES=OFF",
+        "-DVKM_COMPILER_ENABLE_WGSL=ON",
+    ] + generator_args(host_tools_dir, system)
+    for key, value in host_flags.items():
+        cmd.append(f"-D{key}={value}")
+    if system == "Windows":
+        cmd += ["-DCMAKE_GENERATOR_PLATFORM=x64"]
+    if run_cmd(cmd).returncode != 0:
+        print("[FAIL] CMake configuration failed for the host-tools tree.")
+        return None
+
+    # The first build here also builds tint out of Dawn, which takes a while; later runs
+    # reuse it.
+    build_cmd = ["cmake", "--build", str(host_tools_dir), "--target", "vkm-compiler",
+                 "--config", "Release", "--parallel", str(jobs)]
+    if run_cmd(build_cmd).returncode != 0:
+        print("[FAIL] Build failed for the host vkm-compiler.")
+        return None
+
+    binary_name = "vkm-compiler.exe" if system == "Windows" else "vkm-compiler"
+    binary = host_tools_dir / "bin" / binary_name
+    if not binary.exists():
+        print(f"[FAIL] Host vkm-compiler not found: {binary}")
+        return None
+    return binary
+
+
 def run_webgpu_backend(build_dir: Path, build_type: str, jobs: int) -> str:
     """Configure, build, and headlessly test the webgpu (Emscripten/WebGPU) backend.
     Returns 'PASS', 'FAIL', or 'SKIP'."""
@@ -449,6 +508,14 @@ def run_webgpu_backend(build_dir: Path, build_type: str, jobs: int) -> str:
         print("[SKIP] webgpu backend requires Chrome for headless test execution.")
         return "SKIP"
 
+    system = platform.system()
+    host_compiler = build_host_vkm_compiler(jobs, system)
+    if host_compiler is None:
+        # Without it the tests still build and run, but with no shader caches -- so every
+        # test that needs a pipeline self-skips. Say so rather than reporting a clean run.
+        print("[INFO] Continuing without a host vkm-compiler: no WebGPU shader caches will be "
+              "built, so pipeline-dependent tests will skip.")
+
     env = _capture_emsdk_env(emsdk_dir)
 
     emcmake = str(_emcmake_path(emsdk_dir))
@@ -458,7 +525,8 @@ def run_webgpu_backend(build_dir: Path, build_type: str, jobs: int) -> str:
         "-B", str(build_dir),
         f"-DCMAKE_BUILD_TYPE={build_type}",
         "-DBUILD_SAMPLES=OFF",
-    ] + generator_args(build_dir, platform.system())
+    ] + ([f"-DVKM_HOST_VKM_COMPILER={host_compiler}"] if host_compiler else []) \
+      + generator_args(build_dir, system)
     result = run_cmd(configure_cmd, env=env)
     if result.returncode != 0:
         print("[FAIL] CMake configuration failed for webgpu backend.")
