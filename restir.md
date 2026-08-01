@@ -3,8 +3,10 @@
 Living document for the ReSTIR GI implementation: what the technique is, the staged plan,
 current status, remaining TODOs, and the reading list. Updated at the end of every phase.
 
-**Status:** Phases 1-3 complete (toolchain, shared infrastructure, G-buffer + deferred lighting).
-Next: Phase 4 — the GI technique interface and the low-spec probe tier, the first real GI.
+**Status:** Phases 1-3 implemented (toolchain, shared infrastructure, G-buffer + deferred lighting),
+but Phase 3's gate is **not** met: nothing outside `tests/` owns those passes yet, so the debug
+views it asks for do not exist. Phase 4's item 4.5 is where an application first drives the chain
+and where that gate is settled. Now in Phase 4 — the low-spec probe tier, the first real GI.
 
 ---
 
@@ -606,10 +608,18 @@ pixels with **zero validation-layer errors** on Vulkan and Metal. Per `CLAUDE.md
 
 ### Phase 3 — Shared infrastructure B: G-buffer, motion vectors, frame constants
 Also shared by both tiers.
-- [ ] MRT G-buffer: linear depth, world/shading normal, **geometric normal** (for ray offsetting),
-      albedo, roughness/metallic, material ID, **3-component motion vectors**
-- [ ] **Previous-frame G-buffer** (double-buffered) — temporal reuse reads last frame's
-      normal/depth/material to reject taps and evaluates `p̂` in the previous domain
+- [x] **MRT G-buffer**, three targets plus depth (`gbuffer.cpp:30-51`, `gbuffer.hlsl:87-92`): shading
+      **and** geometric normals octahedral-packed into one RGBA16F target (the geometric one is what
+      ray offsetting will need); albedo + roughness; motion + metallic + camera distance. Three
+      deliberate departures from the line above, each recorded rather than quietly dropped:
+      **no material ID** — nothing consumes one yet (`gbuffer.h:47-48`); motion is **2-component**,
+      not 3 (`vkm_gbuffer.hlsli:73`), and **camera-only**, since `VkmObjectData` carries no previous
+      transform, so a moving object reports static-object motion (`gbuffer.hlsl:11-16`); and "linear
+      depth" shipped as **radial distance from the camera** (`gbuffer.hlsl:189`), which is what the
+      position reconstruction below actually wants
+- [x] **Previous-frame G-buffer** (double-buffered): a full second copy of every target plus depth,
+      flipped by `advanceFrame()` (`gbuffer.h:127-128`, `gbuffer.cpp:135-158`). Storage only —
+      **nothing reads `getPrevTexture()` yet**, and nothing will until Phase 8's temporal reuse
 - [x] **Extended `VkmFrameConstants`** (272 -> 368 bytes, stride unchanged at 512): added
       `_prevViewProjection`, `_viewportSize` (xy = pixels, zw = reciprocal) and `_frameIndex`
       (monotonic, distinct from the 0..FRAME_COUNT-1 slot index). The engine owns the two
@@ -619,7 +629,13 @@ Also shared by both tiers.
       mirror and vkm-compiler's Metal pin are three halves of one ABI that nothing else checks.
       Deliberately **not** added: jitter and previous camera position, which have no consumer
       until TAA (Phase 9)
-- [ ] Reconstruct world position from depth + inverse view-projection rather than storing it
+- [x] **Reconstruct world position rather than storing it** — `vkmReconstructWorldPosition`
+      (`vkm_gbuffer.hlsli:97-105`), used by `deferred_lighting.hlsl:91` and `probe_lighting.hlsl:126`.
+      It unprojects a far-plane NDC point through `_inverseViewProjection` and marches along that ray
+      by the **stored radial distance** rather than sampling the depth attachment, because WebGPU
+      rejects a depth-format view bound as an ordinary sampled texture (`vkm_gbuffer.hlsli:88-95`).
+      Same outcome — no world position in the G-buffer — reached through the one channel every
+      backend can read
 - [x] **Fullscreen-pass building block + PBR deferred lighting.** One oversized triangle from
       `SV_VertexID` (no vertex/index buffer), sampling the G-buffer through **descriptor set 2** —
       not the bindless arrays, so the pass has a path on WebGPU and needs no `VkmScene`. Cook-Torrance
@@ -631,10 +647,20 @@ Also shared by both tiers.
       gamma, so whites came out grey, and the "fullscreen" quad was scaled to 0.8. Both fixed rather
       than reproduced; the GLSL is deleted and `TODO.md:14` narrowed to what remains
 - [x] **Fullscreen triangle factored into `vkm_fullscreen.hlsli`** once two passes needed it
-- [ ] Hash-based stateless RNG seeded per (pixel, frame, pass)
+- [ ] Hash-based stateless RNG seeded per (pixel, frame, pass). Not started: `_frameIndex` exists as
+      the seed *source* (`frame_constants.h:90`) but nothing consumes it, and there is no hash helper
+      in `include/vkm/shaders/`
 
 **Gate:** G-buffer channels visualizable via a debug view; reprojection debug view stable under
 camera motion with no drift. Works on all five platform combinations.
+
+> ⚠ **The gate is not met, and the phase should not be called closed because of it.** Every pass
+> above is implemented and tested, but **no application owns any of them** — `VkmGBuffer`,
+> `deferred_lighting` and `tonemap` are instantiated only from `tests/`, and `model_viewer`'s
+> `DebugMode` (`src/samples/model_viewer/main.cpp:63-72`) drives its own forward shader, not a
+> G-buffer. So there is no debug view to look through and no reprojection view to check for drift.
+> The first app to own this chain is Phase 4's item 4.5, which is where this gate really gets
+> settled; it is listed there rather than duplicated here.
 
 ### Phase 4 — GI technique interface + low-spec tier ⭐ first working GI
 The de-risking phase. Delivers visible GI on **all five** platform combinations with no ray tracing.
@@ -662,7 +688,31 @@ Technique decided in §5: **raster-updated dynamic probe volume + SSGI contact t
       direction is integrated — same answer as a copy pass, in one pass, with no read-after-write —
       and the capture is sampled by projecting through the same face matrices the capture used,
       so there is no second cube convention that can disagree with the first
-- [ ] **4.2c Per-frame probe budget (round-robin)** and the propagation-latency measurement
+- [x] **4.2c Per-frame probe budget (round-robin) + propagation latency.** `VkmProbeVolumeUpdater`
+      appends the whole refresh to a render graph — scene update, a cull aimed at the probes rather
+      than a camera, one capture pass covering every budgeted probe's six faces, a barrier, and the
+      two atlas blends. Three things came out of making a *partial* update correct:
+      - **Hysteresis moved to the blend hardware and the atlas stopped being double-buffered.**
+        `lerp(new, previous, h)` against a second copy is only correct when every probe is rewritten
+        every frame — which is exactly what round-robin stops doing, so un-refreshed probes would
+        alternate between two increasingly stale copies. Outputting `alpha = 1 - h` under
+        `SrcAlpha`/`OneMinusSrcAlpha` gives the identical arithmetic against the atlas itself, and
+        "nobody drew this cell" then means "it keeps its value". It also removed a latent bug: the
+        previous-atlas fetch used cell-relative UV, correct only for the single-cell atlas the test
+        happened to use
+      - **Both probe passes turned out not to need per-probe constant buffers at all.** The face
+        matrices are `P·R·T(−p)`, so the probe position cancels in the blend (which evaluates them
+        at `p + direction`) and factors out of the capture (which can work in probe-relative space).
+        One shared buffer per PSO serves the whole volume, and what is genuinely per-probe — a
+        position, a capture tile base, a hysteresis — is small enough to push. Pushed from the
+        **vertex** stage and forwarded as flat interpolants, since a fragment shader cannot read
+        push constants on Vulkan
+      - **The budget is clamped, not wrapped**, so a round refreshes every probe exactly once even
+        when the budget does not divide the probe count, and a probe's first refresh ignores
+        hysteresis so a cold start does not cost a full convergence
+- [ ] **Second cull view.** A probe capture and a main camera need different frusta in one frame,
+      and `VkmScene` has one frame-data staging slot, so today the updater owns the frame's only
+      cull. Deferred to 4.5, which is where a second consumer appears (see the note there)
 - [x] **4.3 Probe sampling.** `probe_lighting.hlsl`: trilinear over the 8 surrounding probes,
       weighted by the **Chebyshev visibility test** against the distance atlas, plus normal bias and
       a smoothed backface term. Addressing and the octahedral mapping live in
@@ -673,9 +723,24 @@ Technique decided in §5: **raster-updated dynamic probe volume + SSGI contact t
 - [ ] **4.4 SSGI contact term** — depth-buffer ray march, added on top of the probe result. Keep it
       strictly additive and strictly in this tier (see the warning in §5)
 - [ ] **4.5 GI sample** with a runtime technique switcher and per-term debug views (probe irradiance,
-      probe depth/moments, Chebyshev weight, SSGI only, composite). Must build on WebGPU
-- [ ] Measure and record the light-propagation latency (frames for a moving light to converge) — this
-      is the known weak point of raster-updated probes and needs a number, not an impression
+      probe depth/moments, Chebyshev weight, SSGI only, composite). Must build on WebGPU.
+      **This also settles Phase 3's gate**: it is the first application to own the G-buffer,
+      deferred lighting and tone-mapping passes, so the G-buffer channel views and the reprojection
+      view Phase 3 asks for belong here. It is also where a second cull view earns its keep — a
+      main camera and a probe capture then need different frusta in one frame, which `VkmScene`
+      cannot do today
+- [x] **Light-propagation latency measured, and it is as bad as feared.** The decay is exactly
+      geometric — a probe retains `hysteresis` of its old value per refresh and is refreshed once
+      per round of `ceil(probeCount / budget)` frames — so the latency is
+      `roundLength · ceil(ln f / ln h)` frames to an error fraction `f`. That is asserted against a
+      real GPU measurement on a 4-probe volume rather than assumed
+      (`tests/TestProbeVolumeUpdaterShared.hpp`), which is what makes the projection trustworthy:
+      **at the defaults (2048 probes, budget 32, hysteresis 0.97) a light change takes 4864 frames
+      — about 81 s at 60 Hz — to shed 90% of the error**, and 1472 frames (~25 s) to shed half.
+      That is unusable as shipped, and the fix is a knob, not a redesign: latency is linear in the
+      round length and logarithmic in `ln h`, so halving the hysteresis to 0.85 costs 6.6× less
+      latency for a noisier image, and doubling the budget halves it for twice the raster cost.
+      Recorded in §12 as the number the mobile budget has to be argued against
 
 **Gate:** low-spec GI renders correctly on Vulkan, Metal **and** WebGPU, with zero validation errors;
 the technique switcher works at runtime; no visible leaking through walls in a two-room test scene.
@@ -999,9 +1064,13 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 - [x] ~~**Low-spec technique choice.**~~ **Decided 2026-07-30:** fully dynamic (no bake), so the
       technique is a **raster-updated dynamic probe volume + SSGI contact term** (§5). Baked
       lightmaps and voxel cone tracing ruled out by the fully-dynamic + mobile constraints.
-- [ ] **Probe budget and propagation latency** are the low tier's real risk. Measure frames-to-converge
-      for a moving light early in Phase 4; if it is unacceptable on mobile, the options are a larger
-      per-frame probe budget, fewer/coarser probes, or revisiting the no-bake constraint.
+- [x] ~~**Probe budget and propagation latency**~~ **Measured 2026-08-01, and the risk was real.**
+      `roundLength · ceil(ln f / ln h)` frames, verified against a GPU measurement. At the defaults
+      (2048 probes, budget 32, hysteresis 0.97): **4864 frames / ~81 s to 90%**. Still open is what
+      to *do* about it — the levers are hysteresis (logarithmic, cheap, costs image stability),
+      budget (linear, costs raster time), and grid size. A mobile budget has to be argued against
+      this number rather than against an impression, and it is the strongest argument for replacing
+      the raster update with Phase 5's rays once they exist.
 - [ ] **Multi-bounce for the high tier.** Once Phase 4's probe volume exists, decide whether ReSTIR GI
       queries it for `L_o` at the secondary hit (kajiya-style world-space irradiance cache) rather
       than continuing a path. This is the cheap route to multi-bounce and reuses Phase 4 directly.
@@ -1038,4 +1107,5 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-08-01 | 4 | Probe volume storage + the lookup pass. `probe_lighting.hlsl` samples 8 probes trilinearly with Chebyshev visibility weighting; verified on Metal against CPU-authored atlases, including that fully occluded probes contribute nothing. Found that the update pass is blocked on the RHI having no viewport control (six cube faces cannot share a render pass) — recorded as the next decision. |
 | 2026-08-01 | 4 | Added `setViewportAndScissor` to the RHI (all three backends), which unblocks the probe update: six cube faces can now share one render pass rather than needing six. Vulkan and Metal agree on the top-left origin, pinned by a test that also covers several viewports writing separate tiles in one pass. |
 | 2026-08-01 | 4 | Probe capture (six cube faces in one render pass, via the new viewport control) and probe blend (octahedral integration + border + hysteresis). The write path now reaches the atlases that the read path already samples. Verified on Metal: per-face capture correctness, and a directional octahedral map whose border matches its mirrored interior. |
+| 2026-08-01 | 4 | **4.2c: the probe volume runs as a frame loop.** `VkmProbeVolumeUpdater` refreshes a round-robin budget of probes per frame (scene update -> probe-aimed cull -> one capture pass for every budgeted probe's six faces -> barrier -> two atlas blends). Making a *partial* update correct forced three changes: hysteresis moved to the blend hardware and the atlas lost its second copy (a swapped pair leaves un-refreshed probes alternating between stale values, and the old previous-atlas fetch used cell-relative UV — correct only for the one-cell atlas the test used); both passes turned out to need no per-probe constant buffer at all, since the face matrices are `P·R·T(−p)` and the position cancels, leaving only a position/tile/hysteresis small enough to push from the vertex stage; and the budget is clamped rather than wrapped so a round covers every probe exactly once. **Propagation latency measured** and asserted against the analytic model: geometric decay at `hysteresis` per refresh, so the defaults (2048 probes, budget 32, h = 0.97) need **4864 frames / ~81 s at 60 Hz** to shed 90% of a light change. Unusable as shipped; the levers are hysteresis, budget and grid size, all recorded in §12. Also reconciled §8's Phase 3 checkboxes with the code and noted that Phase 3's gate is unmet until 4.5 gives those passes an owning application. Metal 193/193 and Vulkan 191/191 in Debug, 192/192 and 191/191 in Release, validation clean throughout; both new tests were checked to fail when the blend factors and the round-robin clamp are sabotaged. Two things only Vulkan caught: releasing at destroy through the deferred reclaimer leaks past the allocator's teardown (it frees on a GPU timeline that will never advance again), and `~VkmScene()` is defaulted so both the new fixture and the pre-existing `runProbeCaptureTest` leaked a scene — Metal has no allocator assert, so both had been passing there. |
 | 2026-07-30 | 4 | Low-spec tier must be **fully dynamic** (no bake) → technique decided: raster-updated dynamic probe volume (DDGI-style octahedral irradiance + distance moments, Chebyshev visibility) plus an additive SSGI contact term. Storage/sampling are update-mechanism-agnostic, so Phase 5's rays can later refresh the same volume, and ReSTIR GI can query it for multi-bounce `L_o`. |

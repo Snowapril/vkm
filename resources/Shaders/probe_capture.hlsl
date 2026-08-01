@@ -2,10 +2,11 @@
 //
 // Renders the scene from one probe, into the six cube faces of a single capture target.
 //
-// All six faces share one render pass: the caller sets a viewport per face and pushes which face
-// is being drawn, so the vertex shader can pick that face's view-projection out of set 2. Without
-// viewport control this would be six render passes per probe, on a grid of thousands -- which is
-// why setViewportAndScissor exists.
+// All six faces share one render pass -- and so do all of a frame's probes. The caller sets a
+// viewport per (probe, face) tile and pushes which probe and which face is being drawn, so the
+// vertex shader can pick that face's view-projection out of set 2. Without viewport control this
+// would be six render passes per probe, on a grid of thousands -- which is why
+// setViewportAndScissor exists.
 //
 // The output is radiance, not a G-buffer. A probe stores what it *saw*, so shading happens here,
 // forward, with the same directional light the scene carries. That makes the probes' contribution
@@ -45,16 +46,20 @@ struct FrameData
     uint2  _pad0;
 };
 
-// Mirrors vkm::VkmProbeCaptureConstants (renderer/probe_volume.h).
+// Mirrors vkm::VkmProbeCaptureConstants (renderer/probe_volume.h). Built for a probe at the
+// origin, and shared by every probe: this shader works in probe-relative space, so the probe's
+// position cancels out of the matrices (see the struct's comment for the algebra).
 struct ProbeCaptureConstants
 {
     float4x4 faceViewProjection[6];
-    float4   probePositionWorld; // xyz = the probe being captured
 };
 
+// Mirrors vkm::VkmProbeCapturePushConstants. Everything genuinely per-probe fits in 16 bytes,
+// which is why a whole frame's probes share one constant buffer and one resource table.
 struct FacePushConstants
 {
-    uint faceIndex;
+    float3 probePositionWorld;
+    uint   faceIndex;
 };
 
 VKM_PUSH_CONSTANTS(FacePushConstants, g_Face);
@@ -77,7 +82,11 @@ VKM_BINDLESS_FRAME_DATA(FrameData, g_FrameData);
 struct VSOutput
 {
     float4 position : SV_POSITION;
-    [[vk::location(0)]] float3 worldPosition : TEXCOORD0;
+    // Relative to the probe, not the world: the pixel shader needs the distance to the probe and
+    // a geometric normal, and both are invariant under the translation (a normal comes from
+    // ddx/ddy, which a constant offset does not change). It also cannot read the push constant
+    // holding the probe position -- Vulkan declares that range for the vertex stage only.
+    [[vk::location(0)]] float3 probeRelativePosition : TEXCOORD0;
     [[vk::location(1)]] float3 worldNormal : NORMAL0;
     [[vk::location(2)]] nointerpolation uint materialIndex : TEXCOORD1;
 };
@@ -123,10 +132,11 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
 
     const float3 position = loadFloat3(obj.vertexPoolSlot, wordBase);
     const float4 worldPosition = mul(obj.worldTransform, float4(position, 1.0));
+    const float3 probeRelative = worldPosition.xyz - g_Face.probePositionWorld;
 
     VSOutput output;
-    output.position = mul(g_Capture.faceViewProjection[g_Face.faceIndex], worldPosition);
-    output.worldPosition = worldPosition.xyz;
+    output.position = mul(g_Capture.faceViewProjection[g_Face.faceIndex], float4(probeRelative, 1.0));
+    output.probeRelativePosition = probeRelative;
     output.worldNormal = mul((float3x3)obj.normalTransform, fetchNormal(obj, wordBase));
     output.materialIndex = obj.materialIndex;
     return output;
@@ -135,7 +145,7 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
 float4 PSMain(VSOutput input) : SV_TARGET0
 {
     const float3 geometricNormal =
-        normalize(cross(ddx(input.worldPosition), ddy(input.worldPosition)));
+        normalize(cross(ddx(input.probeRelativePosition), ddy(input.probeRelativePosition)));
     const float3 normal = (dot(input.worldNormal, input.worldNormal) > 0.0)
                               ? normalize(input.worldNormal)
                               : geometricNormal;
@@ -148,5 +158,5 @@ float4 PSMain(VSOutput input) : SV_TARGET0
     // about later.
     const float3 radiance = baseColor * nDotL;
 
-    return float4(radiance, distance(input.worldPosition, g_Capture.probePositionWorld.xyz));
+    return float4(radiance, length(input.probeRelativePosition));
 }

@@ -11,8 +11,6 @@
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/trigonometric.hpp>
 
-#include <string>
-
 namespace vkm
 {
     void vkmBuildProbeFaceViewProjections(const glm::vec3& position, float nearZ, float farZ,
@@ -77,15 +75,11 @@ namespace vkm
 
         _driver = driver;
         _descriptor = descriptor;
-        _currentSet = 0;
 
-        for (uint32_t setIndex = 0; setIndex < _sets.size(); ++setIndex)
+        if (!createSet(_set))
         {
-            if (!createSet(_sets[setIndex], setIndex))
-            {
-                destroy();
-                return false;
-            }
+            destroy();
+            return false;
         }
         return true;
     }
@@ -96,18 +90,9 @@ namespace vkm
         {
             return;
         }
-        for (AtlasSet& set : _sets)
-        {
-            releaseSet(set);
-        }
+        releaseSet(_set);
         _driver = nullptr;
         _descriptor = Descriptor{};
-        _currentSet = 0;
-    }
-
-    void VkmProbeVolume::advanceFrame()
-    {
-        _currentSet = 1 - _currentSet;
     }
 
     uint32_t VkmProbeVolume::getProbeCount() const
@@ -170,10 +155,8 @@ namespace vkm
         return probeCellCoord(probeIndex) * distanceCellSize();
     }
 
-    VkmResourceHandle VkmProbeVolume::getIrradianceTexture() const { return _sets[_currentSet]._irradiance; }
-    VkmResourceHandle VkmProbeVolume::getDistanceTexture() const { return _sets[_currentSet]._distance; }
-    VkmResourceHandle VkmProbeVolume::getPrevIrradianceTexture() const { return _sets[1 - _currentSet]._irradiance; }
-    VkmResourceHandle VkmProbeVolume::getPrevDistanceTexture() const { return _sets[1 - _currentSet]._distance; }
+    VkmResourceHandle VkmProbeVolume::getIrradianceTexture() const { return _set._irradiance; }
+    VkmResourceHandle VkmProbeVolume::getDistanceTexture() const { return _set._distance; }
 
     VkmProbeVolumeConstants VkmProbeVolume::makeConstants(float normalBias, float hysteresis) const
     {
@@ -188,12 +171,10 @@ namespace vkm
         return constants;
     }
 
-    bool VkmProbeVolume::createSet(AtlasSet& set, uint32_t setIndex)
+    bool VkmProbeVolume::createSet(AtlasSet& set)
     {
         const auto createAtlas = [&](const glm::uvec2& extent, VkmFormat format, const char* name,
                                      VkmResourceHandle& outHandle) {
-            const std::string debugName = std::string(name) + std::to_string(setIndex);
-
             VkmTextureInfo info{};
             // Written as an attachment by the update pass, sampled by the lookup, and readable
             // back for the debug views this tier will need to be tuned through.
@@ -206,7 +187,7 @@ namespace vkm
             info._numMipLevels = 1;
             info._numArrayLayers = 1;
             info._format = format;
-            info._debugName = debugName.c_str();
+            info._debugName = name;
 
             VkmTexture* texture = _driver->newTexture(info);
             if (texture == nullptr)
@@ -224,6 +205,12 @@ namespace vkm
 
     void VkmProbeVolume::releaseSet(AtlasSet& set)
     {
+        // Released immediately rather than through the deferred reclaimer, matching
+        // VkmGBuffer::destroy(): the reclaimer only frees once the GPU timeline passes the frames
+        // that used a resource, so handing it something at shutdown -- when nothing further will be
+        // submitted -- leaks it past the allocator's own teardown. Draining before destroy() is the
+        // caller's job, as it is for every other resource owner here. The volume has no resize path,
+        // so this is its only release.
         const auto release = [this](VkmResourceHandle& handle) {
             if (handle.isValid())
             {

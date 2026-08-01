@@ -819,6 +819,51 @@ CPU profiler.
 cube face selector's visual output. Both need interactive input, which this environment has no way
 to drive; every layer beneath them is covered by the headless tests above.
 
+## 2026-08-01 — Probe GI 4.2c: per-frame probe budget and propagation latency
+
+Turns `restir.md` §8 item 4.2c into running code: the probe passes existed but nothing drove
+them, so every one of them was reachable only from `tests/`.
+
+- New `VkmProbeVolumeUpdater` (`renderer/probe_volume_updater.{h,cpp}`) appends the whole refresh
+  to a `VkmRenderGraph`: scene update -> cull -> capture (every budgeted probe's six faces in one
+  render pass, viewport per tile) -> `barrierTextureForShaderRead` -> irradiance blend -> distance
+  blend. Round-robin cursor, clamped per round so every probe is refreshed exactly once.
+- `VkmProbeVolume` lost its second atlas copy, `advanceFrame()` and `getPrev*Texture()`;
+  hysteresis is now `SrcAlpha`/`OneMinusSrcAlpha` blending against the atlas itself. It also now
+  releases through the deferred reclaimer rather than the pool directly, since a per-frame
+  consumer makes destroy-while-in-flight reachable.
+- `VkmProbeCaptureConstants`/`VkmProbeBlendConstants` became probe-independent (see the Deviations
+  entry below); the per-probe remainder is pushed as `VkmProbeCapturePushConstants` (16 B) and
+  `VkmProbeBlendPushConstants` (8 B), from the vertex stage, forwarded to the pixel stage as flat
+  interpolants because Vulkan declares the push-constant range for vertex/compute only.
+- `probe_blend.json` gained blend state and lost the previous-atlas binding.
+- New `tests/TestProbeVolumeUpdaterShared.hpp`: a driverless convergence-model test, a
+  round-robin schedule test (Metal + Vulkan), and a GPU propagation measurement (Metal).
+
+**The measurement, which is the deliverable:** the decay is geometric at `hysteresis` per refresh,
+one refresh per `ceil(probeCount / budget)` frames. Measured on a 4-probe volume and asserted
+against that model, then projected: the shipping defaults (2048 probes, budget 32, h = 0.97) need
+**4864 frames — ~81 s at 60 Hz — to shed 90%** of a light change. Recorded in `restir.md` §12 and
+`TODO.md`.
+
+**Verification.** Metal 193/193 with validation clean; Vulkan clean; Release built. Both new tests
+were checked to actually fail when sabotaged: `dst_color_blend_factor: zero` breaks the decay
+assertions (7 failures), and wrapping instead of clamping the round-robin breaks the coverage
+assertion (2 failures). The first sabotage run also exposed a weakness in the test itself —
+doctest's `Approx` folds a scale of 1.0 into its epsilon, so absolute comparisons against the
+small radiances an 8x8 probe records passed no matter what the atlas held; the checks are now
+ratios against the lit value.
+
+The wasm build also had to be fixed: `TEST_ENGINE_PIPELINE_DIR` is defined for the native backends
+only, so everything in the new shared header that loads a pipeline is now behind
+`#if defined(TEST_ENGINE_PIPELINE_DIR)`. The convergence-model test is arithmetic and stays outside
+it, so it runs on every backend.
+
+**Left unverified:** WebGPU cannot compile shaders at all (no Tint/Dawn build), so the rewritten
+`probe_capture.hlsl` and `probe_blend.hlsl` are unverified there — including the blend pass's new
+push constant, which on that backend is a set-0 uniform buffer rather than a real push constant,
+i.e. a genuinely different code path.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:
@@ -1335,3 +1380,59 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
   capability by falling back to the staging path, which is always correct — whereas leaving it
   on costs a 6-hour CI timeout per run with no diagnostics. Native Vulkan drivers keep the fast
   path. Logged in `TODO.md`, including the resulting coverage gap.
+
+### 2026-08-01 — Probe constants are shared, not per-probe (ring of tables dropped)
+- Planned: a ring of `budget` immutable per-pass resource tables, each with its own small uniform
+  buffer, because a fragment shader cannot read push constants and set-2 tables are immutable.
+- Did instead: **one** shared constant buffer per PSO, plus per-probe values pushed from the
+  vertex stage and forwarded as flat interpolants.
+- Why: the constants are not actually per-probe. `vkmBuildProbeFaceViewProjections` builds
+  `P · lookAtRH(p, ...)` and `lookAtRH(eye, ...) = R · T(−eye)`, so `faceVP(p) = P·R·T(−p)`. The
+  blend pass evaluates it at `p + direction`, where the translation cancels outright; the capture
+  pass evaluates it at a world position, which is identical to evaluating an origin-built matrix
+  at a probe-relative one. What is left is a `float3` position, a tile index and a hysteresis —
+  16 B and 8 B. The planned ring was ~200 lines of engine machinery existing to carry a constant
+  that provably cancels, and dropping it also removed the per-frame staging buffer and the
+  transfer subgraph that fed it. The capture test's existing assertions (face +Z records the
+  triangle at distance 2.0, face −Z records nothing) pass unchanged, which is what shows the
+  rewrite is equivalent rather than merely plausible.
+
+### 2026-08-01 — VkmScene's second cull view deferred to 4.5
+- Planned: extend `VkmScene` with `kVkmSceneMaxCullViews = 2` so a probe capture and a main camera
+  could cull with different frusta in one frame.
+- Did instead: the updater fills `VkmFrameData::_frustumPlanes` with the AABB of the probes it is
+  refreshing and uses the frame's single cull.
+- Why: with the GI sample out of scope there is no second view — no consumer for the second path
+  and no way to validate it, so it would have been untested engine-core churn. The probe capture's
+  cull is a box test regardless, because all six faces share one visible list, so nothing is lost
+  in this phase. The planned design also had a real bug worth recording for whoever picks it up:
+  `assignBatchRegions` produces two different totals (`visibleCursor`, `argumentCursor`) so there
+  is no single per-view stride, and `countWordOffset` indexes *both* the visible-list and argument
+  buffers, so it cannot take either. Packing every view's count words at the front of both buffers
+  and striding only the payload cursors is the fix. Logged in `TODO.md`.
+
+### 2026-08-01 — Probe resources release immediately at destroy, not through the reclaimer
+- Planned: route `VkmProbeVolume` and `VkmProbeVolumeUpdater` releases through
+  `getDeferredReclaimer()->requestRelease()`, since a per-frame consumer makes
+  destroy-while-in-flight reachable.
+- Did instead: release straight to the resource pool, matching `VkmGBuffer::destroy()` — which
+  passes `deferred = false` and reserves the reclaimer for `resize()`.
+- Why: the reclaimer only frees once the GPU timeline passes the frames that referenced a
+  resource, so anything handed to it at shutdown — when nothing further will ever be submitted —
+  is still outstanding when the allocator tears down. Vulkan caught it immediately (`vk_mem_alloc.h`
+  asserts "Some allocations were not freed", listing three unfreed buffers); Metal did not, which
+  is why the Debug Metal suite had been passing. Neither class has a resize path, so this is their
+  only release, and the drain-before-destroy contract is the one every other resource owner here
+  already has.
+
+### 2026-08-01 — Two VkmScene leaks in the probe tests
+- Planned: nothing — this was not anticipated.
+- Did instead: added `scene.destroy(driver)` to the new updater fixture *and* to the pre-existing
+  `runProbeCaptureTest`.
+- Why: `~VkmScene()` is defaulted, so a scene's buffers only return to the pool on an explicit
+  `destroy(driver)`, and only `TestSceneModelRenderShared.hpp` was doing it. The pre-existing leak
+  in `runProbeCaptureTest` was invisible because that test is Metal-only; it would abort the moment
+  it ran on Vulkan. Fixed rather than merely reported, because the same abort is what this change
+  had to diagnose and leaving the second instance in place would hand the next person the identical
+  hour-long trail — the VMA assert fires inside a signal handler and recurses through backward-cpp,
+  so it presents as a hang rather than as a leak (`TODO.md` documents that recursion).

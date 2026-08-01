@@ -23,6 +23,7 @@
 #include <vkm/renderer/scene/vertex_layout.h>
 #include <vkm/renderer/probe_volume.h>
 
+#include <glm/ext/matrix_transform.hpp>
 #include <glm/matrix.hpp>
 
 #include <vector>
@@ -121,34 +122,16 @@ namespace vkmtest
             CHECK(origins.size() == volume.getProbeCount());
         }
 
-        SUBCASE("both atlases are double-buffered and flip together")
-        {
-            const vkm::VkmResourceHandle irradiance = volume.getIrradianceTexture();
-            const vkm::VkmResourceHandle distance = volume.getDistanceTexture();
-            REQUIRE(irradiance != volume.getPrevIrradianceTexture());
-
-            volume.advanceFrame();
-            // An update reads the previous values and blends into the current ones, so what was
-            // written must be what the next update reads.
-            CHECK(volume.getPrevIrradianceTexture() == irradiance);
-            CHECK(volume.getPrevDistanceTexture() == distance);
-            CHECK(volume.getIrradianceTexture() != irradiance);
-
-            volume.advanceFrame();
-            CHECK(volume.getIrradianceTexture() == irradiance);
-        }
-
-        SUBCASE("all four atlas textures are distinct and live")
+        SUBCASE("both atlas textures are distinct and live")
         {
             std::set<uint64_t> ids;
-            for (vkm::VkmResourceHandle handle : {volume.getIrradianceTexture(), volume.getDistanceTexture(),
-                                                  volume.getPrevIrradianceTexture(), volume.getPrevDistanceTexture()})
+            for (vkm::VkmResourceHandle handle : {volume.getIrradianceTexture(), volume.getDistanceTexture()})
             {
                 REQUIRE(handle.isValid());
                 CHECK(driver->getRenderResourcePool()->getResource<vkm::VkmTexture>(handle) != nullptr);
                 ids.insert(handle.id);
             }
-            CHECK(ids.size() == 4);
+            CHECK(ids.size() == 2);
         }
 
         SUBCASE("a degenerate descriptor is rejected rather than allocating nothing")
@@ -436,9 +419,10 @@ namespace vkmtest
         const float expectedDistance = 2.0f;
         scene.setObjectTransform(0, glm::mat4(1.0f));
 
+        // Built at the origin, because the capture shader works in probe-relative space and the
+        // probe's position arrives through push constants (see VkmProbeCaptureConstants).
         vkm::VkmProbeCaptureConstants captureConstants{};
-        vkm::vkmBuildProbeFaceViewProjections(probePosition, 0.05f, 100.0f, captureConstants._faceViewProjection);
-        captureConstants._probePositionWorld = glm::vec4(probePosition, 1.0f);
+        vkm::vkmBuildProbeFaceViewProjections(glm::vec3(0.0f), 0.05f, 100.0f, captureConstants._faceViewProjection);
 
         vkm::VkmBufferInfo captureBufferInfo{};
         captureBufferInfo._flags = vkm::VkmResourceCreateInfo::AllowShaderRead | vkm::VkmResourceCreateInfo::AllowTransferDst;
@@ -494,7 +478,10 @@ namespace vkmtest
         vkm::VkmFrameData frameData;
         // Frustum planes must be the probe's, not the camera's: the cull pass runs against them,
         // and culling with a stale frustum would reject the very geometry the probe should see.
-        vkm::vkmExtractFrustumPlanes(captureConstants._faceViewProjection[4], frameData._frustumPlanes);
+        // The matrices are origin-relative now, so the frustum has to be moved onto the probe.
+        vkm::vkmExtractFrustumPlanes(
+            captureConstants._faceViewProjection[4] * glm::translate(glm::mat4(1.0f), -probePosition),
+            frameData._frustumPlanes);
         // lightDirection points TOWARDS the light (the engine's convention), and the fixture's
         // normals are +Z, so this is what saturates nDotL and makes the recorded radiance the
         // material colour rather than zero.
@@ -517,20 +504,25 @@ namespace vkmtest
 
         auto* captureSubGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
         for (vkm::VkmResourceHandle handle : referenced) { captureSubGraph->addReferencedResource(handle); }
-        captureSubGraph->setRenderCallback([&scene, pso, table](vkm::VkmCommandBufferBase* commandBuffer) {
-            // All six faces in one pass: aim the viewport, push the face index, draw.
+        captureSubGraph->setRenderCallback([&scene, pso, table, probePosition](vkm::VkmCommandBufferBase* commandBuffer) {
+            // All six faces in one pass: aim the viewport, push which probe and face, draw.
             for (uint32_t face = 0; face < 6; ++face)
             {
                 const uint32_t tileX = (face % kFacesX) * kFaceSize;
                 const uint32_t tileY = (face / kFacesX) * kFaceSize;
                 commandBuffer->setViewportAndScissor(static_cast<int32_t>(tileX), static_cast<int32_t>(tileY),
                                                      kFaceSize, kFaceSize);
+
+                vkm::VkmProbeCapturePushConstants push{};
+                push._probePositionWorld = probePosition;
+                push._faceIndex = face;
+
                 scene.recordDrawBatches(
                     commandBuffer,
                     [pso](const vkm::VkmScene::DrawBatch&) { return pso; },
-                    [table, face](vkm::VkmCommandBufferBase* cb, const vkm::VkmScene::DrawBatch&) {
+                    [table, &push](vkm::VkmCommandBufferBase* cb, const vkm::VkmScene::DrawBatch&) {
                         cb->bindPerPassResources(table);
-                        cb->setPushConstants(&face, sizeof(face));
+                        cb->setPushConstants(&push, sizeof(push));
                     });
             }
         });
@@ -561,6 +553,9 @@ namespace vkmtest
 
         table->destroy();
         delete table;
+        // VkmScene's destructor is defaulted, so without this its buffers outlive the driver and
+        // Vulkan's allocator aborts at teardown. Latent while this test was Metal-only.
+        scene.destroy(driver);
         driver->getRenderResourcePool()->releaseResource(captureDepth->getHandle());
         driver->getRenderResourcePool()->releaseResource(captureTarget->getHandle());
         driver->getRenderResourcePool()->releaseResource(captureBuffer->getHandle());
@@ -592,18 +587,17 @@ namespace vkmtest
             manager.getPipelineState("probe_blend_pso[irradiance]", vkm::VkmPipelineStateOrigin::Engine);
         REQUIRE(pso != nullptr);
 
-        const glm::vec3 probePosition(0.0f, 0.0f, 0.0f);
+        const glm::uvec2 captureExtent(kFaceSize * kFacesPerRow, kFaceSize * 2);
+
         vkm::VkmProbeBlendConstants blendConstants{};
-        vkm::vkmBuildProbeFaceViewProjections(probePosition, 0.05f, 100.0f, blendConstants._faceViewProjection);
-        blendConstants._probePositionWorld = glm::vec4(probePosition, 1.0f);
-        // Hysteresis 0 so this measures the integration alone rather than a blend against whatever
-        // the previous atlas held.
+        vkm::vkmBuildProbeFaceViewProjections(glm::vec3(0.0f), 0.05f, 100.0f, blendConstants._faceViewProjection);
         blendConstants._blendParams = glm::vec4(static_cast<float>(kResolution), 0.0f,
                                                 static_cast<float>(kFacesPerRow), static_cast<float>(kFaceSize));
+        blendConstants._captureAtlasSize = glm::vec4(static_cast<float>(captureExtent.x),
+                                                     static_cast<float>(captureExtent.y), 0.0f, 0.0f);
 
         // Capture: face 4 (+Z) fully bright, every other face black. So the probe "saw" light in
         // exactly one hemisphere.
-        const glm::uvec2 captureExtent(kFaceSize * kFacesPerRow, kFaceSize * 2);
         std::vector<uint16_t> capturePixels(static_cast<size_t>(captureExtent.x) * captureExtent.y * 4, 0);
         for (uint32_t y = 0; y < kFaceSize; ++y)
         {
@@ -644,15 +638,6 @@ namespace vkmtest
 
         // A single-probe atlas: the viewport covers exactly one cell, which is what the shader
         // assumes its UV spans.
-        vkm::VkmTexture* previousTexture = makeTexture(
-            glm::uvec2(kCellSize, kCellSize),
-            static_cast<vkm::VkmResourceCreateInfo>(
-                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowShaderRead) |
-                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowTransferDst)),
-            "ProbeBlendPrevious");
-        std::vector<uint16_t> zeros(static_cast<size_t>(kCellSize) * kCellSize * 4, 0);
-        REQUIRE(driver->uploadToTexture(previousTexture->getHandle(), zeros.data(), zeros.size() * sizeof(uint16_t)));
-
         vkm::VkmTexture* atlasTexture = makeTexture(
             glm::uvec2(kCellSize, kCellSize),
             static_cast<vkm::VkmResourceCreateInfo>(
@@ -677,9 +662,8 @@ namespace vkmtest
         vkm::VkmPerPassResourceTableBase* table = driver->newPerPassResourceTable(
             pso,
             {{ 0, captureTexture->getHandle() },
-             { 1, previousTexture->getHandle() },
-             { 2, sampler->getHandle() },
-             { 3, blendBuffer->getHandle() }},
+             { 1, sampler->getHandle() },
+             { 2, blendBuffer->getHandle() }},
             &tableError);
         REQUIRE_MESSAGE(table != nullptr, tableError);
 
@@ -696,12 +680,19 @@ namespace vkmtest
         auto* barrierSubGraph = renderGraph.beginComputeSubGraph("ProbeBlendInputs");
         barrierSubGraph->setComputeCallback([&](vkm::VkmCommandBufferBase* commandBuffer) {
             commandBuffer->barrierTextureForShaderRead(captureTexture->getHandle());
-            commandBuffer->barrierTextureForShaderRead(previousTexture->getHandle());
         });
         auto* blendSubGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
         blendSubGraph->setRenderCallback([pso, table](vkm::VkmCommandBufferBase* commandBuffer) {
             commandBuffer->bindPipeline(pso);
             commandBuffer->bindPerPassResources(table);
+
+            // Hysteresis 0 so this measures the integration alone: the blend state then weights the
+            // new value 1 and the cleared attachment 0, making the pass a plain overwrite.
+            vkm::VkmProbeBlendPushConstants push{};
+            push._captureTileBase = 0;
+            push._hysteresis = 0.0f;
+            commandBuffer->setPushConstants(&push, sizeof(push));
+
             commandBuffer->draw(3, 1, 0, 0);
         });
         renderGraph.compile();
@@ -733,9 +724,8 @@ namespace vkmtest
 
         table->destroy();
         delete table;
-        for (vkm::VkmResourceHandle handle : {atlasTexture->getHandle(), previousTexture->getHandle(),
-                                              captureTexture->getHandle(), blendBuffer->getHandle(),
-                                              sampler->getHandle()})
+        for (vkm::VkmResourceHandle handle : {atlasTexture->getHandle(), captureTexture->getHandle(),
+                                              blendBuffer->getHandle(), sampler->getHandle()})
         {
             driver->getRenderResourcePool()->releaseResource(handle);
         }
