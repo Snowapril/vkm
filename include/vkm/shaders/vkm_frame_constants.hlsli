@@ -37,7 +37,15 @@ struct VkmFrameConstants
     float4x4 projection;
     float4x4 viewProjection;
     float4x4 inverseViewProjection;
+    // Last frame's viewProjection, for reprojecting a world position into the previous frame's
+    // screen space. Equals viewProjection on the first frame with a camera, so reprojection is
+    // the identity rather than a jump from an identity matrix.
+    float4x4 prevViewProjection;
     float4   cameraPositionWorld; // xyz = world-space eye, w = 1
+    float4   viewportSize;        // xy = pixels, zw = 1 / pixels
+    // x = monotonically increasing frame counter (NOT the 0..FRAME_COUNT-1 slot index); yzw
+    // reserved. Seed stochastic sampling with it so successive frames decorrelate.
+    uint4    frameIndex;
 };
 
 #define VKM_FRAME_CONSTANTS(name) \

@@ -595,7 +595,8 @@ namespace vkm
     }
 
     void VkmScene::recordDrawBatches(VkmCommandBufferBase* commandBuffer,
-                                     const std::function<VkmPipelineStateBase*(const DrawBatch&)>& pipelineResolver)
+                                     const std::function<VkmPipelineStateBase*(const DrawBatch&)>& pipelineResolver,
+                                     const std::function<void(VkmCommandBufferBase*, const DrawBatch&)>& beforeDraw)
     {
         VKM_ASSERT(commandBuffer != nullptr, "VkmScene::recordDrawBatches requires a command buffer");
 
@@ -609,8 +610,16 @@ namespace vkm
             }
             commandBuffer->bindPipeline(pipeline);
 
-            // Nothing is pushed per draw: the arguments the emit pass wrote carry each survivor's
-            // object index in firstInstance, which the vertex shader reads as SV_InstanceID.
+            // The one point where per-draw state can be set: push constants need a bound pipeline,
+            // and this method owns the bind.
+            if (beforeDraw)
+            {
+                beforeDraw(commandBuffer, batch);
+            }
+
+            // Nothing else is pushed per draw: the arguments the emit pass wrote carry each
+            // survivor's object index in firstInstance, which the vertex shader reads as
+            // SV_InstanceID.
             commandBuffer->drawIndirectCount(
                 kSceneArgumentLayout,
                 _argumentBuffer, static_cast<uint64_t>(batch._argumentWordOffset) * sizeof(uint32_t),

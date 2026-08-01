@@ -18,6 +18,7 @@ namespace vkm
     class VkmCommandBufferPoolBase;
     class VkmGpuEventTimelineBase;
     class VkmPipelineStateBase;
+    class VkmPerPassResourceTableBase;
     struct VkmGpuEventTimelineObject;
 
     /*
@@ -39,6 +40,25 @@ namespace vkm
         // Render pass related
         void beginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc);
         void endRenderPass();
+
+        /*
+        * @brief Restricts subsequent draws to a sub-rectangle of the current render pass.
+        *
+        * @details Must be recorded inside a render pass. Coordinates are in pixels with the origin
+        * at the attachment's top-left, the same convention on every backend -- Vulkan's +Y-down NDC
+        * is already handled upstream by vkm-compiler's -fvk-invert-y, so nothing is compensated
+        * here.
+        *
+        * beginRenderPass() already sets both to cover the whole framebuffer, so a pass that draws
+        * to all of it never needs to call these. They exist for passes that pack several views into
+        * one attachment -- rendering a probe's six cube faces into one atlas in a single pass
+        * rather than six, which is the difference between one render pass per probe and six.
+        *
+        * Viewport and scissor are set together rather than separately: every current caller wants
+        * them to agree, and letting them drift apart silently clips geometry the viewport says is
+        * visible.
+        */
+        void setViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height);
 
         // Pipeline related
         void bindPipeline(VkmPipelineStateBase* pipelineState);
@@ -107,8 +127,12 @@ namespace vkm
         /*
         * @brief Compute dispatch of `groupCount*` threadgroups. Must be recorded outside a render
         * pass with a compute pipeline bound; the backing compute pass is opened by that bindPipeline()
-        * and closed by unbindPipeline(). The threadgroup width is the engine-wide
-        * kVkmComputeThreadGroupSizeX, which Metal needs here and cannot query from its pipeline.
+        * and closed by unbindPipeline().
+        *
+        * The threadgroup size is whatever the bound pipeline's shader declared in
+        * [numthreads(...)]: Vulkan and WebGPU take it from the shader module, and Metal reads it
+        * from the pipeline object, where it arrived via VkmShaderCacheHeader::threadGroupSize.
+        * Callers only supply the group counts.
         */
         void dispatch(uint32_t groupCountX, uint32_t groupCountY = 1, uint32_t groupCountZ = 1);
 
@@ -118,6 +142,42 @@ namespace vkm
         * recorded after it. Must be recorded outside a render pass.
         */
         void barrierIndirectArgumentBuffer(VkmResourceHandle buffer);
+
+        /*
+        * @brief Makes earlier writes to `texture` visible to shaders that sample it, and leaves it
+        * in whatever state that sampling needs.
+        *
+        * @details Every other texture operation manages its own destination state (see
+        * copyBufferToTexture), which works because each one both writes and finishes the texture.
+        * A texture written as a render-pass attachment and then *sampled* by a later pass is the
+        * case that convention cannot express: the render pass leaves it in an attachment state,
+        * and nothing afterwards knows to undo that. This is the entry point for that hand-off --
+        * the G-buffer -> lighting-pass dependency in particular.
+        *
+        * Named for its destination like barrierIndirectArgumentBuffer, and equally coarse: it does
+        * not take a source state, because Vulkan already tracks the texture's current layout and
+        * the other two backends need no layout at all. Must be recorded outside a render pass, so
+        * it sits between the pass that wrote the texture and the pass that reads it.
+        *
+        * Only Vulkan does real work here. Metal 4 brackets each compute pass with
+        * barrierAfterQueueStages:/barrierAfterStages: on open and close, which already orders a
+        * render pass's writes against a later pass's reads; WebGPU orders passes implicitly.
+        */
+        void barrierTextureForShaderRead(VkmResourceHandle texture);
+
+        /*
+        * @brief Binds `table` as descriptor set 2 for subsequent draws or dispatches.
+        *
+        * @details Must be recorded with a pipeline bound, and that pipeline must be the one the
+        * table was built against -- set 2's layout comes from the pipeline's own declaration, so a
+        * table built for a different one describes a different set. This is the first bind site in
+        * the engine that needs per-PSO knowledge; sets 0 and 1 are engine-global and bound
+        * unconditionally by bindPipeline().
+        *
+        * A pipeline that declares per-pass resources must have them bound before it draws or
+        * dispatches: an unbound declared set is a validation error, not a silently empty one.
+        */
+        void bindPerPassResources(VkmPerPassResourceTableBase* table);
 
         void setPushConstants(const void* data, uint32_t size, uint32_t offset = 0);
 
@@ -211,8 +271,15 @@ namespace vkm
         inline const std::vector<VkmPipelineStateBase*>& getBoundPipelineHistory() const { return _boundPipelineHistory; }
 
     protected:
+        // The pipeline bindPipeline() last published, or null after unbindPipeline(). Backends
+        // that need pipeline state while recording a command read it here -- Metal's onDispatch()
+        // takes the compute threadgroup size from it, since MTLComputePipelineState cannot be
+        // asked what [numthreads(...)] its function declared.
+        inline VkmPipelineStateBase* getBoundPipelineState() const { return _boundPipelineState; }
+
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) = 0;
         virtual void onEndRenderPass() = 0;
+        virtual void onSetViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height) = 0;
         virtual void onBindPipeline(VkmPipelineStateBase* pipelineState) = 0;
         virtual void onUnbindPipeline() = 0;
         virtual void onCopyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size) = 0;
@@ -229,6 +296,8 @@ namespace vkm
                                          uint32_t maxDrawCount) = 0;
         virtual void onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
         virtual void onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer) = 0;
+        virtual void onBarrierTextureForShaderRead(VkmResourceHandle texture) = 0;
+        virtual void onBindPerPassResources(VkmPerPassResourceTableBase* table) = 0;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) = 0;
         virtual void onSetDebugName(const char* name) = 0;
         virtual void onPushDebugGroup(const char* name) = 0;

@@ -15,6 +15,11 @@ set(SRCS
     ${SRC_DIR}/TestPsoConfig.cpp
     ${SRC_DIR}/TestMemoryTracker.cpp
     ${SRC_DIR}/TestShaderCacheUtil.cpp
+    ${SRC_DIR}/TestTextureShaderReadBarrier.cpp
+    ${SRC_DIR}/TestPerPassResources.cpp
+    ${SRC_DIR}/TestGBuffer.cpp
+    ${SRC_DIR}/TestProbeVolume.cpp
+    ${SRC_DIR}/TestViewport.cpp
     ${SRC_DIR}/TestPipelineStateManager.cpp
     ${SRC_DIR}/TestBindlessSlotAllocator.cpp
     ${SRC_DIR}/TestInputHandler.cpp
@@ -47,6 +52,11 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestSceneModelRenderMetal.mm
         ${SRC_DIR}/TestCubemapTextureMetal.mm
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
+        ${SRC_DIR}/TestPerPassResourcesMetal.mm
+        ${SRC_DIR}/TestGBufferMetal.mm
+        ${SRC_DIR}/TestGBufferRenderMetal.mm
+        ${SRC_DIR}/TestProbeVolumeMetal.mm
+        ${SRC_DIR}/TestViewportMetal.mm
     )
 endif()
 
@@ -64,6 +74,11 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestSceneModelRenderMetal.mm
         ${SRC_DIR}/TestCubemapTextureMetal.mm
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
+        ${SRC_DIR}/TestPerPassResourcesMetal.mm
+        ${SRC_DIR}/TestGBufferMetal.mm
+        ${SRC_DIR}/TestGBufferRenderMetal.mm
+        ${SRC_DIR}/TestProbeVolumeMetal.mm
+        ${SRC_DIR}/TestViewportMetal.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++"
     )
 endif()
@@ -89,6 +104,28 @@ if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
         OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
         PSO_JSON_FILES "${ROOT_DIR}/src/samples/skybox/renderpass.json"
         EXTRA_DEPENDS  "${ROOT_DIR}/src/samples/skybox/skybox.hlsl")
+endif()
+
+# TestPerPassResources dispatches a compute shader whose only resources live in descriptor set 2,
+# on both backends that implement it -- Vulkan allocates a descriptor set, Metal binds discretely
+# onto the argument table, and the same expected values across both is what proves the PSO
+# declaration means the same thing on each. WebGPU's newPerPassResourceTable is still a stub.
+if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
+    vkm_add_shader_cache_target(
+        TARGET_NAME   tests_per_pass_shaders
+        OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
+        PSO_JSON_FILES "${ROOT_DIR}/resources/tests/per_pass/renderpass.json"
+        EXTRA_DEPENDS  "${ROOT_DIR}/resources/tests/per_pass/per_pass_resources.hlsl")
+endif()
+
+# TestViewport renders a constant-colour fullscreen triangle into part of an attachment, which is
+# the capability the probe update needs to pack several views into one render pass.
+if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
+    vkm_add_shader_cache_target(
+        TARGET_NAME   tests_viewport_shaders
+        OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
+        PSO_JSON_FILES "${ROOT_DIR}/resources/tests/viewport/renderpass.json"
+        EXTRA_DEPENDS  "${ROOT_DIR}/resources/tests/viewport/viewport_fill.hlsl")
 endif()
 
 # TestSceneModelRenderMetal draws an imported glTF mesh with the model_viewer sample's PSO.
@@ -163,6 +200,21 @@ if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
     )
 endif()
 
+if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
+    add_dependencies(${target} tests_viewport_shaders)
+    target_compile_definitions(${target}
+        PRIVATE
+        TEST_VIEWPORT_PSO_DIR="${ROOT_DIR}/resources/tests/viewport/"
+        TEST_VIEWPORT_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
+    )
+    add_dependencies(${target} tests_per_pass_shaders)
+    target_compile_definitions(${target}
+        PRIVATE
+        TEST_PER_PASS_PSO_DIR="${ROOT_DIR}/resources/tests/per_pass/"
+        TEST_PER_PASS_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
+    )
+endif()
+
 # The engine PSO cache holds the scene's culling / emit compute pipelines, which VkmEngine loads at
 # startup on EVERY backend -- a missing cache makes initializeBackendDriver fail outright, so this
 # dependency must not be scoped to one backend.
@@ -177,6 +229,15 @@ if (VKM_USE_METAL_API)
         PRIVATE
         TEST_MODEL_VIEWER_SAMPLE_DIR="${ROOT_DIR}/src/samples/model_viewer/"
         TEST_MODEL_VIEWER_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
+    )
+endif()
+
+# The engine PSO directory and its cache are backend-agnostic -- the cache is built for whichever
+# backend is configured -- so these are defined for every native backend rather than only Metal.
+# A Metal-only test body still has to *compile* in a Vulkan build when it lives in a shared header.
+if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
+    target_compile_definitions(${target}
+        PRIVATE
         TEST_ENGINE_PIPELINE_DIR="${ROOT_DIR}/resources/Pipelines/Engine/"
         TEST_ENGINE_SHADER_CACHE_DIR="${ROOT_DIR}/resources/Shaders/ShaderCache/"
     )

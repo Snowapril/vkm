@@ -132,9 +132,12 @@ namespace vkm
     {
     };
 
-    // Threadgroup width every engine compute shader declares as [numthreads(N, 1, 1)]. It is an
-    // engine constant rather than PSO state because Metal needs threadsPerThreadgroup at dispatch
-    // time and MTLComputePipelineState cannot be asked what the shader declared.
+    // Threadgroup width the engine's own 1D scene compute passes declare as [numthreads(N, 1, 1)],
+    // so their dispatch sites can derive a group count from an item count (see
+    // VkmScene::recordCull). It is a convention for those passes, not a constraint on compute
+    // shaders in general: a shader's real [numthreads(...)] is read out of its compiled SPIR-V by
+    // vkm-compiler and carried in VkmShaderCacheHeader::threadGroupSize, which is what Metal
+    // dispatches with. A 2D screen-space kernel is free to declare [numthreads(8, 8, 1)].
     inline constexpr uint32_t kVkmComputeThreadGroupSizeX = 64;
 
     /*

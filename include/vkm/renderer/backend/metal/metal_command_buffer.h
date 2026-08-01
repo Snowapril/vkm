@@ -59,6 +59,7 @@ namespace vkm
 
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) override final;
         virtual void onEndRenderPass() override final;
+        virtual void onSetViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height) override final;
         virtual void onBindPipeline(VkmPipelineStateBase* pipelineState) override final;
         virtual void onUnbindPipeline() override final;
         virtual void onCopyBuffer(VkmResourceHandle srcBuffer, VkmResourceHandle dstBuffer, uint64_t srcOffset, uint64_t dstOffset, uint64_t size) override final;
@@ -72,6 +73,8 @@ namespace vkm
                                          uint32_t maxDrawCount) override final;
         virtual void onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) override final;
         virtual void onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer) override final;
+        virtual void onBarrierTextureForShaderRead(VkmResourceHandle texture) override final;
+        virtual void onBindPerPassResources(VkmPerPassResourceTableBase* table) override final;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) override final;
         virtual void onSetDebugName(const char* name) override final;
         virtual void onPushDebugGroup(const char* name) override final;

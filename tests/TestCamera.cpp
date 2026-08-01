@@ -6,6 +6,7 @@
 #include <glm/vec4.hpp>
 
 #include <cmath>
+#include <cstddef>
 
 // VkmCamera and VkmOrbitCameraController are pure CPU state, and VkmInputHandler needs no
 // window, so the whole camera pipeline -- events in, matrices out -- is testable headlessly.
@@ -24,6 +25,52 @@ namespace
         const glm::vec4 clip = matrix * glm::vec4(point, 1.0f);
         return glm::vec3(clip) / clip.w;
     }
+}
+
+TEST_CASE("VkmFrameConstants - layout matches the shader-side mirror") {
+    // The C++ struct, vkm_frame_constants.hlsli and vkm-compiler's Metal binding pin are three
+    // halves of one ABI, and nothing in the build fails if they drift -- a shader would simply
+    // read the wrong bytes. The static_assert in frame_constants.h pins the total size; these pin
+    // every member offset, which is what actually catches a field inserted in the middle.
+    CHECK(offsetof(vkm::VkmFrameConstants, _view) == 0);
+    CHECK(offsetof(vkm::VkmFrameConstants, _projection) == 64);
+    CHECK(offsetof(vkm::VkmFrameConstants, _viewProjection) == 128);
+    CHECK(offsetof(vkm::VkmFrameConstants, _inverseViewProjection) == 192);
+    CHECK(offsetof(vkm::VkmFrameConstants, _prevViewProjection) == 256);
+    CHECK(offsetof(vkm::VkmFrameConstants, _cameraPositionWorld) == 320);
+    CHECK(offsetof(vkm::VkmFrameConstants, _viewportSize) == 336);
+    CHECK(offsetof(vkm::VkmFrameConstants, _frameIndex) == 352);
+    CHECK(sizeof(vkm::VkmFrameConstants) == 368);
+
+    // One region per frame slot, so the stride must stay a multiple of every backend's minimum
+    // uniform-buffer offset alignment even as the struct grows.
+    CHECK(vkm::kVkmFrameConstantStride % vkm::kVkmFrameConstantAlignment == 0);
+    CHECK(vkm::kVkmFrameConstantStride >= sizeof(vkm::VkmFrameConstants));
+}
+
+TEST_CASE("VkmCamera - fillFrameConstants publishes the viewport size and its reciprocal") {
+    vkm::VkmCamera camera;
+    camera.setPerspective(1.0f, 0.1f, 100.0f);
+    camera.setViewportSize(1920, 1080);
+
+    vkm::VkmFrameConstants constants{};
+    camera.fillFrameConstants(constants);
+
+    CHECK(constants._viewportSize.x == doctest::Approx(1920.0f));
+    CHECK(constants._viewportSize.y == doctest::Approx(1080.0f));
+    CHECK(constants._viewportSize.z == doctest::Approx(1.0f / 1920.0f));
+    CHECK(constants._viewportSize.w == doctest::Approx(1.0f / 1080.0f));
+}
+
+TEST_CASE("VkmCamera - a zero viewport reports a zero reciprocal rather than infinity") {
+    // Before setViewportSize() is called. A shader dividing by zero here sees an obviously wrong
+    // 0 instead of a NaN that propagates silently through a whole frame.
+    vkm::VkmCamera camera;
+    vkm::VkmFrameConstants constants{};
+    camera.fillFrameConstants(constants);
+
+    CHECK(constants._viewportSize.z == 0.0f);
+    CHECK(constants._viewportSize.w == 0.0f);
 }
 
 TEST_CASE("Camera projects the target to the center of clip space")

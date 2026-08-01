@@ -1,0 +1,40 @@
+// Copyright (c) 2025 Snowapril
+
+#pragma once
+
+#include <vkm/renderer/backend/common/per_pass_resource_table.h>
+
+#include <webgpu/webgpu.h>
+
+namespace vkm
+{
+    /*
+    * @brief WebGPU set 2: one WGPUBindGroup, created once from the pipeline's group-2 layout.
+    *
+    * @details The most natural of the three backends -- a bind group is exactly this concept, and
+    * the base class's immutability matches WebGPU's own model, where a bind group is an immutable
+    * object you recreate rather than rewrite.
+    *
+    * Worth recording why this matters beyond per-pass resources: WebGPU cannot sample any texture
+    * through the engine's bindless path, because that path needs runtime-sized arrays and WGSL has
+    * none (see VkmBindlessResourceManagerWebGPU::registerTexture, which is a hard error). Group 2's
+    * fixed bindings are the only way a shader samples a texture on this backend.
+    */
+    class VkmPerPassResourceTableWebGPU : public VkmPerPassResourceTableBase
+    {
+    public:
+        explicit VkmPerPassResourceTableWebGPU(VkmDriverBase* driver);
+        ~VkmPerPassResourceTableWebGPU() override;
+
+        inline WGPUBindGroup getBindGroup() const { return _bindGroup; }
+
+    protected:
+        bool createInner(const std::vector<VkmPerPassResourceEntry>& entries, std::string* outError) override final;
+        void destroyInner() override final;
+
+    private:
+        WGPUBindGroup _bindGroup{nullptr};
+        // Texture views are created for the bind group and must outlive it.
+        std::vector<WGPUTextureView> _textureViews;
+    };
+} // namespace vkm

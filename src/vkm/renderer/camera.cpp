@@ -67,6 +67,18 @@ namespace vkm
         outConstants._viewProjection = viewProjection;
         outConstants._inverseViewProjection = glm::inverse(viewProjection);
         outConstants._cameraPositionWorld = glm::vec4(_eye, 1.0f);
+
+        // Zero until setViewportSize() has been called; the reciprocal is left at zero rather
+        // than made infinite, so a shader dividing by it sees an obviously wrong 0 instead of a
+        // NaN that propagates silently.
+        const float width = static_cast<float>(_viewportWidth);
+        const float height = static_cast<float>(_viewportHeight);
+        outConstants._viewportSize = glm::vec4(width, height,
+                                               width > 0.0f ? 1.0f / width : 0.0f,
+                                               height > 0.0f ? 1.0f / height : 0.0f);
+
+        // _prevViewProjection and _frameIndex are the engine's to fill: a camera holds no
+        // frame-to-frame state (see VkmEngine::render).
     }
 
     VkmOrbitCameraController::VkmOrbitCameraController(VkmCamera* camera)

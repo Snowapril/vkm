@@ -20,6 +20,9 @@ namespace vkm
         VkmShaderCacheStage stage;
         VkmShaderCacheContentFormat contentFormat;
         std::string entryPoint;
+        // The compute stage's declared [numthreads(x, y, z)]; {0, 0, 0} for other stages.
+        // Only Metal consumes it (see VkmShaderCacheHeader::threadGroupSize).
+        uint32_t threadGroupSize[3] = {};
         std::vector<uint8_t> content; // SPIR-V words (as bytes) or UTF-8 MSL/WGSL text
     };
 

@@ -180,7 +180,7 @@ namespace vkm
         id<MTLLibrary> loadStageLibrary(id<MTLDevice> device, id<MTL4Compiler> compiler, bool useMetal4,
             const VkmShaderStageDescriptor& stageDesc, const std::string& shaderCacheDir,
             const std::string& optionName, VkmShaderCacheStage stage,
-            std::string* outEntryPoint, std::string* outError)
+            std::string* outEntryPoint, uint32_t* outThreadGroupSize, std::string* outError)
         {
             const std::string shaderStem = std::filesystem::path(stageDesc.filepath).stem().string();
             const std::string filename = buildShaderCacheFilename(shaderStem, optionName, stage, VkmShaderCacheBackend::Metal);
@@ -192,6 +192,13 @@ namespace vkm
             {
                 *outError = "Failed to load shader cache '" + fullPath + "': " + loadError;
                 return nil;
+            }
+
+            if (outThreadGroupSize != nullptr)
+            {
+                outThreadGroupSize[0] = loaded->threadGroupSize[0];
+                outThreadGroupSize[1] = loaded->threadGroupSize[1];
+                outThreadGroupSize[2] = loaded->threadGroupSize[2];
             }
 
             id<MTLLibrary> library = nil;
@@ -370,7 +377,7 @@ namespace vkm
             std::string computeEntry;
             std::string loadError;
             id<MTLLibrary> computeLibrary = loadStageLibrary(device, compiler, useMetal4,
-                desc.computeShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Compute, &computeEntry, &loadError);
+                desc.computeShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Compute, &computeEntry, _computeThreadGroupSize, &loadError);
             if (computeLibrary == nil)
             {
                 setError(loadError);
@@ -416,7 +423,7 @@ namespace vkm
         std::string loadError;
         std::string vertexEntry;
         id<MTLLibrary> vertexLibrary = loadStageLibrary(device, compiler, useMetal4,
-            desc.vertexShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Vertex, &vertexEntry, &loadError);
+            desc.vertexShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Vertex, &vertexEntry, nullptr, &loadError);
         if (vertexLibrary == nil)
         {
             setError(loadError);
@@ -428,7 +435,7 @@ namespace vkm
         if (desc.fragmentShader.has_value())
         {
             fragmentLibrary = loadStageLibrary(device, compiler, useMetal4,
-                desc.fragmentShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Fragment, &fragmentEntry, &loadError);
+                desc.fragmentShader.value(), shaderCacheDir, desc.optionName, VkmShaderCacheStage::Fragment, &fragmentEntry, nullptr, &loadError);
             if (fragmentLibrary == nil)
             {
                 setError(loadError);

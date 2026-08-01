@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/metal/metal_pipeline_state.h>
+#include <vkm/renderer/backend/metal/metal_per_pass_resource_table.h>
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_staging_buffer.h>
 
@@ -231,6 +232,21 @@ namespace vkm
     void VkmCommandBufferMetal::onEndRenderPass()
     {
         _commandEncoder.commit();
+    }
+
+    void VkmCommandBufferMetal::onSetViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height)
+    {
+        id<MTL4RenderCommandEncoder> renderCommandEncoder = _commandEncoder.getActiveRenderCommandEncoder();
+        VKM_ASSERT(renderCommandEncoder != nil, "setViewportAndScissor outside a render pass");
+
+        const MTLViewport viewport{
+            .originX = static_cast<double>(x), .originY = static_cast<double>(y),
+            .width = static_cast<double>(width), .height = static_cast<double>(height),
+            .znear = 0.0, .zfar = 1.0,
+        };
+        [renderCommandEncoder setViewport:viewport];
+        [renderCommandEncoder setScissorRect:MTLScissorRect{
+            static_cast<NSUInteger>(x), static_cast<NSUInteger>(y), width, height}];
     }
 
     void VkmCommandBufferMetal::onBindPipeline(VkmPipelineStateBase* pipelineState)
@@ -480,11 +496,29 @@ namespace vkm
 
     void VkmCommandBufferMetal::onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
     {
-        // Threadgroup width is the engine-wide constant every engine compute shader declares:
-        // MTLComputePipelineState cannot be asked what [numthreads(...)] the shader used.
+        // MTLComputePipelineState cannot be asked what [numthreads(...)] its function declared,
+        // so the size travels from the shader through its .vfcache onto the pipeline object.
+        // Dispatching with the wrong one silently runs the wrong number of threads, which is why
+        // this reads the bound pipeline rather than assuming one engine-wide size.
+        const VkmPipelineStateMetal* pipelineState =
+            static_cast<const VkmPipelineStateMetal*>(getBoundPipelineState());
+        if (pipelineState == nullptr)
+        {
+            VKM_DEBUG_ERROR("dispatch() with no pipeline bound");
+            return;
+        }
+
+        const uint32_t* threadGroupSize = pipelineState->getComputeThreadGroupSize();
+        if (threadGroupSize[0] == 0)
+        {
+            VKM_DEBUG_ERROR("dispatch() on a pipeline with no compute threadgroup size (not a "
+                            "compute pipeline, or a stale shader cache)");
+            return;
+        }
+
         [_commandEncoder.getActiveComputeCommandEncoder()
             dispatchThreadgroups:MTLSizeMake(groupCountX, groupCountY, groupCountZ)
-           threadsPerThreadgroup:MTLSizeMake(kVkmComputeThreadGroupSizeX, 1, 1)];
+           threadsPerThreadgroup:MTLSizeMake(threadGroupSize[0], threadGroupSize[1], threadGroupSize[2])];
     }
 
     void VkmCommandBufferMetal::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)
@@ -495,6 +529,31 @@ namespace vkm
         // to later ones) and onCopyBuffer does the same, so every ordering this call exists to
         // establish is already covered. Opening an encoder just to emit a barrier is exactly what
         // caused the MTL4CommandQueueErrorTimeout documented in common/AGENTS.md.
+    }
+
+    void VkmCommandBufferMetal::onBarrierTextureForShaderRead(VkmResourceHandle texture)
+    {
+        (void)texture;
+        // Metal has no image layouts to transition, and Metal 4's barriers are encoder-scoped
+        // rather than per-resource, so there is nothing to record for one texture. The ordering
+        // this call exists to establish is already covered: a compute pass opens with
+        // barrierAfterQueueStages:MTLStageAll (onBindPipeline) and closes with
+        // barrierAfterStages:...beforeQueueStages:MTLStageAll (onUnbindPipeline), so a render
+        // pass's writes are visible to a later pass's reads and vice versa.
+        //
+        // As with onBarrierIndirectArgumentBuffer, opening an encoder purely to emit a barrier is
+        // what caused the MTL4CommandQueueErrorTimeout documented in common/AGENTS.md, so this
+        // deliberately records nothing rather than forcing one.
+    }
+
+    void VkmCommandBufferMetal::onBindPerPassResources(VkmPerPassResourceTableBase* table)
+    {
+        // Metal binds set 2 discretely onto the same argument table bindPipeline() already
+        // attached, so this only has to replay the table's resolved entries -- there is no
+        // descriptor set to bind, and no encoder state beyond the argument table itself.
+        VkmBindlessResourceManagerMetal* bindlessManager =
+            static_cast<VkmDriverMetal*>(_driver)->getBindlessResourceManager();
+        static_cast<VkmPerPassResourceTableMetal*>(table)->applyTo(bindlessManager->getArgumentTable());
     }
 
     void VkmCommandBufferMetal::onSetPushConstants(const void* data, uint32_t size, uint32_t offset)

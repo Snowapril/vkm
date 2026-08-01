@@ -190,8 +190,18 @@ namespace vkm
         * `pipelineResolver` maps a batch to the PSO permutation matching its vertex layout; a batch
         * whose resolver returns nullptr is skipped with a warning.
         */
+        /*
+        * @brief Records one indirect draw per batch, resolving each batch's pipeline through
+        * `pipelineResolver`.
+        *
+        * `beforeDraw`, if set, runs after the batch's pipeline is bound and before its draw. That
+        * is the only point at which per-draw state can be set, since push constants require a
+        * bound pipeline and this method owns the binding. The probe capture uses it to push which
+        * cube face is being rendered; the ordinary scene draw passes nothing at all.
+        */
         void recordDrawBatches(VkmCommandBufferBase* commandBuffer,
-                               const std::function<VkmPipelineStateBase*(const DrawBatch&)>& pipelineResolver);
+                               const std::function<VkmPipelineStateBase*(const DrawBatch&)>& pipelineResolver,
+                               const std::function<void(VkmCommandBufferBase*, const DrawBatch&)>& beforeDraw = {});
 
         // Every buffer a frame's update and draws touch, for VkmRenderSubGraph::addReferencedResource.
         void collectReferencedResources(std::vector<VkmResourceHandle>* outHandles) const;

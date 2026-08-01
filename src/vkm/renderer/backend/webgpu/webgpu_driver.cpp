@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/webgpu/webgpu_driver.h>
+#include <vkm/renderer/backend/webgpu/webgpu_per_pass_resource_table.h>
 #include <vkm/renderer/backend/webgpu/webgpu_util.h>
 #include <vkm/renderer/backend/webgpu/webgpu_swapchain.h>
 #include <vkm/renderer/backend/webgpu/webgpu_texture.h>
@@ -372,6 +373,11 @@ namespace vkm
         // preferred format is typically BGRA8, so this stays consistent with createSwapChain.
         (void)enableHdr;
         return VkmFormat::BGRA8_UNORM;
+    }
+
+    VkmPerPassResourceTableBase* VkmDriverWebGPU::newPerPassResourceTableInner()
+    {
+        return new VkmPerPassResourceTableWebGPU(this);
     }
 
     VkmSwapChainBase* VkmDriverWebGPU::newSwapChainInner()

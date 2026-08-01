@@ -27,7 +27,10 @@ bool writeCacheFileRaw(const fs::path& path,
                        vkm::VkmShaderCacheContentFormat format,
                        const std::string& entryPoint,
                        const std::vector<uint8_t>& content,
-                       size_t bytesToWrite)
+                       size_t bytesToWrite,
+                       uint32_t threadGroupX = 0,
+                       uint32_t threadGroupY = 0,
+                       uint32_t threadGroupZ = 0)
 {
     vkm::VkmShaderCacheHeader header{};
     header.magic = magic;
@@ -36,6 +39,9 @@ bool writeCacheFileRaw(const fs::path& path,
     header.stage = stage;
     header.contentFormat = format;
     std::strncpy(header.entryPoint, entryPoint.c_str(), sizeof(header.entryPoint) - 1);
+    header.threadGroupSize[0] = threadGroupX;
+    header.threadGroupSize[1] = threadGroupY;
+    header.threadGroupSize[2] = threadGroupZ;
     header.contentSize = static_cast<uint64_t>(content.size());
 
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -57,10 +63,14 @@ bool writeValidCacheFile(const fs::path& path,
                          vkm::VkmShaderCacheStage stage,
                          vkm::VkmShaderCacheContentFormat format,
                          const std::string& entryPoint,
-                         const std::vector<uint8_t>& content)
+                         const std::vector<uint8_t>& content,
+                         uint32_t threadGroupX = 0,
+                         uint32_t threadGroupY = 0,
+                         uint32_t threadGroupZ = 0)
 {
     return writeCacheFileRaw(path, vkm::kVkmShaderCacheMagic, vkm::kVkmShaderCacheVersion,
-                             backend, stage, format, entryPoint, content, content.size());
+                             backend, stage, format, entryPoint, content, content.size(),
+                             threadGroupX, threadGroupY, threadGroupZ);
 }
 } // namespace
 
@@ -100,6 +110,45 @@ TEST_CASE("loadShaderCacheFile - round-trips a valid file") {
     CHECK(loaded->contentFormat == vkm::VkmShaderCacheContentFormat::Msl);
     CHECK(loaded->entryPoint == "PSMain");
     CHECK(loaded->content == content);
+
+    fs::remove(path);
+}
+
+TEST_CASE("loadShaderCacheFile - round-trips a compute stage's threadgroup size") {
+    // Metal dispatches with this value, so a wrong or dropped size silently runs the wrong
+    // number of threads. A non-64 size proves it is carried rather than assumed from
+    // kVkmComputeThreadGroupSizeX.
+    const fs::path path = fs::temp_directory_path() / "vkm_test_threadgroup.vfcache";
+    const std::vector<uint8_t> content = {0x11, 0x22, 0x33, 0x44};
+    REQUIRE(writeValidCacheFile(path, vkm::VkmShaderCacheBackend::Metal,
+                                vkm::VkmShaderCacheStage::Compute,
+                                vkm::VkmShaderCacheContentFormat::MetalLib, "CSMain", content,
+                                8, 8, 1));
+
+    std::string outError;
+    std::optional<vkm::VkmLoadedShaderCache> loaded =
+        vkm::loadShaderCacheFile(path.string(), vkm::VkmShaderCacheBackend::Metal, &outError);
+    REQUIRE(loaded.has_value());
+    CHECK(loaded->threadGroupSize[0] == 8);
+    CHECK(loaded->threadGroupSize[1] == 8);
+    CHECK(loaded->threadGroupSize[2] == 1);
+
+    fs::remove(path);
+}
+
+TEST_CASE("loadShaderCacheFile - a non-compute stage reports a zero threadgroup size") {
+    const fs::path path = fs::temp_directory_path() / "vkm_test_threadgroup_gfx.vfcache";
+    const std::vector<uint8_t> content = {0x55};
+    REQUIRE(writeValidCacheFile(path, vkm::VkmShaderCacheBackend::Vulkan,
+                                vkm::VkmShaderCacheStage::Vertex,
+                                vkm::VkmShaderCacheContentFormat::SpirV, "VSMain", content));
+
+    std::optional<vkm::VkmLoadedShaderCache> loaded =
+        vkm::loadShaderCacheFile(path.string(), vkm::VkmShaderCacheBackend::Vulkan);
+    REQUIRE(loaded.has_value());
+    CHECK(loaded->threadGroupSize[0] == 0);
+    CHECK(loaded->threadGroupSize[1] == 0);
+    CHECK(loaded->threadGroupSize[2] == 0);
 
     fs::remove(path);
 }

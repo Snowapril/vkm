@@ -13,7 +13,7 @@
 
 #include "scene_common.hlsli"
 
-[numthreads(64, 1, 1)] // must equal kVkmComputeThreadGroupSizeX
+[numthreads(64, 1, 1)] // must equal kVkmComputeThreadGroupSizeX: the dispatch site derives its group count from it
 void CSMain(uint3 threadId : SV_DispatchThreadID)
 {
     if (threadId.x >= g_Batch.objectCount)

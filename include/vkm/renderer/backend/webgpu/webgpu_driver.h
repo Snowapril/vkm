@@ -19,6 +19,7 @@ namespace vkm
         ~VkmDriverWebGPU();
 
         virtual VkmSwapChainBase* newSwapChainInner() override final;
+        virtual VkmPerPassResourceTableBase* newPerPassResourceTableInner() override final;
 
         inline WGPUInstance getInstance() const { return _instance; }
         inline WGPUAdapter getAdapter() const { return _adapter; }

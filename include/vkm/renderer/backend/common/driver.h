@@ -4,6 +4,7 @@
 
 #include <vkm/base/common.h>
 #include <vkm/platform/common/window.h>
+#include <vkm/renderer/backend/common/per_pass_resource_table.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/engine.h>
 
@@ -199,6 +200,17 @@ namespace vkm
         * @param shaderCacheDir directory containing this descriptor's .vfcache files
         */
         VkmPipelineStateBase* newPipelineState(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError = nullptr);
+
+        /*
+        * @brief Builds the descriptor set 2 (per-pass) resources `pipelineState` declared.
+        * @details Returns nullptr if the pipeline declares no per-pass resources, if `entries`
+        * does not exactly cover the declaration, or if a resource is of the wrong kind -- see
+        * VkmPerPassResourceTableBase. The caller owns the result: destroy() then delete, once no
+        * in-flight frame can still be using it.
+        */
+        VkmPerPassResourceTableBase* newPerPassResourceTable(const VkmPipelineStateBase* pipelineState,
+                                                             const std::vector<VkmPerPassResourceEntry>& entries,
+                                                             std::string* outError = nullptr);
 
         /*
         * @brief get driver capability flags
@@ -401,6 +413,7 @@ namespace vkm
         virtual VkmTextureView* newTextureViewInner() = 0;
         virtual VkmBufferView* newBufferViewInner() = 0;
         virtual VkmSwapChainBase* newSwapChainInner() = 0;
+        virtual VkmPerPassResourceTableBase* newPerPassResourceTableInner() = 0;
         virtual VkmCommandQueueBase* newCommandQueueInner() = 0;
         virtual VkmPipelineStateBase* newPipelineStateInner() = 0;
         virtual VkmRenderResourcePool* newRenderResourcePoolInner() = 0;

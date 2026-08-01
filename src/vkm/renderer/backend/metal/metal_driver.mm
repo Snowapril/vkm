@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/metal/metal_driver.h>
+#include <vkm/renderer/backend/metal/metal_per_pass_resource_table.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_staging_buffer.h>
@@ -442,6 +443,11 @@ namespace vkm
     VkmPipelineStateBase* VkmDriverMetal::newPipelineStateInner()
     {
         return new VkmPipelineStateMetal(this);
+    }
+
+    VkmPerPassResourceTableBase* VkmDriverMetal::newPerPassResourceTableInner()
+    {
+        return new VkmPerPassResourceTableMetal(this);
     }
 
     VkmSwapChainBase* VkmDriverMetal::newSwapChainInner()

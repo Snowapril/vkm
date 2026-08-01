@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_staging_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_pipeline_state.h>
+#include <vkm/renderer/backend/vulkan/vulkan_per_pass_resource_table.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
 #include <vkm/renderer/backend/vulkan/vulkan_frame_constant_manager.h>
@@ -204,12 +205,22 @@ namespace vkm
         // only), so no coordinate-space compensation happens here. That upstream Y-flip
         // reverses screen-space winding, which toVkFrontFace() in vulkan_pipeline_state.cpp
         // accounts for.
+        // The pass-wide default; setViewportAndScissor() narrows it afterwards if a caller wants
+        // to pack several views into this attachment.
+        onSetViewportAndScissor(0, 0, frameBufferDesc._width, frameBufferDesc._height);
+    }
+
+    void VkmCommandBufferVulkan::onSetViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height)
+    {
+        // A plain positive-height viewport: the engine's +Y-up clip space reaches Vulkan's +Y-down
+        // NDC through vkm-compiler's -fvk-invert-y, so there is nothing to compensate here (see
+        // onBeginRenderPass).
         const VkViewport viewport{
-            .x = 0.0f, .y = 0.0f,
-            .width = static_cast<float>(frameBufferDesc._width), .height = static_cast<float>(frameBufferDesc._height),
+            .x = static_cast<float>(x), .y = static_cast<float>(y),
+            .width = static_cast<float>(width), .height = static_cast<float>(height),
             .minDepth = 0.0f, .maxDepth = 1.0f,
         };
-        const VkRect2D scissor{ {0, 0}, {frameBufferDesc._width, frameBufferDesc._height} };
+        const VkRect2D scissor{ {x, y}, {width, height} };
         vkCmdSetViewport(_vkCommandBuffer, 0, 1, &viewport);
         vkCmdSetScissor(_vkCommandBuffer, 0, 1, &scissor);
     }
@@ -430,6 +441,55 @@ namespace vkm
                              VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
                              0, 0, nullptr, 1, &barrier, 0, nullptr);
+    }
+
+    void VkmCommandBufferVulkan::onBarrierTextureForShaderRead(VkmResourceHandle texture)
+    {
+        VkmTextureVulkan* textureVulkan =
+            static_cast<VkmTextureVulkan*>(_driver->getRenderResourcePool()->getResource<VkmTexture>(texture));
+        if (textureVulkan == nullptr)
+        {
+            VKM_DEBUG_ERROR("barrierTextureForShaderRead was given a handle that is not a live texture");
+            return;
+        }
+
+        // SHADER_READ_ONLY_OPTIMAL is the layout the bindless texture descriptors declare
+        // (VkmBindlessResourceManagerVulkan writes imageLayout = SHADER_READ_ONLY_OPTIMAL), so a
+        // texture sampled through set 0 has to actually be in it. Uploaded textures already end up
+        // here via copyBufferToTexture; a render target does not, which is the gap this closes.
+        if (textureVulkan->getCurrentLayout() == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        {
+            return;
+        }
+
+        // A sampled depth texture (a shadow map, or the G-buffer depth a GI pass reads) needs the
+        // depth/stencil aspects rather than the colour one.
+        const VkmFormat format = textureVulkan->getTextureInfo()._format;
+        const VkImageAspectFlags aspectMask =
+            (hasDepth(format) || hasStencil(format))
+                ? ((hasDepth(format) ? VK_IMAGE_ASPECT_DEPTH_BIT : 0u) |
+                   (hasStencil(format) ? VK_IMAGE_ASPECT_STENCIL_BIT : 0u))
+                : VK_IMAGE_ASPECT_COLOR_BIT;
+        transitionImageLayout(_vkCommandBuffer, textureVulkan->getImage(),
+                              textureVulkan->getCurrentLayout(),
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, aspectMask);
+        textureVulkan->setCurrentLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    void VkmCommandBufferVulkan::onBindPerPassResources(VkmPerPassResourceTableBase* table)
+    {
+        VkmPerPassResourceTableVulkan* tableVulkan = static_cast<VkmPerPassResourceTableVulkan*>(table);
+        VkDescriptorSet descriptorSet = tableVulkan->getDescriptorSet();
+
+        // The bound pipeline is the one the table was built against (checked in the base class), so
+        // its layout is the right one to bind against and kVkmPerPassSetIndex is the right index.
+        const VkmPipelineStateVulkan* pipelineStateVulkan =
+            static_cast<const VkmPipelineStateVulkan*>(getBoundPipelineState());
+        const VkPipelineBindPoint bindPoint = pipelineStateVulkan->isCompute()
+                                                  ? VK_PIPELINE_BIND_POINT_COMPUTE
+                                                  : VK_PIPELINE_BIND_POINT_GRAPHICS;
+        vkCmdBindDescriptorSets(_vkCommandBuffer, bindPoint, pipelineStateVulkan->getPipelineLayout(),
+                                kVkmPerPassSetIndex, 1, &descriptorSet, 0, nullptr);
     }
 
     void VkmCommandBufferVulkan::onSetPushConstants(const void* data, uint32_t size, uint32_t offset)

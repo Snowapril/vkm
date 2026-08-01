@@ -4,6 +4,7 @@
 #include <vkm/renderer/backend/webgpu/webgpu_texture.h>
 #include <vkm/renderer/backend/webgpu/webgpu_util.h>
 #include <vkm/renderer/backend/webgpu/webgpu_pipeline_state.h>
+#include <vkm/renderer/backend/webgpu/webgpu_per_pass_resource_table.h>
 #include <vkm/renderer/backend/webgpu/webgpu_buffer.h>
 #include <vkm/renderer/backend/webgpu/webgpu_staging_buffer.h>
 #include <vkm/renderer/backend/webgpu/webgpu_driver.h>
@@ -114,6 +115,15 @@ namespace vkm
         wgpuRenderPassEncoderEnd(_renderPassEncoder);
         wgpuRenderPassEncoderRelease(_renderPassEncoder);
         _renderPassEncoder = nullptr;
+    }
+
+    void VkmCommandBufferWebGPU::onSetViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height)
+    {
+        VKM_ASSERT(_renderPassEncoder != nullptr, "setViewportAndScissor outside a render pass");
+        wgpuRenderPassEncoderSetViewport(_renderPassEncoder, static_cast<float>(x), static_cast<float>(y),
+                                         static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f);
+        wgpuRenderPassEncoderSetScissorRect(_renderPassEncoder, static_cast<uint32_t>(x),
+                                            static_cast<uint32_t>(y), width, height);
     }
 
     void VkmCommandBufferWebGPU::onBindPipeline(VkmPipelineStateBase* pipelineState)
@@ -298,6 +308,27 @@ namespace vkm
         (void)buffer;
         // WebGPU has no explicit barriers: writes from one pass are visible to the next by
         // specification, and the scene's copies, culling dispatch and draws are all separate passes.
+    }
+
+    void VkmCommandBufferWebGPU::onBarrierTextureForShaderRead(VkmResourceHandle texture)
+    {
+        (void)texture;
+        // Same reason as onBarrierIndirectArgumentBuffer: WebGPU has no explicit barriers and no
+        // image layouts, and one pass's writes are visible to the next by specification.
+    }
+
+    void VkmCommandBufferWebGPU::onBindPerPassResources(VkmPerPassResourceTableBase* table)
+    {
+        // Group 2 carries no dynamic offset, unlike group 0's push-constant ring, so this is a
+        // plain bind on whichever encoder the bound pipeline opened.
+        WGPUBindGroup bindGroup = static_cast<VkmPerPassResourceTableWebGPU*>(table)->getBindGroup();
+        if (_computePassEncoder != nullptr)
+        {
+            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, kVkmPerPassSetIndex, bindGroup, 0, nullptr);
+            return;
+        }
+        VKM_ASSERT(_renderPassEncoder != nullptr, "bindPerPassResources outside any pass");
+        wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, kVkmPerPassSetIndex, bindGroup, 0, nullptr);
     }
 
     void VkmCommandBufferWebGPU::onSetDebugName(const char* name)

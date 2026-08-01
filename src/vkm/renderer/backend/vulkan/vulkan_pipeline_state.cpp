@@ -205,6 +205,31 @@ namespace vkm
             *outEntryPoint = loaded->entryPoint;
             return true;
         }
+
+    // Set-2 mappings. Shader visibility is derived from the resource type rather than declared per
+    // binding (see VkmPerPassResourceType), so these two stay the single place that decision lives.
+    VkDescriptorType toVkDescriptorType(VkmPerPassResourceType type)
+    {
+        switch (type)
+        {
+            case VkmPerPassResourceType::SampledTexture: return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            case VkmPerPassResourceType::Sampler:        return VK_DESCRIPTOR_TYPE_SAMPLER;
+            case VkmPerPassResourceType::StorageBuffer:  return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            case VkmPerPassResourceType::UniformBuffer:  return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        }
+        return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    }
+
+    VkShaderStageFlags toVkShaderStageFlags(VkmPerPassResourceType type)
+    {
+        // Storage buffers are compute-only to match the constraint the other backends impose (see
+        // VkmPerPassResourceType::StorageBuffer); the rest are visible everywhere, like set 1.
+        if (type == VkmPerPassResourceType::StorageBuffer)
+        {
+            return VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        return VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+    }
     } // namespace
 
     VkmPipelineStateVulkan::VkmPipelineStateVulkan(VkmDriverBase* driver)
@@ -230,10 +255,42 @@ namespace vkm
         // for shaders that use neither -- an unused set in a pipeline layout is valid and keeps
         // every pipeline layout-compatible. Sets 2-3 remain reserved (see
         // common/frame_constants.h).
-        const std::array<VkDescriptorSetLayout, 2> setLayouts{
+        std::vector<VkDescriptorSetLayout> setLayouts{
             driverVulkan->getBindlessResourceManager()->getSetLayout(),
             driverVulkan->getFrameConstantManager()->getSetLayout(),
         };
+
+        // Set 2 is this pipeline's own, built from its `perPassResources` declaration. Declaring
+        // it makes this pipeline layout-incompatible with one that does not -- the first time that
+        // has been true in this engine -- so it is only added when the PSO actually asked for it,
+        // leaving every existing pipeline exactly as it was.
+        if (!desc.perPassResources.empty())
+        {
+            std::vector<VkDescriptorSetLayoutBinding> perPassBindings;
+            perPassBindings.reserve(desc.perPassResources.size());
+            for (const VkmPerPassResourceBinding& resource : desc.perPassResources)
+            {
+                perPassBindings.push_back(VkDescriptorSetLayoutBinding{
+                    .binding         = resource.binding,
+                    .descriptorType  = toVkDescriptorType(resource.type),
+                    .descriptorCount = 1,
+                    .stageFlags      = toVkShaderStageFlags(resource.type),
+                });
+            }
+            const VkDescriptorSetLayoutCreateInfo perPassLayoutCreateInfo{
+                .sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                .bindingCount = static_cast<uint32_t>(perPassBindings.size()),
+                .pBindings    = perPassBindings.data(),
+            };
+            const VkResult layoutResult =
+                vkCreateDescriptorSetLayout(device, &perPassLayoutCreateInfo, nullptr, &_perPassSetLayout);
+            if (!VKM_VK_CHECK_RESULT_MSG(layoutResult, "Failed to create per-pass descriptor set layout"))
+            {
+                setError(outError, "Failed to create the set-2 layout for " + desc.name);
+                return false;
+            }
+            setLayouts.push_back(_perPassSetLayout);
+        }
         const VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
             .offset     = 0,
@@ -549,6 +606,11 @@ namespace vkm
         {
             vkDestroyPipelineLayout(device, _pipelineLayout, nullptr);
             _pipelineLayout = VK_NULL_HANDLE;
+        }
+        if (_perPassSetLayout != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorSetLayout(device, _perPassSetLayout, nullptr);
+            _perPassSetLayout = VK_NULL_HANDLE;
         }
     }
 } // namespace vkm

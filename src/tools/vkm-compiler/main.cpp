@@ -46,6 +46,11 @@ namespace
         VkmShaderCacheStage stage;
         const char* shortName; // file-name component, e.g. "vert"
         const char* profile;   // dxc target profile, e.g. "vs_6_0"
+        // Profile used instead when the stage sets VkmShaderStageDescriptor::requiresRayQuery.
+        // `RayQuery<>` is a shader-model-6.5 feature, and the baseline profile stays at 6.0 so
+        // one shader opting into ray tracing does not raise the requirement for every shader.
+        // Null for stages that cannot carry a ray query (everything but compute).
+        const char* rayQueryProfile;
     };
 
     const char* backendDefault()
@@ -91,6 +96,7 @@ namespace
                         const StageInfo& info,
                         VkmShaderCacheContentFormat format,
                         const std::string& entryPoint,
+                        const uint32_t (&threadGroupSize)[3],
                         const std::vector<uint8_t>& content)
     {
         VkmShaderCacheHeader header{};
@@ -100,6 +106,9 @@ namespace
         header.stage = info.stage;
         header.contentFormat = format;
         std::strncpy(header.entryPoint, entryPoint.c_str(), sizeof(header.entryPoint) - 1);
+        header.threadGroupSize[0] = threadGroupSize[0];
+        header.threadGroupSize[1] = threadGroupSize[1];
+        header.threadGroupSize[2] = threadGroupSize[2];
         header.contentSize = static_cast<uint64_t>(content.size());
 
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -137,13 +146,40 @@ namespace
                         const fs::path& includeDir,
                         const fs::path& spvOut)
     {
+        if (desc.requiresRayQuery && info.rayQueryProfile == nullptr)
+        {
+            std::cerr << "vkm-compiler: " << source.filename().string() << " (" << info.shortName
+                      << ") sets ray_query, but only the compute stage can carry an inline ray"
+                         " query\n";
+            return false;
+        }
+
         std::vector<std::string> args = {
             "-spirv",
-            "-T", info.profile,
+            "-T", desc.requiresRayQuery ? info.rayQueryProfile : info.profile,
             "-E", desc.entryPoint,
             "-D", backendDefine(backend),
             "-D", "VKM_BINDLESS_BUFFER_CAPACITY=" + std::to_string(kVkmBindlessBufferCapacity),
         };
+        if (desc.requiresRayQuery)
+        {
+            // Raises the emitted module from SPIR-V 1.0 (dxc's default) to 1.5, the version
+            // Vulkan 1.2 mandates and the one the ray-tracing extensions are written against.
+            // A query-only module does validate as SPIR-V 1.0 + SPV_KHR_ray_query, but no driver
+            // exposing rayQuery predates Vulkan 1.2, so emitting 1.0 buys nothing and asks
+            // drivers to accept an unusual combination.
+            //
+            // Deliberately no -fspv-extension: that flag is a *whitelist*, and naming
+            // SPV_KHR_ray_query alone makes dxc reject the engine's bindless unsized descriptor
+            // arrays ("SPV_EXT_descriptor_indexing required ... but not permitted to use"). dxc
+            // already emits both extensions on its own, so the flag is unnecessary as well as
+            // harmful.
+            //
+            // Both targets take this path: the Metal target compiles its own SPIR-V and then
+            // feeds spirv-cross, which lowers OpRayQuery* to metal::raytracing intersection
+            // queries.
+            args.push_back("-fspv-target-env=vulkan1.2");
+        }
         if (!includeDir.empty())
         {
             // Where the engine's shared .hlsli headers (include/vkm/shaders) are found.
@@ -191,6 +227,39 @@ namespace
             std::memcpy(words.data(), bytes.data(), words.size() * sizeof(uint32_t));
         }
         return words;
+    }
+
+    /*
+    * @brief Reads a compute shader's declared [numthreads(x, y, z)] out of the compiled SPIR-V.
+    *
+    * Taking it from the module rather than from the PSO JSON keeps the shader the single source
+    * of truth: Metal must be told the threadgroup size at dispatch time, and a hand-maintained
+    * second copy that drifts from the shader would dispatch the wrong thread count silently.
+    * Returns false if the module declares no local size, which is a build error for a compute
+    * stage rather than something to paper over with a default.
+    */
+    bool readComputeThreadGroupSize(const std::vector<uint8_t>& spirv,
+                                    const std::string& entryPoint,
+                                    uint32_t (&out)[3])
+    {
+        try
+        {
+            const spirv_cross::Compiler reflect(toSpirvWords(spirv));
+            const spirv_cross::SPIREntryPoint& entry =
+                reflect.get_entry_point(entryPoint, spv::ExecutionModelGLCompute);
+            if (entry.workgroup_size.x == 0)
+            {
+                return false;
+            }
+            out[0] = entry.workgroup_size.x;
+            out[1] = entry.workgroup_size.y;
+            out[2] = entry.workgroup_size.z;
+            return true;
+        }
+        catch (const std::exception&)
+        {
+            return false;
+        }
     }
 
 #if defined(VKM_METAL_TOOLS_AVAILABLE)
@@ -269,6 +338,7 @@ namespace
                       const StageInfo& info,
                       VkmShaderCacheBackend backend,
                       const std::string& optionName,
+                      const std::vector<VkmPerPassResourceBinding>& perPassResources,
                       const fs::path& shaderRoot,
                       const fs::path& includeDir,
                       const fs::path& outputDir,
@@ -295,6 +365,17 @@ namespace
         {
             std::cerr << "vkm-compiler: dxc produced empty SPIR-V for "
                       << source.filename().string() << "\n";
+            fs::remove(spvTmp);
+            return false;
+        }
+
+        uint32_t threadGroupSize[3] = {};
+        if (info.stage == VkmShaderCacheStage::Compute &&
+            !readComputeThreadGroupSize(spirv, desc.entryPoint, threadGroupSize))
+        {
+            std::cerr << "vkm-compiler: could not read [numthreads(...)] from "
+                      << source.filename().string() << " (entry '" << desc.entryPoint
+                      << "'); Metal needs it at dispatch time\n";
             fs::remove(spvTmp);
             return false;
         }
@@ -425,6 +506,47 @@ namespace
                     compiler.add_msl_resource_binding(resourceBinding);
                 }
 
+                // Set 2 (per-pass) is declared discrete for the same reason set 1 is: it keeps it
+                // out of the pad_argument_buffer_resources walk, which needs a registered base
+                // type for every id it steps over and so cannot cope with the sparse binding
+                // indices a PSO may declare. Each declared binding therefore becomes an ordinary
+                // MSL argument at a pinned index, mirroring what
+                // VkmPerPassResourceTableMetal sets on the argument table at bind time.
+                //
+                // Only bindings this PSO declared are pinned; a shader is free to use a subset.
+                if (!perPassResources.empty())
+                {
+                    compiler.add_discrete_descriptor_set(kVkmPerPassSetIndex);
+                    for (const VkmPerPassResourceBinding& resource : perPassResources)
+                    {
+                        spirv_cross::MSLResourceBinding resourceBinding;
+                        resourceBinding.stage = executionModel;
+                        resourceBinding.desc_set = kVkmPerPassSetIndex;
+                        resourceBinding.binding = resource.binding;
+                        resourceBinding.count = 1;
+                        switch (resource.type)
+                        {
+                            case VkmPerPassResourceType::SampledTexture:
+                                resourceBinding.basetype = spirv_cross::SPIRType::Image;
+                                resourceBinding.msl_texture = kVkmMetalPerPassTextureIndexBase + resource.binding;
+                                break;
+                            case VkmPerPassResourceType::Sampler:
+                                resourceBinding.basetype = spirv_cross::SPIRType::Sampler;
+                                resourceBinding.msl_sampler = kVkmMetalPerPassSamplerIndexBase + resource.binding;
+                                break;
+                            case VkmPerPassResourceType::StorageBuffer:
+                                resourceBinding.basetype = spirv_cross::SPIRType::UInt;
+                                resourceBinding.msl_buffer = kVkmMetalPerPassBufferIndexBase + resource.binding;
+                                break;
+                            case VkmPerPassResourceType::UniformBuffer:
+                                resourceBinding.basetype = spirv_cross::SPIRType::Float;
+                                resourceBinding.msl_buffer = kVkmMetalPerPassBufferIndexBase + resource.binding;
+                                break;
+                        }
+                        compiler.add_msl_resource_binding(resourceBinding);
+                    }
+                }
+
                 // Pin the push-constant block (kPushConstDescSet is its own namespace,
                 // never involved in set-0 padding).
                 {
@@ -501,7 +623,7 @@ namespace
 
         const fs::path outPath =
             outputDir / buildShaderCacheFilename(baseName, optionName, info.stage, backend);
-        if (!writeCacheFile(outPath, backend, info, format, desc.entryPoint, content))
+        if (!writeCacheFile(outPath, backend, info, format, desc.entryPoint, threadGroupSize, content))
         {
             return false;
         }
@@ -600,9 +722,9 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    const StageInfo vertexInfo{VkmShaderCacheStage::Vertex, "vert", "vs_6_0"};
-    const StageInfo fragmentInfo{VkmShaderCacheStage::Fragment, "frag", "ps_6_0"};
-    const StageInfo computeInfo{VkmShaderCacheStage::Compute, "comp", "cs_6_0"};
+    const StageInfo vertexInfo{VkmShaderCacheStage::Vertex, "vert", "vs_6_0", nullptr};
+    const StageInfo fragmentInfo{VkmShaderCacheStage::Fragment, "frag", "ps_6_0", nullptr};
+    const StageInfo computeInfo{VkmShaderCacheStage::Compute, "comp", "cs_6_0", "cs_6_5"};
 
     bool allOk = true;
     for (const VkmPipelineStateDescriptor& variant : *variants)
@@ -610,17 +732,17 @@ int main(int argc, char** argv)
         if (variant.vertexShader.has_value())
         {
             allOk &= compileStage(*variant.vertexShader, vertexInfo, backend,
-                                  variant.optionName, shaderRoot, includeDir, outputDir, emitMsl);
+                                  variant.optionName, variant.perPassResources, shaderRoot, includeDir, outputDir, emitMsl);
         }
         if (variant.fragmentShader.has_value())
         {
             allOk &= compileStage(*variant.fragmentShader, fragmentInfo, backend,
-                                  variant.optionName, shaderRoot, includeDir, outputDir, emitMsl);
+                                  variant.optionName, variant.perPassResources, shaderRoot, includeDir, outputDir, emitMsl);
         }
         if (variant.computeShader.has_value())
         {
             allOk &= compileStage(*variant.computeShader, computeInfo, backend,
-                                  variant.optionName, shaderRoot, includeDir, outputDir, emitMsl);
+                                  variant.optionName, variant.perPassResources, shaderRoot, includeDir, outputDir, emitMsl);
         }
     }
 
