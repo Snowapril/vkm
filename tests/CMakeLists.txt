@@ -19,6 +19,7 @@ set(SRCS
     ${SRC_DIR}/TestPerPassResources.cpp
     ${SRC_DIR}/TestGBuffer.cpp
     ${SRC_DIR}/TestProbeVolume.cpp
+    ${SRC_DIR}/TestSceneCullViews.cpp
     ${SRC_DIR}/TestViewport.cpp
     ${SRC_DIR}/TestPipelineStateManager.cpp
     ${SRC_DIR}/TestBindlessSlotAllocator.cpp

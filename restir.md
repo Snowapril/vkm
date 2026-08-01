@@ -720,9 +720,18 @@ Technique decided in §5: **raster-updated dynamic probe volume + SSGI contact t
       - **The budget is clamped, not wrapped**, so a round refreshes every probe exactly once even
         when the budget does not divide the probe count, and a probe's first refresh ignores
         hysteresis so a cold start does not cost a full convergence
-- [ ] **Second cull view.** A probe capture and a main camera need different frusta in one frame,
-      and `VkmScene` has one frame-data staging slot, so today the updater owns the frame's only
-      cull. Deferred to 4.5, which is where a second consumer appears (see the note there)
+- [x] **Second cull view.** `kVkmSceneMaxCullViews = 2`: each view gets its own `VkmFrameData`
+      region, its own count words and its own payload regions in the visible-list and argument
+      buffers, so two culls in one frame never write the same words and need no barrier between
+      them. `recordUpdate`/`recordCull`/`recordDrawBatches` all take a `viewIndex`.
+
+      Two details are what make the layout work. The counts for *every* view sit at the front of
+      both buffers rather than beside each view's payload, because a batch uses one index into
+      both and their payloads have different strides — there is no single per-view offset that
+      would serve both. And each view needs its own **staging** region, not just its own device
+      region: both `recordUpdate` calls write host memory immediately, long before either GPU copy
+      runs, so a shared staging slot leaves the first cull reading the second view's frustum. That
+      was the actual blocker, and it is the one a test has to pin
 - [x] **4.3 Probe sampling.** `probe_lighting.hlsl`: trilinear over the 8 surrounding probes,
       weighted by the **Chebyshev visibility test** against the distance atlas, plus normal bias and
       a smoothed backface term. Addressing and the octahedral mapping live in
@@ -736,9 +745,8 @@ Technique decided in §5: **raster-updated dynamic probe volume + SSGI contact t
       probe depth/moments, Chebyshev weight, SSGI only, composite). Must build on WebGPU.
       **This also settles Phase 3's gate**: it is the first application to own the G-buffer,
       deferred lighting and tone-mapping passes, so the G-buffer channel views and the reprojection
-      view Phase 3 asks for belong here. It is also where a second cull view earns its keep — a
-      main camera and a probe capture then need different frusta in one frame, which `VkmScene`
-      cannot do today
+      view Phase 3 asks for belong here. The second cull view it needs — a camera frustum for the
+      G-buffer and an all-directions one for the probe capture, in the same frame — is in place
 - [x] **Light-propagation latency measured, and it is as bad as feared.** The decay is exactly
       geometric — a probe retains `hysteresis` of its old value per refresh and is refreshed once
       per round of `ceil(probeCount / budget)` frames — so the latency is

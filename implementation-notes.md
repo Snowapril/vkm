@@ -1500,3 +1500,36 @@ and readback in earlier iterations, so everything upstream works; the cause is u
 The validation half of the same test runs and passes.
 
 Verified: Metal 193/193 and Vulkan 191/191 Debug, 192/192 and 191/191 Release, WebGPU green.
+
+## 2026-08-02 — VkmScene: two cull views per frame
+
+Deferred out of 4.2c because it had no consumer then; 4.5 gives it one. A probe capture sees in
+every direction, so culling it against the camera frustum drops exactly the geometry behind the
+camera that indirect light comes from -- a GI frame has to cull twice, against different frusta.
+
+`kVkmSceneMaxCullViews = 2`. `recordUpdate`/`recordCull`/`recordDrawBatches` take a `viewIndex`
+(default 0, so every existing caller is unchanged), and `SceneBatchConstants` carries a
+`frameDataIndex` that `scene_cull.hlsl` indexes the frame data with.
+
+Two layout details carry the design:
+
+- **All views' count words sit at the front of both buffers**, not beside each view's payload. A
+  batch uses ONE index into the visible-list and argument buffers, and their payloads have
+  different strides (`assignBatchRegions` produces two different cursors), so no single per-view
+  offset would serve both. Counts are `viewIndex * batchCount + i`; the payloads get their own
+  strides.
+- **Each view needs its own staging region, not just its own device region.** Both `recordUpdate`
+  calls write host memory immediately, long before either GPU copy runs, so a shared staging slot
+  leaves the first cull reading the second view's frustum. This was the actual blocker all along.
+
+`SceneBatchConstants`'s padding also changed from `uint3` to scalars: WebGPU lowers push constants
+to a uniform buffer, where a vector aligns to its own size and would land at a different offset
+than in the scalar layout Vulkan and Metal use. The used fields were all below the padding, so
+nothing was broken -- but adding a field right above it would have been.
+
+New `tests/TestSceneCullViewsShared.hpp` culls one object against a seeing and a blind frustum in
+one frame and checks the two counts. Both failure modes were confirmed by sabotage, and they fail
+*different* assertions: forcing `g_FrameData[0]` makes view 1 report 1, and sharing the staging
+region makes view 0 report 0. Runs on Metal and Vulkan.
+
+Metal 194/194 and Vulkan 192/192 Debug, 193/193 and 192/192 Release, WebGPU green.

@@ -84,7 +84,6 @@
 - `VkmGpuProfiler` skips a submission's timing when all `kMaxPendingSubmissions` timestamp slot buckets are still in flight.
 - `VkmGpuProfilerInspector` has no unit-test coverage; only the collector and the trace format are tested.
 - The WebGPU per-pass compute test is skipped: `newBuffer` returns null for its storage buffer with no Dawn validation error and no engine log, and the cause is unknown.
-- A probe capture and a main camera view cannot cull in the same frame: VkmScene has one frame-data staging slot per frame.
 - The probe blend render pass loads and stores the whole atlas every frame to update at most the per-frame probe budget of cells.
 - VkmProbeVolumeUpdater's probe budget is capped at 32 by the Metal/WebGPU 1024-entry push-constant ring, which has no per-frame reset.
 - Probe capture, blend and update have GPU test coverage on Metal only; Vulkan covers the probe volume's addressing and the round-robin schedule.

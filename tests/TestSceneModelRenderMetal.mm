@@ -9,6 +9,7 @@
 #include <vkm/renderer/backend/metal/metal_driver.h>
 
 #include "TestSceneModelRenderShared.hpp"
+#include "TestSceneCullViewsShared.hpp"
 
 #include <memory>
 
@@ -40,6 +41,12 @@ TEST_CASE("Metal scene model - an imported glTF mesh renders through the bindles
     MetalSceneModelFixture f;
     VKM_REQUIRE_DEVICE(f.initResult);
     vkmtest::runSceneModelRenderTest(f.driver.get());
+}
+
+TEST_CASE("Metal scene cull - two views in one frame keep their own frusta and results") {
+    MetalSceneModelFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+    vkmtest::runSceneCullViewsTest(f.driver.get());
 }
 
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE

@@ -87,7 +87,13 @@ namespace vkm
         uint32_t _visibleWordOffset = 0;
         uint32_t _countWordOffset = 0;
         uint32_t _argumentWordOffset = 0;
-        uint32_t _pad0[3]{ 0, 0, 0 };
+        // Which VkmFrameData the cull pass tests against; see kVkmSceneMaxCullViews.
+        uint32_t _frameDataIndex = 0;
+        // Scalars rather than a uint2/uint3: WebGPU lowers push constants to a uniform buffer,
+        // where a vector aligns to its own size, so a vector here would sit at a different offset
+        // than it does in the scalar layout Vulkan and Metal use.
+        uint32_t _pad0 = 0;
+        uint32_t _pad1 = 0;
     };
     static_assert(sizeof(SceneBatchConstants) == 32, "SceneBatchConstants must match the shader-side struct");
 
@@ -119,6 +125,17 @@ namespace vkm
     * the scene does.
     */
     void vkmExtractFrustumPlanes(const glm::mat4& viewProjection, glm::vec4* outPlanes);
+
+    /*
+    * @brief How many independently culled views one frame may record.
+    *
+    * @details Two, because a frame that refreshes GI probes needs a cull the probes can use
+    * alongside the camera's: a probe looks in every direction, so culling its capture against the
+    * camera frustum would drop exactly the geometry behind the camera that indirect light comes
+    * from. Each view gets its own frame data, its own counts and its own payload regions, so the
+    * two culls never write the same words and need no barrier between them.
+    */
+    constexpr uint32_t kVkmSceneMaxCullViews = 2;
 
     class VkmScene
     {
@@ -172,7 +189,8 @@ namespace vkm
         * @brief Records the copies that publish `frameData` and any dirty object transforms for
         * this frame. Must be recorded outside a render pass, before the draws that read them.
         */
-        void recordUpdate(VkmCommandBufferBase* commandBuffer, uint32_t frameIndex, const VkmFrameData& frameData);
+        void recordUpdate(VkmCommandBufferBase* commandBuffer, uint32_t frameIndex,
+                          const VkmFrameData& frameData, uint32_t viewIndex = 0);
 
         /*
         * @brief Records the frustum-culling pass and the emit pass that turns its output into
@@ -183,7 +201,7 @@ namespace vkm
         * The two are separate dispatches with the compute pass closed and reopened between them,
         * which is what orders the emit's reads after the cull's compacting writes.
         */
-        void recordCull(VkmCommandBufferBase* commandBuffer);
+        void recordCull(VkmCommandBufferBase* commandBuffer, uint32_t viewIndex = 0);
 
         /*
         * @brief Records the frame's draws, one PSO bind and one GPU-driven indirect draw per batch.
@@ -201,7 +219,8 @@ namespace vkm
         */
         void recordDrawBatches(VkmCommandBufferBase* commandBuffer,
                                const std::function<VkmPipelineStateBase*(const DrawBatch&)>& pipelineResolver,
-                               const std::function<void(VkmCommandBufferBase*, const DrawBatch&)>& beforeDraw = {});
+                               const std::function<void(VkmCommandBufferBase*, const DrawBatch&)>& beforeDraw = {},
+                               uint32_t viewIndex = 0);
 
         // Every buffer a frame's update and draws touch, for VkmRenderSubGraph::addReferencedResource.
         void collectReferencedResources(std::vector<VkmResourceHandle>* outHandles) const;
@@ -253,20 +272,28 @@ namespace vkm
         VkmResourceHandle _frameDataBuffer{ VKM_INVALID_RESOURCE_HANDLE };
 
         /*
-        * The two GPU-driven bookkeeping buffers. Both start with one count word per batch, so a
-        * batch's count lives at the same word index in each, followed by that batch's own region:
+        * The two GPU-driven bookkeeping buffers. Both start with one count word per batch per cull
+        * view, so a batch's count lives at the same word index in each, followed by one payload
+        * region per view:
         *
-        *   visible list:  [count per batch][batch 0 object indices][batch 1 ...]
-        *   arguments:     [count per batch][batch 0 VkmDrawIndirectArguments][batch 1 ...]
+        *   visible list:  [counts: view 0 | view 1][view 0 object indices][view 1 ...]
+        *   arguments:     [counts: view 0 | view 1][view 0 VkmDrawIndirectArguments][view 1 ...]
+        *
+        * The counts are gathered at the front rather than living beside each view's payload because
+        * a batch uses ONE index into both buffers, whose payloads have different strides -- there
+        * is no single per-view offset that would work for both otherwise.
         *
         * The cull pass compacts into the visible list; the emit pass reads it and fills the
         * arguments, zeroing the slots past the count so they draw nothing.
         */
         VkmResourceHandle _visibleListBuffer{ VKM_INVALID_RESOURCE_HANDLE };
         VkmResourceHandle _argumentBuffer{ VKM_INVALID_RESOURCE_HANDLE };
-        // Zero-filled, sized to the count region: one copy per frame resets every batch's count.
+        // Zero-filled, sized to ONE view's count region: a cull resets only its own view's counts.
         VkmResourceHandle _countClearBuffer{ VKM_INVALID_RESOURCE_HANDLE };
         uint64_t _countRegionSize = 0;
+        // Per-view strides within each buffer's payload, in u32 words.
+        uint32_t _visibleViewStrideWords = 0;
+        uint32_t _argumentViewStrideWords = 0;
 
         VkmPipelineStateBase* _cullPipeline = nullptr;
         VkmPipelineStateBase* _emitPipeline = nullptr;
@@ -275,8 +302,11 @@ namespace vkm
         * The device-side ObjectData buffer is a single buffer at a fixed bindless binding, so an
         * object index is frame-invariant -- that is what keeps the draw path free of push
         * constants. The per-frame ring lives on the upload side instead: one staging buffer per
-        * frame slot, laid out as [ObjectData array][FrameData], so the CPU never writes memory a
-        * frame still in flight may be reading.
+        * frame slot, laid out as [ObjectData array][FrameData per cull view], so the CPU never
+        * writes memory a frame still in flight may be reading. One FrameData region per view is
+        * what makes two culls per frame possible: both recordUpdate() calls write host memory
+        * immediately, long before either GPU copy runs, so sharing one region would leave the
+        * first cull reading the second view's frustum.
         */
         std::array<VkmResourceHandle, FRAME_BUFFER_COUNT> _stagingBuffers{};
         // Resolved once in build(): the staging buffers live as long as the scene does, and
