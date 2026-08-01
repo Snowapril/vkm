@@ -3,7 +3,8 @@
 Living document for the ReSTIR GI implementation: what the technique is, the staged plan,
 current status, remaining TODOs, and the reading list. Updated at the end of every phase.
 
-**Status:** Phase 1 spike **passed** (2026-07-30). See §4.1. Next: Phase 2 shared infrastructure.
+**Status:** Phases 1-3 complete (toolchain, shared infrastructure, G-buffer + deferred lighting).
+Next: Phase 4 — the GI technique interface and the low-spec probe tier, the first real GI.
 
 ---
 
@@ -625,7 +626,11 @@ Also shared by both tiers.
       GGX finally reads the `VkmMaterialData` that glTF import has carried unused. This is also
       where `barrierTextureForShaderRead` got its pixel-level proof, and where set 2's *texture and
       sampler* paths were first exercised (the earlier test used buffers only)
-- [ ] Tone mapping into the live pipeline (`tonemap.frag` is still dead GLSL with no PSO — `TODO.md:14`)
+- [x] **Tone mapping migrated to HLSL + PSO.** The loose `tonemap.frag`/`quad_screen.vert` were dead
+      (no PSO referenced them) *and* wrong: `main()` bypassed the helper doing exposure/white-point/
+      gamma, so whites came out grey, and the "fullscreen" quad was scaled to 0.8. Both fixed rather
+      than reproduced; the GLSL is deleted and `TODO.md:14` narrowed to what remains
+- [x] **Fullscreen triangle factored into `vkm_fullscreen.hlsli`** once two passes needed it
 - [ ] Hash-based stateless RNG seeded per (pixel, frame, pass)
 
 **Gate:** G-buffer channels visualizable via a debug view; reprojection debug view stable under
@@ -1011,4 +1016,5 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-07-31 | 2 | Descriptor set 2 on **Metal**, via discrete argument-table bindings (not a second argument buffer) so it stays out of the `pad_argument_buffer_resources` walk, mirroring set 1. vkm-compiler pins each declared binding per-PSO. The cross-backend test now runs the same shader and expected values on Vulkan and Metal, which is what shows the declaration means the same thing on both. Metal 169 tests, Vulkan 173, wasm builds. |
 | 2026-07-31 | 2 | Descriptor set 2 on **WebGPU** (bind group 2), completing set 2 on all three backends. Compile-verified only: the WebGPU suite runs in headless Chrome and passes, but no shader can be compiled for that backend without a Tint/Dawn build, so the group-2 path has not executed. Flagged as a Phase 4 risk. |
 | 2026-08-01 | 3 | G-buffer filled by a real MRT scene pass (`gbuffer.hlsl`) with camera motion vectors, then consumed by a fullscreen PBR deferred-lighting pass reading it through descriptor set 2. Verified on Metal by rendering the fixture scene and checking the shaded output: the lit pixel is non-black with the material's colour ordering preserved, uncovered pixels are exactly black, and doubling only the set-2 light buffer doubles the result. Metal 175 tests. |
+| 2026-08-01 | 3 | Tone mapping migrated from dead GLSL to HLSL + PSO, fixing the missing white-point normalization and gamma encode it never applied. Fullscreen triangle factored into `vkm_fullscreen.hlsli` now that lighting and tone mapping both use it. **Phase 3 complete.** |
 | 2026-07-30 | 4 | Low-spec tier must be **fully dynamic** (no bake) → technique decided: raster-updated dynamic probe volume (DDGI-style octahedral irradiance + distance moments, Chebyshev visibility) plus an additive SSGI contact term. Storage/sampling are update-mechanism-agnostic, so Phase 5's rays can later refresh the same volume, and ReSTIR GI can query it for multi-bounce `L_o`. |

@@ -384,6 +384,139 @@ namespace vkmtest
         driver->getRenderResourcePool()->releaseResource(sampler->getHandle());
         gbuffer.destroy();
     }
+
+    /*
+    * @brief Runs the tone-mapping pass over a known HDR colour and checks the mapped result.
+    *
+    * The interesting property is the white point: the Uncharted 2 curve must be normalized so that
+    * an input of 11.2 maps to exactly 1.0. The GLSL this replaced skipped that normalization (and
+    * the gamma encode), so whites came out grey -- which is invisible unless something asserts on
+    * it, hence this test.
+    */
+    inline void runTonemapTest(vkm::VkmDriverBase* driver)
+    {
+        vkm::VkmPipelineStateManager manager(driver);
+        std::string psoError;
+        REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(TEST_ENGINE_PIPELINE_DIR, TEST_ENGINE_SHADER_CACHE_DIR,
+                                                                vkm::VkmPipelineStateOrigin::Engine, &psoError),
+                        psoError);
+        vkm::VkmPipelineStateBase* pso =
+            manager.getPipelineState("tonemap_pso", vkm::VkmPipelineStateOrigin::Engine);
+        REQUIRE(pso != nullptr);
+
+        constexpr uint32_t kSize = 16;
+
+        // A uniform HDR source, so every pixel maps identically and one readback texel speaks for
+        // the whole image.
+        const auto makeSourceTexture = [&](float value) {
+            vkm::VkmTextureInfo info{};
+            info._flags = static_cast<vkm::VkmResourceCreateInfo>(
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowShaderRead) |
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowTransferDst));
+            info._extent = glm::uvec3(kSize, kSize, 1);
+            info._numMipLevels = 1;
+            info._numArrayLayers = 1;
+            // 8-bit UNORM cannot carry an HDR value above 1, so the source is 32-bit float.
+            info._format = vkm::VkmFormat::R32G32B32A32_SFLOAT;
+            info._debugName = "TonemapSource";
+            vkm::VkmTexture* texture = driver->newTexture(info);
+            REQUIRE(texture != nullptr);
+
+            std::vector<float> pixels(static_cast<size_t>(kSize) * kSize * 4);
+            for (size_t i = 0; i < pixels.size(); i += 4)
+            {
+                pixels[i + 0] = value;
+                pixels[i + 1] = value;
+                pixels[i + 2] = value;
+                pixels[i + 3] = 1.0f;
+            }
+            REQUIRE(driver->uploadToTexture(texture->getHandle(), pixels.data(), pixels.size() * sizeof(float)));
+            return texture;
+        };
+
+        vkm::VkmSamplerInfo samplerInfo{};
+        samplerInfo._debugName = "TonemapSampler";
+        vkm::VkmSampler* sampler = driver->newSampler(samplerInfo);
+        REQUIRE(sampler != nullptr);
+
+        struct TonemapConstants { float exposureGamma[4]; };
+        vkm::VkmBufferInfo constantsInfo{};
+        constantsInfo._flags = vkm::VkmResourceCreateInfo::AllowShaderRead | vkm::VkmResourceCreateInfo::AllowTransferDst;
+        constantsInfo._size = sizeof(TonemapConstants);
+        constantsInfo._debugName = "TonemapConstants";
+        vkm::VkmBuffer* constantsBuffer = driver->newBuffer(constantsInfo);
+        REQUIRE(constantsBuffer != nullptr);
+        // Exposure 1 and gamma 1: an identity gamma isolates the curve itself, so the white-point
+        // assertion below is about normalization rather than about the encode.
+        const TonemapConstants constants{{1.0f, 1.0f, 0.0f, 0.0f}};
+        REQUIRE(driver->uploadToBuffer(constantsBuffer->getHandle(), &constants, sizeof(constants)));
+
+        vkm::VkmTextureInfo targetInfo{};
+        targetInfo._flags = vkm::VkmResourceCreateInfo::AllowColorAttachment | vkm::VkmResourceCreateInfo::AllowTransferSrc;
+        targetInfo._extent = glm::uvec3(kSize, kSize, 1);
+        targetInfo._numMipLevels = 1;
+        targetInfo._numArrayLayers = 1;
+        targetInfo._format = driver->getSwapChainColorFormat(); // what "swapchain" in the PSO resolves to
+        targetInfo._debugName = "TonemapTarget";
+        vkm::VkmTexture* target = driver->newTexture(targetInfo);
+        REQUIRE(target != nullptr);
+
+        vkm::VkmFrameBufferDescriptor fbDesc{};
+        fbDesc._width = kSize;
+        fbDesc._height = kSize;
+        fbDesc._renderPass._colorAttachmentCount = 1;
+        fbDesc._renderPass._colorAttachments[0]._attachmentId = 0;
+        fbDesc._renderPass._colorAttachments[0]._loadAction = vkm::VkmLoadAction::Clear;
+        fbDesc._renderPass._colorAttachments[0]._storeAction = vkm::VkmStoreAction::Store;
+        fbDesc._colorAttachments[0] = target->getHandle();
+
+        const auto tonemapValue = [&](float hdrValue) {
+            vkm::VkmTexture* source = makeSourceTexture(hdrValue);
+            const std::vector<vkm::VkmPerPassResourceEntry> entries{
+                { 0, source->getHandle() },
+                { 1, sampler->getHandle() },
+                { 2, constantsBuffer->getHandle() },
+            };
+            std::string tableError;
+            vkm::VkmPerPassResourceTableBase* table = driver->newPerPassResourceTable(pso, entries, &tableError);
+            REQUIRE_MESSAGE(table != nullptr, tableError);
+
+            vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+            auto* subGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
+            subGraph->setRenderCallback([pso, table](vkm::VkmCommandBufferBase* commandBuffer) {
+                commandBuffer->bindPipeline(pso);
+                commandBuffer->bindPerPassResources(table);
+                commandBuffer->draw(3, 1, 0, 0);
+            });
+            renderGraph.compile();
+            renderGraph.execute();
+            renderGraph.ensureCompleted();
+
+            vkm::VkmTextureReadbackResult readback = driver->readbackTexture(target->getHandle());
+            table->destroy();
+            delete table;
+            driver->getRenderResourcePool()->releaseResource(source->getHandle());
+            // The swapchain format may be BGRA, so read the channel the target actually stores
+            // red in; a uniform grey source makes the three colour channels equal anyway.
+            return readback.pixels[(static_cast<size_t>(kSize / 2) * readback.width + kSize / 2) * readback.channels];
+        };
+
+        // The curve's white point. Normalized correctly, 11.2 maps to 1.0 -- i.e. saturated white.
+        // Without the normalization the shader this replaces produced roughly 0.8 here, a visibly
+        // grey "white" that nothing would have caught.
+        CHECK(tonemapValue(11.2f) >= 254);
+
+        // Black maps to black, and a mid value lands strictly between: the curve is monotonic and
+        // actually being applied rather than the input passing through.
+        CHECK(tonemapValue(0.0f) == 0);
+        const uint8_t mid = tonemapValue(1.0f);
+        CHECK(mid > 0);
+        CHECK(mid < 254);
+
+        driver->getRenderResourcePool()->releaseResource(target->getHandle());
+        driver->getRenderResourcePool()->releaseResource(constantsBuffer->getHandle());
+        driver->getRenderResourcePool()->releaseResource(sampler->getHandle());
+    }
 }
 
 #endif // TEST_GBUFFER_RENDER_SHARED_HPP

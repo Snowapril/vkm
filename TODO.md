@@ -11,7 +11,7 @@
 - The WebGPU set-1 path is compile-verified only; emitting WGSL needs a `VKM_COMPILER_ENABLE_WGSL=ON` vkm-compiler (tint/dawn build) that no local or CI configuration provides yet.
 - The common command-buffer interface has no compute dispatch entry point; Metal's `beginComputePass` scaffolding is never invoked.
 - `MTL4RenderPipelineDescriptor` has no depth/stencil attachment format properties in Metal4; `VkmPipelineStateMetal` can't validate/set depth-stencil format at pipeline-creation time, only at render-pass/encoder time.
-- Migrate vkm's own engine shaders (scene_object/tonemap/etc.) from loose GLSL to HLSL+PSO json so `resources/Pipelines/Engine/` and the `vkm_engine_shaders` CMake target actually have something to compile.
+- Migrate vkm's remaining loose GLSL engine shaders (scene_object, test_shader) to HLSL+PSO json; tonemap and quad_screen were migrated and their GLSL deleted.
 - WebGPU resources report `getAllocatedSize()`/`getMemoryAlignment()` as a passthrough of the requested size (wgpu has no allocation introspection; Vulkan/Metal report real values).
 - PSO JSON has no push-constant/descriptor-set representation; the bindless set 0 layout and push-constant range are hardcoded per backend (VkmPipelineStateVulkan::createInner, vkm-compiler's MSL remaps, VkmBindlessResourceManagerWebGPU's bind group layout).
 - `getProcessCpuUsagePercent()` returns 0 on wasm.

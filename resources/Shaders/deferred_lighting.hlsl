@@ -12,12 +12,11 @@
 //   - The G-buffer is unpacked through vkm_gbuffer.hlsli rather than by restating the octahedral
 //     maths here, so writer and reader cannot drift.
 //
-// The fullscreen triangle is generated from SV_VertexID with no vertex buffer and no index buffer,
-// which is why the PSO declares no input layout. One oversized triangle rather than two quad
-// triangles: it avoids the diagonal seam where two triangles meet, along which quad-based
-// derivatives are wrong.
+// The fullscreen triangle comes from vkm_fullscreen.hlsli, which is why the PSO declares no input
+// layout.
 
 #include "vkm_frame_constants.hlsli"
+#include "vkm_fullscreen.hlsli"
 #include "vkm_gbuffer.hlsli"
 
 VKM_FRAME_CONSTANTS(g_VkmFrame);
@@ -37,25 +36,11 @@ struct LightConstants
 [[vk::binding(4, 2)]] SamplerState         g_Sampler            : register(s0, space2);
 [[vk::binding(5, 2)]] ConstantBuffer<LightConstants> g_Light    : register(b0, space2);
 
-struct VSOutput
-{
-    float4 position : SV_POSITION;
-    [[vk::location(0)]] float2 uv : TEXCOORD0;
-};
+typedef VkmFullscreenVSOutput VSOutput;
 
-/*
-* @brief One oversized triangle covering the viewport, from the vertex index alone.
-*
-* vertexId 0,1,2 produce UVs (0,0), (2,0), (0,2), which map to clip-space corners spanning twice
-* the viewport. The half outside is clipped away, leaving full coverage with no interior edge.
-*/
 VSOutput VSMain(uint vertexId : SV_VertexID)
 {
-    VSOutput output;
-    output.uv = float2((vertexId << 1) & 2, vertexId & 2);
-    // UV is +Y down, clip space is +Y up (see camera.h), hence the sign on y.
-    output.position = float4(output.uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
-    return output;
+    return vkmFullscreenTriangle(vertexId);
 }
 
 // Trowbridge-Reitz (GGX) normal distribution.
