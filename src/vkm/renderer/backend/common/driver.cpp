@@ -534,13 +534,9 @@ namespace vkm
         return swapChain;
     }
 
-    VkmPipelineStateBase* VkmDriverBase::newPipelineState(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError)
+    bool VkmDriverBase::resolveSwapChainFormats(VkmPipelineStateDescriptor& desc, std::string* outError) const
     {
-        // Resolve any "swapchain" color format sentinel to the concrete swapchain format before
-        // the backend consumes it -- the format converters (getMTLPixelFormat/toVkFormat/...)
-        // must never see VkmFormat::Swapchain.
-        VkmPipelineStateDescriptor resolvedDesc = desc;
-        for (VkmColorBlendAttachmentState& attachment : resolvedDesc.colorAttachments)
+        for (VkmColorBlendAttachmentState& attachment : desc.colorAttachments)
         {
             if (attachment.format == VkmFormat::Swapchain)
             {
@@ -550,10 +546,31 @@ namespace vkm
                     {
                         *outError = "Pipeline requests \"swapchain\" color format but no swapchain color format has been resolved";
                     }
-                    return nullptr;
+                    return false;
                 }
                 attachment.format = _swapChainColorFormat;
             }
+        }
+        return true;
+    }
+
+    void VkmDriverBase::waitIdle(const uint64_t timeoutMs)
+    {
+        for (const std::vector<VkmCommandQueueBase*>& queuesOfType : _commandQueues)
+        {
+            for (VkmCommandQueueBase* commandQueue : queuesOfType)
+            {
+                commandQueue->waitIdle(timeoutMs);
+            }
+        }
+    }
+
+    VkmPipelineStateBase* VkmDriverBase::newPipelineState(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError)
+    {
+        VkmPipelineStateDescriptor resolvedDesc = desc;
+        if (!resolveSwapChainFormats(resolvedDesc, outError))
+        {
+            return nullptr;
         }
 
         VkmPipelineStateBase* pipelineState = newPipelineStateInner();

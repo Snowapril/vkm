@@ -1,9 +1,23 @@
 // Copyright (c) 2025 Snowapril
 
-#include "subprocess.h"
+#include <vkm/base/subprocess.h>
 
 #include <array>
 #include <cstdio>
+
+#if defined(__EMSCRIPTEN__)
+namespace vkm
+{
+    SubprocessResult runSubprocess(const std::string& executable,
+                                   const std::vector<std::string>& /*args*/)
+    {
+        SubprocessResult result;
+        result.exitCode = -1;
+        result.output = "Cannot launch '" + executable + "': subprocesses are unavailable on wasm";
+        return result;
+    }
+} // namespace vkm
+#else
 
 #if defined(_WIN32)
 #define VKM_POPEN _popen
@@ -92,3 +106,5 @@ namespace vkm
         return result;
     }
 } // namespace vkm
+
+#endif // !defined(__EMSCRIPTEN__)

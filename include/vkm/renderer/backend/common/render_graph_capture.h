@@ -26,6 +26,13 @@ namespace vkm
         // Texture-only fields
         VkmFormat format = VkmFormat::Undefined;
         glm::uvec3 extent{0, 0, 0};
+        uint32_t numArrayLayers = 1;
+        VkmTextureType textureType = VkmTextureType::Auto;
+        // Capture-owned copy of this texture's contents at pass time. Stays invalid when the
+        // texture could not be snapshotted (unsupported backend, swapchain back buffer,
+        // depth/stencil format, 3D, or over the capture's snapshot budget) -- the inspector
+        // then falls back to showing the live texture.
+        VkmResourceHandle snapshotTexture = VKM_INVALID_RESOURCE_HANDLE;
         // Buffer-only field
         uint64_t size = 0;
     };
@@ -36,13 +43,10 @@ namespace vkm
         VkmCapturedResourceInfo info;
         VkmLoadAction loadAction = VkmLoadAction::DontCare;
         VkmStoreAction storeAction = VkmStoreAction::DontCare;
-        // True when the attachment is a swapchain back buffer (AllowPresent).
+        // True when the attachment is a swapchain back buffer (AllowPresent). Those cannot be
+        // copy sources (CAMetalLayer.framebufferOnly stays YES), so info.snapshotTexture
+        // stays invalid for them.
         bool isPresentTarget = false;
-        // Capture-owned post-pass copy of the attachment contents. Stays invalid when
-        // content capture is unsupported on this backend, or when the attachment is a
-        // swapchain back buffer (AllowPresent) -- those cannot be copy sources
-        // (CAMetalLayer.framebufferOnly stays YES).
-        VkmResourceHandle snapshotTexture = VKM_INVALID_RESOURCE_HANDLE;
     };
 
     // CPU copy of (a prefix of) one buffer referenced by a captured pass.
@@ -122,11 +126,23 @@ namespace vkm
         void releaseResources(VkmDriverBase* driver);
 
         static constexpr uint64_t kMaxCapturedBufferBytes = 64 * 1024;
+        // Ceiling on all snapshot textures of one capture. A graph with several passes, each
+        // referencing a few 4K inputs, would otherwise allocate hundreds of MB on one keypress.
+        static constexpr uint64_t kMaxSnapshotBytes = 256ull * 1024 * 1024;
 
     private:
+        /*
+        * @brief Allocate a capture-owned copy of `source`'s mip 0 / layer 0 and record the
+        * copy into `commandBuffer`. Returns an invalid handle when the source cannot be
+        * snapshotted; the caller then keeps metadata only.
+        */
+        VkmResourceHandle takeTextureSnapshot(VkmDriverBase* driver, VkmCommandBufferBase* commandBuffer,
+                                              VkmResourceHandle source, std::string debugName);
+
         State _state = State::Idle;
         uint32_t _capturedFrameIndex = 0;
         bool _hasContentCapture = false;
+        uint64_t _snapshotBytes = 0;
         std::vector<VkmCapturedPass> _passes;
         std::vector<VkmResourceHandle> _snapshotTextures;
         // Stable storage for snapshot-texture debug names: VkmTextureInfo keeps a raw

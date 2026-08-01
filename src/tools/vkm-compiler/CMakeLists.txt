@@ -5,7 +5,6 @@ set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 # Sources
 set(SRCS
     ${SRC_DIR}/main.cpp
-    ${SRC_DIR}/subprocess.cpp
 )
 
 # Build executable (a native host tool; never an Emscripten binary)

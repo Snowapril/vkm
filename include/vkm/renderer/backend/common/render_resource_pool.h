@@ -75,6 +75,15 @@ namespace vkm
         */
         std::vector<VkmResourceMemoryTag> getAllMemoryTags() const;
 
+        /*
+        * @brief Snapshot of every currently-live handle of one resource category -- the
+        * companion to getAllMemoryTags(), which reports sizes but no handles. Returning
+        * handles rather than pointers is what keeps this safe across frames: the caller
+        * re-resolves through getResource(), and a slot recycled in the meantime is rejected
+        * by the generation check instead of dangling.
+        */
+        std::vector<VkmResourceHandle> getAllResourceHandles(VkmResourceType type) const;
+
     private:
         // Caller must already hold _mutex.
         VkmResourceHandle allocateResourceLocked(VkmResourceType type, VkmResourcePoolType poolType);

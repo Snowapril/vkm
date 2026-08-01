@@ -28,6 +28,11 @@
 - `VkmGpuCrashHandler::clearFrameMarkers()` blocks on the graphics queue's `waitIdle()` every frame while `--enable-gpu-crash-dump` is set, since no per-frame-slot completion wait exists in the live render loop.
 - `copyTexture` (texture-to-texture, render graph capture snapshots) is Metal-only; Vulkan/WebGPU have error-logging stubs (`copyTextureToBuffer`/`readbackTexture` are cross-backend).
 - Render graph capture records depth/stencil attachments as metadata only (no snapshot/preview).
+- Render graph capture snapshots cube/array inputs as slice 0 only; other faces are viewable only through the texture browser's per-layer readback.
+- PSO reload keeps variants that an edit removed from the json registered, since callers hold raw non-owning pointers to them; only a restart drops them.
+- Reloading a PSO whose set-2 (per-pass) declaration changed leaves any `VkmPerPassResourceTableBase` already built from it stale, with no notification; only tests build such tables today, so nothing holds one across a reload yet.
+- The texture browser's cube/array face preview goes through a blocking `readbackTexture` (full queue wait) on every face change.
+- Runtime shader recompilation needs a baked-in `VKM_COMPILER_EXECUTABLE`, so installed and Emscripten builds can reload PSO json render state but not shaders.
 - Render graph capture records swapchain backbuffer outputs as metadata only (`CAMetalLayer.framebufferOnly` stays YES).
 - Render graph capture texture previews in ImGui are Metal-only (`getTextureID` returns 0 on Vulkan/WebGPU).
 - Programmatic .gputrace capture scopes only the Metal Graphics queue 0; Vulkan/WebGPU `requestGpuFrameCapture()` is a no-op (no RenderDoc integration).

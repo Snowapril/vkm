@@ -213,6 +213,22 @@ namespace vkm
                                                              std::string* outError = nullptr);
 
         /*
+        * @brief Replace every VkmFormat::Swapchain color-format sentinel in `desc` with the
+        * concrete swapchain format. The format converters (getMTLPixelFormat/toVkFormat/...)
+        * must never see VkmFormat::Swapchain, so every path that hands a descriptor to a
+        * backend must run this first -- newPipelineState() and VkmPipelineStateManager's
+        * reload path both do.
+        */
+        bool resolveSwapChainFormats(VkmPipelineStateDescriptor& desc, std::string* outError = nullptr) const;
+
+        /*
+        * @brief Block until every command queue of this driver has finished all submitted
+        * work. Used by the pipeline-state reload path, which destroys backend pipeline
+        * objects synchronously (they never go through the deferred reclaimer).
+        */
+        void waitIdle(const uint64_t timeoutMs = UINT64_MAX);
+
+        /*
         * @brief get driver capability flags
         */
         inline VkmDriverCapabilityFlags getDriverCapabilityFlags() const { return _driverCapabilityFlags; }
