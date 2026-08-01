@@ -86,11 +86,18 @@ namespace vkm
 
         /*
         * Buffers published at the fixed singleton bindings. A WebGPU bind group must supply an
-        * entry for every entry in its layout, so an unbound singleton binds _singletonPlaceholder
+        * entry for every entry in its layout, so an unbound singleton binds its placeholder
         * instead of being omitted; a shader that reads it sees zeroes rather than failing
         * validation.
+        *
+        * One placeholder per singleton, not one shared between them. WebGPU rejects a bind group
+        * whose writable storage bindings overlap, and separately rejects a *buffer* used both
+        * read-write and read-only within one synchronization scope -- and these bindings are a mix
+        * of both kinds. Distinct slices of one buffer fix the first but not the second, so the
+        * only thing that works is distinct buffers. Each is tiny and lives for the manager's
+        * lifetime; they only matter until a scene publishes the real ones.
         */
-        WGPUBuffer _singletonPlaceholder = nullptr;
+        std::array<WGPUBuffer, static_cast<size_t>(VkmBindlessSingletonBuffer::Count)> _singletonPlaceholders{};
         std::array<WGPUBuffer, static_cast<size_t>(VkmBindlessSingletonBuffer::Count)> _singletonBuffers{};
         std::array<uint64_t, static_cast<size_t>(VkmBindlessSingletonBuffer::Count)> _singletonSizes{};
 

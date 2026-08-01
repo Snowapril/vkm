@@ -34,6 +34,8 @@ namespace vkm
 
     private:
         WGPUBuffer _wgpuBuffer{nullptr};
-        bool _needsRemap{false}; // true once unmap() has been called at least once
+        // Whether the next map() has to go through wgpuBufferMapAsync. Starts true: this buffer is
+        // created unmapped, because WebGPU rejects any GPU or queue use of a mapped buffer.
+        bool _needsRemap{true};
     };
 } // namespace vkm

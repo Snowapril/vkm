@@ -60,11 +60,19 @@ namespace vkm
             ? (WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead)
             : (WGPUBufferUsage_CopySrc | WGPUBufferUsage_MapWrite);
 
+        // Created UNMAPPED, unlike the Vulkan and Metal staging buffers which stay persistently
+        // mapped. WebGPU forbids a mapped buffer from being used by the GPU at all: a submit that
+        // references one is rejected with "used in submit while mapped" and the whole command
+        // buffer is discarded, and wgpuQueueWriteBuffer rejects it too. Every use of a staging
+        // buffer here starts with the GPU or the queue touching it -- a readback is copied into
+        // before it is ever read, and writeDirect() is a queue write -- so mapping at creation
+        // makes the first operation on a fresh buffer invalid. Callers that want the pointer ask
+        // for it with map(), which is what the async round trip below is for.
         const WGPUBufferDescriptor bufferDesc{
             .label            = toWGPUStringView("VkmStagingBufferWebGPU"),
             .usage            = static_cast<WGPUBufferUsage>(usage),
             .size             = info._size,
-            .mappedAtCreation = true,
+            .mappedAtCreation = false,
         };
         _wgpuBuffer = wgpuDeviceCreateBuffer(driverWebGPU->getDevice(), &bufferDesc);
         if (_wgpuBuffer == nullptr)
@@ -73,8 +81,8 @@ namespace vkm
             return false;
         }
 
-        _mappedPointer = wgpuBufferGetMappedRange(_wgpuBuffer, 0, info._size);
-        _needsRemap = false;
+        _mappedPointer = nullptr;
+        _needsRemap = true;
         return true;
     }
 
@@ -108,7 +116,12 @@ namespace vkm
             return nullptr;
         }
 
-        _mappedPointer = wgpuBufferGetMappedRange(_wgpuBuffer, 0, _stagingBufferInfo._size);
+        // A read-only mapping must be fetched through the const entry point; wgpuBufferGetMappedRange
+        // rejects it outright. The const_cast keeps one signature for every backend -- callers of a
+        // readback buffer only ever read through it, which is exactly what the mode says.
+        _mappedPointer = mapMode == WGPUMapMode_Read
+            ? const_cast<void*>(wgpuBufferGetConstMappedRange(_wgpuBuffer, 0, _stagingBufferInfo._size))
+            : wgpuBufferGetMappedRange(_wgpuBuffer, 0, _stagingBufferInfo._size);
         _needsRemap = false;
         return _mappedPointer;
     }

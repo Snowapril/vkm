@@ -570,15 +570,25 @@ Blocks *any* multi-pass compute work, and therefore **both** GI tiers. Pre-exist
       binding per-PSO via `add_msl_resource_binding`; the runtime replays the resolved entries onto
       the argument table. Verified by running the *same* shader and expected values as Vulkan
 - [x] **Descriptor set 2 on WebGPU** (bind group 2). The most natural of the three — a bind group
-      *is* this concept, and WebGPU's own model already treats one as immutable. **Compile-verified
-      only**, see the risk below
-- [ ] ⚠ **Make WebGPU runtime-verifiable — blocks trusting Phase 4 there.** The WebGPU suite does
-      run locally (headless Chrome, and it passes), but no shader can be *compiled* for it:
-      `VKM_COMPILER_ENABLE_WGSL` is OFF and turning it on builds Tint through a full Dawn
-      ExternalProject that no local or CI configuration provides (`TODO.md:11,23`). So the set-2
-      test is excluded on WebGPU, and its group-2 path has never executed. This is a pre-existing
-      engine limitation affecting *all* WebGPU shader work, not something set 2 introduced — but
-      Phase 4 puts real weight on that backend, so it should be resolved before, not after
+      *is* this concept, and WebGPU's own model already treats one as immutable
+- [x] ⚠ **WebGPU is runtime-verifiable now.** The premise recorded here — that turning on
+      `VKM_COMPILER_ENABLE_WGSL` needs a Dawn build "no local or CI configuration provides" — was
+      wrong: Dawn is already vendored and pinned, the CMake wiring already existed, and
+      `scripts/run_tests.py` now builds a WGSL-capable host vkm-compiler and hands it to the
+      Emscripten configure. Every engine PSO compiles to WGSL and ships in MEMFS, and the set-2
+      table path runs there.
+
+      **The gap was hiding four real bugs**, none of which a compile could have caught: implicit-LOD
+      sampling in non-uniform control flow (illegal in WGSL); staging buffers left mapped at
+      creation, which WebGPU forbids the GPU or the queue from touching — that broke `readbackTexture`
+      and every `writeDirect` upload; the compute path never binding group 1, which the graphics path
+      already did and documented; and all unpublished bindless singletons sharing one placeholder
+      buffer, which WebGPU rejects both for overlapping writable-storage bindings and for mixing
+      read-write with read-only use of one buffer. That last one invalidated every WebGPU pass that
+      did not populate a scene.
+
+      Still open: the per-pass *compute* test is skipped — `newBuffer` returns null for its storage
+      buffer with no Dawn error and no engine log (`TODO.md`). The validation half of that test runs
 - [ ] **Note:** set 2 is what unblocks WebGPU sampling at all — `registerTexture` is a hard error
       there because WGSL has no runtime-sized arrays, so the low-spec tier cannot sample a probe
       atlas until set 2 lands on WebGPU
@@ -1107,5 +1117,6 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-08-01 | 4 | Probe volume storage + the lookup pass. `probe_lighting.hlsl` samples 8 probes trilinearly with Chebyshev visibility weighting; verified on Metal against CPU-authored atlases, including that fully occluded probes contribute nothing. Found that the update pass is blocked on the RHI having no viewport control (six cube faces cannot share a render pass) — recorded as the next decision. |
 | 2026-08-01 | 4 | Added `setViewportAndScissor` to the RHI (all three backends), which unblocks the probe update: six cube faces can now share one render pass rather than needing six. Vulkan and Metal agree on the top-left origin, pinned by a test that also covers several viewports writing separate tiles in one pass. |
 | 2026-08-01 | 4 | Probe capture (six cube faces in one render pass, via the new viewport control) and probe blend (octahedral integration + border + hysteresis). The write path now reaches the atlases that the read path already samples. Verified on Metal: per-face capture correctness, and a directional octahedral map whose border matches its mirrored interior. |
+| 2026-08-02 | 4 | **WebGPU can compile and run shaders.** The blocker recorded since Phase 2 -- that `VKM_COMPILER_ENABLE_WGSL` needs a Dawn build no configuration provides -- was simply untrue: Dawn is vendored and pinned, the CMake wiring existed, and `run_sample.py` already built a WGSL host compiler. `run_tests.py` now does the same, so every engine PSO ships as WGSL in MEMFS and the set-2 path executes there. The gap was hiding **four** real bugs, all invisible to a compile: implicit-LOD sampling in non-uniform control flow; staging buffers left mapped at creation (WebGPU forbids the GPU or queue touching a mapped buffer, which broke `readbackTexture` and every `writeDirect` upload); the compute path never binding group 1, which the graphics path already did *and explained in a comment*; and every unpublished bindless singleton sharing one placeholder buffer, rejected both for overlapping writable-storage bindings and for mixing read-write with read-only use of one buffer -- that alone invalidated any WebGPU pass without a scene. Metal 193/193, Vulkan 191/191, both Release, WebGPU green. One test stays skipped with the cause unknown (`TODO.md`). |
 | 2026-08-01 | 4 | **4.2c: the probe volume runs as a frame loop.** `VkmProbeVolumeUpdater` refreshes a round-robin budget of probes per frame (scene update -> probe-aimed cull -> one capture pass for every budgeted probe's six faces -> barrier -> two atlas blends). Making a *partial* update correct forced three changes: hysteresis moved to the blend hardware and the atlas lost its second copy (a swapped pair leaves un-refreshed probes alternating between stale values, and the old previous-atlas fetch used cell-relative UV — correct only for the one-cell atlas the test used); both passes turned out to need no per-probe constant buffer at all, since the face matrices are `P·R·T(−p)` and the position cancels, leaving only a position/tile/hysteresis small enough to push from the vertex stage; and the budget is clamped rather than wrapped so a round covers every probe exactly once. **Propagation latency measured** and asserted against the analytic model: geometric decay at `hysteresis` per refresh, so the defaults (2048 probes, budget 32, h = 0.97) need **4864 frames / ~81 s at 60 Hz** to shed 90% of a light change. Unusable as shipped; the levers are hysteresis, budget and grid size, all recorded in §12. Also reconciled §8's Phase 3 checkboxes with the code and noted that Phase 3's gate is unmet until 4.5 gives those passes an owning application. Metal 193/193 and Vulkan 191/191 in Debug, 192/192 and 191/191 in Release, validation clean throughout; both new tests were checked to fail when the blend factors and the round-robin clamp are sabotaged. Two things only Vulkan caught: releasing at destroy through the deferred reclaimer leaks past the allocator's teardown (it frees on a GPU timeline that will never advance again), and `~VkmScene()` is defaulted so both the new fixture and the pre-existing `runProbeCaptureTest` leaked a scene — Metal has no allocator assert, so both had been passing there. |
 | 2026-07-30 | 4 | Low-spec tier must be **fully dynamic** (no bake) → technique decided: raster-updated dynamic probe volume (DDGI-style octahedral irradiance + distance moments, Chebyshev visibility) plus an additive SSGI contact term. Storage/sampling are update-mechanism-agnostic, so Phase 5's rays can later refresh the same volume, and ReSTIR GI can query it for multi-bounce `L_o`. |
