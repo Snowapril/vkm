@@ -3,6 +3,8 @@
 
 #include <vkm/base/common.h>
 #include <vkm/platform/common/app_delegate.h>
+#include <vkm/renderer/backend/common/swapchain.h>
+#include <vkm/renderer/engine.h>
 
 #if defined(VKM_PLATFORM_WINDOWS)
 #include <vkm/platform/windows/application.h>
@@ -24,7 +26,7 @@ public:
 
     virtual void postDriverReady(VkmEngine* engine) override final
     {
-        (void)engine;
+        _engine = engine;
         VKM_DEBUG_LOG("EmptyScreenApplication::postDriverReady");
     }
 
@@ -40,7 +42,6 @@ public:
 
     virtual void render(uint32_t windowIndex, VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) override final
     {
-        (void)windowIndex;
         VKM_DEBUG_LOG("EmptyScreenApplication::render");
 
         VkmFrameBufferDescriptor frameBufferDesc;
@@ -56,8 +57,11 @@ public:
         frameBufferDesc._renderPass._colorAttachments[0]._clearColors[3] = 1.0f;
 
 
-        frameBufferDesc._width = 1280; // Set the width of the framebuffer
-        frameBufferDesc._height = 720; // Set the height of the framebuffer
+        // Read from the swapchain every frame rather than hardcoded: the window is resizable,
+        // and on Vulkan these two become the render area and viewport.
+        const glm::uvec2 extent = _engine->getSwapChain(windowIndex)->getExtent();
+        frameBufferDesc._width = extent.x;
+        frameBufferDesc._height = extent.y;
         frameBufferDesc._colorAttachments[0] = backBuffer; // Attach the back buffer
 
         auto graphicsSubGraph = renderGraph->beginGraphicsSubGraph(frameBufferDesc);
@@ -70,6 +74,7 @@ public:
     }
 
 private:
+    VkmEngine* _engine{nullptr};
 };
 
 int main(int argc, char* argv[])

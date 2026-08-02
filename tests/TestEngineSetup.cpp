@@ -794,12 +794,75 @@ TEST_CASE("VkmSwapChainVulkan - created and initialized with a hidden GLFW windo
     }
     REQUIRE_MESSAGE(initResult.code == vkm::VkmInitResultCode::Success, initResult.reason);
 
+    // The surface, not the requested window size, decides the real extent: on a HiDPI display
+    // the framebuffer is the window size in points times the backing scale.
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
+
     {
         // unique_ptr destroyed before driver — correct order: swapchain uses driver's resource pool
         std::unique_ptr<vkm::VkmSwapChainBase> sc(driver->newSwapChain());
         REQUIRE(sc != nullptr);
         REQUIRE(sc->initialize(vkm::VkmWindowInfo{ 256, 256, "UnitTest", window }));
-        CHECK(sc->getExtent() == glm::uvec2(256u, 256u));
+        CHECK(sc->getExtent() == glm::uvec2((uint32_t)framebufferWidth, (uint32_t)framebufferHeight));
+        REQUIRE(sc->getBackBufferCount() > 0);
+
+        SUBCASE("resize to a new extent recreates the back buffers") {
+            glfwSetWindowSize(window, 384, 320);
+            glfwPollEvents();
+
+            int resizedWidth = 0;
+            int resizedHeight = 0;
+            glfwGetFramebufferSize(window, &resizedWidth, &resizedHeight);
+            // A headless/offscreen window manager may not honour glfwSetWindowSize; there is
+            // nothing to assert about a resize that did not happen.
+            if (resizedWidth != framebufferWidth || resizedHeight != framebufferHeight) {
+                sc->resize((uint32_t)resizedWidth, (uint32_t)resizedHeight);
+
+                CHECK(sc->getExtent() == glm::uvec2((uint32_t)resizedWidth, (uint32_t)resizedHeight));
+                REQUIRE(sc->getBackBufferCount() > 0);
+                // Every image in the new set must be a live pool resource: resize() releases the
+                // old handles and the backend allocates a fresh one per swapchain image.
+                for (uint8_t i = 0; i < sc->getBackBufferCount(); ++i) {
+                    CAPTURE(i);
+                    const vkm::VkmResourceHandle handle = sc->getBackBuffer(i);
+                    REQUIRE(handle.isValid());
+                    CHECK(driver->getRenderResourcePool()->getResource<vkm::VkmTexture>(handle) != nullptr);
+                }
+            } else {
+                MESSAGE("Skipping: the window manager did not honour glfwSetWindowSize.");
+            }
+        }
+
+        SUBCASE("resize to the same extent keeps the existing back buffers") {
+            std::vector<vkm::VkmResourceHandle> before;
+            for (uint8_t i = 0; i < sc->getBackBufferCount(); ++i) {
+                before.push_back(sc->getBackBuffer(i));
+            }
+
+            sc->resize((uint32_t)framebufferWidth, (uint32_t)framebufferHeight);
+
+            CHECK(sc->getExtent() == glm::uvec2((uint32_t)framebufferWidth, (uint32_t)framebufferHeight));
+            REQUIRE((size_t)sc->getBackBufferCount() == before.size());
+            for (size_t i = 0; i < before.size(); ++i) {
+                CAPTURE(i);
+                CHECK(sc->getBackBuffer((uint8_t)i) == before[i]);
+            }
+        }
+
+        SUBCASE("resize to a zero extent tears the swapchain down") {
+            // What a minimized window reports. Nothing is created, and the engine skips the
+            // window until a non-zero size brings it back.
+            sc->resize(0u, 0u);
+
+            CHECK(sc->getExtent() == glm::uvec2(0u, 0u));
+            CHECK(sc->getBackBufferCount() == 0);
+
+            sc->resize((uint32_t)framebufferWidth, (uint32_t)framebufferHeight);
+            CHECK(sc->getExtent() == glm::uvec2((uint32_t)framebufferWidth, (uint32_t)framebufferHeight));
+            CHECK(sc->getBackBufferCount() > 0);
+        }
     }
 
     driver->destroy();
@@ -820,16 +883,23 @@ struct NullAppDelegate : vkm::AppDelegate {
 };
 } // namespace
 
-#if defined(VKM_ENABLE_IMGUI)
-TEST_CASE("VkmEngine - ImGui renderer initializes and survives one loopInner() tick") {
+// One TEST_CASE, not two, and deliberately so: VkmEngine::initializeEngine() registers
+// process-wide loggers, so a second VkmEngine in the same process throws "logger with name
+// 'ConsoleLogger' already exists". This is therefore the single place a live engine can be
+// driven, and it covers both the ImGui renderer smoke test and the whole resize sequence.
+TEST_CASE("VkmEngine - drives a frame, and publishes/suspends/applies a window resize") {
     glfwInit();
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     GLFWwindow* window = glfwCreateWindow(256, 256, "UnitTest", nullptr, nullptr);
-    REQUIRE(window != nullptr);
+    if (window == nullptr) {
+        MESSAGE("Skipping: glfwCreateWindow failed (no display server available in this environment).");
+        glfwTerminate();
+        return;
+    }
 
     vkm::VkmEngine engine(new vkm::VkmDriverVulkan());
-    REQUIRE(engine.initializeEngine(new NullAppDelegate(), vkm::VkmEngineLaunchOptions{ .enableValidationLayer = false }));
+    REQUIRE(engine.initializeEngine(new NullAppDelegate(), vkm::VkmEngineLaunchOptions{ .enableValidationLayer = true }));
 
     vkm::VkmInitResult initResult = engine.initializeBackendDriver();
     if (initResult.code == vkm::VkmInitResultCode::HardwareUnsupported) {
@@ -840,15 +910,88 @@ TEST_CASE("VkmEngine - ImGui renderer initializes and survives one loopInner() t
     }
     REQUIRE_MESSAGE(initResult.code == vkm::VkmInitResultCode::Success, initResult.reason);
 
-    // isImGuiWindow = true so the engine creates and binds its ImGui renderer to this window.
+    // isImGuiWindow = true so the engine creates and binds its ImGui renderer to this window
+    // (when built with ImGui). That also puts every loopInner() below on the single-window path,
+    // where a skipped frame is what discardFrame() has to close out.
     engine.addSwapChain(vkm::VkmWindowInfo{ 256, 256, "UnitTest", window }, /*isImGuiWindow=*/true);
+    vkm::VkmSwapChainBase* swapChain = engine.getMainSwapChain();
+    REQUIRE(swapChain != nullptr);
+
+    // The ImGui renderer initializes and a plain frame ticks through.
+    CHECK_NOTHROW(engine.loopInner(0.001));
+
+    const glm::uvec2 originalExtent = swapChain->getExtent();
+
+    // Deliberately no SUBCASEs: doctest re-runs the whole test body per subcase, and
+    // initializeEngine() registers process-wide loggers that cannot be registered twice. The
+    // scenarios below are sequential anyway -- each leaves the swapchain in a known state.
+
+    // Actually resize the window rather than only publishing a number: on Vulkan the surface's
+    // currentExtent is what the rebuilt swapchain adopts, so a size the window never took would
+    // simply be ignored. Returns the resulting framebuffer size in pixels.
+    const auto resizeWindowTo = [&](int width, int height) {
+        glfwSetWindowSize(window, width, height);
+        glfwPollEvents();
+        int framebufferWidth = 0;
+        int framebufferHeight = 0;
+        glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
+        return glm::uvec2((uint32_t)framebufferWidth, (uint32_t)framebufferHeight);
+    };
+
+    const glm::uvec2 resizedExtent = resizeWindowTo(384, 320);
+    if (resizedExtent == originalExtent) {
+        MESSAGE("Skipping: the window manager did not honour glfwSetWindowSize.");
+        engine.destroy();
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return;
+    }
+
+    // --- nothing is rebuilt while a live resize is in progress ---
+    engine.onWindowLiveResizeChanged(window, true);
+    engine.onWindowResized(window, resizedExtent.x, resizedExtent.y);
+
+    CHECK(engine.isWindowRenderingSuspended(0));
     CHECK_NOTHROW(engine.loopInner(0.016));
+    CHECK(swapChain->getExtent() == originalExtent);
+
+    // Ending the resize is what releases it, and one frame is enough to apply it.
+    engine.onWindowLiveResizeChanged(window, false);
+    CHECK_FALSE(engine.isWindowRenderingSuspended(0));
+    CHECK_NOTHROW(engine.loopInner(0.032));
+    CHECK(swapChain->getExtent() == resizedExtent);
+
+    // --- a size published between frames is applied on the next one ---
+    const glm::uvec2 restoredExtent = resizeWindowTo(256, 256);
+    engine.onWindowResized(window, restoredExtent.x, restoredExtent.y);
+    // Not applied yet: the window thread only publishes, the frame loop consumes.
+    CHECK(swapChain->getExtent() == resizedExtent);
+
+    CHECK_NOTHROW(engine.loopInner(0.048));
+    CHECK(swapChain->getExtent() == restoredExtent);
+
+    // A frame with nothing pending leaves it alone.
+    CHECK_NOTHROW(engine.loopInner(0.064));
+    CHECK(swapChain->getExtent() == restoredExtent);
+
+    // --- a minimized window reports suspended and recovers on restore ---
+    engine.onWindowResized(window, 0u, 0u);
+    CHECK_NOTHROW(engine.loopInner(0.080));
+    CHECK(swapChain->getExtent() == glm::uvec2(0u, 0u));
+    CHECK(engine.isWindowRenderingSuspended(0));
+
+    // Further frames must not touch the torn-down swapchain.
+    CHECK_NOTHROW(engine.loopInner(0.096));
+
+    engine.onWindowResized(window, restoredExtent.x, restoredExtent.y);
+    CHECK_NOTHROW(engine.loopInner(0.112));
+    CHECK(swapChain->getExtent() == restoredExtent);
+    CHECK_FALSE(engine.isWindowRenderingSuspended(0));
 
     engine.destroy();
     glfwDestroyWindow(window);
     glfwTerminate();
 }
-#endif // VKM_ENABLE_IMGUI
 
 #endif // VKM_USE_VULKAN_API
 

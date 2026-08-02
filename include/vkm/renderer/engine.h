@@ -9,8 +9,9 @@
 #include <vkm/renderer/backend/common/render_graph.h>
 
 #include <glm/mat4x4.hpp>
+#include <atomic>
+#include <deque>
 #include <memory>
-#include <vector>
 
 namespace vkm
 {
@@ -42,6 +43,25 @@ namespace vkm
         VkmFormat _backBufferFormat = VkmFormat::Undefined;
         bool _isImGuiWindow = false; // the single window ImGui is bound to and drawn on
         std::array<std::unique_ptr<VkmRenderGraph>, FRAME_COUNT> _frameRenderGraphs;
+
+        /*
+        * @brief Resize handoff from the window thread to the engine loop.
+        *
+        * Resize events always arrive on the platform's window thread, which on the macOS Metal
+        * path is not the thread running loopInner(). Rather than let that thread touch the
+        * driver, it only publishes here; VkmEngine::render() consumes it and does every GPU
+        * call. Same split as VkmInputHandler's event queue, with atomics instead of a mutex
+        * since there is exactly one word of state per direction.
+        *
+        * _pendingExtent is a packed extent plus a marker bit, or 0 for "no pending change" --
+        * the marker is what keeps a genuine 0x0 (a minimized window) from reading as "nothing
+        * pending". See packPendingExtent() in engine.cpp for the layout. Publishing overwrites
+        * rather than queues: only the newest size matters.
+        */
+        std::atomic<uint64_t> _pendingExtent {0};
+        // Set between a live-resize begin and end (AppKit's windowWillStartLiveResize /
+        // windowDidEndLiveResize). While set, this window renders nothing at all.
+        std::atomic<bool> _liveResizeActive {false};
     };
 
     struct VkmEngineLaunchOptions
@@ -118,6 +138,17 @@ namespace vkm
          */
         void render(const double deltaTime);
 
+        /*
+        * @brief Drains everything that could still reference `windowContext`'s back buffers, then
+        * rebuilds its swapchain at `packedExtent` (see packPendingExtent() in engine.cpp), or at
+        * the swapchain's current extent when `packedExtent` is 0 -- an out-of-date recreate,
+        * where the backend re-derives the size from its surface anyway.
+        * @details Runs on the engine-loop thread -- the render thread on the macOS Metal path.
+        * The swapchain destroys its back-buffer textures immediately rather than through the
+        * deferred reclaimer, so the drain here is what makes that safe.
+        */
+        void recreateSwapChain(VkmWindowContext& windowContext, uint64_t packedExtent);
+
 #if defined(VKM_ENABLE_IMGUI)
         /*
         * @brief Draws the engine-wide debug overlay (FPS, CPU usage, GPU frame time, frame
@@ -159,6 +190,37 @@ namespace vkm
         * never have to track window indices themselves. Unknown handles are ignored.
         */
         void onWindowFocusChanged(const void* nativeHandle, bool focused);
+
+        /*
+        * @brief Platform layers report a window's new back-buffer size here, by native handle so
+        * they never have to track window indices themselves. Unknown handles are ignored.
+        * @details Callable from the window thread: the size is only published (see
+        * VkmWindowContext::_pendingExtent) and the swapchain is rebuilt later, from the engine
+        * loop. Width/height are in pixels, not points -- on GLFW that is glfwGetFramebufferSize,
+        * on AppKit the view's backing size. A zero extent (a minimized window) is valid and
+        * simply stops that window rendering until it comes back.
+        */
+        void onWindowResized(const void* nativeHandle, uint32_t width, uint32_t height);
+
+        /*
+        * @brief Platform layers bracket a user-driven resize drag with this, so rendering can be
+        * suspended for its duration and the swapchain rebuilt exactly once when it ends.
+        * @details Only platforms that report such brackets call it (AppKit's
+        * windowWillStartLiveResize/windowDidEndLiveResize). GLFW has no equivalent, and gets by
+        * without one because its size callback only fires from glfwPollEvents() -- see
+        * installGlfwWindowResizeCallback() for what that does and does not buy.
+        */
+        void onWindowLiveResizeChanged(const void* nativeHandle, bool active);
+
+        /*
+        * @brief True while the given window renders nothing -- during a live resize, or when it
+        * is minimized. Platform layers use this to skip work that would otherwise stall on a
+        * frame that will never be presented (see the ImGui drawable in the macOS display-link
+        * callback).
+        * @details Engine-loop thread only, unlike the two above: it reads the swapchain extent,
+        * which the loop itself rewrites during a rebuild.
+        */
+        bool isWindowRenderingSuspended(uint32_t windowIndex) const;
 
         /*
         * @brief The window that currently holds keyboard focus, or kVkmNoFocusedWindow.
@@ -234,7 +296,9 @@ namespace vkm
         VkmCamera* _activeCamera {nullptr}; // non-owning, see setActiveCamera()
 
         // One entry per window; each owns its swapchain and per-frame-slot render graphs.
-        std::vector<VkmWindowContext> _windowContexts;
+        // A deque, not a vector: VkmWindowContext holds atomics (so it is neither copyable nor
+        // movable), and a deque never relocates the elements it already holds.
+        std::deque<VkmWindowContext> _windowContexts;
         // Index into _windowContexts of the ImGui-bound window, or INVALID_VALUE32 if none.
         uint32_t _imGuiWindowIndex {INVALID_VALUE32};
 

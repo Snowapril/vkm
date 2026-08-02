@@ -21,6 +21,7 @@ namespace vkm
         CursorMove,
         Scroll,
         WindowFocus,
+        WindowResize,
     };
 
     /*
@@ -34,10 +35,11 @@ namespace vkm
         VkmMouseButton _button {VkmMouseButton::Left};
         VkmKeyAction _action {VkmKeyAction::Press};
         uint32_t _modifiers {0};
-        double _x {0.0}; // CursorMove: absolute position. Scroll: offset.
-        double _y {0.0};
+        double _x {0.0}; // CursorMove: absolute position. Scroll: offset. WindowResize: new width.
+        double _y {0.0}; //                                               WindowResize: new height.
         bool _isRepeat {false};
-        // WindowFocus only: which window gained or lost focus, and which way.
+        // WindowFocus: which window gained or lost focus, and which way.
+        // WindowResize: which window changed size (_focused is unused).
         uint32_t _windowIndex {0};
         bool _focused {false};
     };
@@ -72,6 +74,19 @@ namespace vkm
         * latched down forever.
         */
         void onWindowFocusChanged(uint32_t windowIndex, bool focused);
+
+        /*
+        * @brief Reports that `windowIndex` changed to `width` x `height` pixels.
+        * @details Absolute cursor positions need no correction -- they are window-relative and
+        * this handler caches no window size -- but the *delta* does: resizing from the left or
+        * top edge moves the window origin, so the cursor's window-relative position jumps
+        * without the pointer having moved. The next move is treated as the first one so that
+        * jump never reaches a consumer as a delta. Same reasoning as onWindowFocusChanged().
+        *
+        * Goes through the same event queue as the cursor moves rather than being applied
+        * directly, so it stays correctly ordered against them.
+        */
+        void onWindowResized(uint32_t windowIndex, uint32_t width, uint32_t height);
 
         // --- consumer side: called from the engine loop thread only ------------------
 

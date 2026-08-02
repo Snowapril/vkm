@@ -35,6 +35,17 @@ namespace vkm
         */
         void newFrame(bool windowFocused);
         void renderDrawData(VkmCommandBufferBase* commandBuffer);
+
+        /*
+        * @brief Ends the current ImGui frame without drawing it.
+        * @details newFrame() opens an ImGui frame unconditionally, but the ImGui window may end
+        * up rendering nothing -- it is suspended during a live resize, minimized, or its image
+        * acquire failed. ImGui::NewFrame() asserts if the previous frame was neither Render()ed
+        * nor EndFrame()d, so those frames have to be closed explicitly. A no-op once
+        * renderDrawData() has run, so the engine can call it unconditionally.
+        */
+        void discardFrame();
+
         void shutdown();
 
         /*

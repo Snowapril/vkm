@@ -86,8 +86,12 @@ namespace vkm
         textureInfo._numArrayLayers = 1;
 
         VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
-        for (VkmResourceHandle& handle : _backBuffers)
+        // Exactly as many as acquireNextImageInner() cycles through -- the rest of the
+        // MAX_BACK_BUFFER_COUNT-sized array stays invalid, which is what _backBuffers expects.
+        _backBufferCount = (uint8_t)BACK_BUFFER_COUNT;
+        for (uint32_t i = 0; i < BACK_BUFFER_COUNT; ++i)
         {
+            VkmResourceHandle& handle = _backBuffers[i];
             VkmTextureWebGPU* newTextureWebGPU = new VkmTextureWebGPU(_driver);
             handle = renderResourcePool->allocateTexture(newTextureWebGPU);
             if (newTextureWebGPU->initialize(handle, textureInfo) == false)
@@ -123,6 +127,14 @@ namespace vkm
         WGPUSurfaceTexture surfaceTexture{};
         wgpuSurfaceGetCurrentTexture(_surface, &surfaceTexture);
 
+        if (surfaceTexture.status == WGPUSurfaceGetCurrentTextureStatus_Outdated ||
+            surfaceTexture.status == WGPUSurfaceGetCurrentTextureStatus_Lost)
+        {
+            // The canvas changed size or the surface was lost. Not an error: flag it and let the
+            // engine reconfigure the surface before the next frame -- see isOutOfDate().
+            _outOfDate = true;
+            return VKM_INVALID_RESOURCE_HANDLE;
+        }
         if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
             surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal)
         {

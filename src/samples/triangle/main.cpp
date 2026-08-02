@@ -14,6 +14,7 @@
 #include <vkm/renderer/backend/common/buffer.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
+#include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/engine.h>
 
 #if defined(VKM_PLATFORM_WINDOWS)
@@ -50,6 +51,8 @@ public:
     virtual void postDriverReady(VkmEngine* engine) override final
     {
         VKM_DEBUG_LOG("TriangleApplication::postDriverReady");
+
+        _engine = engine;
 
         VkmPipelineStateManager* manager = engine->getPipelineStateManager();
         std::string err;
@@ -131,7 +134,6 @@ public:
 
     virtual void render(uint32_t windowIndex, VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) override final
     {
-        (void)windowIndex;
         VKM_DEBUG_LOG("TriangleApplication::render");
 
         VkmFrameBufferDescriptor frameBufferDesc;
@@ -144,8 +146,12 @@ public:
         frameBufferDesc._renderPass._colorAttachments[0]._clearColors[2] = 0.0f; // B
         frameBufferDesc._renderPass._colorAttachments[0]._clearColors[3] = 1.0f; // A
 
-        frameBufferDesc._width = 800; // Set the width of the framebuffer
-        frameBufferDesc._height = 600; // Set the height of the framebuffer
+        // Read from the swapchain every frame rather than hardcoded: the window is resizable,
+        // and on Vulkan these two become the render area and viewport, so a stale size renders
+        // the triangle into a corner of the back buffer.
+        const glm::uvec2 extent = _engine->getSwapChain(windowIndex)->getExtent();
+        frameBufferDesc._width = extent.x;
+        frameBufferDesc._height = extent.y;
         frameBufferDesc._colorAttachments[0] = backBuffer; // Attach the back buffer
 
         auto graphicsSubGraph = renderGraph->beginGraphicsSubGraph(frameBufferDesc, "TrianglePass");
@@ -171,6 +177,7 @@ public:
     }
 
 private:
+    VkmEngine* _engine{nullptr};
     VkmPipelineStateBase* _pso{nullptr};
     uint32_t _vertexBufferSlot{UINT32_MAX};
     uint32_t _indexBufferSlot{UINT32_MAX};

@@ -40,11 +40,28 @@ namespace vkm
         void destroy();
 
         /*
-        * @brief Resize swapchain
-        * @details recreate swapchain with new extent
+        * @brief Recreate the swapchain at a new extent.
+        * @details A no-op at the same extent unless the swapchain is out of date. A zero extent
+        * (a minimized window) tears the swapchain down and creates nothing; the next non-zero
+        * resize brings it back.
+        *
+        * The caller must already have drained every submission that could still reference the
+        * back buffers -- this destroys them immediately rather than through the deferred
+        * reclaimer. VkmEngine::recreateSwapChain() is that caller.
         */
         void resize(uint32_t width, uint32_t height);
-        
+
+        /*
+        * @brief True once acquire or present reported the swapchain no longer matches its
+        * surface (Vulkan's VK_ERROR_OUT_OF_DATE_KHR, WebGPU's Outdated/Lost). The engine
+        * recreates on the next frame, which covers resizes the window layer never reported --
+        * tiling window managers, display changes.
+        */
+        inline bool isOutOfDate() const
+        {
+            return _outOfDate;
+        }
+
         /*
         * @brief Acquire next back buffer image index
         * @details get next back buffer image index for rendering. wait for acquire in cpu time if necessary
@@ -73,6 +90,15 @@ namespace vkm
             return _backBufferCount;
         }
 
+        /*
+        * @brief The back buffer at `index`, or an invalid handle when `index` is past
+        * getBackBufferCount(). The set is replaced wholesale by resize().
+        */
+        inline VkmResourceHandle getBackBuffer(uint8_t index) const
+        {
+            return (index < _backBufferCount) ? _backBuffers[index] : VKM_INVALID_RESOURCE_HANDLE;
+        }
+
     protected:
         virtual bool createSwapChain(void* windowHandle) = 0;
         // Non-pure so the base destructor can call it safely before the derived vtable
@@ -95,7 +121,12 @@ namespace vkm
 
         VkmDriverBase* _driver;
         VkmCommandQueueBase* _presentQueue = nullptr;
+        // The handle initialize() was given (GLFWwindow* / CAMetalLayer*), kept so resize() can
+        // hand it back to createSwapChain().
+        void* _windowHandle = nullptr;
         glm::uvec2 _extent;
+        // Set by the backends from an acquire/present result; cleared by resize(). See isOutOfDate().
+        bool _outOfDate = false;
         uint8_t _backBufferCount = 0;
         uint32_t _currentBackBufferIndex = INVALID_VALUE32;
     };

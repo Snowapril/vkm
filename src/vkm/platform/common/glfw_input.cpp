@@ -310,6 +310,36 @@ namespace vkm
             // switch.
             engine->onWindowFocusChanged(window, focused != 0);
         }
+
+        /*
+        * @brief Handlers displaced by our framebuffer-size callback, one per window.
+        * @details Per window for the same reason as the focus callbacks above: this is installed
+        * on every window, and ImGui's GLFW backend has one of its own on the ImGui window.
+        */
+        std::vector<std::pair<GLFWwindow*, GLFWframebuffersizefun>> g_previousFramebufferSizeCallbacks;
+
+        void framebufferSizeCallback(GLFWwindow* window, int width, int height)
+        {
+            for (const std::pair<GLFWwindow*, GLFWframebuffersizefun>& entry : g_previousFramebufferSizeCallbacks)
+            {
+                if (entry.first == window && entry.second != nullptr)
+                {
+                    entry.second(window, width, height);
+                    break;
+                }
+            }
+
+            VkmEngine* engine = getEngine(window);
+            if (engine == nullptr)
+            {
+                return;
+            }
+
+            // The framebuffer size, not the window size: it is in pixels, which is what the
+            // swapchain wants, and the two differ on a HiDPI display. Minimizing reports 0x0,
+            // which the engine handles as "render nothing until it comes back".
+            engine->onWindowResized(window, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+        }
     }
 
     void installGlfwWindowFocusCallback(void* glfwWindow, VkmEngine* engine)
@@ -324,6 +354,21 @@ namespace vkm
         {
             engine->onWindowFocusChanged(window, true);
         }
+    }
+
+    void installGlfwWindowResizeCallback(void* glfwWindow, VkmEngine* engine)
+    {
+        GLFWwindow* window = static_cast<GLFWwindow*>(glfwWindow);
+        glfwSetWindowUserPointer(window, engine);
+        g_previousFramebufferSizeCallbacks.emplace_back(window, glfwSetFramebufferSizeCallback(window, framebufferSizeCallback));
+
+        // GLFW reports the framebuffer size only on change, and the swapchain was created from
+        // the size the platform layer asked for -- which on a HiDPI display is not the size it
+        // got. Publish the real one now so the very first frame is already correct.
+        int width = 0;
+        int height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        engine->onWindowResized(window, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
     }
 
     void installGlfwInputCallbacks(void* glfwWindow, VkmEngine* engine)
@@ -361,6 +406,12 @@ namespace vkm
     void installGlfwWindowFocusCallback(void* /*glfwWindow*/, VkmEngine* /*engine*/)
     {
         // Focus is reported by VkmApplicationImpl's windowDidBecomeKey:/windowDidResignKey:
+        // on the macOS Metal path.
+    }
+
+    void installGlfwWindowResizeCallback(void* /*glfwWindow*/, VkmEngine* /*engine*/)
+    {
+        // Resizes are reported by VkmApplicationImpl's live-resize and windowDidResize: hooks
         // on the macOS Metal path.
     }
 }

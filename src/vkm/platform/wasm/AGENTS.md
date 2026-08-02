@@ -36,5 +36,5 @@ Always paired with the WebGPU backend. When working here also read:
 
 - [ ] No blocking `while` loop anywhere in this directory — always structure per-frame work as a callback registered via `emscripten_set_main_loop_arg`
 - [ ] `glfwInit()` called exactly once; `glfwTerminate()` called from the main-loop trampoline on close, not after `entryPoint` returns
-- [ ] Canvas resize forwarded to `VkmSwapChainBase::resize` via `emscripten_set_resize_callback` (not yet wired — flag as a gap if adding resize support)
+- [x] Canvas resize forwarded to the swapchain — via `installGlfwWindowResizeCallback` (GLFW's Emscripten port reports canvas size changes), not `emscripten_set_resize_callback`. A browser-window resize that leaves the canvas element's own size untouched still produces no event; sizing the canvas to the viewport is the shell page's job
 - [ ] `glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API)` set before window creation (no GL context)

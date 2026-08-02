@@ -93,5 +93,5 @@ is delivered to whichever window took focus and would otherwise never arrive.
 - [ ] No ObjC imports in `.h` files (pimpl hides them)
 - [ ] `CAMetalLayer` pixel format set to match swapchain format before passing to Metal backend
 - [ ] `TARGET_OS_IPHONE` / `TARGET_OS_OSX` used for platform branching
-- [ ] App delegate properly forwards resize events to engine
+- [x] App delegate properly forwards resize events to engine (`windowWillStartLiveResize:` / `windowDidEndLiveResize:` / `windowDidResize:` / `windowDidChangeBackingProperties:`)
 - [ ] `autorelease` pool created around the main event loop if not using `NSApplicationMain`

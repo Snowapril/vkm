@@ -16,7 +16,8 @@
 - PSO JSON has no push-constant/descriptor-set representation; the bindless set 0 layout and push-constant range are hardcoded per backend (VkmPipelineStateVulkan::createInner, vkm-compiler's MSL remaps, VkmBindlessResourceManagerWebGPU's bind group layout).
 - `getProcessCpuUsagePercent()` returns 0 on wasm.
 - wasm builds bake the on-disk `RESOURCES_DIR` into the engine library and samples; the MEMFS `--preload-file` remap covers only the `UnitTests` and `triangle` targets.
-- `VkmFrameBufferDescriptor::_width/_height` are consumed only by the Vulkan backend's viewport/scissor; Metal and WebGPU ignore them and use the full attachment, and both samples hardcode sizes that don't match the swapchain.
+- `VkmFrameBufferDescriptor::_width/_height` are consumed only by the Vulkan backend's viewport/scissor; Metal and WebGPU ignore them and use the full attachment.
+- `VkmEngine::initializeEngine()` registers process-wide loggers, so only one `VkmEngine` can exist per process; a second one throws and the unit tests can host exactly one live-engine test.
 - WebGPU bindless mega-buffers are fixed-capacity (16 MiB vertex / 8 MiB index) with no growth; registerBuffer fails hard when exhausted.
 - WebGPU bindless-registered buffers must be tightly packed engine VertexData/uint element arrays (typed mega-buffers; Vulkan/Metal treat them as opaque).
 - The Metal/WebGPU push-constant ring wraps after 1024 allocations with no per-frame reset; overlapping in-flight entries would be overwritten.

@@ -106,6 +106,16 @@ namespace vkm
         pushEvent(event);
     }
 
+    void VkmInputHandler::onWindowResized(uint32_t windowIndex, uint32_t width, uint32_t height)
+    {
+        VkmInputEvent event;
+        event._type = VkmInputEventType::WindowResize;
+        event._windowIndex = windowIndex;
+        event._x = static_cast<double>(width);
+        event._y = static_cast<double>(height);
+        pushEvent(event);
+    }
+
     void VkmInputHandler::pushEvent(const VkmInputEvent& event)
     {
         std::lock_guard<std::mutex> lock(_pendingMutex);
@@ -244,6 +254,14 @@ namespace vkm
                 _cursorInitialized = false;
                 break;
             }
+            case VkmInputEventType::WindowResize:
+            {
+                // Resizing from the left or top edge moves the window origin, so the cursor's
+                // window-relative position jumps without the pointer having moved. Re-baseline
+                // so that jump is not reported as a delta -- see onWindowResized().
+                _cursorInitialized = false;
+                break;
+            }
         }
     }
 
@@ -283,6 +301,12 @@ namespace vkm
             {
                 VKM_DEBUG_LOG(fmt::format("[Input] WindowFocus window={} {}",
                     event._windowIndex, event._focused ? "gained" : "lost").c_str());
+                break;
+            }
+            case VkmInputEventType::WindowResize:
+            {
+                VKM_DEBUG_LOG(fmt::format("[Input] WindowResize window={} {:.0f}x{:.0f}",
+                    event._windowIndex, event._x, event._y).c_str());
                 break;
             }
         }
