@@ -6,7 +6,7 @@
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/metal/metal_pipeline_state.h>
-#include <vkm/renderer/backend/metal/metal_per_pass_resource_table.h>
+#include <vkm/renderer/backend/metal/metal_resource_table.h>
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_staging_buffer.h>
 
@@ -546,14 +546,14 @@ namespace vkm
         // deliberately records nothing rather than forcing one.
     }
 
-    void VkmCommandBufferMetal::onBindPerPassResources(VkmPerPassResourceTableBase* table)
+    void VkmCommandBufferMetal::onBindResourceTable(VkmResourceTableBase* table)
     {
         // Metal binds set 2 discretely onto the same argument table bindPipeline() already
         // attached, so this only has to replay the table's resolved entries -- there is no
         // descriptor set to bind, and no encoder state beyond the argument table itself.
         VkmBindlessResourceManagerMetal* bindlessManager =
             static_cast<VkmDriverMetal*>(_driver)->getBindlessResourceManager();
-        static_cast<VkmPerPassResourceTableMetal*>(table)->applyTo(bindlessManager->getArgumentTable());
+        static_cast<VkmResourceTableMetal*>(table)->applyTo(bindlessManager->getArgumentTable());
     }
 
     void VkmCommandBufferMetal::onSetPushConstants(const void* data, uint32_t size, uint32_t offset)

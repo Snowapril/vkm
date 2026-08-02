@@ -1,0 +1,13 @@
+{
+    "name": "per_draw_only_pso",
+    "shaders": {
+        "compute": { "filepath": "per_draw_only.hlsl", "entry_point": "CSMain" }
+    },
+    "per_draw_resources": [
+        { "binding": 0, "type": "uniform_buffer" },
+        { "binding": 1, "type": "storage_buffer" }
+    ],
+    "options": {
+        "default": {}
+    }
+}

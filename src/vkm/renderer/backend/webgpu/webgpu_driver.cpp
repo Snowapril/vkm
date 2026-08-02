@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/webgpu/webgpu_driver.h>
-#include <vkm/renderer/backend/webgpu/webgpu_per_pass_resource_table.h>
+#include <vkm/renderer/backend/webgpu/webgpu_resource_table.h>
 #include <vkm/renderer/backend/webgpu/webgpu_util.h>
 #include <vkm/renderer/backend/webgpu/webgpu_swapchain.h>
 #include <vkm/renderer/backend/webgpu/webgpu_texture.h>
@@ -375,9 +375,9 @@ namespace vkm
         return VkmFormat::BGRA8_UNORM;
     }
 
-    VkmPerPassResourceTableBase* VkmDriverWebGPU::newPerPassResourceTableInner()
+    VkmResourceTableBase* VkmDriverWebGPU::newResourceTableInner()
     {
-        return new VkmPerPassResourceTableWebGPU(this);
+        return new VkmResourceTableWebGPU(this);
     }
 
     VkmSwapChainBase* VkmDriverWebGPU::newSwapChainInner()

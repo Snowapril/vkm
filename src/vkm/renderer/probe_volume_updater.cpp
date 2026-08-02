@@ -6,7 +6,7 @@
 #include <vkm/renderer/backend/common/buffer.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/driver.h>
-#include <vkm/renderer/backend/common/per_pass_resource_table.h>
+#include <vkm/renderer/backend/common/resource_table.h>
 #include <vkm/renderer/backend/common/pipeline_state.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/render_graph.h>
@@ -266,9 +266,9 @@ namespace vkm
                                              std::string* outError)
     {
         const auto buildTable = [&](VkmPipelineStateBase* pipeline,
-                                    const std::vector<VkmPerPassResourceEntry>& entries,
-                                    VkmPerPassResourceTableBase*& outTable) {
-            outTable = _driver->newPerPassResourceTable(pipeline, entries, outError);
+                                    const std::vector<VkmTableResourceEntry>& entries,
+                                    VkmResourceTableBase*& outTable) {
+            outTable = _driver->newResourceTable(pipeline, VkmResourceSetKind::PerPass, entries, outError);
             return outTable != nullptr;
         };
 
@@ -316,7 +316,7 @@ namespace vkm
             return;
         }
 
-        const auto destroyTable = [](VkmPerPassResourceTableBase*& table) {
+        const auto destroyTable = [](VkmResourceTableBase*& table) {
             if (table != nullptr)
             {
                 table->destroy();
@@ -324,7 +324,7 @@ namespace vkm
                 table = nullptr;
             }
         };
-        for (VkmPerPassResourceTableBase*& table : _captureTables)
+        for (VkmResourceTableBase*& table : _captureTables)
         {
             destroyTable(table);
         }
@@ -483,7 +483,7 @@ namespace vkm
                             return _capturePipelines[static_cast<uint32_t>(batch._layout)];
                         },
                         [this, &push](VkmCommandBufferBase* cb, const VkmScene::DrawBatch& batch) {
-                            cb->bindPerPassResources(_captureTables[static_cast<uint32_t>(batch._layout)]);
+                            cb->bindResourceTable(_captureTables[static_cast<uint32_t>(batch._layout)]);
                             cb->setPushConstants(&push, sizeof(push));
                         },
                         _descriptor._cullViewIndex);
@@ -501,7 +501,7 @@ namespace vkm
         // at a different place in each.
         const auto recordBlend = [&](const char* name, VkmResourceHandle atlas, const glm::uvec2& atlasExtent,
                                      uint32_t cellSize, VkmPipelineStateBase* pipeline,
-                                     VkmPerPassResourceTableBase* table, VkmResourceHandle constants,
+                                     VkmResourceTableBase* table, VkmResourceHandle constants,
                                      bool distanceAtlas) {
             VkmFrameBufferDescriptor fb{};
             fb._width = atlasExtent.x;
@@ -524,7 +524,7 @@ namespace vkm
             subGraph->setRenderCallback([this, pipeline, table, cellSize, distanceAtlas](
                                             VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->bindPipeline(pipeline);
-                commandBuffer->bindPerPassResources(table);
+                commandBuffer->bindResourceTable(table);
                 for (uint32_t slot = 0; slot < _slice.size(); ++slot)
                 {
                     const uint32_t probeIndex = _slice[slot];

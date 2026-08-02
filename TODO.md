@@ -5,7 +5,7 @@
 - Vulkan `UnitTests` in GitHub Actions CI still lack a software Vulkan ICD on the Windows and macOS runners (Ubuntu now installs lavapipe).
 - `MemoryTracker`'s global mutex serializes every allocation/deallocation across all threads.
 - The unit-test hang watchdog is native-only; the wasm build links no pthreads, so a hung test there is bounded only by `scripts/run_tests.py`'s 60 s Chrome timeout and is not attributed to a test.
-- Design and implement descriptor sets 2 (per-pass) and 3 (per-draw) of the engine/user resource-binding convention (sets 0 bindless and 1 per-frame are implemented on all backends).
+- Sets 0-3 exhaust WebGPU's default maxBindGroups of 4, so a fifth descriptor set is not expressible there.
 - Set 1 has one frame-constants region per frame slot engine-wide, so a second scene-rendering window would render with the main swapchain's aspect ratio and share that region unsynchronized.
 - The frame-constant buffers bypass `newBuffer()` (no `VkmBuffer` is host-writable), so they are absent from the memory tracker, like the bindless managers' own buffers.
 - The WebGPU set-1 path has no test that reads per-frame constants in a WGSL shader, though one can now be built (`scripts/run_tests.py` builds a WGSL-capable host vkm-compiler).
@@ -32,7 +32,7 @@
 - Render graph capture records depth/stencil attachments as metadata only (no snapshot/preview).
 - Render graph capture snapshots cube/array inputs as slice 0 only; other faces are viewable only through the texture browser's per-layer readback.
 - PSO reload keeps variants that an edit removed from the json registered, since callers hold raw non-owning pointers to them; only a restart drops them.
-- Reloading a PSO whose set-2 (per-pass) declaration changed leaves any `VkmPerPassResourceTableBase` already built from it stale, with no notification; only tests build such tables today, so nothing holds one across a reload yet.
+- Reloading a PSO whose set-2/set-3 declaration changed leaves any `VkmResourceTableBase` already built from it stale, with no notification; only tests build such tables today, so nothing holds one across a reload yet.
 - The texture browser's cube/array face preview goes through a blocking `readbackTexture` (full queue wait) on every face change.
 - Runtime shader recompilation needs a baked-in `VKM_COMPILER_EXECUTABLE`, so installed and Emscripten builds can reload PSO json render state but not shaders.
 - Render graph capture records swapchain backbuffer outputs as metadata only (`CAMetalLayer.framebufferOnly` stays YES).
@@ -99,3 +99,5 @@
 - The probe capture pushes constants once per (probe, face, draw batch) though the pushed value depends only on (probe, face), so the probe budget still shrinks as a scene gains batches: 128 at one batch, 6 at Sponza's 25 materials.
 - The probe GI update converges too slowly at its default hysteresis: 2048 probes at budget 32 with hysteresis 0.97 take 4864 frames to shed 90% of a light change.
 - `scripts/run_tests.py` and `scripts/run_sample.py` duplicate about ten helper functions, including the host vkm-compiler build, instead of sharing a module.
+- A shader cache file is named `<shader>[<option>].<stage>.<backend>` and carries no entry point, so two PSOs sharing one HLSL file and option name silently overwrite each other's cache.
+- Metal's MTL4ArgumentTable caps buffer binds at 31 and sampler binds at 16, which is what bounds sets 2 and 3 to 13 buffers / 8 samplers / 16 textures each.

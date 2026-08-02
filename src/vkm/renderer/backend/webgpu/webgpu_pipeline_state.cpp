@@ -210,11 +210,11 @@ namespace vkm
         }
 
         // Shader visibility for a set-2 binding, derived from its type rather than declared (see
-        // VkmPerPassResourceType). Storage buffers are compute-only because WebGPU forbids
+        // VkmTableResourceType). Storage buffers are compute-only because WebGPU forbids
         // writable storage in the vertex stage -- the constraint that shaped the common enum.
-        WGPUShaderStage toWGPUShaderStage(VkmPerPassResourceType type)
+        WGPUShaderStage toWGPUShaderStage(VkmTableResourceType type)
         {
-            if (type == VkmPerPassResourceType::StorageBuffer)
+            if (type == VkmTableResourceType::StorageBuffer)
             {
                 return WGPUShaderStage_Compute;
             }
@@ -254,57 +254,102 @@ namespace vkm
         // VkmFrameConstantManagerWebGPU), mirroring Vulkan's two-set pipeline layout in
         // VkmPipelineStateVulkan::createInner. Both are declared even for shaders that use
         // neither. Groups 2-3 remain reserved (see common/frame_constants.h).
-        WGPUBindGroupLayout bindGroupLayouts[3]{
+        // Four groups exactly exhausts WebGPU's default maxBindGroups.
+        WGPUBindGroupLayout bindGroupLayouts[kVkmPerDrawSetIndex + 1]{
             driverWebGPU->getBindlessResourceManager()->getBindGroupLayout(),
             driverWebGPU->getFrameConstantManager()->getBindGroupLayout(),
+            nullptr,
             nullptr,
         };
         uint32_t bindGroupLayoutCount = 2;
 
-        // Group 2 is this pipeline's own, built from its `perPassResources` declaration. WGSL has
-        // no runtime-sized arrays -- the reason the bindless texture path does not exist on this
-        // backend at all -- but these are fixed bindings, so they are ordinary bind-group entries.
-        if (!desc.perPassResources.empty())
+        // Groups 2 and 3 are this pipeline's own, built from its `perPassResources` /
+        // `perDrawResources` declarations. WGSL has no runtime-sized arrays -- the reason the
+        // bindless texture path does not exist on this backend at all -- but these are fixed
+        // bindings, so they are ordinary bind-group entries. That is what makes set 3 the way a
+        // material's textures reach a WebGPU shader.
+        auto buildGroupLayout = [&](VkmResourceSetKind kind, const char* label,
+                                    WGPUBindGroupLayout& outLayout) -> bool
         {
-            std::vector<WGPUBindGroupLayoutEntry> perPassEntries;
-            perPassEntries.reserve(desc.perPassResources.size());
-            for (const VkmPerPassResourceBinding& resource : desc.perPassResources)
+            const std::vector<VkmTableResourceBinding>& declaration = desc.resourcesFor(kind);
+            std::vector<WGPUBindGroupLayoutEntry> layoutEntries;
+            layoutEntries.reserve(declaration.size());
+            for (const VkmTableResourceBinding& resource : declaration)
             {
                 WGPUBindGroupLayoutEntry entry{};
                 entry.binding = resource.binding;
                 entry.visibility = toWGPUShaderStage(resource.type);
                 switch (resource.type)
                 {
-                    case VkmPerPassResourceType::SampledTexture:
+                    case VkmTableResourceType::SampledTexture:
                         entry.texture.sampleType = WGPUTextureSampleType_Float;
                         entry.texture.viewDimension = WGPUTextureViewDimension_2D;
                         break;
-                    case VkmPerPassResourceType::Sampler:
+                    case VkmTableResourceType::Sampler:
                         entry.sampler.type = WGPUSamplerBindingType_Filtering;
                         break;
-                    case VkmPerPassResourceType::StorageBuffer:
+                    case VkmTableResourceType::StorageBuffer:
                         entry.buffer.type = WGPUBufferBindingType_Storage;
                         break;
-                    case VkmPerPassResourceType::UniformBuffer:
+                    case VkmTableResourceType::UniformBuffer:
                         entry.buffer.type = WGPUBufferBindingType_Uniform;
                         break;
                 }
-                perPassEntries.push_back(entry);
+                layoutEntries.push_back(entry);
             }
 
-            WGPUBindGroupLayoutDescriptor perPassLayoutDesc{};
-            perPassLayoutDesc.label = toWGPUStringView("VkmPipelineStateWebGPU PerPassLayout");
-            perPassLayoutDesc.entryCount = perPassEntries.size();
-            perPassLayoutDesc.entries = perPassEntries.data();
-            _perPassBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &perPassLayoutDesc);
-            if (_perPassBindGroupLayout == nullptr)
+            WGPUBindGroupLayoutDescriptor layoutDesc{};
+            layoutDesc.label = toWGPUStringView(label);
+            layoutDesc.entryCount = layoutEntries.size();
+            layoutDesc.entries = layoutEntries.data();
+            outLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
+            if (outLayout == nullptr)
             {
                 if (outError != nullptr)
-                    *outError = "Failed to create the group-2 layout for " + desc.name;
+                    *outError = std::string("Failed to create the ") + vkmResourceSetKindName(kind) +
+                                " bind group layout for " + desc.name;
                 return false;
             }
-            bindGroupLayouts[2] = _perPassBindGroupLayout;
-            bindGroupLayoutCount = 3;
+            return true;
+        };
+
+        if (!desc.perPassResources.empty())
+        {
+            if (!buildGroupLayout(VkmResourceSetKind::PerPass,
+                                  "VkmPipelineStateWebGPU PerPassLayout", _perPassBindGroupLayout))
+            {
+                return false;
+            }
+            bindGroupLayouts[kVkmPerPassSetIndex] = _perPassBindGroupLayout;
+            bindGroupLayoutCount = kVkmPerPassSetIndex + 1;
+        }
+        if (!desc.perDrawResources.empty())
+        {
+            // A group must land at its own index, so a pipeline declaring group 3 and not group 2
+            // needs an empty placeholder at 2 -- WebGPU accepts an entry-less bind group layout,
+            // and the array is positional.
+            if (bindGroupLayouts[kVkmPerPassSetIndex] == nullptr)
+            {
+                WGPUBindGroupLayoutDescriptor emptyDesc{};
+                emptyDesc.label = toWGPUStringView("VkmPipelineStateWebGPU EmptyPerPassLayout");
+                emptyDesc.entryCount = 0;
+                emptyDesc.entries = nullptr;
+                _emptyBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &emptyDesc);
+                if (_emptyBindGroupLayout == nullptr)
+                {
+                    if (outError != nullptr)
+                        *outError = "Failed to create the placeholder group-2 layout for " + desc.name;
+                    return false;
+                }
+                bindGroupLayouts[kVkmPerPassSetIndex] = _emptyBindGroupLayout;
+            }
+            if (!buildGroupLayout(VkmResourceSetKind::PerDraw,
+                                  "VkmPipelineStateWebGPU PerDrawLayout", _perDrawBindGroupLayout))
+            {
+                return false;
+            }
+            bindGroupLayouts[kVkmPerDrawSetIndex] = _perDrawBindGroupLayout;
+            bindGroupLayoutCount = kVkmPerDrawSetIndex + 1;
         }
 
         WGPUPipelineLayoutDescriptor pipelineLayoutDesc{};
@@ -529,10 +574,14 @@ namespace vkm
 
     void VkmPipelineStateWebGPU::destroyInner()
     {
-        if (_perPassBindGroupLayout != nullptr)
+        for (WGPUBindGroupLayout* layout : {&_perPassBindGroupLayout, &_perDrawBindGroupLayout,
+                                            &_emptyBindGroupLayout})
         {
-            wgpuBindGroupLayoutRelease(_perPassBindGroupLayout);
-            _perPassBindGroupLayout = nullptr;
+            if (*layout != nullptr)
+            {
+                wgpuBindGroupLayoutRelease(*layout);
+                *layout = nullptr;
+            }
         }
         if (_renderPipeline != nullptr)
         {

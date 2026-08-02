@@ -3,7 +3,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
-#include <vkm/renderer/backend/vulkan/vulkan_per_pass_resource_table.h>
+#include <vkm/renderer/backend/vulkan/vulkan_resource_table.h>
 #include <vkm/renderer/backend/vulkan/vulkan_util.h>
 #include <vkm/renderer/engine.h>
 
@@ -239,9 +239,9 @@ namespace vkm
         return VkmFormat::BGRA8_UNORM;
     }
 
-    VkmPerPassResourceTableBase* VkmDriverVulkan::newPerPassResourceTableInner()
+    VkmResourceTableBase* VkmDriverVulkan::newResourceTableInner()
     {
-        return new VkmPerPassResourceTableVulkan(this);
+        return new VkmResourceTableVulkan(this);
     }
 
     VkmSwapChainBase* VkmDriverVulkan::newSwapChainInner()

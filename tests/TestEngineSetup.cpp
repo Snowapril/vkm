@@ -219,7 +219,7 @@ protected:
     vkm::VkmTextureView* newTextureViewInner() override { return new MockTextureView(this); }
     vkm::VkmBufferView* newBufferViewInner() override { return nullptr; }
     vkm::VkmSwapChainBase* newSwapChainInner() override { return nullptr; }
-    vkm::VkmPerPassResourceTableBase* newPerPassResourceTableInner() override { return nullptr; }
+    vkm::VkmResourceTableBase* newResourceTableInner() override { return nullptr; }
     vkm::VkmCommandQueueBase* newCommandQueueInner() override { return new FakeCommandQueue(this); }
     vkm::VkmPipelineStateBase* newPipelineStateInner() override { return nullptr; }
     vkm::VkmRenderResourcePool* newRenderResourcePoolInner() override { return new vkm::VkmRenderResourcePool(this); }

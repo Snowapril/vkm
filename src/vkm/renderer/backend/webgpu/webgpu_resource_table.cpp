@@ -1,6 +1,6 @@
 // Copyright (c) 2025 Snowapril
 
-#include <vkm/renderer/backend/webgpu/webgpu_per_pass_resource_table.h>
+#include <vkm/renderer/backend/webgpu/webgpu_resource_table.h>
 
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
@@ -27,17 +27,17 @@ namespace vkm
         }
     }
 
-    VkmPerPassResourceTableWebGPU::VkmPerPassResourceTableWebGPU(VkmDriverBase* driver)
-        : VkmPerPassResourceTableBase(driver)
+    VkmResourceTableWebGPU::VkmResourceTableWebGPU(VkmDriverBase* driver)
+        : VkmResourceTableBase(driver)
     {
     }
 
-    VkmPerPassResourceTableWebGPU::~VkmPerPassResourceTableWebGPU()
+    VkmResourceTableWebGPU::~VkmResourceTableWebGPU()
     {
         destroyInner();
     }
 
-    bool VkmPerPassResourceTableWebGPU::createInner(const std::vector<VkmPerPassResourceEntry>& entries,
+    bool VkmResourceTableWebGPU::createInner(const std::vector<VkmTableResourceEntry>& entries,
                                                     std::string* outError)
     {
         VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
@@ -45,15 +45,15 @@ namespace vkm
 
         const VkmPipelineStateWebGPU* pipelineStateWebGPU =
             static_cast<const VkmPipelineStateWebGPU*>(_pipelineState);
-        WGPUBindGroupLayout layout = pipelineStateWebGPU->getPerPassBindGroupLayout();
+        WGPUBindGroupLayout layout = pipelineStateWebGPU->getBindGroupLayout(getSetKind());
         if (layout == nullptr)
         {
-            setError(outError, "Pipeline '" + _pipelineState->getName() + "' has no group-2 layout");
+            setError(outError, "Pipeline '" + _pipelineState->getName() + "' has no group-" +
+                                   std::to_string(getSetIndex()) + " layout");
             return false;
         }
 
-        const std::vector<VkmPerPassResourceBinding>& declaration =
-            _pipelineState->getDescriptor().perPassResources;
+        const std::vector<VkmTableResourceBinding>& declaration = getDeclaration();
         VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
 
         std::vector<WGPUBindGroupEntry> bindEntries;
@@ -64,15 +64,15 @@ namespace vkm
         // lockstep.
         for (size_t i = 0; i < entries.size(); ++i)
         {
-            const VkmPerPassResourceEntry& entry = entries[i];
-            const VkmPerPassResourceBinding& declared = declaration[i];
+            const VkmTableResourceEntry& entry = entries[i];
+            const VkmTableResourceBinding& declared = declaration[i];
 
             WGPUBindGroupEntry bindEntry{};
             bindEntry.binding = declared.binding;
 
             switch (declared.type)
             {
-                case VkmPerPassResourceType::SampledTexture:
+                case VkmTableResourceType::SampledTexture:
                 {
                     VkmTextureWebGPU* textureWebGPU = static_cast<VkmTextureWebGPU*>(
                         renderResourcePool->getResource<VkmTexture>(entry.resource));
@@ -90,7 +90,7 @@ namespace vkm
                     bindEntry.textureView = view;
                     break;
                 }
-                case VkmPerPassResourceType::Sampler:
+                case VkmTableResourceType::Sampler:
                 {
                     VkmSamplerWebGPU* samplerWebGPU = static_cast<VkmSamplerWebGPU*>(
                         renderResourcePool->getResource<VkmSampler>(entry.resource));
@@ -104,8 +104,8 @@ namespace vkm
                     bindEntry.sampler = samplerWebGPU->getSampler();
                     break;
                 }
-                case VkmPerPassResourceType::StorageBuffer:
-                case VkmPerPassResourceType::UniformBuffer:
+                case VkmTableResourceType::StorageBuffer:
+                case VkmTableResourceType::UniformBuffer:
                 {
                     VkmBufferWebGPU* bufferWebGPU = static_cast<VkmBufferWebGPU*>(
                         renderResourcePool->getResource<VkmBuffer>(entry.resource));
@@ -140,7 +140,7 @@ namespace vkm
         return true;
     }
 
-    void VkmPerPassResourceTableWebGPU::destroyInner()
+    void VkmResourceTableWebGPU::destroyInner()
     {
         if (_bindGroup != nullptr)
         {

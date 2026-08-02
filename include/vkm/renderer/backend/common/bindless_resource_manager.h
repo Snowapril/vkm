@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <vkm/renderer/backend/common/frame_constants.h>
+#include <vkm/renderer/backend/common/pipeline_state.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 
 #include <vector>
@@ -125,30 +127,107 @@ namespace vkm
     * everywhere: Metal has to reserve argument-table slots up front, and a per-backend cap would
     * turn a valid pipeline into a runtime failure on one backend only.
     */
-    inline constexpr uint32_t kVkmPerPassResourceMaxBindings = 16;
+    inline constexpr uint32_t kVkmResourceTableMaxBindings = 16;
 
     /*
-    * @brief Set 2 (per-pass) on Metal: discrete bindings, one Metal index per declared binding.
+    * @brief Sets 2 (per-pass) and 3 (per-draw) on Metal: discrete bindings, one Metal index per
+    * declared binding.
     *
-    * Discrete for the same reason set 1 is -- it keeps set 2 out of the padding walk
+    * Discrete for the same reason set 1 is -- it keeps them out of the padding walk
     * pad_argument_buffer_resources drives, which needs a registered base type for every id it
     * steps over and cannot cope with the sparse binding indices a PSO is allowed to declare.
     *
-    * Metal keeps separate index spaces for buffers, textures and samplers. The buffer space
-    * continues after set 1's; the texture and sampler spaces start at 0, because set 0's bindless
-    * textures and sampler live *inside* its argument buffer rather than in argument-table slots,
-    * leaving both spaces otherwise unused.
+    * Metal keeps separate index spaces for buffers, textures and samplers, and has **no descriptor
+    * set index at all** -- which is the one place the two sets genuinely differ rather than merely
+    * being parameterized. Their separation is carried entirely by these bases, so set 3 starts
+    * where set 2's kVkmResourceTableMaxBindings end in every one of the three spaces. Getting this
+    * wrong aliases set 3 onto set 2 silently.
+    *
+    * The buffer space continues after set 1's; the texture and sampler spaces start at 0, because
+    * set 0's bindless textures and sampler live *inside* its argument buffer rather than in
+    * argument-table slots, leaving both spaces otherwise unused.
     */
+    /*
+    * @brief How many resources of each kind ONE set may declare, on Metal.
+    *
+    * @details MTL4ArgumentTable enforces hard caps -- `max buffer bind count must not be more than
+    * 31` and `max sampler state bind count must not be more than 16`, per its descriptor
+    * validation -- and sets 2 and 3 have to share them. These are what the sums below fit into.
+    *
+    * They bound resources *per type*, not binding indices, because the index assignment is dense
+    * per type (see VkmMetalTableIndexAssigner): a PSO declaring five textures, one sampler and one
+    * uniform at bindings 0..6 uses sampler slot 0, not slot 5. Assigning `base + bindingIndex`
+    * instead would have made the sampler cap bind at 8 binding indices per set -- one more than
+    * gi_composite already declares.
+    */
+    inline constexpr uint32_t kVkmMetalTableTextureCapacity = 16;
+    inline constexpr uint32_t kVkmMetalTableSamplerCapacity = 8;
+    inline constexpr uint32_t kVkmMetalTableBufferCapacity  = 13;
+
     inline constexpr uint32_t kVkmMetalPerPassBufferIndexBase  = kVkmMetalFrameConstantBufferIndex + 1;
     inline constexpr uint32_t kVkmMetalPerPassTextureIndexBase = 0;
     inline constexpr uint32_t kVkmMetalPerPassSamplerIndexBase = 0;
 
+    inline constexpr uint32_t kVkmMetalPerDrawBufferIndexBase  = kVkmMetalPerPassBufferIndexBase + kVkmMetalTableBufferCapacity;
+    inline constexpr uint32_t kVkmMetalPerDrawTextureIndexBase = kVkmMetalPerPassTextureIndexBase + kVkmMetalTableTextureCapacity;
+    inline constexpr uint32_t kVkmMetalPerDrawSamplerIndexBase = kVkmMetalPerPassSamplerIndexBase + kVkmMetalTableSamplerCapacity;
+
     inline constexpr uint32_t kVkmMetalArgumentTableBufferBindCount =
-        kVkmMetalPerPassBufferIndexBase + kVkmPerPassResourceMaxBindings;
+        kVkmMetalPerDrawBufferIndexBase + kVkmMetalTableBufferCapacity;
     inline constexpr uint32_t kVkmMetalArgumentTableTextureBindCount =
-        kVkmMetalPerPassTextureIndexBase + kVkmPerPassResourceMaxBindings;
+        kVkmMetalPerDrawTextureIndexBase + kVkmMetalTableTextureCapacity;
     inline constexpr uint32_t kVkmMetalArgumentTableSamplerBindCount =
-        kVkmMetalPerPassSamplerIndexBase + kVkmPerPassResourceMaxBindings;
+        kVkmMetalPerDrawSamplerIndexBase + kVkmMetalTableSamplerCapacity;
+
+    // The caps MTL4ArgumentTableDescriptor validation enforces. Exceeding one aborts at device
+    // level with "Argument Table Descriptor Validation", and only with Metal API Validation on --
+    // which is exactly how this was found, and why it is asserted here instead.
+    static_assert(kVkmMetalArgumentTableBufferBindCount <= 31, "MTL4ArgumentTable allows at most 31 buffer binds");
+    static_assert(kVkmMetalArgumentTableSamplerBindCount <= 16, "MTL4ArgumentTable allows at most 16 sampler binds");
+
+    /*
+    * @brief Assigns a set's Metal argument-table indices, densely per resource type.
+    *
+    * @details Metal keeps separate index spaces for buffers, textures and samplers, and has no
+    * descriptor set index at all -- which set a binding belongs to is carried entirely by these
+    * indices. Walking the declaration in order and taking the next index of that resource's type
+    * is what keeps the scarce sampler space proportional to the samplers actually declared.
+    *
+    * Both vkm-compiler's add_msl_resource_binding pins and VkmResourceTableMetal's bind-time
+    * writes drive this same assigner over the same declaration, in the same order. They must agree
+    * exactly: a mismatch is a shader reading a slot nobody wrote, with no diagnostic.
+    */
+    class VkmMetalTableIndexAssigner
+    {
+    public:
+        explicit VkmMetalTableIndexAssigner(VkmResourceSetKind kind)
+            : _textureIndex((kind == VkmResourceSetKind::PerPass) ? kVkmMetalPerPassTextureIndexBase
+                                                                 : kVkmMetalPerDrawTextureIndexBase)
+            , _samplerIndex((kind == VkmResourceSetKind::PerPass) ? kVkmMetalPerPassSamplerIndexBase
+                                                                  : kVkmMetalPerDrawSamplerIndexBase)
+            , _bufferIndex((kind == VkmResourceSetKind::PerPass) ? kVkmMetalPerPassBufferIndexBase
+                                                                 : kVkmMetalPerDrawBufferIndexBase)
+        {
+        }
+
+        // The Metal index for the next declared resource of `type`, in declaration order.
+        uint32_t next(VkmTableResourceType type)
+        {
+            switch (type)
+            {
+                case VkmTableResourceType::SampledTexture: return _textureIndex++;
+                case VkmTableResourceType::Sampler:        return _samplerIndex++;
+                case VkmTableResourceType::StorageBuffer:
+                case VkmTableResourceType::UniformBuffer:  return _bufferIndex++;
+            }
+            return 0;
+        }
+
+    private:
+        uint32_t _textureIndex;
+        uint32_t _samplerIndex;
+        uint32_t _bufferIndex;
+    };
     inline constexpr uint32_t kVkmMetalBindlessTextureIdBase     = 0;
     inline constexpr uint32_t kVkmMetalBindlessBufferIdBase      = kVkmBindlessTextureCapacity;
     inline constexpr uint32_t kVkmMetalBindlessIndexBufferIdBase = kVkmBindlessTextureCapacity + kVkmBindlessBufferCapacity;

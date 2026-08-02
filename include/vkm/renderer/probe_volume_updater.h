@@ -17,7 +17,7 @@
 namespace vkm
 {
     class VkmDriverBase;
-    class VkmPerPassResourceTableBase;
+    class VkmResourceTableBase;
     class VkmPipelineStateBase;
     class VkmPipelineStateManager;
     class VkmRenderGraph;
@@ -176,11 +176,11 @@ namespace vkm
         // One capture PSO and table per vertex layout, because a table is validated against the
         // pipeline it was built for and each layout permutation is a different pipeline.
         std::array<VkmPipelineStateBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _capturePipelines{};
-        std::array<VkmPerPassResourceTableBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _captureTables{};
+        std::array<VkmResourceTableBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _captureTables{};
         VkmPipelineStateBase* _irradianceBlendPipeline = nullptr;
         VkmPipelineStateBase* _distanceBlendPipeline = nullptr;
-        VkmPerPassResourceTableBase* _irradianceBlendTable = nullptr;
-        VkmPerPassResourceTableBase* _distanceBlendTable = nullptr;
+        VkmResourceTableBase* _irradianceBlendTable = nullptr;
+        VkmResourceTableBase* _distanceBlendTable = nullptr;
 
         std::vector<uint32_t> _slice;
         // Resolved during record() rather than read from _everRefreshed inside the render callback:

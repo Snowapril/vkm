@@ -1862,3 +1862,90 @@ Metal 202/202 (20292 assertions) with Metal API Validation on and no validation 
   `VkmPushConstantRingAllocator`. The two copies would have been identical, and the plan's own
   verification step — a test of the region arithmetic — is much better served by a headless class
   than by two near-duplicate backend tests, one of which (WebGPU) only runs under Chrome.
+
+## 2026-08-02 — Descriptor set 3 (per-draw), by generalizing set 2 rather than duplicating it
+
+WebGPU cannot do bindless textures (Tint has no array-of-handle type, and
+`maxSampledTexturesPerShaderStage` defaults to 16), so a material's textures have to reach a shader
+there through a per-draw descriptor set. This is that set. Nothing consumes it yet; the texturing
+PRs do.
+
+The two sets differ by an index, by which declaration they validate against, and -- on Metal, which
+has no descriptor set index at all -- by which argument-table indices they occupy. Everything else
+is shared, so this generalizes the ~40 files that carried set 2 instead of standing up a parallel
+hierarchy.
+
+- **Renamed to match.** `per_pass_resource_table.{h,cpp}` and its three backend pairs became
+  `resource_table.*`; `VkmPerPassResourceTableBase` -> `VkmResourceTableBase`,
+  `VkmPerPassResourceType` -> `VkmTableResourceType`, `bindPerPassResources()` ->
+  `bindResourceTable()`. A table stores its own `VkmResourceSetKind`, so the bind site passes
+  nothing extra.
+- **`VkmResourceSetKind` lives in `frame_constants.h`**, beside the set-index constants it selects
+  between, rather than in `pipeline_state.h` -- that header is where the set convention is
+  documented, and it avoids a cycle.
+- **Bind-time compatibility is checked against the declaration, not the pipeline pointer.** A PSO's
+  permutations are distinct pipeline objects sharing one declaration (the G-buffer has three vertex
+  layouts), and requiring a table per permutation would multiply per-material tables by the
+  permutation count for nothing.
+- **A PSO may declare set 3 without set 2**, which is exactly what a G-buffer pass wanting only
+  per-material textures does. Both Vulkan's `setLayouts` vector and WebGPU's `bindGroupLayouts[]`
+  are positional, so that case needs an **empty placeholder layout at index 2** or the set silently
+  slides down and the shader reads nothing.
+- **vkm-compiler's set-2 pin block became a lambda called twice.** Vulkan and WGSL need no compiler
+  work at all -- they store or transpile the SPIR-V verbatim; only Metal pins indices.
+
+### Metal's argument table has hard caps, and only validation says so
+
+The first full-suite run after wiring set 3 aborted in the *first* test, presenting as a hang. The
+cause was two layers deep:
+
+```
+-[MTLDebugDevice newArgumentTableWithDescriptor:error:]: failed assertion `Argument Table Descriptor
+Validation / max buffer bind count must not be more than 31. / max sampler state bind count must not
+be more than 16.'
+```
+
+Reserving `kVkmResourceTableMaxBindings` (16) of every index space *per set* asks for 37 buffer and
+32 sampler binds. Both exceed Metal's limits, so device creation aborted -- and, per `TODO.md`, an
+abort inside mimalloc recurses forever through backward-cpp's signal handler, so it read as a
+spinning process rather than a failure. It reproduced only with `MTL_DEBUG_LAYER=1`; the filtered
+runs I had been iterating with had validation off and passed.
+
+The fix is not a smaller binding cap. Indices were assigned as `base + bindingIndex`, so
+`gi_composite` -- five textures, a sampler at binding 5, a uniform at binding 6 -- consumed six
+sampler slots to hold one sampler. Halving the cap to fit would have left it one binding from the
+limit. New `VkmMetalTableIndexAssigner` instead assigns **densely per resource type**, walking the
+declaration in order; both vkm-compiler's pins and the runtime table drive the same assigner over
+the same declaration, which is what keeps them in agreement. Per-set capacities are now 16 textures
+/ 8 samplers / 13 buffers, `static_assert`ed against Metal's 31 and 16, and the parser rejects a
+declaration that overruns one -- engine-wide, so a PSO that loads on Vulkan cannot fail on Metal
+only.
+
+### Verification
+
+`tests/TestResourceTables*` (renamed from `TestPerPassResources*`), two fixture PSOs:
+
+- `resource_tables_pso` declares **both** sets and outputs `pass.base + draw.base + threadId`, so a
+  set 3 aliased onto set 2 is a wrong number rather than a plausible one.
+- `per_draw_only_pso` declares **set 3 alone**, which is what exercises the placeholder layout.
+
+Both failure modes were confirmed by sabotage, on different backends and with different signatures:
+pointing the assigner at set 2's bases for both sets makes the *metallib compile* fail
+("cannot reserve 'buffer' resource location at index 5") and then the test fail; dropping Vulkan's
+placeholder layout makes pipeline creation fail validation
+(`VUID-VkComputePipelineCreateInfo-layout-07988`).
+
+Metal 203/203 (20321 assertions) with Metal API Validation, Vulkan 200/200 (5044), zero validation
+output on either.
+
+### Deviations
+
+- Planned: reserve `kVkmResourceTableMaxBindings` of each Metal index space per set. Did instead:
+  per-type capacities with dense assignment, because the planned reservation exceeds Metal's
+  argument-table caps and the obvious repair (halve the binding cap to 8) would have left an
+  existing PSO one binding from the limit.
+- Planned: one fixture PSO with two entry points in one HLSL file. Did instead: two HLSL files. A
+  shader cache is named `<shader>[<option>].<stage>.<backend>` and carries **no entry point**, so
+  the two PSOs overwrote each other's cache and the per-draw-only pipeline silently loaded the
+  other's shader -- which is how the test first failed. Logged in `TODO.md` as the latent footgun
+  it is.

@@ -30,7 +30,7 @@ namespace vkm
         * @brief Create swapchain with window info
         */
         virtual VkmSwapChainBase* newSwapChainInner() override final;
-        virtual VkmPerPassResourceTableBase* newPerPassResourceTableInner() override final;
+        virtual VkmResourceTableBase* newResourceTableInner() override final;
 
         inline VkDevice getDevice() const { return _device; }
         inline VkPhysicalDevice getPhysicalDevice() const { return _physicalDevice; }

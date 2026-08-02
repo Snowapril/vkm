@@ -3,6 +3,7 @@
 #pragma once
 
 #include <vkm/base/common.h>
+#include <vkm/renderer/backend/common/frame_constants.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/shader_cache.h>
 
@@ -162,24 +163,27 @@ namespace vkm
     };
 
     /*
-    * @brief One resource kind a pass can declare at descriptor set 2.
+    * @brief One resource kind a PSO can declare at descriptor set 2 or set 3.
     *
-    * Set 2 is the per-pass set (see common/frame_constants.h). Unlike set 0, its contents are
-    * declared by each PSO rather than being engine-global, and unlike set 0 the bindings are
-    * fixed rather than runtime-sized arrays. That is what makes it work on WebGPU: WGSL has no
-    * runtime-sized arrays, which is the whole reason the bindless texture path is Vulkan/Metal
-    * only (VkmDriverCapabilityFlags::TextureUpload), so a shader there can sample nothing at all.
-    * A fixed binding is an ordinary WGSL bind-group entry.
+    * Sets 2 (per-pass) and 3 (per-draw) are the PSO-declared sets (see common/frame_constants.h).
+    * Unlike set 0, their contents are declared by each PSO rather than being engine-global, and
+    * unlike set 0 the bindings are fixed rather than runtime-sized arrays. That is what makes them
+    * work on WebGPU: WGSL has no runtime-sized arrays, which is the whole reason the bindless
+    * texture path is Vulkan/Metal only (VkmDriverCapabilityFlags::TextureUpload), so a shader there
+    * can sample nothing at all through set 0. A fixed binding is an ordinary WGSL bind-group entry.
+    *
+    * The register space in the comments below is the set the declaration belongs to -- space2 for
+    * a per-pass binding, space3 for a per-draw one. Nothing else about the kinds differs.
     */
-    enum class VkmPerPassResourceType : uint8_t
+    enum class VkmTableResourceType : uint8_t
     {
-        // Texture2D at register(t#, space2). Read-only; pairs with a Sampler binding.
+        // Texture2D at register(t#, spaceN). Read-only; pairs with a Sampler binding.
         SampledTexture = 0,
-        // SamplerState at register(s#, space2). Separate from the texture so one sampler can
+        // SamplerState at register(s#, spaceN). Separate from the texture so one sampler can
         // serve several, matching HLSL/SPIR-V rather than Metal's combined view.
         Sampler = 1,
         /*
-        * RWStructuredBuffer at register(u#, space2).
+        * RWStructuredBuffer at register(u#, spaceN).
         *
         * Compute-visible only, for the same reason set 0's two read-write singletons are
         * (bindless_resource_manager.h): WebGPU forbids writable storage in the vertex stage, and
@@ -187,27 +191,27 @@ namespace vkm
         * fetched as an indirect argument in that scope.
         */
         StorageBuffer = 2,
-        // ConstantBuffer at register(b#, space2): per-pass constants that outgrow the 128-byte
-        // vertex-only push-constant range, and that the fragment stage can actually read.
+        // ConstantBuffer at register(b#, spaceN): constants that outgrow the 128-byte vertex-only
+        // push-constant range, and that the fragment stage can actually read.
         UniformBuffer = 3,
     };
 
     /*
-    * @brief One entry in a PSO's set-2 declaration.
+    * @brief One entry in a PSO's set-2 or set-3 declaration.
     *
     * Shader visibility is derived from `type` rather than declared, so a PSO cannot accidentally
     * ask for a combination a backend rejects -- see the StorageBuffer note above.
     */
-    struct VkmPerPassResourceBinding
+    struct VkmTableResourceBinding
     {
         uint32_t binding = 0;
-        VkmPerPassResourceType type = VkmPerPassResourceType::SampledTexture;
+        VkmTableResourceType type = VkmTableResourceType::SampledTexture;
 
-        inline bool operator==(const VkmPerPassResourceBinding& other) const noexcept
+        inline bool operator==(const VkmTableResourceBinding& other) const noexcept
         {
             return binding == other.binding && type == other.type;
         }
-        inline bool operator!=(const VkmPerPassResourceBinding& other) const noexcept
+        inline bool operator!=(const VkmTableResourceBinding& other) const noexcept
         {
             return !(*this == other);
         }
@@ -323,11 +327,29 @@ namespace vkm
         * which is every pipeline that predates set 2.
         *
         * Sets 0 and 1 are engine-global and identical for every pipeline, which is what let bind
-        * sites stay free of per-PSO knowledge. Set 2 is the first thing that is genuinely per-PSO,
-        * so a pipeline declaring it is no longer layout-compatible with one that does not, and
+        * sites stay free of per-PSO knowledge. Sets 2 and 3 are the genuinely per-PSO ones, so a
+        * pipeline declaring either is no longer layout-compatible with one that does not, and
         * whatever binds its resources has to know this list.
         */
-        std::vector<VkmPerPassResourceBinding> perPassResources;
+        std::vector<VkmTableResourceBinding> perPassResources;
+
+        /*
+        * @brief This pipeline's descriptor set 3 (per-draw) declaration, from the JSON
+        * `per_draw_resources` array. Same shape and same rules as perPassResources; only the set
+        * index and the intended bind frequency differ.
+        *
+        * A PSO may declare this *without* declaring set 2 -- a G-buffer pass wants per-material
+        * textures and no per-pass resources at all. Backends must therefore keep set 3 at set index
+        * 3 rather than at "the next free slot", which means inserting an empty placeholder layout
+        * for set 2 (see VkmPipelineStateVulkan::createInner and its WebGPU counterpart).
+        */
+        std::vector<VkmTableResourceBinding> perDrawResources;
+
+        // The declaration for one set kind, so shared code selects instead of branching.
+        inline const std::vector<VkmTableResourceBinding>& resourcesFor(VkmResourceSetKind kind) const
+        {
+            return (kind == VkmResourceSetKind::PerPass) ? perPassResources : perDrawResources;
+        }
 
         // vertexShader is the only field the parser treats as required.
         std::optional<VkmShaderStageDescriptor> vertexShader;

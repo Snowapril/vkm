@@ -16,7 +16,7 @@ set(SRCS
     ${SRC_DIR}/TestMemoryTracker.cpp
     ${SRC_DIR}/TestShaderCacheUtil.cpp
     ${SRC_DIR}/TestTextureShaderReadBarrier.cpp
-    ${SRC_DIR}/TestPerPassResources.cpp
+    ${SRC_DIR}/TestResourceTables.cpp
     ${SRC_DIR}/TestGBuffer.cpp
     ${SRC_DIR}/TestProbeVolume.cpp
     ${SRC_DIR}/TestSceneCullViews.cpp
@@ -54,7 +54,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestSceneModelRenderMetal.mm
         ${SRC_DIR}/TestCubemapTextureMetal.mm
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
-        ${SRC_DIR}/TestPerPassResourcesMetal.mm
+        ${SRC_DIR}/TestResourceTablesMetal.mm
         ${SRC_DIR}/TestGBufferMetal.mm
         ${SRC_DIR}/TestGBufferRenderMetal.mm
         ${SRC_DIR}/TestProbeVolumeMetal.mm
@@ -76,7 +76,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestSceneModelRenderMetal.mm
         ${SRC_DIR}/TestCubemapTextureMetal.mm
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
-        ${SRC_DIR}/TestPerPassResourcesMetal.mm
+        ${SRC_DIR}/TestResourceTablesMetal.mm
         ${SRC_DIR}/TestGBufferMetal.mm
         ${SRC_DIR}/TestGBufferRenderMetal.mm
         ${SRC_DIR}/TestProbeVolumeMetal.mm
@@ -108,17 +108,20 @@ if (VKM_USE_METAL_API OR VKM_USE_VULKAN_API)
         EXTRA_DEPENDS  "${ROOT_DIR}/src/samples/skybox/skybox.hlsl")
 endif()
 
-# TestPerPassResources dispatches a compute shader whose only resources live in descriptor set 2 --
-# Vulkan allocates a descriptor set, Metal binds discretely onto the argument table, WebGPU builds a
-# bind group, and the same expected values across all three is what proves the PSO declaration means
-# the same thing on each. WebGPU joins only when a host vkm-compiler can build it a WGSL cache
-# (see the elseif below); its bind-group-2 code has been implemented all along, just never executed.
+# TestResourceTables dispatches compute shaders whose only resources live in the PSO-declared sets
+# 2 and 3 -- Vulkan allocates descriptor sets, Metal binds discretely onto the argument table at
+# per-set index bases, WebGPU builds bind groups, and the same expected values across all three is
+# what proves the PSO declaration means the same thing on each. One PSO declares both sets (so an
+# aliased pair is visible); a second declares set 3 only (so a set that slid down to index 2 is).
+# WebGPU joins only when a host vkm-compiler can build it a WGSL cache (see the elseif below).
 if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API OR (EMSCRIPTEN AND VKM_HOST_VKM_COMPILER))
     vkm_add_shader_cache_target(
-        TARGET_NAME   tests_per_pass_shaders
+        TARGET_NAME   tests_resource_table_shaders
         OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
-        PSO_JSON_FILES "${ROOT_DIR}/resources/tests/per_pass/renderpass.json"
-        EXTRA_DEPENDS  "${ROOT_DIR}/resources/tests/per_pass/per_pass_resources.hlsl")
+        PSO_JSON_FILES "${ROOT_DIR}/resources/tests/resource_tables/renderpass.json"
+                       "${ROOT_DIR}/resources/tests/resource_tables/per_draw_only.json"
+        EXTRA_DEPENDS  "${ROOT_DIR}/resources/tests/resource_tables/resource_tables.hlsl"
+                       "${ROOT_DIR}/resources/tests/resource_tables/per_draw_only.hlsl")
 endif()
 
 # TestViewport renders a constant-colour fullscreen triangle into part of an attachment, which is
@@ -210,21 +213,21 @@ if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
         TEST_VIEWPORT_PSO_DIR="${ROOT_DIR}/resources/tests/viewport/"
         TEST_VIEWPORT_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
     )
-    add_dependencies(${target} tests_per_pass_shaders)
+    add_dependencies(${target} tests_resource_table_shaders)
     target_compile_definitions(${target}
         PRIVATE
-        TEST_PER_PASS_PSO_DIR="${ROOT_DIR}/resources/tests/per_pass/"
-        TEST_PER_PASS_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
+        TEST_RESOURCE_TABLE_PSO_DIR="${ROOT_DIR}/resources/tests/resource_tables/"
+        TEST_RESOURCE_TABLE_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
     )
 elseif (EMSCRIPTEN AND VKM_USE_WEBGPU_API AND VKM_HOST_VKM_COMPILER)
-    # The set-2 (bind group 2) path on WebGPU shipped compile-verified only, because nothing
-    # could build a WGSL shader to exercise it. With a host vkm-compiler it can run for real.
+    # The bind-group 2/3 paths on WebGPU need a WGSL shader to exercise them, which only a host
+    # vkm-compiler can build.
     # The PSO json rides the resources/ mount; the cache rides the /shadercache one below.
-    add_dependencies(${target} tests_per_pass_shaders)
+    add_dependencies(${target} tests_resource_table_shaders)
     target_compile_definitions(${target}
         PRIVATE
-        TEST_PER_PASS_PSO_DIR="/resources/tests/per_pass/"
-        TEST_PER_PASS_SHADER_CACHE_DIR="/shadercache/"
+        TEST_RESOURCE_TABLE_PSO_DIR="/resources/tests/resource_tables/"
+        TEST_RESOURCE_TABLE_SHADER_CACHE_DIR="/shadercache/"
     )
 endif()
 

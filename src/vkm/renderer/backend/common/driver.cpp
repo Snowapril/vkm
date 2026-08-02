@@ -584,17 +584,18 @@ namespace vkm
         return pipelineState;
     }
 
-    VkmPerPassResourceTableBase* VkmDriverBase::newPerPassResourceTable(
+    VkmResourceTableBase* VkmDriverBase::newResourceTable(
         const VkmPipelineStateBase* pipelineState,
-        const std::vector<VkmPerPassResourceEntry>& entries,
+        VkmResourceSetKind kind,
+        const std::vector<VkmTableResourceEntry>& entries,
         std::string* outError)
     {
-        VkmPerPassResourceTableBase* table = newPerPassResourceTableInner();
+        VkmResourceTableBase* table = newResourceTableInner();
         if (table == nullptr)
         {
             return nullptr;
         }
-        if (!table->initialize(pipelineState, entries, outError))
+        if (!table->initialize(pipelineState, kind, entries, outError))
         {
             delete table;
             return nullptr;

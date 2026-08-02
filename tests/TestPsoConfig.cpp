@@ -240,10 +240,10 @@ TEST_CASE("VkmPipelineStateDescriptor - per-pass resource (set 2) declaration") 
 
         REQUIRE(result->perPassResources.size() == 4);
         CHECK(result->perPassResources[0].binding == 0);
-        CHECK(result->perPassResources[0].type == vkm::VkmPerPassResourceType::SampledTexture);
-        CHECK(result->perPassResources[1].type == vkm::VkmPerPassResourceType::Sampler);
-        CHECK(result->perPassResources[2].type == vkm::VkmPerPassResourceType::StorageBuffer);
-        CHECK(result->perPassResources[3].type == vkm::VkmPerPassResourceType::UniformBuffer);
+        CHECK(result->perPassResources[0].type == vkm::VkmTableResourceType::SampledTexture);
+        CHECK(result->perPassResources[1].type == vkm::VkmTableResourceType::Sampler);
+        CHECK(result->perPassResources[2].type == vkm::VkmTableResourceType::StorageBuffer);
+        CHECK(result->perPassResources[3].type == vkm::VkmTableResourceType::UniformBuffer);
     }
 
     SUBCASE("binding indices need not be contiguous or ordered") {
@@ -327,7 +327,7 @@ TEST_CASE("VkmPipelineStateDescriptor - per-pass resource (set 2) declaration") 
         REQUIRE_MESSAGE(variants.has_value(), outError);
         REQUIRE(variants->size() == 1);
         REQUIRE((*variants)[0].perPassResources.size() == 1);
-        CHECK((*variants)[0].perPassResources[0].type == vkm::VkmPerPassResourceType::StorageBuffer);
+        CHECK((*variants)[0].perPassResources[0].type == vkm::VkmTableResourceType::StorageBuffer);
     }
 }
 

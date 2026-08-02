@@ -37,7 +37,7 @@
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/driver.h>
-#include <vkm/renderer/backend/common/per_pass_resource_table.h>
+#include <vkm/renderer/backend/common/resource_table.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/render_graph.h>
 #include <vkm/renderer/backend/common/sampler.h>
@@ -377,10 +377,10 @@ public:
             ssgiSubGraph->addReferencedResource(_indirectTarget);
             ssgiSubGraph->addReferencedResource(_directTarget);
             VkmPipelineStateBase* ssgiPipeline = _ssgiPipeline;
-            VkmPerPassResourceTableBase* ssgiTable = _tables._ssgi;
+            VkmResourceTableBase* ssgiTable = _tables._ssgi;
             ssgiSubGraph->setRenderCallback([ssgiPipeline, ssgiTable](VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->bindPipeline(ssgiPipeline);
-                commandBuffer->bindPerPassResources(ssgiTable);
+                commandBuffer->bindResourceTable(ssgiTable);
                 commandBuffer->draw(3, 1, 0, 0);
             });
         }
@@ -402,10 +402,10 @@ public:
             renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_extent, backBuffer), "GiTonemap");
         tonemapSubGraph->addReferencedResource(_compositeTarget);
         VkmPipelineStateBase* tonemapPipeline = _tonemapPipeline;
-        VkmPerPassResourceTableBase* tonemapTable = _tables._tonemap;
+        VkmResourceTableBase* tonemapTable = _tables._tonemap;
         tonemapSubGraph->setRenderCallback([tonemapPipeline, tonemapTable](VkmCommandBufferBase* commandBuffer) {
             commandBuffer->bindPipeline(tonemapPipeline);
-            commandBuffer->bindPerPassResources(tonemapTable);
+            commandBuffer->bindResourceTable(tonemapTable);
             commandBuffer->draw(3, 1, 0, 0);
         });
 
@@ -418,10 +418,10 @@ public:
                 renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_extent, _screenshotTarget), "GiScreenshot");
             shotSubGraph->addReferencedResource(_screenshotTarget);
             VkmPipelineStateBase* pipeline = _tonemapPipeline;
-            VkmPerPassResourceTableBase* table = _tables._tonemap;
+            VkmResourceTableBase* table = _tables._tonemap;
             shotSubGraph->setRenderCallback([pipeline, table](VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->bindPipeline(pipeline);
-                commandBuffer->bindPerPassResources(table);
+                commandBuffer->bindResourceTable(table);
                 commandBuffer->draw(3, 1, 0, 0);
             });
             _screenshotPending = true;
@@ -437,11 +437,11 @@ private:
 
     struct Tables
     {
-        VkmPerPassResourceTableBase* _lighting = nullptr;
-        VkmPerPassResourceTableBase* _probeLighting = nullptr;
-        VkmPerPassResourceTableBase* _ssgi = nullptr;
-        VkmPerPassResourceTableBase* _composite = nullptr;
-        VkmPerPassResourceTableBase* _tonemap = nullptr;
+        VkmResourceTableBase* _lighting = nullptr;
+        VkmResourceTableBase* _probeLighting = nullptr;
+        VkmResourceTableBase* _ssgi = nullptr;
+        VkmResourceTableBase* _composite = nullptr;
+        VkmResourceTableBase* _tonemap = nullptr;
 
         bool isComplete() const
         {
@@ -467,21 +467,21 @@ private:
     }
 
     void recordFullscreen(VkmRenderGraph* renderGraph, const char* name, VkmResourceHandle target,
-                          VkmPipelineStateBase* pipeline, VkmPerPassResourceTableBase* table)
+                          VkmPipelineStateBase* pipeline, VkmResourceTableBase* table)
     {
         VkmRenderGraphicsSubGraph* subGraph =
             renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_extent, target), name);
         subGraph->addReferencedResource(target);
         subGraph->setRenderCallback([pipeline, table](VkmCommandBufferBase* commandBuffer) {
             commandBuffer->bindPipeline(pipeline);
-            commandBuffer->bindPerPassResources(table);
+            commandBuffer->bindResourceTable(table);
             commandBuffer->draw(3, 1, 0, 0);
         });
     }
 
     void destroyTables(Tables& tables)
     {
-        for (VkmPerPassResourceTableBase** table :
+        for (VkmResourceTableBase** table :
              { &tables._lighting, &tables._probeLighting, &tables._ssgi, &tables._composite, &tables._tonemap })
         {
             if (*table != nullptr)
@@ -670,22 +670,22 @@ private:
         const VkmResourceHandle motion = _gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic);
 
         std::string error;
-        _tables._lighting = driver->newPerPassResourceTable(
-            _lightingPipeline,
+        _tables._lighting = driver->newResourceTable(
+            _lightingPipeline, VkmResourceSetKind::PerPass,
             {{ 0, normal }, { 1, baseColor }, { 2, motion }, { 3, _sampler }, { 4, _lightBuffer }}, &error);
-        _tables._probeLighting = driver->newPerPassResourceTable(
-            _probeLightingPipeline,
+        _tables._probeLighting = driver->newResourceTable(
+            _probeLightingPipeline, VkmResourceSetKind::PerPass,
             {{ 0, normal }, { 1, motion }, { 2, _volume.getIrradianceTexture() },
              { 3, _volume.getDistanceTexture() }, { 4, _sampler }, { 5, _volumeBuffer }}, &error);
-        _tables._ssgi = driver->newPerPassResourceTable(
-            _ssgiPipeline,
+        _tables._ssgi = driver->newResourceTable(
+            _ssgiPipeline, VkmResourceSetKind::PerPass,
             {{ 0, normal }, { 1, motion }, { 2, _directTarget }, { 3, _sampler }, { 4, _ssgiBuffer }}, &error);
-        _tables._composite = driver->newPerPassResourceTable(
-            _compositePipeline,
+        _tables._composite = driver->newResourceTable(
+            _compositePipeline, VkmResourceSetKind::PerPass,
             {{ 0, _directTarget }, { 1, _indirectTarget }, { 2, baseColor }, { 3, normal },
              { 4, motion }, { 5, _sampler }, { 6, _compositeBuffer }}, &error);
-        _tables._tonemap = driver->newPerPassResourceTable(
-            _tonemapPipeline, {{ 0, _compositeTarget }, { 1, _sampler }, { 2, _tonemapBuffer }}, &error);
+        _tables._tonemap = driver->newResourceTable(
+            _tonemapPipeline, VkmResourceSetKind::PerPass, {{ 0, _compositeTarget }, { 1, _sampler }, { 2, _tonemapBuffer }}, &error);
 
         if (!_tables.isComplete())
         {

@@ -338,7 +338,8 @@ namespace
                       const StageInfo& info,
                       VkmShaderCacheBackend backend,
                       const std::string& optionName,
-                      const std::vector<VkmPerPassResourceBinding>& perPassResources,
+                      const std::vector<VkmTableResourceBinding>& perPassResources,
+                      const std::vector<VkmTableResourceBinding>& perDrawResources,
                       const fs::path& shaderRoot,
                       const fs::path& includeDir,
                       const fs::path& outputDir,
@@ -506,46 +507,58 @@ namespace
                     compiler.add_msl_resource_binding(resourceBinding);
                 }
 
-                // Set 2 (per-pass) is declared discrete for the same reason set 1 is: it keeps it
-                // out of the pad_argument_buffer_resources walk, which needs a registered base
-                // type for every id it steps over and so cannot cope with the sparse binding
-                // indices a PSO may declare. Each declared binding therefore becomes an ordinary
-                // MSL argument at a pinned index, mirroring what
-                // VkmPerPassResourceTableMetal sets on the argument table at bind time.
+                // Sets 2 (per-pass) and 3 (per-draw) are declared discrete for the same reason
+                // set 1 is: it keeps them out of the pad_argument_buffer_resources walk, which
+                // needs a registered base type for every id it steps over and so cannot cope with
+                // the sparse binding indices a PSO may declare. Each declared binding therefore
+                // becomes an ordinary MSL argument at a pinned index, mirroring what
+                // VkmResourceTableMetal sets on the argument table at bind time -- the two index
+                // maps must agree exactly, which is why both read the same vkmMetalTable*IndexBase
+                // helpers.
                 //
                 // Only bindings this PSO declared are pinned; a shader is free to use a subset.
-                if (!perPassResources.empty())
+                const auto pinResourceTable = [&](VkmResourceSetKind kind,
+                                                  const std::vector<VkmTableResourceBinding>& declaration)
                 {
-                    compiler.add_discrete_descriptor_set(kVkmPerPassSetIndex);
-                    for (const VkmPerPassResourceBinding& resource : perPassResources)
+                    if (declaration.empty())
                     {
+                        return;
+                    }
+                    const uint32_t setIndex = vkmResourceSetIndex(kind);
+                    compiler.add_discrete_descriptor_set(setIndex);
+                    VkmMetalTableIndexAssigner indexAssigner(kind);
+                    for (const VkmTableResourceBinding& resource : declaration)
+                    {
+                        const uint32_t metalIndex = indexAssigner.next(resource.type);
                         spirv_cross::MSLResourceBinding resourceBinding;
                         resourceBinding.stage = executionModel;
-                        resourceBinding.desc_set = kVkmPerPassSetIndex;
+                        resourceBinding.desc_set = setIndex;
                         resourceBinding.binding = resource.binding;
                         resourceBinding.count = 1;
                         switch (resource.type)
                         {
-                            case VkmPerPassResourceType::SampledTexture:
+                            case VkmTableResourceType::SampledTexture:
                                 resourceBinding.basetype = spirv_cross::SPIRType::Image;
-                                resourceBinding.msl_texture = kVkmMetalPerPassTextureIndexBase + resource.binding;
+                                resourceBinding.msl_texture = metalIndex;
                                 break;
-                            case VkmPerPassResourceType::Sampler:
+                            case VkmTableResourceType::Sampler:
                                 resourceBinding.basetype = spirv_cross::SPIRType::Sampler;
-                                resourceBinding.msl_sampler = kVkmMetalPerPassSamplerIndexBase + resource.binding;
+                                resourceBinding.msl_sampler = metalIndex;
                                 break;
-                            case VkmPerPassResourceType::StorageBuffer:
+                            case VkmTableResourceType::StorageBuffer:
                                 resourceBinding.basetype = spirv_cross::SPIRType::UInt;
-                                resourceBinding.msl_buffer = kVkmMetalPerPassBufferIndexBase + resource.binding;
+                                resourceBinding.msl_buffer = metalIndex;
                                 break;
-                            case VkmPerPassResourceType::UniformBuffer:
+                            case VkmTableResourceType::UniformBuffer:
                                 resourceBinding.basetype = spirv_cross::SPIRType::Float;
-                                resourceBinding.msl_buffer = kVkmMetalPerPassBufferIndexBase + resource.binding;
+                                resourceBinding.msl_buffer = metalIndex;
                                 break;
                         }
                         compiler.add_msl_resource_binding(resourceBinding);
                     }
-                }
+                };
+                pinResourceTable(VkmResourceSetKind::PerPass, perPassResources);
+                pinResourceTable(VkmResourceSetKind::PerDraw, perDrawResources);
 
                 // Pin the push-constant block (kPushConstDescSet is its own namespace,
                 // never involved in set-0 padding).
@@ -732,17 +745,20 @@ int main(int argc, char** argv)
         if (variant.vertexShader.has_value())
         {
             allOk &= compileStage(*variant.vertexShader, vertexInfo, backend,
-                                  variant.optionName, variant.perPassResources, shaderRoot, includeDir, outputDir, emitMsl);
+                                  variant.optionName, variant.perPassResources, variant.perDrawResources,
+                                  shaderRoot, includeDir, outputDir, emitMsl);
         }
         if (variant.fragmentShader.has_value())
         {
             allOk &= compileStage(*variant.fragmentShader, fragmentInfo, backend,
-                                  variant.optionName, variant.perPassResources, shaderRoot, includeDir, outputDir, emitMsl);
+                                  variant.optionName, variant.perPassResources, variant.perDrawResources,
+                                  shaderRoot, includeDir, outputDir, emitMsl);
         }
         if (variant.computeShader.has_value())
         {
             allOk &= compileStage(*variant.computeShader, computeInfo, backend,
-                                  variant.optionName, variant.perPassResources, shaderRoot, includeDir, outputDir, emitMsl);
+                                  variant.optionName, variant.perPassResources, variant.perDrawResources,
+                                  shaderRoot, includeDir, outputDir, emitMsl);
         }
     }
 

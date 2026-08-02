@@ -6,7 +6,7 @@
 #include "TestHalfFloatShared.hpp"
 
 #include <vkm/renderer/backend/common/buffer.h>
-#include <vkm/renderer/backend/common/per_pass_resource_table.h>
+#include <vkm/renderer/backend/common/resource_table.h>
 #include <vkm/renderer/backend/common/sampler.h>
 #include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
@@ -268,7 +268,7 @@ namespace vkmtest
         // the immutability was designed around.
         const auto shadeWith = [&](float intensity) {
             vkm::VkmBuffer* lightBuffer = makeLightBuffer(intensity);
-            const std::vector<vkm::VkmPerPassResourceEntry> entries{
+            const std::vector<vkm::VkmTableResourceEntry> entries{
                 { 0, gbuffer.getTexture(vkm::VkmGBuffer::Target::Normal) },
                 { 1, gbuffer.getTexture(vkm::VkmGBuffer::Target::BaseColorRoughness) },
                 { 2, gbuffer.getTexture(vkm::VkmGBuffer::Target::MotionMetallic) },
@@ -276,8 +276,8 @@ namespace vkmtest
                 { 4, lightBuffer->getHandle() },
             };
             std::string tableError;
-            vkm::VkmPerPassResourceTableBase* table =
-                driver->newPerPassResourceTable(lightingPso, entries, &tableError);
+            vkm::VkmResourceTableBase* table =
+                driver->newResourceTable(lightingPso, vkm::VkmResourceSetKind::PerPass, entries, &tableError);
             REQUIRE_MESSAGE(table != nullptr, tableError);
 
             vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
@@ -295,7 +295,7 @@ namespace vkmtest
             auto* lightingSubGraph = renderGraph.beginGraphicsSubGraph(lightingFb);
             lightingSubGraph->setRenderCallback([lightingPso, table](vkm::VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->bindPipeline(lightingPso);
-                commandBuffer->bindPerPassResources(table);
+                commandBuffer->bindResourceTable(table);
                 commandBuffer->draw(3, 1, 0, 0); // one oversized triangle, no vertex buffer
             });
 
@@ -442,20 +442,20 @@ namespace vkmtest
 
         const auto tonemapValue = [&](float hdrValue) {
             vkm::VkmTexture* source = makeSourceTexture(hdrValue);
-            const std::vector<vkm::VkmPerPassResourceEntry> entries{
+            const std::vector<vkm::VkmTableResourceEntry> entries{
                 { 0, source->getHandle() },
                 { 1, sampler->getHandle() },
                 { 2, constantsBuffer->getHandle() },
             };
             std::string tableError;
-            vkm::VkmPerPassResourceTableBase* table = driver->newPerPassResourceTable(pso, entries, &tableError);
+            vkm::VkmResourceTableBase* table = driver->newResourceTable(pso, vkm::VkmResourceSetKind::PerPass, entries, &tableError);
             REQUIRE_MESSAGE(table != nullptr, tableError);
 
             vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
             auto* subGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
             subGraph->setRenderCallback([pso, table](vkm::VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->bindPipeline(pso);
-                commandBuffer->bindPerPassResources(table);
+                commandBuffer->bindResourceTable(table);
                 commandBuffer->draw(3, 1, 0, 0);
             });
             renderGraph.compile();

@@ -4,7 +4,7 @@
 #include <vkm/renderer/backend/webgpu/webgpu_texture.h>
 #include <vkm/renderer/backend/webgpu/webgpu_util.h>
 #include <vkm/renderer/backend/webgpu/webgpu_pipeline_state.h>
-#include <vkm/renderer/backend/webgpu/webgpu_per_pass_resource_table.h>
+#include <vkm/renderer/backend/webgpu/webgpu_resource_table.h>
 #include <vkm/renderer/backend/webgpu/webgpu_buffer.h>
 #include <vkm/renderer/backend/webgpu/webgpu_staging_buffer.h>
 #include <vkm/renderer/backend/webgpu/webgpu_driver.h>
@@ -325,18 +325,18 @@ namespace vkm
         // image layouts, and one pass's writes are visible to the next by specification.
     }
 
-    void VkmCommandBufferWebGPU::onBindPerPassResources(VkmPerPassResourceTableBase* table)
+    void VkmCommandBufferWebGPU::onBindResourceTable(VkmResourceTableBase* table)
     {
         // Group 2 carries no dynamic offset, unlike group 0's push-constant ring, so this is a
         // plain bind on whichever encoder the bound pipeline opened.
-        WGPUBindGroup bindGroup = static_cast<VkmPerPassResourceTableWebGPU*>(table)->getBindGroup();
+        WGPUBindGroup bindGroup = static_cast<VkmResourceTableWebGPU*>(table)->getBindGroup();
         if (_computePassEncoder != nullptr)
         {
-            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, kVkmPerPassSetIndex, bindGroup, 0, nullptr);
+            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, table->getSetIndex(), bindGroup, 0, nullptr);
             return;
         }
-        VKM_ASSERT(_renderPassEncoder != nullptr, "bindPerPassResources outside any pass");
-        wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, kVkmPerPassSetIndex, bindGroup, 0, nullptr);
+        VKM_ASSERT(_renderPassEncoder != nullptr, "bindResourceTable outside any pass");
+        wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, table->getSetIndex(), bindGroup, 0, nullptr);
     }
 
     void VkmCommandBufferWebGPU::onSetDebugName(const char* name)
