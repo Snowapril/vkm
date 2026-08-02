@@ -9,6 +9,8 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <meshoptimizer.h>
 
+#include <filesystem>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -233,10 +235,29 @@ namespace vkm
             return true;
         }
 
-        void convertMaterial(const cgltf_material& source, VkmSceneMaterial* outMaterial)
+        /*
+        * @brief The model-image index a texture view points at, or INVALID_VALUE32.
+        *
+        * @details A glTF texture is an (image, sampler) pair; only the image is taken here, because
+        * set 0 carries one fixed linear/clamp sampler and there is nowhere to put a per-texture one
+        * yet. Materials whose sampler differs will therefore address wrong at the edges -- noted
+        * rather than silently accepted.
+        */
+        uint32_t imageIndexOf(const cgltf_data* data, const cgltf_texture_view& view)
+        {
+            if (view.texture == nullptr || view.texture->image == nullptr)
+            {
+                return INVALID_VALUE32;
+            }
+            return static_cast<uint32_t>(cgltf_image_index(data, view.texture->image));
+        }
+
+        void convertMaterial(const cgltf_data* data, const cgltf_material& source, VkmSceneMaterial* outMaterial)
         {
             outMaterial->_name = source.name != nullptr ? source.name : "";
             outMaterial->_emissiveFactor = glm::make_vec3(source.emissive_factor);
+            outMaterial->_normalImage = imageIndexOf(data, source.normal_texture);
+            outMaterial->_emissiveImage = imageIndexOf(data, source.emissive_texture);
 
             if (source.has_pbr_metallic_roughness)
             {
@@ -244,6 +265,41 @@ namespace vkm
                 outMaterial->_baseColorFactor = glm::make_vec4(pbr.base_color_factor);
                 outMaterial->_metallicFactor = pbr.metallic_factor;
                 outMaterial->_roughnessFactor = pbr.roughness_factor;
+                outMaterial->_baseColorImage = imageIndexOf(data, pbr.base_color_texture);
+                outMaterial->_metallicRoughnessImage = imageIndexOf(data, pbr.metallic_roughness_texture);
+            }
+        }
+
+        /*
+        * @brief Resolves each glTF image to a path next to the glTF itself.
+        *
+        * @details URIs in a glTF are relative to the document, so they only mean anything alongside
+        * its directory. Percent-encoding is decoded in place by cgltf_decode_uri, which is why the
+        * URI is copied first -- the parsed data is shared and decoding is destructive.
+        *
+        * An image with no URI (embedded in a buffer view, or a data URI) is left empty: neither is
+        * decoded here, and an empty path is how the uploader tells there is nothing to open.
+        */
+        void convertImages(const cgltf_data* data, const std::string& gltfPath, VkmSceneModel* outModel)
+        {
+            const std::filesystem::path baseDirectory = std::filesystem::path(gltfPath).parent_path();
+
+            outModel->_images.resize(data->images_count);
+            for (cgltf_size i = 0; i < data->images_count; ++i)
+            {
+                const cgltf_image& image = data->images[i];
+                if (image.uri == nullptr || image.uri[0] == '\0')
+                {
+                    continue;
+                }
+                std::string uri = image.uri;
+                if (uri.rfind("data:", 0) == 0)
+                {
+                    continue; // embedded, not a file
+                }
+                cgltf_decode_uri(uri.data());
+                uri.resize(std::char_traits<char>::length(uri.c_str()));
+                outModel->_images[i]._uri = (baseDirectory / uri).string();
             }
         }
     } // namespace
@@ -283,10 +339,12 @@ namespace vkm
 
         VkmSceneModel model;
 
+        convertImages(data, filePath, &model);
+
         model._materials.resize(data->materials_count);
         for (cgltf_size i = 0; i < data->materials_count; ++i)
         {
-            convertMaterial(data->materials[i], &model._materials[i]);
+            convertMaterial(data, data->materials[i], &model._materials[i]);
         }
 
         // glTF meshes are containers of primitives; the engine draws one primitive at a

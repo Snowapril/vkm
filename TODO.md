@@ -37,7 +37,9 @@
 - Render graph capture records swapchain backbuffer outputs as metadata only (`CAMetalLayer.framebufferOnly` stays YES).
 - Render graph capture texture previews in ImGui are Metal-only (`getTextureID` returns 0 on Vulkan/WebGPU).
 - Programmatic .gputrace capture scopes only the Metal Graphics queue 0; Vulkan/WebGPU `requestGpuFrameCapture()` is a no-op (no RenderDoc integration).
-- glTF import covers geometry and material factors only: no textures, no samplers, no animation/skinning, no Draco/KTX2/`EXT_meshopt_compression` (the texture upload/bindless path it would need now exists).
+- glTF import reads material texture *references* but nothing uploads them yet; no per-texture samplers, no animation/skinning, no Draco/KTX2/`EXT_meshopt_compression`.
+- glTF images embedded in a buffer view or a data URI are skipped by the importer; only file URIs resolve.
+- A glTF texture's sampler is discarded on import: set 0 carries one fixed linear/clamp sampler, so materials wanting repeat or nearest address wrong at the edges.
 - Metal's emit stage is the shared HLSL one (`scene_emit_draws.hlsl`) and its `drawIndirectCount` encodes one `drawPrimitives:indirectBuffer:` per candidate slot. The planned Metal-only variant — an MSL kernel filling an `MTLIndirectCommandBuffer` plus `executeCommandsInBuffer:indirectBuffer:` — is not implemented; it needs the emit dispatch to become a backend service (Vulkan/WebGPU dispatch the engine HLSL PSO, Metal dispatches an embedded metallib kernel) so `VkmScene` stays backend-free, and it needs `inheritBuffers` proven against an MTL4 argument table first.
 - WebGPU indirect batches encode `maxDrawCount` draws per frame; no render-bundle caching, so the per-draw encode cost is paid every frame.
 - The culling pass and the WebGPU emit path are compile-verified only: the GPU-driven path is pixel- and count-verified on Metal, and the WebGPU/wasm test path needs emsdk plus Chrome, which `run_tests.py` skips when they are absent.
@@ -89,6 +91,8 @@
 - VkmProbeVolumeUpdater's probe budget is capped at 32 by the Metal/WebGPU 1024-entry push-constant ring, which has no per-frame reset.
 - Probe capture, blend and update have GPU test coverage on Metal only; Vulkan covers the probe volume's addressing and the round-robin schedule.
 - No automated test asserts that an atlas the probe updater wrote is addressed the way probe_lighting reads it, nor that the Chebyshev test stops a leak against a real captured atlas; both are only checked by eye in the gi sample.
+- Probes that land inside geometry are neither detected nor relocated, so they inject their interior into the lookup; it shows as saturated patches beside hard black ones on interior surfaces.
+- The probe propagation test failed once out of three identical runs on a loaded machine and did not reproduce; its 20 s budget may be tight when other worktrees are running tests.
 - SSGI's ray length and intensity are unvalidated guesses; there is no ground truth to tune them against until the Phase 6 reference path tracer.
 - The gi sample has no automated pixel check (screenshots are compared by eye) and no reprojection debug view.
 - The probe capture pushes constants once per (probe, face, draw batch), so the per-frame probe budget has to shrink as a scene gains batches to stay inside the 1024-entry push-constant ring.

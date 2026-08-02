@@ -20,6 +20,7 @@
 #include <cxxopts.hpp>
 
 #include <glm/common.hpp>
+#include <glm/gtx/component_wise.hpp>
 #include <glm/geometric.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/matrix.hpp>
@@ -83,6 +84,16 @@ VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_screenshot_frame, 600u);
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_debug_view, 0u);
 // Off switch for the contact term, so a screenshot run can A/B it against the probes alone.
 VKM_GLOBAL_VARIABLE(bool, gv_gi_ssgi, true);
+// Probes per axis. More is better lit and slower to converge -- a round is probeCount/budget
+// frames -- so it is a knob rather than a constant. Y is lower than X and Z because scenes are
+// wider than they are tall, not because height matters less.
+VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_x, 20u);
+VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_y, 10u);
+VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_z, 20u);
+// Fraction of the scene's radius to orbit at. Below 1 the camera starts inside the geometry, which
+// is where a probe volume is actually judged -- an exterior view can look right while the interior
+// is black, which is exactly how the scene-scale bug got past a screenshot.
+VKM_GLOBAL_VARIABLE(float, gv_gi_camera_distance, 1.0f);
 
 namespace
 {
@@ -220,8 +231,7 @@ public:
         driver->uploadToBuffer(_lightBuffer, &light, sizeof(light));
         const TonemapConstants tonemap{};
         driver->uploadToBuffer(_tonemapBuffer, &tonemap, sizeof(tonemap));
-        const VkmSsgiConstants ssgi{};
-        driver->uploadToBuffer(_ssgiBuffer, &ssgi, sizeof(ssgi));
+        // Uploaded once the scene's scale is known; see loadScene.
 
         _ssgiEnabled = gv_gi_ssgi.get();
         if (gv_gi_debug_view.get() < static_cast<uint32_t>(VkmGiDebugView::Count))
@@ -522,7 +532,8 @@ private:
         const glm::vec3 extent = bounds._valid ? bounds.getExtent() : glm::vec3(8.0f);
 
         VkmProbeVolume::Descriptor volumeDescriptor{};
-        volumeDescriptor._probeCounts = glm::uvec3(16u, 6u, 16u);
+        volumeDescriptor._probeCounts = glm::max(
+            glm::uvec3(gv_gi_probes_x.get(), gv_gi_probes_y.get(), gv_gi_probes_z.get()), glm::uvec3(2u));
         // A margin outside the bounds, so surfaces at the very edge still sit between probes
         // rather than outside the grid, where the lookup returns black.
         const glm::vec3 span = extent * 1.2f;
@@ -530,7 +541,7 @@ private:
             glm::max(span / glm::vec3(volumeDescriptor._probeCounts - glm::uvec3(1u)), glm::vec3(0.05f));
         volumeDescriptor._origin =
             center - glm::vec3(volumeDescriptor._probeCounts - glm::uvec3(1u)) * volumeDescriptor._spacing * 0.5f;
-        _cameraController.frame(center, glm::length(extent) * 0.5f);
+        _cameraController.frame(center, glm::length(extent) * 0.5f * gv_gi_camera_distance.get());
         if (!_volume.initialize(driver, volumeDescriptor))
         {
             VKM_DEBUG_ERROR("Failed to create the GI probe volume");
@@ -553,6 +564,10 @@ private:
                             " by the push-constant ring at " + std::to_string(batchCount) + " draw batches").c_str());
         }
 
+        // _nearZ / _farZ are left at 0 so the updater derives them from the volume. Fixed
+        // world-space values are a guess about scene scale, and getting that guess wrong is
+        // invisible until you stand inside the scene: a far plane shorter than the room clips
+        // away everything the probes should have seen.
         VkmProbeVolumeUpdater::Descriptor updaterDescriptor{};
         updaterDescriptor._cullViewIndex = kProbeCullView;
         updaterDescriptor._budget = _probeBudget;
@@ -565,6 +580,12 @@ private:
 
         const VkmProbeVolumeConstants volumeConstants = _volume.makeConstants();
         driver->uploadToBuffer(_volumeBuffer, &volumeConstants, sizeof(volumeConstants));
+
+        // The contact term covers what falls between probes, so its reach is a fraction of the
+        // probe spacing rather than a fixed distance -- the same scale trap as the probe range.
+        VkmSsgiConstants ssgi{};
+        ssgi._params.y = glm::compMin(volumeDescriptor._spacing) * 0.35f;
+        driver->uploadToBuffer(_ssgiBuffer, &ssgi, sizeof(ssgi));
 
         _sceneReady = true;
     }

@@ -1136,6 +1136,12 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 - [x] ~~**Low-spec technique choice.**~~ **Decided 2026-07-30:** fully dynamic (no bake), so the
       technique is a **raster-updated dynamic probe volume + SSGI contact term** (§5). Baked
       lightmaps and voxel cone tracing ruled out by the fully-dynamic + mobile constraints.
+- [ ] **Probe relocation / classification.** A probe that lands inside geometry captures that
+      geometry's interior and hands it to the lookup — saturated patches beside hard black ones on
+      interior surfaces, visible in Sponza the moment the camera goes indoors. DDGI detects such
+      probes and either nudges them into open space or marks them inactive; neither is implemented.
+      The Chebyshev test cannot help: it weights a probe by whether the *surface* is visible to it,
+      and cannot repair a probe whose own capture is wrong.
 - [x] ~~**Probe budget and propagation latency**~~ **Measured 2026-08-01, and the risk was real.**
       `roundLength · ceil(ln f / ln h)` frames, verified against a GPU measurement. At the defaults
       (2048 probes, budget 32, hysteresis 0.97): **4864 frames / ~81 s to 90%**. Still open is what

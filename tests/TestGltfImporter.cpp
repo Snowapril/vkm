@@ -7,6 +7,8 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
+#include <system_error>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -17,6 +19,7 @@ namespace
 //   p0 (0,0,0)  p1 (1,0,0)  p2 (0,1,0)
 const std::string kGltfPath = std::string(RESOURCES_DIR) + "tests/gltf_triangle.gltf";
 const std::string kGlbPath = std::string(RESOURCES_DIR) + "tests/gltf_triangle.glb";
+const std::string kTexturedPath = std::string(RESOURCES_DIR) + "tests/gltf_textured.gltf";
 
 // Keeps the file's own vertex/index ordering so the assertions below can address
 // individual vertices.
@@ -230,6 +233,59 @@ TEST_CASE("importGltfModel - optimized import keeps the geometry intact") {
     REQUIRE(model._meshes.size() == 1);
     CHECK(model._meshes[0]._vertexCount == 3);
     CHECK(model._meshes[0]._indices.size() == 3);
+}
+
+/*
+* Materials referencing textures is the point; what is easy to get wrong is everything around it.
+* A URI is relative to the glTF document, so it only resolves alongside that file's directory, and
+* it may be percent-encoded -- the red image's name is written with %5F here so a decoder that is
+* missing shows up as a path that cannot be opened rather than as a subtly wrong one.
+*/
+TEST_CASE("importGltfModel - resolves material texture references to image paths") {
+    vkm::VkmSceneModel model;
+    std::string error;
+    REQUIRE_MESSAGE(vkm::importGltfModel(kTexturedPath, &model, &error), error);
+
+    REQUIRE(model._images.size() == 2);
+    REQUIRE(model._materials.size() == 1);
+    const vkm::VkmSceneMaterial& material = model._materials[0];
+
+    SUBCASE("each channel points at the image the glTF named") {
+        CHECK(material._baseColorImage == 0);
+        CHECK(material._normalImage == 1);
+        // Absent in the fixture: a material without a texture for a channel has to be
+        // distinguishable from one pointing at image 0, or every such material samples image 0.
+        CHECK(material._metallicRoughnessImage == vkm::INVALID_VALUE32);
+        CHECK(material._emissiveImage == vkm::INVALID_VALUE32);
+    }
+
+    SUBCASE("factors still arrive alongside the textures") {
+        // glTF multiplies factor by texture, so losing the factor when a texture appears would
+        // silently change the material rather than fail.
+        CHECK(material._baseColorFactor.r == doctest::Approx(0.25f));
+        CHECK(material._roughnessFactor == doctest::Approx(0.75f));
+    }
+
+    SUBCASE("URIs resolve next to the glTF, percent-encoding decoded") {
+        for (const vkm::VkmSceneImage& image : model._images) {
+            REQUIRE_FALSE(image._uri.empty());
+            // The real check: the path can actually be opened. A URI left relative, or left
+            // percent-encoded, produces a plausible-looking string that no loader can read.
+            std::error_code ec;
+            CHECK_MESSAGE(std::filesystem::is_regular_file(image._uri, ec), image._uri);
+        }
+        CHECK(model._images[1]._uri.find("reference_red_64x64.png") != std::string::npos);
+        CHECK(model._images[1]._uri.find('%') == std::string::npos);
+    }
+}
+
+TEST_CASE("importGltfModel - a material with no textures reports none") {
+    vkm::VkmSceneModel model;
+    std::string error;
+    REQUIRE_MESSAGE(vkm::importGltfModel(kGltfPath, &model, &error), error);
+    REQUIRE(model._materials.size() == 1);
+    CHECK(model._images.empty());
+    CHECK(model._materials[0]._baseColorImage == vkm::INVALID_VALUE32);
 }
 
 TEST_CASE("importGltfModel - fails gracefully on a missing file") {
