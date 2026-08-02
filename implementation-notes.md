@@ -1563,11 +1563,22 @@ render-target-then-sampled hand-off.
   table is meant to be used. Resizing rebuilds every table, and the old ones wait out
   FRAME_BUFFER_COUNT frames rather than being deleted under a running GPU.
 
-**Verification and its limits.** The sample renders Sponza for 35 s with zero Metal validation
-errors and no ring wraps, and builds on Metal, Vulkan and WebGPU. It is *not* verified by pixels:
-this environment cannot see the window, and there is no automated check that an atlas the updater
-wrote is addressed the way `probe_lighting` reads it. The capture->blend half is covered (the
-propagation test reads a lit probe's cell) and the lookup half is covered (the lighting test authors
-atlases from the CPU); their junction is not. Both gaps are in `TODO.md`.
+**Verification.** `vkmWriteTexturePng` (new, `renderer/screenshot.{h,cpp}`) reads a colour texture
+back and writes a PNG; the sample drives it with `--gv_gi_screenshot=<png>`,
+`--gv_gi_screenshot_frame=<n>` and `--gv_gi_debug_view=<n>`, tone-mapping a second time into an
+owned target on the capture frame and exiting once the file is written. The backbuffer itself
+cannot be the source -- Metal keeps `framebufferOnly = YES` on the drawable. `VkmInputHandler`
+gained a `requestExit()` so a screenshot run can stop itself.
+
+That is what verifies any of this without a display, and the indirect-only view over Sponza settles
+the question the atlas tests could not reach: it shows real colour bleeding, green where light
+bounced off the green material and grey where it did not, so the atlas the updater writes *is*
+addressed the way `probe_lighting` reads it. Still no *automated* pixel check -- screenshots are
+compared by eye (`TODO.md`).
+
+A correction to an earlier claim in this session: a Sponza run that appeared to render cleanly for
+35 s was mostly spent importing the scene, and a later "built" check passed only because the grep
+looked for "error" and the failure said "No rule to make target" -- the build directory had been
+reconfigured with BUILD_SAMPLES=OFF, so several screenshot runs used a stale binary.
 
 Metal 194/194 and Vulkan 192/192 Debug, 193/193 and 192/192 Release.

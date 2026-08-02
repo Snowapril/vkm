@@ -48,6 +48,7 @@
 #include <vkm/renderer/gi_composite.h>
 #include <vkm/renderer/probe_volume.h>
 #include <vkm/renderer/probe_volume_updater.h>
+#include <vkm/renderer/screenshot.h>
 #include <vkm/renderer/scene/gltf_importer.h>
 #include <vkm/renderer/backend/common/staging_buffer.h>
 #include <vkm/renderer/scene/scene.h>
@@ -71,6 +72,15 @@ using namespace vkm;
 
 VKM_GLOBAL_VARIABLE(std::string, gv_gi_model_path,
                     std::string(RESOURCES_DIR) + "Scenes/Sponza/Sponza.gltf");
+// Write a PNG of the composed frame and quit. This is how the sample gets verified at all on a
+// machine where nobody can look at the window -- see vkmWriteTexturePng.
+VKM_GLOBAL_VARIABLE(std::string, gv_gi_screenshot, "");
+// Which frame to capture. Probes refresh a slice per frame and converge over rounds, so a
+// screenshot taken too early shows a half-lit volume rather than the technique's actual output.
+VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_screenshot_frame, 600u);
+// Which channel to show, as a VkmGiDebugView. Settable here as well as through the UI so a
+// screenshot run can capture a specific term without anyone touching the window.
+VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_debug_view, 0u);
 
 namespace
 {
@@ -205,6 +215,11 @@ public:
         const TonemapConstants tonemap{};
         driver->uploadToBuffer(_tonemapBuffer, &tonemap, sizeof(tonemap));
 
+        if (gv_gi_debug_view.get() < static_cast<uint32_t>(VkmGiDebugView::Count))
+        {
+            _debugView = static_cast<VkmGiDebugView>(gv_gi_debug_view.get());
+        }
+
         loadScene(gv_gi_model_path.get());
     }
 
@@ -237,6 +252,7 @@ public:
         }
         retireTables();
         ensureTargets();
+        takePendingScreenshot();
         drawUi();
     }
 
@@ -347,6 +363,24 @@ public:
             commandBuffer->bindPerPassResources(tonemapTable);
             commandBuffer->draw(3, 1, 0, 0);
         });
+
+        // The backbuffer cannot be read back (Metal keeps framebufferOnly on the drawable), so a
+        // screenshot frame tone-maps a second time into a target this sample owns. Only on that
+        // one frame -- this is a debugging path, not a permanent second pass.
+        if (_screenshotTarget.isValid() && _frameCounter == gv_gi_screenshot_frame.get())
+        {
+            VkmRenderGraphicsSubGraph* shotSubGraph =
+                renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_extent, _screenshotTarget), "GiScreenshot");
+            shotSubGraph->addReferencedResource(_screenshotTarget);
+            VkmPipelineStateBase* pipeline = _tonemapPipeline;
+            VkmPerPassResourceTableBase* table = _tables._tonemap;
+            shotSubGraph->setRenderCallback([pipeline, table](VkmCommandBufferBase* commandBuffer) {
+                commandBuffer->bindPipeline(pipeline);
+                commandBuffer->bindPerPassResources(table);
+                commandBuffer->draw(3, 1, 0, 0);
+            });
+            _screenshotPending = true;
+        }
 
         _gbuffer.advanceFrame();
     }
@@ -516,7 +550,7 @@ private:
         }
 
         VkmDeferredResourceReclaimer* reclaimer = driver->getDeferredReclaimer();
-        for (VkmResourceHandle* target : { &_directTarget, &_indirectTarget, &_compositeTarget })
+        for (VkmResourceHandle* target : { &_directTarget, &_indirectTarget, &_compositeTarget, &_screenshotTarget })
         {
             if (target->isValid())
             {
@@ -535,6 +569,29 @@ private:
         _directTarget = direct->getHandle();
         _indirectTarget = indirect->getHandle();
         _compositeTarget = composite->getHandle();
+
+        // Only when one was asked for: it is the same size as the backbuffer and would otherwise
+        // cost a full swapchain-sized target for nothing. Swapchain format, because the tone map
+        // PSO's attachment is declared as the swapchain's.
+        if (!gv_gi_screenshot.get().empty())
+        {
+            VkmTextureInfo shotInfo{};
+            shotInfo._flags = static_cast<VkmResourceCreateInfo>(
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowColorAttachment) |
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferSrc));
+            shotInfo._extent = glm::uvec3(extent, 1);
+            shotInfo._numMipLevels = 1;
+            shotInfo._numArrayLayers = 1;
+            shotInfo._format = driver->getSwapChainColorFormat();
+            shotInfo._debugName = "GiScreenshot";
+            VkmTexture* shot = driver->newTexture(shotInfo);
+            if (shot == nullptr)
+            {
+                VKM_DEBUG_ERROR("Failed to create the GI screenshot target");
+                return;
+            }
+            _screenshotTarget = shot->getHandle();
+        }
 
         if (_tables.isComplete())
         {
@@ -570,6 +627,20 @@ private:
         {
             VKM_DEBUG_ERROR(("Failed to build the GI sample's per-pass tables: " + error).c_str());
         }
+    }
+
+    // Deliberately after the frame that rendered it: readbackTexture submits and waits, which is
+    // not something to do in the middle of recording.
+    void takePendingScreenshot()
+    {
+        if (!_screenshotPending)
+        {
+            return;
+        }
+        _screenshotPending = false;
+        vkmWriteTexturePng(_engine->getDriver(), _screenshotTarget, gv_gi_screenshot.get());
+        // A screenshot run exists to produce the file, so it stops once it has one.
+        _engine->getInputHandler().requestExit();
     }
 
     void drawUi()
@@ -628,6 +699,8 @@ private:
     VkmResourceHandle _directTarget{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _indirectTarget{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _compositeTarget{ VKM_INVALID_RESOURCE_HANDLE };
+    VkmResourceHandle _screenshotTarget{ VKM_INVALID_RESOURCE_HANDLE };
+    bool _screenshotPending = false;
 
     Tables _tables;
     std::vector<RetiredTables> _retiredTables;

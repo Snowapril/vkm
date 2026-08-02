@@ -758,10 +758,16 @@ Technique decided in §5: **raster-updated dynamic probe volume + SSGI contact t
       and the Metal/WebGPU push-constant ring has no per-frame reset, so a fixed budget wraps it
       onto entries a running frame still references.
 
+      Verified by screenshot: `--gv_gi_screenshot=<png> --gv_gi_screenshot_frame=<n>` tone-maps a
+      second time into an owned target, reads it back and writes a PNG, then exits — the only way
+      to check any of this on a machine where nobody sees the window. The indirect-only view over
+      Sponza shows real colour bleeding, green where light bounced off the green material and grey
+      where it did not, which is what closes the capture→lookup addressing question the atlas tests
+      could not reach on their own.
+
       Not yet done here: a runtime *technique* switcher (there is one technique), the SSGI term
-      (4.4), and a reprojection debug view. Verification is Metal-only and eyes-free — the sample
-      renders Sponza with zero validation errors, but nothing automated yet asserts that a
-      captured atlas feeds the lookup correctly (both halves are tested, their junction is not)
+      (4.4), a reprojection debug view, and any *automated* pixel check — screenshots are still
+      compared by eye
 - [x] **Light-propagation latency measured, and it is as bad as feared.** The decay is exactly
       geometric — a probe retains `hysteresis` of its old value per refresh and is refreshed once
       per round of `ceil(probeCount / budget)` frames — so the latency is
