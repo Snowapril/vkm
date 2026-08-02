@@ -23,6 +23,7 @@ set(SRCS
     ${SRC_DIR}/TestViewport.cpp
     ${SRC_DIR}/TestPipelineStateManager.cpp
     ${SRC_DIR}/TestBindlessSlotAllocator.cpp
+    ${SRC_DIR}/TestPushConstantRingAllocator.cpp
     ${SRC_DIR}/TestInputHandler.cpp
     ${SRC_DIR}/TestTimeBudget.cpp
     ${SRC_DIR}/TestCamera.cpp

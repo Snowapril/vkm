@@ -48,10 +48,13 @@ namespace vkm
         void unregisterTexture(uint32_t slot) override final;
 
         // Copies `size` bytes into the next push-constant ring entry and returns that
-        // entry's GPU address (to be bound at kVkmMetalPushConstantBufferIndex). The ring
-        // wraps after PUSH_CONSTANT_ENTRY_COUNT allocations; entries are assumed retired
-        // by then (logged if that assumption is at risk -- no per-frame reset hook exists).
+        // entry's GPU address (to be bound at kVkmMetalPushConstantBufferIndex). Entries come
+        // from the current frame slot's region and the cursor wraps within it after
+        // PUSH_CONSTANT_ENTRY_COUNT allocations, which would reuse entries this same frame
+        // still references -- so that wrap is logged as the overflow it is.
         uint64_t allocatePushConstantSlot(const void* data, uint32_t size);
+
+        void beginFrame(uint32_t frameSlot) override final;
 
         inline id<MTL4ArgumentTable> getArgumentTable() const { return _argumentTable; }
         inline id<MTLBuffer> getArgumentBuffer() const { return _argumentBuffer; }
@@ -63,11 +66,13 @@ namespace vkm
         VkmDriverMetal* _driver;
 
         id<MTLBuffer> _argumentBuffer = nullptr;      // kVkmMetalBindlessArgumentEntryCount x 8 bytes, shared storage
-        id<MTLBuffer> _pushConstantRing = nullptr;    // PUSH_CONSTANT_ENTRY_COUNT x PUSH_CONSTANT_ENTRY_STRIDE, shared storage
+        // kVkmPushConstantRingTotalEntryCount x PUSH_CONSTANT_ENTRY_STRIDE, shared storage:
+        // FRAME_BUFFER_COUNT regions of PUSH_CONSTANT_ENTRY_COUNT entries each.
+        id<MTLBuffer> _pushConstantRing = nullptr;
         id<MTL4ArgumentTable> _argumentTable = nullptr;
         id<MTLSamplerState> _defaultSampler = nullptr; // published at kVkmMetalBindlessSamplerId
 
-        uint32_t _pushConstantCursor = 0;
+        VkmPushConstantRingAllocator _pushConstantEntries;
 
         VkmBindlessSlotAllocator _textureSlots{kVkmBindlessTextureCapacity};
         VkmBindlessSlotAllocator _bufferSlots{kVkmBindlessBufferCapacity};

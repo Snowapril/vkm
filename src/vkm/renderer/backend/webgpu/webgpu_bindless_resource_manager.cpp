@@ -46,7 +46,8 @@ namespace vkm
         _slotTable = createBindlessBuffer(device, "VkmBindlessSlotTable", slotTableSize,
                                           WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
         _pushConstantRing = createBindlessBuffer(device, "VkmPushConstantRing",
-                                                 PUSH_CONSTANT_ENTRY_COUNT * PUSH_CONSTANT_ENTRY_STRIDE,
+                                                 static_cast<uint64_t>(kVkmPushConstantRingTotalEntryCount) *
+                                                     PUSH_CONSTANT_ENTRY_STRIDE,
                                                  WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst);
         if (_vertexMegaBuffer == nullptr || _indexMegaBuffer == nullptr ||
             _slotTable == nullptr || _pushConstantRing == nullptr)
@@ -331,17 +332,24 @@ namespace vkm
         // Nothing was ever registered, so there is no slot to release.
     }
 
+    void VkmBindlessResourceManagerWebGPU::beginFrame(uint32_t frameSlot)
+    {
+        _pushConstantEntries.beginFrame(frameSlot);
+    }
+
     uint32_t VkmBindlessResourceManagerWebGPU::writePushConstants(const void* data, uint32_t size)
     {
         VKM_ASSERT(size <= PUSH_CONSTANT_ENTRY_STRIDE, "Push constant data exceeds ring entry stride");
 
-        if (_pushConstantCursor != 0 && (_pushConstantCursor % PUSH_CONSTANT_ENTRY_COUNT) == 0)
+        bool overflowed = false;
+        const uint32_t entryIndex = _pushConstantEntries.allocate(&overflowed);
+        if (overflowed)
         {
-            VKM_DEBUG_WARN("Push-constant ring wrapped; entries older than 1024 allocations are being reused");
+            // Wrapping within a frame slot's own region reuses entries *this* frame is still
+            // referencing, which no wait can make safe.
+            VKM_DEBUG_WARN("Push-constant ring region overflowed: this frame pushed more than "
+                           "kVkmPushConstantRingEntryCount times and is reusing its own entries");
         }
-
-        const uint32_t entryIndex = _pushConstantCursor % PUSH_CONSTANT_ENTRY_COUNT;
-        _pushConstantCursor++;
 
         const uint32_t byteOffset = entryIndex * PUSH_CONSTANT_ENTRY_STRIDE;
         wgpuQueueWriteBuffer(_driver->getQueue(), _pushConstantRing, byteOffset, data, size);

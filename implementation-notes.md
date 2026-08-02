@@ -1790,3 +1790,75 @@ runs are contiguous either way.
 Set 3 itself is the larger half: 33 files carry the set-2 machinery, and the two sets differ only by
 an index and which declaration they validate against, so it wants generalizing rather than
 duplicating.
+
+## 2026-08-02 — The push-constant ring gets a per-frame reset
+
+Prerequisite for the texturing work rather than part of it. Binding a per-material descriptor
+table on WebGPU means splitting draw batches per material, and the probe capture pushes once per
+(probe, face, batch) — so more batches multiply the ring traffic. At the old budget arithmetic
+Sponza would have driven the probe budget from 32 down to 2, on top of an already-unusable 81 s
+propagation latency. The ring is the actual constraint, so it got fixed first.
+
+- **The bug.** `writePushConstants` / `allocatePushConstantSlot` did `cursor % 1024` and never
+  reset, so a frame could hand out an entry a still-executing frame was referencing. Callers
+  worked around it by budgeting against `1024 / FRAME_BUFFER_COUNT`, which is where the probe
+  budget's cap of 32 came from.
+- **The fix.** The ring is now `FRAME_BUFFER_COUNT` regions of `kVkmPushConstantRingEntryCount`
+  entries (the buffer grew 3x, to 768 KiB), and a new
+  `VkmBindlessResourceManagerBase::beginFrame(frameSlot)` rewinds the cursor to its region base.
+  Safety is by construction and is not a new assumption: `VkmEngine::render()` calls it right
+  after that slot's `renderGraph->ensureCompleted()`, which is exactly the point, and exactly the
+  reason, the set-1 frame constants are written a few lines below.
+- **Not pure virtual.** Vulkan inherits the base's no-op — it has a real push-constant
+  instruction and no ring — so this adds no entry point a backend must stub. A manager that never
+  receives the call keeps using region 0, which is what the unit tests do and what preserves their
+  previous behaviour exactly.
+- **The arithmetic moved into `VkmPushConstantRingAllocator`** (common/bindless_resource_manager),
+  next to the existing `VkmBindlessSlotAllocator`. Metal and WebGPU had byte-identical cursor
+  logic and only differ in the entry stride and in what the entry index is turned into (a GPU
+  address vs a dynamic offset). Sharing it is also what makes the interesting part testable with
+  no device on any backend.
+- **The warning changed meaning, so its text did too.** Wrapping used to mean "reusing entries
+  from N allocations ago, probably retired". Wrapping inside a region now means this *single*
+  frame pushed more than 1024 times and is overwriting entries it is still referencing — which no
+  wait can make safe. That is a budget overflow, not an ordering assumption, and it says so.
+- `VkmProbeVolumeUpdater::kMaxBudget` 32 -> 128 (1024 / 8, since a single-batch frame costs
+  `6*budget + 2*budget`), and the gi sample's derived budget lost its `FRAME_BUFFER_COUNT` factor.
+  The sample's default budget is unchanged at 32, so nothing about the shipped probe volume moves
+  — the cap simply stops being the binding constraint. `TODO.md` lost the "no per-frame reset"
+  entry and gained the two limits that remain: a single frame still cannot exceed 1024 pushes, and
+  the rewind is driven by window 0 only (the same single-region caveat set 1 already carries).
+
+**How much this actually buys, measured rather than assumed.** One frame slot's region gives
+`1024 / (6*batches + 2)` probes. Sponza is **one** draw batch today, so the ring allowed 42 before
+and 128 now — it was never the binding constraint there; the sample's default of 32 was. Splitting
+batches per material (25 materials, 103 primitives) takes that to 2 before and **6** now. So the
+reset is a 3x headroom, *not* enough on its own to make per-material batches affordable, and the
+next step has to stop the capture pushing per (probe, face, **batch**) as well — the pushed value
+depends only on (probe, face). Recorded here because the texturing plan had assumed this fix
+settled it.
+
+**A bug this run caught in the change itself.** The gi sample logged
+"Probe budget limited to 32 by the push-constant ring at 1 draw batches" — false, since the ring
+allowed 128 and 32 is the sample's own default. The condition was `_probeBudget < kMaxBudget`,
+which was silent only because `kMaxBudget` had been 32 too; raising it made a pre-existing
+imprecision start lying. It now compares against the *requested* budget, so it fires only when the
+ring is what reduced it, and prints both numbers.
+
+**Verification.** `tests/TestPushConstantRingAllocator.cpp`, five cases: consecutive entries
+within a frame, disjoint regions across every frame slot, a slot's region rewinding when the slot
+comes round again, region-local overflow reported rather than spilling into the neighbouring
+slot's region, and region 0 without any `beginFrame` call. Both failure modes were confirmed by
+sabotage and they fail *different* assertions: dropping the cursor rewind fails "rewinds a slot's
+region" (1028 != 1024), and collapsing every region base to 0 fails the overflow case
+(1023 != 2047), i.e. the pre-fix single-region ring is detected as such.
+
+Metal 202/202 (20292 assertions) with Metal API Validation on and no validation output.
+
+### Deviations
+
+- Planned: `beginFrame` would live only on the two backends that have a ring, with the cursor and
+  region base as plain members. Did instead: factored the bookkeeping into a shared
+  `VkmPushConstantRingAllocator`. The two copies would have been identical, and the plan's own
+  verification step — a test of the region arithmetic — is much better served by a headless class
+  than by two near-duplicate backend tests, one of which (WebGPU) only runs under Chrome.

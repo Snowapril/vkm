@@ -20,7 +20,8 @@
 - `VkmEngine::initializeEngine()` registers process-wide loggers, so only one `VkmEngine` can exist per process; a second one throws and the unit tests can host exactly one live-engine test.
 - WebGPU bindless mega-buffers are fixed-capacity (16 MiB vertex / 8 MiB index) with no growth; registerBuffer fails hard when exhausted.
 - WebGPU bindless-registered buffers must be tightly packed engine VertexData/uint element arrays (typed mega-buffers; Vulkan/Metal treat them as opaque).
-- The Metal/WebGPU push-constant ring wraps after 1024 allocations with no per-frame reset; overlapping in-flight entries would be overwritten.
+- The Metal/WebGPU push-constant ring gives each frame slot 1024 entries and rewinds them per frame, so a single frame pushing more than 1024 times still overwrites entries it is using.
+- The push-constant ring's per-slot region is rewound by window 0 only, so a second scene-rendering window would share that region unsynchronized (the same caveat descriptor set 1 carries).
 - wasm.yml CI builds no WebGPU shader caches: `scripts/run_tests.py` does it now, but CI has no actions cache for the ~30-minute Dawn/tint build.
 - Extend `VkmResourcePoolType` with Graphics/Compute categories for narrower Metal residency sets.
 - Metal resources bound via `overrideExternalHandle()` rely on the caller registering them (`VkmRenderResourcePoolMetal::registerExternalAllocation`); the swapchain deliberately opts out because `CAMetalLayer.residencySet` already covers its drawables.
@@ -88,13 +89,13 @@
 - `VkmGpuProfilerInspector` has no unit-test coverage; only the collector and the trace format are tested.
 - The WebGPU per-pass compute test is skipped: `newBuffer` returns null for its storage buffer with no Dawn validation error and no engine log, and the cause is unknown.
 - The probe blend render pass loads and stores the whole atlas every frame to update at most the per-frame probe budget of cells.
-- VkmProbeVolumeUpdater's probe budget is capped at 32 by the Metal/WebGPU 1024-entry push-constant ring, which has no per-frame reset.
+- VkmProbeVolumeUpdater's probe budget is capped at 128 by the Metal/WebGPU push-constant ring's 1024 entries per frame slot.
 - Probe capture, blend and update have GPU test coverage on Metal only; Vulkan covers the probe volume's addressing and the round-robin schedule.
 - No automated test asserts that an atlas the probe updater wrote is addressed the way probe_lighting reads it, nor that the Chebyshev test stops a leak against a real captured atlas; both are only checked by eye in the gi sample.
 - Probes that land inside geometry are neither detected nor relocated, so they inject their interior into the lookup; it shows as saturated patches beside hard black ones on interior surfaces.
 - The probe propagation test failed once out of three identical runs on a loaded machine and did not reproduce; its 20 s budget may be tight when other worktrees are running tests.
 - SSGI's ray length and intensity are unvalidated guesses; there is no ground truth to tune them against until the Phase 6 reference path tracer.
 - The gi sample has no automated pixel check (screenshots are compared by eye) and no reprojection debug view.
-- The probe capture pushes constants once per (probe, face, draw batch), so the per-frame probe budget has to shrink as a scene gains batches to stay inside the 1024-entry push-constant ring.
+- The probe capture pushes constants once per (probe, face, draw batch) though the pushed value depends only on (probe, face), so the probe budget still shrinks as a scene gains batches: 128 at one batch, 6 at Sponza's 25 materials.
 - The probe GI update converges too slowly at its default hysteresis: 2048 probes at budget 32 with hysteresis 0.97 take 4864 frames to shed 90% of a light change.
 - `scripts/run_tests.py` and `scripts/run_sample.py` duplicate about ten helper functions, including the host vkm-compiler build, instead of sharing a module.

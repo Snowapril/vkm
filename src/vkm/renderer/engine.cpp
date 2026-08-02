@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/render_graph_capture.h>
 #include <vkm/renderer/backend/common/frame_constants.h>
+#include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/gpu_profiler.h>
 #include <vkm/renderer/camera.h>
 #include <vkm/renderer/memory_report.h>
@@ -608,6 +609,17 @@ namespace vkm
                 renderGraph->ensureCompleted();
             }
             renderGraph->reset();
+
+            // Rewind this frame slot's push-constant ring region, for the same reason and at the
+            // same point as the set-1 write below: the ring's per-slot region may only be
+            // rewritten once that slot's previous submit has completed. Driven by window 0 only,
+            // because the ring is engine-global per slot -- the same single-region caveat set 1
+            // carries (see TODO.md). Nothing else pushes: a dedicated ImGui window renders through
+            // the ImGui renderer's own argument table, not this ring.
+            if (windowIndex == 0)
+            {
+                _driver->getBindlessResourceManager()->beginFrame(_currentFrameIndex);
+            }
 
             VkmResourceHandle currentBackBuffer = VKM_INVALID_RESOURCE_HANDLE;
             {

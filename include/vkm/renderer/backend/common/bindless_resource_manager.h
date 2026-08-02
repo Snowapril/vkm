@@ -85,16 +85,24 @@ namespace vkm
     inline constexpr uint32_t kVkmBindlessPushConstantSize = 128;
 
     /*
-    * @brief How many push-constant allocations the Metal and WebGPU rings hold.
+    * @brief How many push-constant allocations the Metal and WebGPU rings hold **per frame slot**.
     *
     * @details Those backends have no push-constant instruction, so every setPushConstants() call
-    * takes a ring entry and the draw references it by dynamic offset. The cursor never resets, so
-    * a frame that pushes more than this many times over FRAME_BUFFER_COUNT frames reuses entries a
-    * running frame still references. Named here rather than only inside each backend because it is
-    * a budget callers have to plan against -- a pass that pushes per (item, sub-item, batch), like
-    * the probe capture, can reach it (see VkmProbeVolumeUpdater::kMaxBudget).
+    * takes a ring entry and the draw references it by dynamic offset. The ring is partitioned into
+    * FRAME_BUFFER_COUNT regions of this many entries, one per frame slot, and
+    * VkmBindlessResourceManagerBase::beginFrame() rewinds the cursor to its region base. That is
+    * what makes reuse safe: a slot's region is only rewritten after that slot's render graph has
+    * been waited on, which is the same guarantee descriptor set 1's per-slot region relies on.
+    *
+    * Named here rather than only inside each backend because it is still a budget callers have to
+    * plan against -- it now bounds one frame's pushes rather than all frames in flight together,
+    * but a pass that pushes per (item, sub-item, batch), like the probe capture, can reach it.
     */
     inline constexpr uint32_t kVkmPushConstantRingEntryCount = 1024;
+
+    // Total entries the ring buffer holds: one region per frame slot.
+    inline constexpr uint32_t kVkmPushConstantRingTotalEntryCount =
+        kVkmPushConstantRingEntryCount * FRAME_BUFFER_COUNT;
 
     // Metal (argument buffers Tier 2): [[buffer(0)]]/[[buffer(1)]] remain the vertex-stream
     // indices; the set-0 argument buffer and the push-constant buffer are pinned after them.
@@ -152,6 +160,35 @@ namespace vkm
     inline constexpr uint32_t kVkmMetalBindlessArgumentEntryCount =
         kVkmMetalBindlessSingletonIdBase + static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count);
 
+    /*
+    * @brief Hands out push-constant ring entries from the current frame slot's region.
+    *
+    * @details The ring is FRAME_BUFFER_COUNT regions of kVkmPushConstantRingEntryCount entries.
+    * beginFrame() rewinds the cursor to a slot's region base, which is only safe once that slot's
+    * render graph has been waited on -- see VkmBindlessResourceManagerBase::beginFrame().
+    *
+    * Shared by the Metal and WebGPU managers rather than duplicated in each: the arithmetic is
+    * identical (only the entry stride and what the entry index is turned into differ), and it is
+    * the part worth testing without a device.
+    */
+    class VkmPushConstantRingAllocator
+    {
+    public:
+        // Rewinds to `frameSlot`'s region. Out-of-range slots are clamped to region 0, which is
+        // also the region a manager that never gets a beginFrame() call keeps using.
+        void beginFrame(uint32_t frameSlot);
+
+        // Returns the absolute entry index to write. Wrapping inside a region means this frame
+        // pushed more than kVkmPushConstantRingEntryCount times and is reusing entries it still
+        // references -- unlike a wrap across frames, no wait can make that safe, so it is a
+        // budget overflow rather than an ordering assumption. `outOverflowed` reports the wrap.
+        uint32_t allocate(bool* outOverflowed = nullptr);
+
+    private:
+        uint32_t _cursor = 0;
+        uint32_t _regionBase = 0;
+    };
+
     // Fixed-capacity slot allocator for one bindless array: LIFO free-list plus a monotonic
     // high-water mark (a plain free-list, not VkmOffsetAllocator's byte-range coalescing,
     // which is the wrong shape for uniform-size array-element allocation).
@@ -205,5 +242,19 @@ namespace vkm
         * immutable, so this recreates bind group 0.
         */
         virtual bool setSingletonBuffer(VkmBindlessSingletonBuffer which, VkmResourceHandle bufferHandle) = 0;
+
+        /*
+        * @brief Rewinds this frame slot's push-constant ring region.
+        *
+        * Called once per frame by VkmEngine::render(), after that slot's render graph has been
+        * waited on -- the same point, and for the same reason, that the frame constants of
+        * descriptor set 1 are written. Overwriting the region before that wait would clobber
+        * entries a running frame still references.
+        *
+        * Not pure virtual, and Vulkan deliberately inherits the no-op: it has a real
+        * push-constant instruction, so there is no ring and nothing to rewind. A manager that
+        * never receives this call keeps using region 0, which is what the unit tests do.
+        */
+        virtual void beginFrame(uint32_t frameSlot) { (void)frameSlot; }
     };
 } // namespace vkm

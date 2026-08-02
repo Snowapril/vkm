@@ -62,9 +62,12 @@ namespace vkm
         void unregisterTexture(uint32_t slot) override final;
 
         // Writes `size` bytes into the next push-constant ring entry and returns its byte
-        // offset, to be passed as the dynamic offset of bind group 0. The ring wraps after
+        // offset, to be passed as the dynamic offset of bind group 0. Entries come from the
+        // current frame slot's region and the cursor wraps within it after
         // PUSH_CONSTANT_ENTRY_COUNT allocations (see the Metal manager for the same caveat).
         uint32_t writePushConstants(const void* data, uint32_t size);
+
+        void beginFrame(uint32_t frameSlot) override final;
 
         inline WGPUBindGroupLayout getBindGroupLayout() const { return _bindGroupLayout; }
         inline WGPUBindGroup getBindGroup() const { return _bindGroup; }
@@ -101,7 +104,8 @@ namespace vkm
         std::array<WGPUBuffer, static_cast<size_t>(VkmBindlessSingletonBuffer::Count)> _singletonBuffers{};
         std::array<uint64_t, static_cast<size_t>(VkmBindlessSingletonBuffer::Count)> _singletonSizes{};
 
-        uint32_t _pushConstantCursor = 0;
+        // The ring holds kVkmPushConstantRingTotalEntryCount entries: one region per frame slot.
+        VkmPushConstantRingAllocator _pushConstantEntries;
 
         VkmBindlessSlotAllocator _bufferSlots{kVkmBindlessBufferCapacity};
         VkmBindlessSlotAllocator _indexBufferSlots{kVkmBindlessIndexBufferCapacity};

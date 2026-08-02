@@ -548,20 +548,23 @@ private:
             return;
         }
 
-        // The capture pass pushes once per (probe, face, batch), and Metal/WebGPU hand out a
-        // push-constant ring entry per push with no per-frame reset (1024 entries, FRAME_BUFFER_COUNT
-        // frames in flight). A budget chosen without reference to the scene's batch count therefore
-        // wraps the ring onto entries a running frame still references -- so derive it, and say so
-        // when the scene is the thing limiting it rather than the knob.
+        // The capture pass pushes once per (probe, face, batch), so the budget still has to fit
+        // inside one frame's push-constant ring region on Metal/WebGPU -- but that region is now
+        // rewound every frame, so it is one frame's pushes that must fit rather than all frames in
+        // flight together. What remains is a plain per-frame capacity check, not the 3x-tighter
+        // "entries a running frame still references" constraint this used to work around.
         const uint32_t batchCount = static_cast<uint32_t>(_scene.getDrawBatches().size());
-        const uint32_t ringBudget =
-            kVkmPushConstantRingEntryCount /
-            (FRAME_BUFFER_COUNT * std::max(1u, 6u * batchCount + 2u));
+        const uint32_t ringBudget = kVkmPushConstantRingEntryCount / std::max(1u, 6u * batchCount + 2u);
+        const uint32_t requestedBudget = _probeBudget;
         _probeBudget = std::clamp(std::min(_probeBudget, ringBudget), 1u, VkmProbeVolumeUpdater::kMaxBudget);
-        if (_probeBudget < VkmProbeVolumeUpdater::kMaxBudget)
+        // Only when the ring is what took it down. Comparing against kMaxBudget instead would
+        // report every budget below the engine's ceiling as ring-limited, which is how this line
+        // came to claim "limited to 32 by the push-constant ring" for a scene the ring allowed 128.
+        if (_probeBudget < requestedBudget)
         {
-            VKM_DEBUG_INFO(("Probe budget limited to " + std::to_string(_probeBudget) +
-                            " by the push-constant ring at " + std::to_string(batchCount) + " draw batches").c_str());
+            VKM_DEBUG_INFO(("Probe budget limited to " + std::to_string(_probeBudget) + " (from " +
+                            std::to_string(requestedBudget) + ") by the push-constant ring at " +
+                            std::to_string(batchCount) + " draw batches").c_str());
         }
 
         // _nearZ / _farZ are left at 0 so the updater derives them from the volume. Fixed

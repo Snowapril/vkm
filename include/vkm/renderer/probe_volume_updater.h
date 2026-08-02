@@ -91,13 +91,18 @@ namespace vkm
         /*
         * @brief The largest budget the push-constant ring can carry.
         *
-        * @details Metal and WebGPU hand out a push-constant ring entry per setPushConstants() call
-        * and never reset it per frame (1024 entries, VkmBindlessResourceManagerMetal). The capture
-        * pass pushes once per (probe, face, batch) and the blend pass once per (probe, atlas), so a
-        * frame costs at least 6*budget + 2*budget entries, and FRAME_COUNT frames may be in flight.
-        * Above this the ring wraps onto entries a running frame still references.
+        * @details Metal and WebGPU hand out a push-constant ring entry per setPushConstants() call.
+        * The capture pass pushes once per (probe, face, batch) and the blend pass once per
+        * (probe, atlas), so a single-batch frame costs 6*budget + 2*budget entries. The ring gives
+        * each frame slot its own region of kVkmPushConstantRingEntryCount (1024) entries and
+        * rewinds it every frame, so this bounds *one* frame's pushes: 1024 / 8 = 128. It was 32
+        * while the cursor never reset and FRAME_COUNT frames had to share one region.
+        *
+        * A scene with more than one draw batch costs proportionally more and has to lower the
+        * budget itself -- the capture's push count scales with the batch count, which only the
+        * caller knows (see the gi sample).
         */
-        static constexpr uint32_t kMaxBudget = 32u;
+        static constexpr uint32_t kMaxBudget = 128u;
 
         VkmProbeVolumeUpdater() = default;
         ~VkmProbeVolumeUpdater();
