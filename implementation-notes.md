@@ -1949,3 +1949,77 @@ output on either.
   the two PSOs overwrote each other's cache and the per-draw-only pipeline silently loaded the
   other's shader -- which is how the test first failed. Logged in `TODO.md` as the latent footgun
   it is.
+
+## 2026-08-02 — glTF material textures on Vulkan/Metal (step 2 of texturing)
+
+The importer read texture *references* in the previous session; this uploads them and samples them.
+Base colour and metallic-roughness only -- normal maps need tangents the importer may leave zeroed,
+and emissive has no G-buffer channel to land in. Both are recorded with their prerequisites rather
+than half-done.
+
+- **`VkmMaterialData` 48 -> 64 bytes**, gaining a `uvec4` of bindless texture slots. All four are
+  added at once though two are sampled: the importer already produces four references, and the
+  alternative is paying the same ABI churn twice -- the record's word stride is mirrored in the
+  shaders and pinned by `TestObjectDataLayout`. `INVALID_VALUE32` means "no texture", which has to
+  be distinguishable from slot 0 or every untextured material samples whatever lives there.
+- **`VkmScene` owns the upload.** `addModel()` has no driver, so it records resolved paths and
+  `build()` -- which already owns the material pool -- decodes with the existing
+  `loadImageFromFile`, uploads, and registers. The dedup cache is keyed on **(path, colour space)**,
+  because colour space belongs to the *channel that references* the image rather than to the file:
+  base colour and emissive are sRGB-encoded, metallic-roughness and normal are linear data that
+  must not be de-gamma'd. An image used as both genuinely needs two textures.
+- **One unreadable image warns and leaves its slot invalid**, falling back to the factor, rather
+  than failing the scene; returning false is reserved for exhausting the bindless array, where
+  continuing would silently mis-address whatever slot came back.
+- **`vkm_material.hlsli`** is the only place that branches on the backend, exactly as
+  `vkm_bindless.hlsli` is for the resource arrays. Vulkan/Metal get the bindless `Texture2D` array;
+  WebGPU gets functions returning 1, so the factor passes through unchanged -- honest, and matching
+  what `VkmScene` uploads there: nothing.
+- **It is all one macro**, which is not stylistic. HLSL resolves names top-down and the arrays these
+  functions read are themselves declared by macros in the shader, so plain functions in the header
+  referenced identifiers that did not exist yet and failed to compile. `VKM_BINDLESS_VERTEX_PULLING`
+  has the same shape for the same reason.
+- **`NonUniformResourceIndex` is required, not decorative.** One indirect draw covers many
+  materials, so the slot is divergent across a wave -- precisely the case Vulkan's
+  descriptor-indexing non-uniform rule exists for.
+- **`probe_capture.hlsl` samples base colour too**, which is what makes indirect colour bleeding
+  carry the scene's actual colours instead of a per-material average. Leaving it factor-only would
+  have made direct and indirect light disagree about what the surface looks like.
+- `model_viewer.hlsl` resolved base colour in the *vertex* stage; that moved to the pixel stage,
+  since a texture sample needs the interpolated UV and interpolating an already-sampled colour
+  flattens every material to one value per vertex.
+
+### The engine sampler was clamp-to-edge, and glTF's default is repeat
+
+The first textured render of DamagedHelmet came out heavily streaked and mostly green, against a
+source albedo that is white/grey/yellow/teal with green in one corner. Not a fetch bug: the asset's
+**V runs 1.003 .. 1.998** and it declares `"samplers": [{}]`, i.e. the glTF default wrap, which is
+REPEAT. vkm's one engine sampler was clamp-to-edge, so every pixel collapsed onto the texture's
+bottom row -- which is where that green corner is.
+
+This is the limitation `TODO.md` already recorded ("a glTF texture's sampler is discarded on
+import"); nothing consumed it until now. The sampler is now linear/**repeat** on both backends,
+because repeat is glTF's default and material textures are what it mostly serves. The other
+consumer, the skybox cubemap, is unaffected either way: a cube lookup derives in-range face
+coordinates and hardware seamless filtering handles the edges, so the address mode never applies
+there. `TestCubemapTexture` still passes on both backends, and the limitation entry is inverted
+rather than deleted -- a material wanting *clamp* now addresses wrong, and per-texture samplers
+remain the real fix.
+
+Worth noting for what tests can and cannot do: the unit test below uses a **solid** texture, which
+is UV-invariant by construction, so it could never have caught this. It took looking at a real
+asset.
+
+**Verification.** `runMaterialTextureTest` renders `gltf_textured.gltf` -- baseColorFactor
+(0.25, 0.5, 0.75) against a solid green (0, 255, 0) baseColorTexture -- through the G-buffer PSO.
+glTF multiplies the two, so the result is (0, 0.5, 0) and every channel discriminates: red and blue
+collapse only if the texture was sampled, green survives only if the factor was still applied.
+**Sabotage** by forcing the base-colour slot invalid reads back 0.251 and 0.749 -- the factor
+exactly -- so the test distinguishes "textured" from "untextured", not merely "changed".
+
+Metal 204/204 with Metal API Validation, Vulkan 200/200, zero validation output on either.
+
+Looked at, not just measured: DamagedHelmet's albedo view now matches its source texture region for
+region (teal dome with the red decal, white plating, gold trim, green lens elements), and Sponza
+renders brick courses and a tiled roof where it was flat grey. The roof tiles also show exactly the
+distance aliasing the deferred mipmap work is for.

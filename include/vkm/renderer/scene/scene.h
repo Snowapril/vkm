@@ -97,14 +97,28 @@ namespace vkm
     };
     static_assert(sizeof(SceneBatchConstants) == 32, "SceneBatchConstants must match the shader-side struct");
 
-    // Material factors as uploaded into the scene's material pool.
+    /*
+    * @brief Material factors plus texture slots, as uploaded into the scene's material pool.
+    *
+    * glTF multiplies factor by texture, so a slot of INVALID_VALUE32 ("no texture") has to be
+    * distinguishable from slot 0 or every untextured material samples whatever lives there.
+    *
+    * All four slots are present even though only base colour and metallic-roughness are sampled
+    * today: the importer already produces four image references, and the alternative is paying the
+    * same ABI churn twice (the record's word stride is mirrored in vkm_material.hlsli and pinned by
+    * TestObjectDataLayout).
+    */
     struct VkmMaterialData
     {
         glm::vec4 _baseColorFactor{ 1.0f, 1.0f, 1.0f, 1.0f };
         glm::vec4 _emissive{ 0.0f, 0.0f, 0.0f, 0.0f };            // xyz = emissive factor
         glm::vec4 _metallicRoughness{ 1.0f, 1.0f, 0.0f, 0.0f };   // x = metallic, y = roughness
+        // Bindless texture-array slots: x = base colour, y = metallic-roughness, z = normal,
+        // w = emissive. INVALID_VALUE32 where the material has no texture for that channel, which
+        // is also what every slot holds on a backend without VkmDriverCapabilityFlags::TextureUpload.
+        glm::uvec4 _textureSlots{ INVALID_VALUE32, INVALID_VALUE32, INVALID_VALUE32, INVALID_VALUE32 };
     };
-    static_assert(sizeof(VkmMaterialData) == 48, "VkmMaterialData must match the shader-side material record");
+    static_assert(sizeof(VkmMaterialData) == 64, "VkmMaterialData must match the shader-side material record");
 
     // One placed instance of an imported mesh.
     struct VkmSceneObject
@@ -241,6 +255,29 @@ namespace vkm
         VkmSceneAABB computeWorldBounds() const;
 
     private:
+        /*
+        * @brief One material's texture references, as resolved file paths plus the colour space
+        * each is sampled in.
+        *
+        * Held as paths from addModel() until build(), which is where a driver first exists. Colour
+        * space is a property of the *channel that references* the image, not of the image: base
+        * colour and emissive are sRGB-encoded, metallic-roughness and normal are linear data. The
+        * upload cache is therefore keyed on (path, sRGB) so an image used as both gets two
+        * textures rather than one that is wrong for one of them.
+        */
+        struct MaterialImageRefs
+        {
+            std::string _baseColor;
+            std::string _metallicRoughness;
+            std::string _normal;
+            std::string _emissive;
+        };
+
+        // Decodes, uploads and registers every referenced image, filling _materials' texture slots.
+        // Skipped entirely without VkmDriverCapabilityFlags::TextureUpload, which leaves every slot
+        // invalid and every material factor-only -- what WebGPU gets until set 3 carries them.
+        bool uploadMaterialTextures(VkmDriverBase* driver, std::string* outError);
+
         // One mesh appended into a pool, plus the object-space data every instance of it shares.
         struct MeshEntry
         {
@@ -262,6 +299,10 @@ namespace vkm
         std::vector<MeshEntry> _meshEntries;
         std::vector<VkmSceneObject> _objects;
         std::vector<VkmMaterialData> _materials;
+        std::vector<MaterialImageRefs> _materialImages; // 1:1 with _materials
+        // Textures this scene owns, one per (path, colour space) actually uploaded.
+        std::vector<VkmResourceHandle> _materialTextures;
+        std::vector<uint32_t> _materialTextureSlots; // 1:1 with _materialTextures
         std::vector<VkmObjectData> _objectData;
         std::vector<DrawBatch> _drawBatches;
 

@@ -57,9 +57,11 @@ namespace vkm
     * @details Binding 0 is a sampled-image array with no sampler attached (which is the shape
     * HLSL wants: DXC always emits a separate texture and SamplerState, and spirv-cross
     * outright refuses combined image samplers inside an argument-buffer runtime array).
-    * Rather than a sampler array nothing would index yet, there is a single
-    * linear/clamp-to-edge sampler -- what a cubemap wants, and enough for any texture the
-    * engine samples today.
+    * Rather than a sampler array nothing would index yet, there is a single linear/repeat
+    * sampler. Repeat because it is glTF's default wrap and material textures are the main
+    * consumer; a cube lookup derives in-range face coordinates, so the address mode does not
+    * apply there either way. A material wanting clamp addresses wrong at the edges -- per-texture
+    * samplers are the fix, and are not built.
     */
     inline constexpr uint32_t kVkmBindlessSamplerBinding = 3;
 

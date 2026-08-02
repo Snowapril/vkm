@@ -38,9 +38,9 @@
 - Render graph capture records swapchain backbuffer outputs as metadata only (`CAMetalLayer.framebufferOnly` stays YES).
 - Render graph capture texture previews in ImGui are Metal-only (`getTextureID` returns 0 on Vulkan/WebGPU).
 - Programmatic .gputrace capture scopes only the Metal Graphics queue 0; Vulkan/WebGPU `requestGpuFrameCapture()` is a no-op (no RenderDoc integration).
-- glTF import reads material texture *references* but nothing uploads them yet; no per-texture samplers, no animation/skinning, no Draco/KTX2/`EXT_meshopt_compression`.
+- glTF import has no animation/skinning and no Draco/KTX2/`EXT_meshopt_compression`; material textures upload on Vulkan/Metal but normal and emissive maps are imported and never sampled.
 - glTF images embedded in a buffer view or a data URI are skipped by the importer; only file URIs resolve.
-- A glTF texture's sampler is discarded on import: set 0 carries one fixed linear/clamp sampler, so materials wanting repeat or nearest address wrong at the edges.
+- A glTF texture's sampler is discarded on import: set 0 carries one fixed linear/repeat sampler (glTF's default wrap), so materials wanting clamp or nearest address wrong at the edges.
 - Metal's emit stage is the shared HLSL one (`scene_emit_draws.hlsl`) and its `drawIndirectCount` encodes one `drawPrimitives:indirectBuffer:` per candidate slot. The planned Metal-only variant — an MSL kernel filling an `MTLIndirectCommandBuffer` plus `executeCommandsInBuffer:indirectBuffer:` — is not implemented; it needs the emit dispatch to become a backend service (Vulkan/WebGPU dispatch the engine HLSL PSO, Metal dispatches an embedded metallib kernel) so `VkmScene` stays backend-free, and it needs `inheritBuffers` proven against an MTL4 argument table first.
 - WebGPU indirect batches encode `maxDrawCount` draws per frame; no render-bundle caching, so the per-draw encode cost is paid every frame.
 - The culling pass and the WebGPU emit path are compile-verified only: the GPU-driven path is pixel- and count-verified on Metal, and the WebGPU/wasm test path needs emsdk plus Chrome, which `run_tests.py` skips when they are absent.
@@ -49,7 +49,7 @@
 - meshoptimizer clusterization is unused: `VkmSceneGeometryPool` is shaped to carry a meshlet pool (one more bindless slot, two more `MeshRange` fields) but nothing builds meshlets and there is no mesh-shader pipeline.
 - Imported vertices keep a zeroed `TANGENT` when the asset omits one (no MikkTSpace-style generator), and generated normals are area-weighted smooth rather than the spec's flat normals.
 - `copyBufferToTexture`/`uploadToTexture`, `registerTexture` and the set-0 sampler are Vulkan/Metal-only; WebGPU has error-logging stubs (WGSL has no runtime-sized texture arrays).
-- Set 0 has one fixed linear/clamp-to-edge sampler at binding 3 rather than a sampler array, so per-texture filter/address modes are not selectable in shaders.
+- Set 0 has one fixed linear/repeat sampler at binding 3 rather than a sampler array, so per-texture filter/address modes are not selectable in shaders.
 - Only one texture type may be declared at set 0 binding 0 per shader, and texture slots come from one allocator shared by all types (convention only, unenforced).
 - Texture upload has no mipmap generation: `uploadToTexture` writes one mip level per call and nothing downsamples.
 - `uploadToTexture` blocks per call on the staging path, so a 6-face cubemap stalls the graphics queue six times at load on any device without `VkmDriverCapabilityFlags::TextureHostCopy`.
@@ -101,3 +101,6 @@
 - `scripts/run_tests.py` and `scripts/run_sample.py` duplicate about ten helper functions, including the host vkm-compiler build, instead of sharing a module.
 - A shader cache file is named `<shader>[<option>].<stage>.<backend>` and carries no entry point, so two PSOs sharing one HLSL file and option name silently overwrite each other's cache.
 - Metal's MTL4ArgumentTable caps buffer binds at 31 and sampler binds at 16, which is what bounds sets 2 and 3 to 13 buffers / 8 samplers / 16 textures each.
+- Material textures are Vulkan/Metal only: WebGPU implements neither `uploadToTexture` nor `registerTexture`, so every material's texture slot stays invalid there and shading falls back to the factor.
+- Normal maps are unsampled because tangents may be zero (no MikkTSpace generator), and emissive because the G-buffer has no channel to carry it.
+- Material textures have no automated coverage on Vulkan: the offscreen scene-render harness is Metal-only, since the Vulkan fixture renders black on this machine's MoltenVK/lavapipe.

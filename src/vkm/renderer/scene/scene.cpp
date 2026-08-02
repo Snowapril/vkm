@@ -10,12 +10,16 @@
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/staging_buffer.h>
+#include <vkm/renderer/backend/common/texture.h>
+#include <vkm/renderer/scene/image_loader.h>
 
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/geometric.hpp>
 
 #include <algorithm>
+#include <map>
 
 namespace vkm
 {
@@ -104,6 +108,12 @@ namespace vkm
         VKM_ASSERT(_objectData.empty(), "VkmScene::addModel must be called before build()");
 
         const uint32_t materialBase = static_cast<uint32_t>(_materials.size());
+        // An image index the model does not resolve to a file URI leaves an empty path, which
+        // uploadMaterialTextures() reads as "no texture" -- the same outcome as no reference at
+        // all. The importer already leaves _uri empty for buffer-view and data-URI images.
+        const auto imagePath = [&model](uint32_t imageIndex) -> std::string {
+            return (imageIndex < model._images.size()) ? model._images[imageIndex]._uri : std::string();
+        };
         for (const VkmSceneMaterial& material : model._materials)
         {
             VkmMaterialData data;
@@ -111,6 +121,15 @@ namespace vkm
             data._emissive = glm::vec4(material._emissiveFactor, 0.0f);
             data._metallicRoughness = glm::vec4(material._metallicFactor, material._roughnessFactor, 0.0f, 0.0f);
             _materials.push_back(data);
+
+            // Paths, not pixels: addModel() has no driver, and a glTF's images are usually larger
+            // than its geometry, so decoding waits for build().
+            MaterialImageRefs refs;
+            refs._baseColor = imagePath(material._baseColorImage);
+            refs._metallicRoughness = imagePath(material._metallicRoughnessImage);
+            refs._normal = imagePath(material._normalImage);
+            refs._emissive = imagePath(material._emissiveImage);
+            _materialImages.push_back(std::move(refs));
         }
 
         // Mesh entry index per model mesh, so the draw list below can map onto the pooled ranges.
@@ -283,6 +302,118 @@ namespace vkm
             static_cast<uint64_t>(regionBase + _argumentViewStrideWords * kVkmSceneMaxCullViews) * sizeof(uint32_t);
     }
 
+    /*
+    * @brief Decodes, uploads and registers every image the scene's materials reference.
+    *
+    * @details Runs from build(), which is the first point a driver exists. One texture per
+    * (path, colour space): glTF multiplies factor by texture and the two colour spaces are
+    * different data, so an image referenced as both base colour and metallic-roughness genuinely
+    * needs two.
+    *
+    * A single image failing to decode warns and leaves that slot invalid, which falls back to the
+    * material's factor, rather than failing the whole scene -- one unreadable PNG should not cost
+    * the geometry. Returning false is reserved for running out of bindless slots, where continuing
+    * would silently mis-address whatever slot came back.
+    */
+    bool VkmScene::uploadMaterialTextures(VkmDriverBase* driver, std::string* outError)
+    {
+        // WebGPU implements neither uploadToTexture nor registerTexture, so every slot stays
+        // invalid there and every material renders factor-only. Deliberately silent: it is the
+        // documented state of that backend, not a failure of this scene.
+        if ((driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::TextureUpload) == 0u)
+        {
+            return true;
+        }
+
+        VkmBindlessResourceManagerBase* bindlessManager = driver->getBindlessResourceManager();
+        if (bindlessManager == nullptr)
+        {
+            return true;
+        }
+
+        // Keyed on (path, sRGB) so one image serving two colour spaces gets one texture each.
+        std::map<std::pair<std::string, bool>, uint32_t> uploaded;
+        bool slotsExhausted = false;
+
+        const auto slotFor = [&](const std::string& path, bool srgb) -> uint32_t {
+            if (path.empty() || slotsExhausted)
+            {
+                return INVALID_VALUE32;
+            }
+            const auto key = std::make_pair(path, srgb);
+            const auto existing = uploaded.find(key);
+            if (existing != uploaded.end())
+            {
+                return existing->second;
+            }
+
+            VkmImageData image;
+            std::string imageError;
+            if (!loadImageFromFile(path, &image, &imageError))
+            {
+                VKM_DEBUG_WARN(("Material texture '" + path + "' could not be decoded (" + imageError +
+                                "); the material falls back to its factor").c_str());
+                uploaded.emplace(key, INVALID_VALUE32);
+                return INVALID_VALUE32;
+            }
+
+            VkmTextureInfo info{};
+            info._flags = static_cast<VkmResourceCreateInfo>(
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst));
+            info._extent = glm::uvec3(image._width, image._height, 1);
+            info._numMipLevels = 1;
+            info._numArrayLayers = 1;
+            // The colour space belongs to the channel that references the image, not to the file:
+            // base colour and emissive are sRGB-encoded, metallic-roughness and normal are linear
+            // data that must not be de-gamma'd on the way in.
+            info._format = srgb ? VkmFormat::R8G8B8A8_SRGB : VkmFormat::R8G8B8A8_UNORM;
+            info._debugName = "SceneMaterialTexture";
+
+            VkmTexture* texture = driver->newTexture(info);
+            if (texture == nullptr ||
+                !driver->uploadToTexture(texture->getHandle(), image._pixels.data(), image.getByteSize()))
+            {
+                VKM_DEBUG_WARN(("Material texture '" + path +
+                                "' could not be uploaded; the material falls back to its factor").c_str());
+                if (texture != nullptr)
+                {
+                    driver->getRenderResourcePool()->releaseResource(texture->getHandle());
+                }
+                uploaded.emplace(key, INVALID_VALUE32);
+                return INVALID_VALUE32;
+            }
+
+            const uint32_t slot = bindlessManager->registerTexture(texture->getHandle());
+            if (slot == INVALID_VALUE32)
+            {
+                driver->getRenderResourcePool()->releaseResource(texture->getHandle());
+                slotsExhausted = true;
+                return INVALID_VALUE32;
+            }
+            _materialTextures.push_back(texture->getHandle());
+            _materialTextureSlots.push_back(slot);
+            uploaded.emplace(key, slot);
+            return slot;
+        };
+
+        for (size_t i = 0; i < _materials.size(); ++i)
+        {
+            const MaterialImageRefs& refs = _materialImages[i];
+            glm::uvec4& slots = _materials[i]._textureSlots;
+            slots.x = slotFor(refs._baseColor, /*srgb=*/true);
+            slots.y = slotFor(refs._metallicRoughness, /*srgb=*/false);
+            slots.z = slotFor(refs._normal, /*srgb=*/false);
+            slots.w = slotFor(refs._emissive, /*srgb=*/true);
+        }
+
+        if (slotsExhausted)
+        {
+            return fail(outError, "The bindless texture array is exhausted while uploading material textures");
+        }
+        return true;
+    }
+
     bool VkmScene::build(VkmDriverBase* driver, VkmPipelineStateManager* pipelineStateManager, std::string* outError)
     {
         VKM_ASSERT(driver != nullptr, "VkmScene::build requires a driver");
@@ -312,6 +443,14 @@ namespace vkm
         if (_materials.empty())
         {
             _materials.push_back(VkmMaterialData{});
+        }
+        _materialImages.resize(_materials.size());
+
+        // Fills _materials' texture slots, so this must precede the pool upload below.
+        if (!uploadMaterialTextures(driver, outError))
+        {
+            destroy(driver);
+            return false;
         }
 
         VkmBuffer* materialBuffer = createStorageBuffer(
@@ -456,6 +595,10 @@ namespace vkm
             {
                 bindlessManager->unregisterBuffer(_materialPoolSlot, VkmBindlessArrayType::Buffer);
             }
+            for (const uint32_t slot : _materialTextureSlots)
+            {
+                bindlessManager->unregisterTexture(slot);
+            }
             // Unbind before the buffers go away so the set never names a released resource.
             bindlessManager->setSingletonBuffer(VkmBindlessSingletonBuffer::ObjectData, VKM_INVALID_RESOURCE_HANDLE);
             bindlessManager->setSingletonBuffer(VkmBindlessSingletonBuffer::FrameData, VKM_INVALID_RESOURCE_HANDLE);
@@ -474,6 +617,13 @@ namespace vkm
             }
             handle = VKM_INVALID_RESOURCE_HANDLE;
         };
+
+        for (VkmResourceHandle& texture : _materialTextures)
+        {
+            release(texture);
+        }
+        _materialTextures.clear();
+        _materialTextureSlots.clear();
 
         release(_materialBuffer);
         release(_objectDataBuffer);

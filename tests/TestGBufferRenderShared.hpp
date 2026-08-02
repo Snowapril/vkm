@@ -57,15 +57,15 @@ namespace vkmtest
     inline glm::mat4 fillGBuffer(vkm::VkmDriverBase* driver,
                                  vkm::VkmPipelineStateManager& manager,
                                  vkm::VkmScene& scene,
-                                 vkm::VkmGBuffer& gbuffer)
+                                 vkm::VkmGBuffer& gbuffer,
+                                 const char* gltfName = "tests/gltf_triangle.gltf")
     {
         vkm::VkmGltfImportOptions importOptions;
         importOptions._optimizeMeshes = false;
 
         vkm::VkmSceneModel model;
         std::string error;
-        REQUIRE(vkm::importGltfModel(std::string(RESOURCES_DIR) + "tests/gltf_triangle.gltf",
-                                     &model, &error, importOptions));
+        REQUIRE(vkm::importGltfModel(std::string(RESOURCES_DIR) + gltfName, &model, &error, importOptions));
 
         std::string psoError;
         REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(TEST_ENGINE_PIPELINE_DIR, TEST_ENGINE_SHADER_CACHE_DIR,
@@ -188,6 +188,47 @@ namespace vkmtest
         }
 
         gbuffer.destroy();
+    }
+
+    /*
+    * @brief The material's base-colour *texture* reaches the G-buffer, not just its factor.
+    *
+    * @details resources/tests/gltf_textured.gltf pairs a baseColorFactor of (0.25, 0.5, 0.75) with
+    * a solid green (0, 255, 0) baseColorTexture, and glTF multiplies the two -- so the shaded
+    * result is (0, 0.5, 0). Every channel discriminates: red and blue collapse to zero only if the
+    * texture was sampled, and green survives only if the factor was still applied. A material that
+    * ignored its texture would read back the factor itself.
+    *
+    * The image is uploaded as R8G8B8A8_SRGB, which is what makes a fully-saturated 255 decode to
+    * linear 1.0 and leave the factor unscaled.
+    */
+    inline void runMaterialTextureTest(vkm::VkmDriverBase* driver)
+    {
+        vkm::VkmPipelineStateManager manager(driver);
+        vkm::VkmScene scene;
+        vkm::VkmGBuffer gbuffer;
+        fillGBuffer(driver, manager, scene, gbuffer, "tests/gltf_textured.gltf");
+
+        const uint32_t sampleX = kGBufferRenderSize / 4;
+        const uint32_t sampleY = kGBufferRenderSize * 3 / 4;
+
+        const vkm::VkmTextureReadbackResult readback =
+            driver->readbackTexture(gbuffer.getTexture(vkm::VkmGBuffer::Target::BaseColorRoughness));
+        REQUIRE(readback.channels == 4);
+        const uint8_t* texel =
+            &readback.pixels[(static_cast<size_t>(sampleY) * readback.width + sampleX) * readback.channels];
+
+        CHECK(texel[0] / 255.0f == doctest::Approx(0.0f).epsilon(0.02));
+        CHECK(texel[1] / 255.0f == doctest::Approx(kFixtureBaseColorG).epsilon(0.02));
+        CHECK(texel[2] / 255.0f == doctest::Approx(0.0f).epsilon(0.02));
+
+        // Stated separately so a regression reads as "the factor came through untextured" rather
+        // than as three unrelated channel failures.
+        CHECK(texel[0] / 255.0f < kFixtureBaseColorR * 0.5f);
+        CHECK(texel[2] / 255.0f < kFixtureBaseColorB * 0.5f);
+
+        gbuffer.destroy();
+        scene.destroy(driver);
     }
 
     /*

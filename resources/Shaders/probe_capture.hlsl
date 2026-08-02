@@ -17,6 +17,7 @@
 // half-float distance precision is not the limiting factor.
 
 #include "vkm_bindless.hlsli"
+#include "vkm_material.hlsli"
 
 // Deliberately not scene_common.hlsli: that header also declares the compute-only read-write
 // singletons, which a render pipeline must never declare (see vkm_bindless.hlsli).
@@ -66,6 +67,7 @@ VKM_PUSH_CONSTANTS(FacePushConstants, g_Face);
 VKM_BINDLESS_VERTEX_PULLING(uint);
 VKM_BINDLESS_OBJECT_DATA(ObjectData, g_ObjectData);
 VKM_BINDLESS_FRAME_DATA(FrameData, g_FrameData);
+VKM_MATERIAL_DECLARE();
 
 [[vk::binding(0, 2)]] ConstantBuffer<ProbeCaptureConstants> g_Capture : register(b0, space2);
 
@@ -89,6 +91,7 @@ struct VSOutput
     [[vk::location(0)]] float3 probeRelativePosition : TEXCOORD0;
     [[vk::location(1)]] float3 worldNormal : NORMAL0;
     [[vk::location(2)]] nointerpolation uint materialIndex : TEXCOORD1;
+    [[vk::location(3)]] float2 uv : TEXCOORD2;
 };
 
 float3 loadFloat3(uint slot, uint wordBase)
@@ -115,12 +118,18 @@ float3 fetchNormal(ObjectData obj, uint wordBase)
 #endif
 }
 
-float3 fetchBaseColor(uint materialPoolSlot, uint materialIndex)
+// See gbuffer.hlsl's fetchUV -- same layouts, same offsets.
+float2 fetchUV(ObjectData obj, uint wordBase)
 {
-    const uint wordBase = materialIndex * 12; // VkmMaterialData is 48 bytes = 12 words
-    return float3(asfloat(VKM_LOAD_VERTEX(materialPoolSlot, wordBase + 0)),
-                  asfloat(VKM_LOAD_VERTEX(materialPoolSlot, wordBase + 1)),
-                  asfloat(VKM_LOAD_VERTEX(materialPoolSlot, wordBase + 2)));
+#if defined(VKM_VERTEX_LAYOUT_STANDARD_PBR)
+    return float2(asfloat(VKM_LOAD_VERTEX(obj.vertexPoolSlot, wordBase + 8)),
+                  asfloat(VKM_LOAD_VERTEX(obj.vertexPoolSlot, wordBase + 9)));
+#elif defined(VKM_VERTEX_LAYOUT_COMPACT)
+    const uint packed = VKM_LOAD_VERTEX(obj.vertexPoolSlot, wordBase + 4);
+    return float2(f16tof32(packed & 0xFFFFu), f16tof32(packed >> 16));
+#else
+    return float2(0.0, 0.0);
+#endif
 }
 
 VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
@@ -139,6 +148,7 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
     output.probeRelativePosition = probeRelative;
     output.worldNormal = mul((float3x3)obj.normalTransform, fetchNormal(obj, wordBase));
     output.materialIndex = obj.materialIndex;
+    output.uv = fetchUV(obj, wordBase);
     return output;
 }
 
@@ -150,7 +160,11 @@ float4 PSMain(VSOutput input) : SV_TARGET0
                               ? normalize(input.worldNormal)
                               : geometricNormal;
 
-    const float3 baseColor = fetchBaseColor(g_FrameData[0].materialPoolSlot, input.materialIndex);
+    // Textured, not factor-only: a probe records the radiance leaving a surface, so sampling the
+    // albedo here is what makes indirect colour bleeding carry the scene's actual colours instead
+    // of a per-material average.
+    const VkmMaterial material = vkmLoadMaterial(g_FrameData[0].materialPoolSlot, input.materialIndex);
+    const float3 baseColor = vkmSampleBaseColor(material, input.uv).rgb;
     const float nDotL = saturate(dot(normal, normalize(g_FrameData[0].lightDirection.xyz)));
 
     // Lambert only. A probe records low-frequency incoming radiance, and the specular lobe of a

@@ -69,9 +69,14 @@ namespace vkm
         samplerDesc.minFilter = MTLSamplerMinMagFilterLinear;
         samplerDesc.magFilter = MTLSamplerMinMagFilterLinear;
         samplerDesc.mipFilter = MTLSamplerMipFilterLinear;
-        samplerDesc.sAddressMode = MTLSamplerAddressModeClampToEdge;
-        samplerDesc.tAddressMode = MTLSamplerAddressModeClampToEdge;
-        samplerDesc.rAddressMode = MTLSamplerAddressModeClampToEdge;
+        // REPEAT because that is glTF's default wrap, and material textures are what this sampler
+        // mostly serves: DamagedHelmet's V runs 1.0..2.0 and relies on wrapping, which under clamp
+        // collapsed every pixel onto the texture's bottom row. The cubemap is unaffected -- a cube
+        // lookup derives in-range face coordinates and hardware seamless filtering handles the
+        // edges, so the address mode never applies there.
+        samplerDesc.sAddressMode = MTLSamplerAddressModeRepeat;
+        samplerDesc.tAddressMode = MTLSamplerAddressModeRepeat;
+        samplerDesc.rAddressMode = MTLSamplerAddressModeRepeat;
         samplerDesc.supportArgumentBuffers = YES;
         samplerDesc.label = @"VkmBindlessDefaultSampler";
         _defaultSampler = [device newSamplerStateWithDescriptor:samplerDesc];
