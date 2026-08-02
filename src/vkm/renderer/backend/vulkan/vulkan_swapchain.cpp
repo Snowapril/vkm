@@ -147,8 +147,24 @@ namespace vkm
         // Choose the best available surface format and present mode
         const VkSurfaceFormat2KHR surfaceFormat2 = selectSwapSurfaceFormat(formats);
         const VkPresentModeKHR    presentMode    = selectSwapPresentMode(presentModes, vSync);
-        // Set the window size according to the surface's current extent
-        const VkExtent2D currentExtent = capabilities2.surfaceCapabilities.currentExtent;
+
+        // Set the window size according to the surface's current extent. A currentExtent of
+        // 0xFFFFFFFF means the surface takes whatever size the swapchain asks for (Wayland does
+        // this), so fall back to the extent the caller requested, clamped to what the surface
+        // accepts.
+        VkExtent2D currentExtent = capabilities2.surfaceCapabilities.currentExtent;
+        if (currentExtent.width == UINT32_MAX || currentExtent.height == UINT32_MAX)
+        {
+            const VkExtent2D minExtent = capabilities2.surfaceCapabilities.minImageExtent;
+            const VkExtent2D maxExtent = capabilities2.surfaceCapabilities.maxImageExtent;
+            currentExtent.width  = std::clamp(_extent.x, minExtent.width, maxExtent.width);
+            currentExtent.height = std::clamp(_extent.y, minExtent.height, maxExtent.height);
+        }
+
+        // The surface -- not the caller -- is the authority on the real extent: on a HiDPI display
+        // it is the window size in points times the backing scale. getExtent() feeds the camera
+        // aspect and every framebuffer descriptor, so it must report what the images actually are.
+        _extent = glm::uvec2(currentExtent.width, currentExtent.height);
 
         // Adjust the number of images in flight within GPU limitations
         uint32_t minImageCount       = capabilities2.surfaceCapabilities.minImageCount;  // Vulkan-defined minimum
@@ -354,7 +370,20 @@ namespace vkm
 
         uint32_t imageIndex = 0;
         VkResult vkResult = vkAcquireNextImageKHR(device, _swapChain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
-        if (vkResult != VK_SUCCESS && vkResult != VK_SUBOPTIMAL_KHR)
+        if (vkResult == VK_ERROR_OUT_OF_DATE_KHR)
+        {
+            // The surface changed under us without the window layer reporting it. Not an error:
+            // flag it and let the engine recreate before the next frame. The semaphore was not
+            // signaled, so no pending state is set.
+            _outOfDate = true;
+            return VKM_INVALID_RESOURCE_HANDLE;
+        }
+        if (vkResult == VK_SUBOPTIMAL_KHR)
+        {
+            // The image is still usable, so this frame goes ahead; recreation happens next frame.
+            _outOfDate = true;
+        }
+        else if (vkResult != VK_SUCCESS)
         {
             // Do not set pending state: the semaphore was not signaled.
             VKM_DEBUG_ERROR("Failed to acquire next swapchain image");
@@ -397,6 +426,13 @@ namespace vkm
             .pImageIndices      = &_currentBackBufferIndex,
         };
         VkResult vkResult = vkQueuePresentKHR(vkQueue, &presentInfo);
+        if (vkResult == VK_ERROR_OUT_OF_DATE_KHR || vkResult == VK_SUBOPTIMAL_KHR)
+        {
+            // The present itself is complete; the swapchain just no longer matches its surface.
+            // Flag it so the engine recreates before the next frame -- see isOutOfDate().
+            _outOfDate = true;
+            return;
+        }
         VKM_VK_CHECK_RESULT_MSG(vkResult, "Failed to present swapchain image");
     }
 

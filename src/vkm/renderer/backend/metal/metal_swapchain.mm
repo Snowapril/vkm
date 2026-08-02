@@ -71,8 +71,12 @@ namespace vkm
         textureInfo._numMipLevels = 1;
         textureInfo._numArrayLayers = 1;
 
-        for (VkmResourceHandle& handle : _backBuffers)
+        // Exactly as many as acquireNextImageInner() cycles through -- the rest of the
+        // MAX_BACK_BUFFER_COUNT-sized array stays invalid, which is what _backBuffers expects.
+        _backBufferCount = (uint8_t)BACK_BUFFER_COUNT;
+        for (uint32_t i = 0; i < BACK_BUFFER_COUNT; ++i)
         {
+            VkmResourceHandle& handle = _backBuffers[i];
             VkmTextureMetal* newTextureMetal = new VkmTextureMetal(_driver);
 
             VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();

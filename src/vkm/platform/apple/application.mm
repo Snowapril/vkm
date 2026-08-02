@@ -31,6 +31,8 @@
 #include <vkm/platform/common/glfw_input.h>
 #include <vkm/base/cpu_profiler.h>
 
+#include <algorithm>
+
 #if defined(VKM_USE_METAL_API)
 @interface VkmWindowImpl : NSWindow
 - (void)setEngine:(nonnull vkm::VkmEngine *)engine;
@@ -46,6 +48,11 @@
 - (void)renderThreadLoop;
 - (void)stop;
 @end
+
+// Window indices in the order this platform layer calls addSwapChain(): the scene window first,
+// then the dedicated ImGui window.
+static constexpr uint32_t kSceneWindowIndex = 0;
+static constexpr uint32_t kImGuiWindowIndex = 1;
 
 static void* renderWorker( void* _Nullable obj )
 {
@@ -175,7 +182,12 @@ static void* renderWorker( void* _Nullable obj )
 
     // Feed the secondary ImGui window a drawable for this frame. nextDrawable may briefly block
     // on the drawable pool; if it returns nil the engine skips that window's render this frame.
-    if (_imguiSwapChain != nullptr && _imguiMetalLayer != nil)
+    //
+    // Skipped entirely while that window renders nothing (it is mid-live-resize, or minimized):
+    // the drawables would never be presented, so the pool would drain and every nextDrawable
+    // would then block out its full timeout -- stalling the render thread for the whole drag.
+    if (_imguiSwapChain != nullptr && _imguiMetalLayer != nil &&
+        _engine->isWindowRenderingSuspended(kImGuiWindowIndex) == false)
     {
         id<CAMetalDrawable> imguiDrawable = [_imguiMetalLayer nextDrawable];
         _imguiSwapChain->overrideCurrentDrawable(imguiDrawable);
@@ -595,13 +607,13 @@ static void createMenuBar(const char* appName)
     
     _metalLayer = [[CAMetalLayer alloc] init];
     _metalLayer.device = _mtlDevice;
-    
-    // Set layer size and make it opaque:
-    _metalLayer.drawableSize = NSMakeSize(1920 , 1080);
+
     _metalLayer.opaque = YES;
     _metalLayer.framebufferOnly = YES;
-    
-    // Configure CoreAnimation letterboxing:
+
+    // Configure CoreAnimation letterboxing. This is what makes a live resize look right: while
+    // the user drags, the engine renders nothing and the drawable keeps its pre-drag size, so
+    // CoreAnimation scales the last presented frame into the new bounds until the drag ends.
     _metalLayer.contentsGravity = kCAGravityResizeAspect;
     _metalLayer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
 
@@ -614,9 +626,14 @@ static void createMenuBar(const char* appName)
     _view = [[NSView alloc] initWithFrame:_window.contentLayoutRect];
     _view.layer = _metalLayer;
     _window.contentView = _view;
-    
+
+    // The drawable tracks the view's size in pixels, here and on every subsequent resize
+    // (see publishBackingSizeForWindow:).
+    const CGSize backingSize = [_view convertSizeToBacking:_view.bounds.size];
+    _metalLayer.drawableSize = backingSize;
+
     vkm::VKM_DEBUG_INFO("Metal layer & view setup complete");
-    
+
     vkm::VkmWindowInfo windowInfo;
     windowInfo._width = _metalLayer.drawableSize.width;
     windowInfo._height = _metalLayer.drawableSize.height;
@@ -652,7 +669,6 @@ static void createMenuBar(const char* appName)
 
     _imguiMetalLayer = [[CAMetalLayer alloc] init];
     _imguiMetalLayer.device = _mtlDevice;
-    _imguiMetalLayer.drawableSize = NSMakeSize(960, 640);
     _imguiMetalLayer.opaque = YES;
     _imguiMetalLayer.framebufferOnly = YES;
     _imguiMetalLayer.contentsGravity = kCAGravityResizeAspect;
@@ -666,6 +682,9 @@ static void createMenuBar(const char* appName)
     _imguiView = [[NSView alloc] initWithFrame:_imguiWindow.contentLayoutRect];
     _imguiView.layer = _imguiMetalLayer;
     _imguiWindow.contentView = _imguiView;
+
+    // As in createView: the drawable is the view's size in pixels, not in points.
+    _imguiMetalLayer.drawableSize = [_imguiView convertSizeToBacking:_imguiView.bounds.size];
 
     vkm::VkmWindowInfo imguiWindowInfo;
     imguiWindowInfo._width = _imguiMetalLayer.drawableSize.width;
@@ -693,8 +712,8 @@ static void createMenuBar(const char* appName)
                                                                 uiCanvasSize:uiCanvasSize];
     
     [_rendererCoordinator setEngine: _engine];
-    [_rendererCoordinator setSwapChain: (vkm::VkmSwapChainMetal*)_engine->getSwapChain(0)];
-    [_rendererCoordinator setImGuiSwapChain: (vkm::VkmSwapChainMetal*)_engine->getSwapChain(1)];
+    [_rendererCoordinator setSwapChain: (vkm::VkmSwapChainMetal*)_engine->getSwapChain(kSceneWindowIndex)];
+    [_rendererCoordinator setImGuiSwapChain: (vkm::VkmSwapChainMetal*)_engine->getSwapChain(kImGuiWindowIndex)];
     [_rendererCoordinator setImGuiMetalLayer: _imguiMetalLayer];
 }
 
@@ -766,10 +785,24 @@ static void createMenuBar(const char* appName)
     _engine = engine;
 }
 
-// Both windows share this delegate, so the engine learns which one holds keyboard focus. The
-// layer is the handle addSwapChain() was given, which is what findWindowIndex() matches on;
-// it is looked up from the window we created rather than from contentView.layer, which AppKit
-// is free to substitute on a view that was never marked layer-hosting.
+// Both windows share this delegate, so a notification has to be mapped back to the layer that
+// addSwapChain() was given -- that is the handle findWindowIndex() matches on. It is looked up
+// from the window we created rather than from contentView.layer, which AppKit is free to
+// substitute on a view that was never marked layer-hosting. Returns nil for a window we do not own.
+- (nullable CAMetalLayer*)layerForWindow:(nonnull NSWindow*)window
+{
+    if (window == _window)           { return _metalLayer; }
+    if (window == _imguiWindow)      { return _imguiMetalLayer; }
+    return nil;
+}
+
+- (nullable NSView*)viewForWindow:(nonnull NSWindow*)window
+{
+    if (window == _window)           { return _view; }
+    if (window == _imguiWindow)      { return _imguiView; }
+    return nil;
+}
+
 - (void)reportFocus:(NSNotification *)notification focused:(BOOL)focused
 {
     if (_engine == nullptr)
@@ -777,13 +810,45 @@ static void createMenuBar(const char* appName)
         return;
     }
 
-    NSWindow* window = (NSWindow*)notification.object;
-    CAMetalLayer* layer = nil;
-    if (window == _window)          { layer = _metalLayer; }
-    else if (window == _imguiWindow) { layer = _imguiMetalLayer; }
-    else                             { return; }
+    CAMetalLayer* layer = [self layerForWindow:(NSWindow*)notification.object];
+    if (layer == nil)
+    {
+        return;
+    }
 
     _engine->onWindowFocusChanged((__bridge const void*)layer, focused == YES);
+}
+
+// Resizes the layer's drawable to the view's size in *pixels* and tells the engine, which
+// rebuilds the swapchain from its own loop. Main thread only -- it touches AppKit.
+- (void)publishBackingSizeForWindow:(nonnull NSWindow*)window
+{
+    if (_engine == nullptr)
+    {
+        return;
+    }
+
+    CAMetalLayer* layer = [self layerForWindow:window];
+    NSView* view = [self viewForWindow:window];
+    if (layer == nil || view == nil)
+    {
+        return;
+    }
+
+    // convertSizeToBacking applies the screen's backing scale, so this is the window's true
+    // pixel resolution rather than its size in points. Clamped to 1: CAMetalLayer rejects a
+    // zero drawable size, and a zero-height window is reachable while the user drags.
+    const CGSize backingSize = [view convertSizeToBacking:view.bounds.size];
+    const uint32_t width  = (uint32_t)std::max(1.0, backingSize.width);
+    const uint32_t height = (uint32_t)std::max(1.0, backingSize.height);
+
+    if (layer.drawableSize.width == (CGFloat)width && layer.drawableSize.height == (CGFloat)height)
+    {
+        return;
+    }
+
+    layer.drawableSize = CGSizeMake((CGFloat)width, (CGFloat)height);
+    _engine->onWindowResized((__bridge const void*)layer, width, height);
 }
 
 - (void)windowDidBecomeKey:(NSNotification *)notification
@@ -801,9 +866,64 @@ static void createMenuBar(const char* appName)
     // [self updateMaxEDRValue];
 }
 
+// AppKit brackets a user-driven resize drag with these two, which is exactly the "suspend while
+// resizing, rebuild once it ends" split the engine wants. While suspended the engine renders
+// nothing and the last presented frame stays on screen, scaled into the new bounds by the
+// layer's kCAGravityResizeAspect.
+- (void)windowWillStartLiveResize:(NSNotification *)notification
+{
+    if (_engine == nullptr)
+    {
+        return;
+    }
+
+    CAMetalLayer* layer = [self layerForWindow:(NSWindow*)notification.object];
+    if (layer != nil)
+    {
+        _engine->onWindowLiveResizeChanged((__bridge const void*)layer, true);
+    }
+}
+
+- (void)windowDidEndLiveResize:(NSNotification *)notification
+{
+    if (_engine == nullptr)
+    {
+        return;
+    }
+
+    NSWindow* window = (NSWindow*)notification.object;
+    CAMetalLayer* layer = [self layerForWindow:window];
+    if (layer == nil)
+    {
+        return;
+    }
+
+    // Publish the final size before lifting the suspension, so the engine sees both in the same
+    // frame and rebuilds exactly once.
+    [self publishBackingSizeForWindow:window];
+    _engine->onWindowLiveResizeChanged((__bridge const void*)layer, false);
+}
+
 - (void)windowDidResize:(NSNotification *)notification
 {
-    //
+    // A live resize reports its final size from windowDidEndLiveResize: above; publishing every
+    // intermediate step here would rebuild the swapchain once per dragged pixel. What is left is
+    // everything that changes the size without a drag -- zoom, fullscreen, programmatic setFrame
+    // -- which has no bracket and should apply immediately.
+    NSWindow* window = (NSWindow*)notification.object;
+    if (window.inLiveResize)
+    {
+        return;
+    }
+
+    [self publishBackingSizeForWindow:window];
+}
+
+// Moving the window to a display with a different backing scale changes its pixel size without
+// changing its size in points, so windowDidResize: never fires.
+- (void)windowDidChangeBackingProperties:(NSNotification *)notification
+{
+    [self publishBackingSizeForWindow:(NSWindow*)notification.object];
 }
 
 - (void)destroy
@@ -1027,6 +1147,10 @@ namespace vkm
         // The ImGui window's input callbacks belong to the ImGui backend; only its focus is
         // the engine's business, so that is all we install there.
         installGlfwWindowFocusCallback(_imguiWindow.getHandle(), &_engine);
+
+        // Both windows have their own swapchain, so both need their own resize callback.
+        installGlfwWindowResizeCallback(_window.getHandle(), &_engine);
+        installGlfwWindowResizeCallback(_imguiWindow.getHandle(), &_engine);
 
         // The Vulkan-on-macOS path drives the frame loop here on the main thread, unlike the
         // Metal path's dedicated RenderThread.

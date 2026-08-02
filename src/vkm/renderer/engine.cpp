@@ -52,6 +52,28 @@ namespace vkm
     // (and starts keeping frame history) from frame 0.
     VKM_GLOBAL_VARIABLE(bool, gv_gpu_profile, false);
 
+    namespace
+    {
+        /*
+        * Packing for VkmWindowContext::_pendingExtent: width in bits 32..62, height in bits
+        * 0..31, and a marker in bit 63. The marker is what distinguishes "nothing pending" from
+        * a genuine 0x0 publish, which is what a minimized window reports. Both dimensions are
+        * pixel counts, so neither comes anywhere near the 2^31 the packing leaves them.
+        */
+        constexpr uint64_t kPendingExtentValidBit = uint64_t(1) << 63;
+
+        constexpr uint64_t packPendingExtent(uint32_t width, uint32_t height)
+        {
+            return kPendingExtentValidBit | (static_cast<uint64_t>(width) << 32) | static_cast<uint64_t>(height);
+        }
+
+        constexpr glm::uvec2 unpackPendingExtent(uint64_t packedExtent)
+        {
+            return glm::uvec2(static_cast<uint32_t>((packedExtent >> 32) & 0x7FFFFFFFu),
+                              static_cast<uint32_t>(packedExtent & 0xFFFFFFFFu));
+        }
+    }
+
     VkmEngine::VkmEngine(VkmDriverBase* driver)
         : _driver(driver), _lastUpdateTime(0.0)
     {
@@ -220,6 +242,84 @@ namespace vkm
         _inputHandler.onWindowFocusChanged(windowIndex, focused);
     }
 
+    void VkmEngine::onWindowResized(const void* nativeHandle, uint32_t width, uint32_t height)
+    {
+        const uint32_t windowIndex = findWindowIndex(nativeHandle);
+        if (windowIndex == kVkmNoFocusedWindow)
+        {
+            // A window this engine does not own, or an event arriving before addSwapChain()
+            // registered it -- same rule as onWindowFocusChanged().
+            return;
+        }
+
+        // Overwrite rather than accumulate: only the newest size matters, and a resize drag
+        // produces far more events than frames.
+        _windowContexts[windowIndex]._pendingExtent.store(packPendingExtent(width, height), std::memory_order_release);
+
+        // Input state that a geometry change invalidates is the input handler's business; it
+        // needs the event ordered against the cursor moves around it, so it goes on that queue.
+        _inputHandler.onWindowResized(windowIndex, width, height);
+    }
+
+    void VkmEngine::onWindowLiveResizeChanged(const void* nativeHandle, bool active)
+    {
+        const uint32_t windowIndex = findWindowIndex(nativeHandle);
+        if (windowIndex == kVkmNoFocusedWindow)
+        {
+            return;
+        }
+        _windowContexts[windowIndex]._liveResizeActive.store(active, std::memory_order_release);
+    }
+
+    bool VkmEngine::isWindowRenderingSuspended(uint32_t windowIndex) const
+    {
+        if (windowIndex >= _windowContexts.size())
+        {
+            return true;
+        }
+
+        const VkmWindowContext& windowContext = _windowContexts[windowIndex];
+        if (windowContext._liveResizeActive.load(std::memory_order_acquire))
+        {
+            return true;
+        }
+
+        const glm::uvec2 extent = windowContext._swapChain->getExtent();
+        return extent.x == 0 || extent.y == 0;
+    }
+
+    void VkmEngine::recreateSwapChain(VkmWindowContext& windowContext, uint64_t packedExtent)
+    {
+        VkmSwapChainBase* swapChain = windowContext._swapChain;
+        const glm::uvec2 currentExtent = swapChain->getExtent();
+        // No published size means this is an out-of-date recreate: rebuild at the extent the
+        // swapchain already has, which the backend re-derives from its surface anyway.
+        const glm::uvec2 targetExtent = (packedExtent != 0) ? unpackPendingExtent(packedExtent) : currentExtent;
+
+        // Plenty of published sizes change nothing: the platform layer re-reporting the size the
+        // swapchain was created at, or a drag that ended where it began. resize() would ignore
+        // those anyway, but only after this function had already paid for the drain below --
+        // so the same condition is checked here, before anything expensive happens.
+        if (targetExtent == currentExtent && swapChain->isOutOfDate() == false)
+        {
+            return;
+        }
+
+        // Every frame slot of this window may still have a submit in flight referencing the back
+        // buffers, and the driver's other queues (uploads, readbacks) may hold work of their own.
+        // Drain both before the swapchain releases those textures.
+        for (std::unique_ptr<VkmRenderGraph>& renderGraph : windowContext._frameRenderGraphs)
+        {
+            renderGraph->ensureCompleted();
+        }
+        _driver->waitIdle();
+
+        swapChain->resize(targetExtent.x, targetExtent.y);
+
+        VKM_DEBUG_INFO(fmt::format("Swapchain recreated at {}x{}",
+            swapChain->getExtent().x, swapChain->getExtent().y).c_str());
+    }
+
     bool VkmEngine::wantsCaptureKeyboard() const
     {
 #if defined(VKM_ENABLE_IMGUI)
@@ -302,7 +402,8 @@ namespace vkm
 
         const uint32_t windowIndex = static_cast<uint32_t>(_windowContexts.size());
 
-        VkmWindowContext windowContext;
+        // Constructed in place: VkmWindowContext holds atomics, so it cannot be moved in.
+        VkmWindowContext& windowContext = _windowContexts.emplace_back();
         windowContext._swapChain = swapChain;
         windowContext._windowHandle = windowInfo._windowHandle;
         windowContext._backBufferFormat = backBufferFormat;
@@ -311,7 +412,6 @@ namespace vkm
         {
             windowContext._frameRenderGraphs[i] = std::make_unique<VkmRenderGraph>(_driver, i);
         }
-        _windowContexts.push_back(std::move(windowContext));
 
 #if defined(VKM_ENABLE_IMGUI)
         if (isImGuiWindow)
@@ -477,6 +577,29 @@ namespace vkm
             VkmWindowContext& windowContext = _windowContexts[windowIndex];
             VkmRenderGraph* renderGraph = windowContext._frameRenderGraphs[_currentFrameIndex].get();
 
+            // Rendering stops for the whole duration of a resize drag. The last presented frame
+            // stays on screen, scaled into the new bounds by the compositor, until the drag ends.
+            if (windowContext._liveResizeActive.load(std::memory_order_acquire))
+            {
+                continue;
+            }
+
+            // A resize ended (or the swapchain went out of date under us): drain and rebuild
+            // before anything acquires from it. Consuming with exchange() means a size published
+            // while we rebuild is picked up next frame rather than lost.
+            const uint64_t pendingExtent = windowContext._pendingExtent.exchange(0, std::memory_order_acq_rel);
+            if (pendingExtent != 0 || windowContext._swapChain->isOutOfDate())
+            {
+                recreateSwapChain(windowContext, pendingExtent);
+            }
+
+            // A minimized window has no swapchain to render into.
+            const glm::uvec2 windowExtent = windowContext._swapChain->getExtent();
+            if (windowExtent.x == 0 || windowExtent.y == 0)
+            {
+                continue;
+            }
+
             // Throttle before acquiring: timeline-wait on this window's previous submit on this
             // frame slot and reset its graph. Must precede acquireNextImage() so this slot's
             // image-available semaphore is guaranteed free before it is reused.
@@ -493,8 +616,10 @@ namespace vkm
             }
             if (!currentBackBuffer.isValid())
             {
-                // Acquire failed (e.g. surface lost/out-of-date). Only this window's slot was
-                // waited on and reset, so skip just this window this frame.
+                // Acquire failed. Only this window's slot was waited on and reset, so skip just
+                // this window this frame. An out-of-date surface flagged itself on the way out
+                // and is rebuilt at the top of the next frame; anything else is a real error the
+                // backend has already logged.
                 continue;
             }
 
@@ -613,6 +738,17 @@ namespace vkm
                 windowContext._swapChain->present();
             }
         }
+
+#if defined(VKM_ENABLE_IMGUI)
+        // loopInner() opened an ImGui frame unconditionally, but every path above that skips the
+        // ImGui window -- suspended during a live resize, minimized, or a failed acquire -- left
+        // it open. Closing it here keeps the next ImGui::NewFrame() from asserting. A no-op on
+        // the ordinary path, where the overlay's render callback already ended the frame.
+        if (_imGuiRenderer)
+        {
+            _imGuiRenderer->discardFrame();
+        }
+#endif
     }
 
     VkmEngineLaunchOptions VkmEngine::parseEngineLaunchOptions(int argc, char* argv[])

@@ -105,6 +105,12 @@ namespace vkm
 
         installGlfwInputCallbacks(_window.getHandle(), &_engine);
 
+        // GLFW's Emscripten port reports canvas size changes through this callback, so the
+        // swapchain follows whenever the page resizes the canvas element. A browser-window resize
+        // that leaves the canvas element's own size untouched produces no event -- keeping the
+        // canvas sized to the viewport is the shell page's job, not the engine's.
+        installGlfwWindowResizeCallback(_window.getHandle(), &_engine);
+
         // Emscripten forbids blocking the main thread. Register a callback-driven loop
         // (fired at the browser's requestAnimationFrame cadence) instead of the blocking
         // while() loop the other platforms use. This call does not return in the normal

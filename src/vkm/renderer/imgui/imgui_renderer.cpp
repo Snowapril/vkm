@@ -40,6 +40,17 @@ namespace vkm
         renderDrawDataInner(commandBuffer);
     }
 
+    void VkmImGuiRendererBase::discardFrame()
+    {
+        if (_frameRendered)
+        {
+            return;
+        }
+        _frameRendered = true;
+
+        ImGui::EndFrame();
+    }
+
     void VkmImGuiRendererBase::shutdown()
     {
         shutdownInner();

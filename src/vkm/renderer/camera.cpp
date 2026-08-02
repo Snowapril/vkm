@@ -179,6 +179,16 @@ namespace vkm
                 }
                 return;
             }
+            case VkmInputEventType::WindowResize:
+            {
+                // Dragging the window's left or top edge moves its origin, so the cursor's
+                // window-relative position jumps without the pointer having moved. Same fix as
+                // the stale-position cases above: drop the baseline so that jump is never
+                // applied as a rotation. The aspect ratio needs no handling here -- the engine
+                // republishes the viewport size from the swapchain every frame.
+                _hasLastCursor = false;
+                return;
+            }
             case VkmInputEventType::Key:
                 return;
         }
@@ -335,6 +345,14 @@ namespace vkm
                     _dragging = false;
                     _hasLastCursor = false;
                 }
+                return;
+            }
+            case VkmInputEventType::WindowResize:
+            {
+                // Same as the orbit controller: a window origin that moved under the cursor
+                // makes the tracked position stale, and applying that as a look delta would
+                // snap the view.
+                _hasLastCursor = false;
                 return;
             }
             case VkmInputEventType::Key:

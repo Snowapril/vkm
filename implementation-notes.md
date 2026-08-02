@@ -1500,3 +1500,95 @@ and readback in earlier iterations, so everything upstream works; the cause is u
 The validation half of the same test runs and passes.
 
 Verified: Metal 193/193 and Vulkan 191/191 Debug, 192/192 and 191/191 Release, WebGPU green.
+
+## 2026-08-02 — Window resize (suspend during, rebuild after)
+
+Nothing reacted to a window resize before this: `VkmSwapChainBase::resize()` was a TODO stub with
+zero callers, `-[VkmApplicationImpl windowDidResize:]` was empty, and no GLFW framebuffer-size
+callback existed anywhere.
+
+- **Handoff.** Resize events arrive on the window thread, which on the macOS Metal path is not the
+  thread running `loopInner()`. `VkmWindowContext` gained two atomics — `_pendingExtent` (packed
+  `(width << 32) | height` plus a bit-63 marker, so a genuine 0x0 from a minimize is
+  distinguishable from "nothing pending") and `_liveResizeActive`. The window thread only
+  publishes; `VkmEngine::render()` consumes. No driver call ever happens on the window thread.
+  `_windowContexts` became a `std::deque` because atomics make the context non-movable.
+- **Drain.** `VkmEngine::recreateSwapChain()` does `ensureCompleted()` on all `FRAME_COUNT` graphs
+  of that window, then `VkmDriverBase::waitIdle()` (every queue, so uploads and readbacks too),
+  then `resize()`. The swapchain releases its back buffers immediately rather than through the
+  deferred reclaimer, so that drain is what makes it safe.
+- **Suspension.** AppKit's `windowWillStartLiveResize:`/`windowDidEndLiveResize:` bracket the drag
+  exactly; the engine renders nothing in between and `kCAGravityResizeAspect` scales the last
+  presented frame into the new bounds. GLFW has no such bracket. Its size callback only fires from
+  `glfwPollEvents()`, which runs once per frame, so a frame's events coalesce into at most one
+  rebuild; Win32 and Cocoa additionally run a modal resize loop that `glfwPollEvents()` does not
+  return from, so a drag there draws nothing at all, while X11 rebuilds once per frame. Both are
+  correct — only the first also freezes rendering.
+- **Out-of-date self-heal.** Vulkan `VK_ERROR_OUT_OF_DATE_KHR`/`VK_SUBOPTIMAL_KHR` from acquire or
+  present, and WebGPU `Outdated`/`Lost`, now set `_outOfDate` instead of being logged as errors or
+  ignored. The engine rebuilds on the next frame, which covers resizes no window callback reported.
+- **macOS drawable size.** `CAMetalLayer.drawableSize` was hardcoded to 1920x1080 (and 960x640 for
+  the ImGui window) regardless of window size, so a 1280x720 window rendered at 1080p and was
+  letterboxed. It now tracks `[view convertSizeToBacking:view.bounds.size]` at creation and on
+  every resize, i.e. the window's true pixel resolution.
+- **Vulkan extent write-back.** `createSwapChain` created images from
+  `surfaceCapabilities.currentExtent` but left `_extent` at whatever the platform layer requested,
+  so `getExtent()` — which feeds the camera aspect and every framebuffer descriptor — was wrong on
+  any HiDPI display. It now writes the real extent back, and handles the `0xFFFFFFFF` "you choose"
+  sentinel by clamping the requested size to `min/maxImageExtent`.
+- **Input.** Absolute cursor positions need no correction (they are window-relative and nothing
+  caches a window size), but the *deltas* do: dragging a window's left or top edge moves its origin,
+  so the cursor's window-relative position jumps without the pointer moving. A new
+  `VkmInputEventType::WindowResize` goes through the same mutex-buffered queue as the cursor moves,
+  so it stays ordered against them, and drops the tracked baseline in `VkmInputHandler` and in both
+  camera controllers — the same thing they already do on focus loss, for the same reason.
+- **Samples.** `triangle` (800x600) and `empty_screen` (1280x720) hardcoded
+  `frameBufferDesc._width/_height`; both now read `getSwapChain(windowIndex)->getExtent()` like
+  `model_viewer` and `skybox` already did. Removed the matching TODO.md clause.
+
+### Deviations
+
+- Planned: only `VkmSwapChainBase::resize()`, the platform hooks, and the sample fixes.
+  Did instead: also (a) reset `_backBuffers` entries to invalid in `destroySwapChainCommon()`, since
+  a backend may produce fewer images on recreate than it did before and a leftover handle would be
+  double-released; (b) set `_backBufferCount` on Metal and WebGPU, which never did, and allocated
+  `BACK_BUFFER_COUNT` placeholder textures there instead of `MAX_BACK_BUFFER_COUNT` — otherwise the
+  new `getBackBuffer()` accessor reports nothing on two of three backends and every resize would
+  churn five unused textures. Both are required for resize to be correct rather than optional
+  cleanups.
+- Planned: nothing about ImGui. Did instead: added `VkmImGuiRendererBase::discardFrame()`.
+  `ImGui::Render()` is only reachable through `renderDrawData()`, so any frame that skips the ImGui
+  window leaves an unclosed ImGui frame and the next `ImGui::NewFrame()` asserts. Suspension made
+  that reachable constantly; the existing failed-acquire `continue` could already trip it.
+- Planned: nothing about the display-link callback. Did instead: it now skips
+  `[_imguiMetalLayer nextDrawable]` while that window is suspended. Drawables that are never
+  presented drain the 3-deep pool, after which every `nextDrawable` blocks out its full timeout and
+  stalls the render thread for the whole drag.
+- Planned: `recreateSwapChain()` would drain and then call `resize()`, letting `resize()`'s
+  same-extent early-out handle the no-op case. Did instead: the same-extent check was hoisted into
+  `recreateSwapChain()` ahead of the drain. Interactive testing showed the original shape paying
+  for a full `waitIdle()` and logging "Swapchain recreated" twice at startup, where the platform
+  layer's initial publish reports exactly the size the swapchain was already built at. `resize()`
+  keeps its own guard for direct callers.
+
+### Verification
+
+- `scripts/run_tests.py`: metal / vulkan / webgpu all PASS. Metal: 193 test cases / 19188
+  assertions under `MTL_DEBUG_LAYER=1`; Vulkan: 191 / 3928 with validation layers on.
+- New Vulkan coverage in `tests/TestEngineSetup.cpp`, validation layers on: `VkmSwapChainVulkan`
+  resize / no-op resize / zero-extent teardown-and-restore, and a `VkmEngine` test driving the
+  real publish -> suspend -> drain -> rebuild -> minimize -> restore sequence through
+  `loopInner()`.
+  Note that the latter absorbed the former "ImGui renderer survives one loopInner() tick" test
+  rather than sitting alongside it: `initializeEngine()` registers process-wide loggers, so a
+  second `VkmEngine` in the same process throws "logger with name 'ConsoleLogger' already
+  exists". There can be exactly one live-engine test per binary, and this is it.
+- Interactive, both backends, via AppleScript-driven window resizes of the `triangle` sample:
+  the swapchain rebuilds at the correct backing-scaled pixel size (900x700 pt -> 1800x1336 px on a
+  2x display), with zero Metal API Validation and zero Vulkan validation-layer output. On Metal the
+  log confirms the rebuild runs on the render thread while window setup ran on the main thread,
+  which is the handoff this change exists for.
+- Not verified by me: an actual mouse-driven live-resize drag, i.e. the
+  `windowWillStartLiveResize:`/`windowDidEndLiveResize:` suspension path on Metal. A programmatic
+  resize reports `inLiveResize == NO` and goes through `windowDidResize:` instead, so the brackets
+  themselves need a human dragging a window edge.

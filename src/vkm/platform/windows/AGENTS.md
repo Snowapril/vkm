@@ -26,7 +26,7 @@ HWND hwnd = glfwGetWin32Window(glfwWindow);
 
 The application class (`application.h` / `application.cpp`) owns the GLFW window and drives the main loop:
 - `glfwPollEvents()` — called each frame
-- Window resize → `VkmSwapChainBase::resize(width, height)`
+- Window resize → `installGlfwWindowResizeCallback` → `VkmEngine::onWindowResized` → (from the engine loop) `VkmSwapChainBase::resize(width, height)`
 - Window close → trigger engine shutdown
 
 Do not call `glfwInit` / `glfwTerminate` more than once per process.
@@ -44,5 +44,5 @@ This platform layer is **always paired with the Vulkan backend**. When working h
 
 - [ ] `VKM_PLATFORM_WINDOWS` guard around Win32-specific includes (`<windows.h>`)
 - [ ] GLFW window created with `GLFW_CLIENT_API = GLFW_NO_API` (no OpenGL context)
-- [ ] Window resize callback registered and forwarded to swapchain
+- [x] Window resize callback registered and forwarded to swapchain (`installGlfwWindowResizeCallback`, on every window)
 - [ ] `glfwDestroyWindow` called before `glfwTerminate`

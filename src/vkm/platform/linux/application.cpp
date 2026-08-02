@@ -103,6 +103,10 @@ namespace vkm
         // the engine's business, so that is all we install there.
         installGlfwWindowFocusCallback(_imguiWindow.getHandle(), &_engine);
 
+        // Both windows have their own swapchain, so both need their own resize callback.
+        installGlfwWindowResizeCallback(_window.getHandle(), &_engine);
+        installGlfwWindowResizeCallback(_imguiWindow.getHandle(), &_engine);
+
         // Linux drives the frame loop on the main thread (unlike Apple, which hands it to a
         // dedicated render thread), so this is the thread the CPU profiler's frames come from.
         VKM_PROFILE_SET_THREAD_NAME("MainThread");
