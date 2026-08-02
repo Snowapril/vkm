@@ -50,7 +50,11 @@ struct SceneBatchConstants
     uint visibleWordOffset;  // first word of this batch's compacted object-index list
     uint countWordOffset;    // word holding this batch's visible count
     uint argumentWordOffset; // first word of this batch's VkmDrawIndirectArguments records
-    uint3 _pad0;
+    uint frameDataIndex;     // which FrameData the cull tests against (one per cull view)
+    // Scalars rather than a uint2: WebGPU lowers push constants to a uniform buffer, where a
+    // vector aligns to its own size and would land at a different offset than it does here.
+    uint _pad0;
+    uint _pad1;
 };
 
 VKM_PUSH_CONSTANTS(SceneBatchConstants, g_Batch);

@@ -249,15 +249,18 @@ namespace vkm
 
     void VkmScene::assignBatchRegions(uint64_t* outVisibleListSize, uint64_t* outArgumentSize)
     {
-        // The count words come first, one per batch, so both buffers share a batch's count index.
-        // Everything after them is 16-byte aligned so an argument record never straddles a
-        // native alignment boundary.
-        const uint32_t countWords = static_cast<uint32_t>(_drawBatches.size());
+        // The count words come first -- every view's, back to back -- so both buffers share a
+        // batch's count index even though their payloads have different strides. Everything after
+        // them is 16-byte aligned so an argument record never straddles a native alignment
+        // boundary. The offsets stored per batch are view 0's; recordCull() and recordDrawBatches()
+        // add the view's stride.
+        const uint32_t batchCount = static_cast<uint32_t>(_drawBatches.size());
+        const uint32_t countWords = batchCount * kVkmSceneMaxCullViews;
         const uint32_t regionBase = (countWords + 3u) & ~3u;
 
         uint32_t visibleCursor = regionBase;
         uint32_t argumentCursor = regionBase;
-        for (uint32_t i = 0; i < static_cast<uint32_t>(_drawBatches.size()); ++i)
+        for (uint32_t i = 0; i < batchCount; ++i)
         {
             DrawBatch& batch = _drawBatches[i];
             batch._countWordOffset = i;
@@ -270,9 +273,14 @@ namespace vkm
             argumentCursor += batch._objectCount * (vkmGetIndirectArgumentStride(kSceneArgumentLayout) / sizeof(uint32_t));
         }
 
-        _countRegionSize = static_cast<uint64_t>(countWords) * sizeof(uint32_t);
-        *outVisibleListSize = static_cast<uint64_t>(visibleCursor) * sizeof(uint32_t);
-        *outArgumentSize = static_cast<uint64_t>(argumentCursor) * sizeof(uint32_t);
+        _visibleViewStrideWords = visibleCursor - regionBase;
+        _argumentViewStrideWords = argumentCursor - regionBase;
+        // One view's worth: a cull clears only the counts it is about to fill.
+        _countRegionSize = static_cast<uint64_t>(batchCount) * sizeof(uint32_t);
+        *outVisibleListSize =
+            static_cast<uint64_t>(regionBase + _visibleViewStrideWords * kVkmSceneMaxCullViews) * sizeof(uint32_t);
+        *outArgumentSize =
+            static_cast<uint64_t>(regionBase + _argumentViewStrideWords * kVkmSceneMaxCullViews) * sizeof(uint32_t);
     }
 
     bool VkmScene::build(VkmDriverBase* driver, VkmPipelineStateManager* pipelineStateManager, std::string* outError)
@@ -337,7 +345,8 @@ namespace vkm
         }
         _objectDataBuffer = objectDataBuffer->getHandle();
 
-        VkmBuffer* frameDataBuffer = createStorageBuffer(driver, sizeof(VkmFrameData), "SceneFrameData");
+        VkmBuffer* frameDataBuffer =
+            createStorageBuffer(driver, sizeof(VkmFrameData) * kVkmSceneMaxCullViews, "SceneFrameData");
         if (frameDataBuffer == nullptr)
         {
             destroy(driver);
@@ -413,13 +422,13 @@ namespace vkm
             _countClearBuffer = clearBuffer->getHandle();
         }
 
-        // One staging buffer per frame slot, laid out as [ObjectData array][FrameData].
+        // One staging buffer per frame slot, laid out as [ObjectData array][FrameData per view].
         _frameDataStagingOffset = objectDataSize;
         for (uint32_t frame = 0; frame < FRAME_BUFFER_COUNT; ++frame)
         {
             VkmStagingBufferInfo stagingInfo{};
             stagingInfo._flags = VkmResourceCreateInfo::AllowTransferSrc;
-            stagingInfo._size = objectDataSize + sizeof(VkmFrameData);
+            stagingInfo._size = objectDataSize + sizeof(VkmFrameData) * kVkmSceneMaxCullViews;
             stagingInfo._debugName = "SceneUploadStaging";
 
             VkmStagingBuffer* staging = driver->newStagingBuffer(stagingInfo);
@@ -516,10 +525,12 @@ namespace vkm
         _dirtyEnd = std::max(_dirtyEnd, objectIndex + 1);
     }
 
-    void VkmScene::recordUpdate(VkmCommandBufferBase* commandBuffer, uint32_t frameIndex, const VkmFrameData& frameData)
+    void VkmScene::recordUpdate(VkmCommandBufferBase* commandBuffer, uint32_t frameIndex,
+                                const VkmFrameData& frameData, uint32_t viewIndex)
     {
         VKM_ASSERT(commandBuffer != nullptr, "VkmScene::recordUpdate requires a command buffer");
         VKM_ASSERT(frameIndex < FRAME_BUFFER_COUNT, "VkmScene::recordUpdate frame index is out of range");
+        VKM_ASSERT(viewIndex < kVkmSceneMaxCullViews, "VkmScene::recordUpdate view index is out of range");
 
         if (_objectData.empty())
         {
@@ -532,12 +543,15 @@ namespace vkm
             return;
         }
 
-        // FrameData changes every frame (the camera moves), so it is always copied.
+        // FrameData changes every frame (the camera moves), so it is always copied. Each view owns
+        // a staging region and a device region: the host write below happens now, while the copy
+        // happens whenever the GPU reaches it, so two views sharing either would race.
+        const uint64_t viewByteOffset = static_cast<uint64_t>(viewIndex) * sizeof(VkmFrameData);
         VkmFrameData publishedFrameData = frameData;
         publishedFrameData._materialPoolSlot = _materialPoolSlot;
-        staging->writeDirect(_frameDataStagingOffset, &publishedFrameData, sizeof(VkmFrameData));
+        staging->writeDirect(_frameDataStagingOffset + viewByteOffset, &publishedFrameData, sizeof(VkmFrameData));
         commandBuffer->copyBuffer(_stagingBuffers[frameIndex], _frameDataBuffer,
-                                  _frameDataStagingOffset, 0, sizeof(VkmFrameData));
+                                  _frameDataStagingOffset + viewByteOffset, viewByteOffset, sizeof(VkmFrameData));
 
         if (_dirtyFirst != _dirtyEnd)
         {
@@ -550,29 +564,38 @@ namespace vkm
         }
     }
 
-    void VkmScene::recordCull(VkmCommandBufferBase* commandBuffer)
+    void VkmScene::recordCull(VkmCommandBufferBase* commandBuffer, uint32_t viewIndex)
     {
         VKM_ASSERT(commandBuffer != nullptr, "VkmScene::recordCull requires a command buffer");
+        VKM_ASSERT(viewIndex < kVkmSceneMaxCullViews, "VkmScene::recordCull view index is out of range");
 
         if (_drawBatches.empty() || _cullPipeline == nullptr || _emitPipeline == nullptr)
         {
             return;
         }
 
+        const uint32_t batchCount = static_cast<uint32_t>(_drawBatches.size());
+        const uint32_t countWordBase = viewIndex * batchCount;
+        const uint32_t visibleWordBase = viewIndex * _visibleViewStrideWords;
+        const uint32_t argumentWordBase = viewIndex * _argumentViewStrideWords;
+
         // Every batch's visible count has to start at zero: the cull pass only ever increments it.
-        commandBuffer->copyBuffer(_countClearBuffer, _visibleListBuffer, 0, 0, _countRegionSize);
+        // Only this view's counts, so a cull recorded earlier in the frame keeps its results.
+        commandBuffer->copyBuffer(_countClearBuffer, _visibleListBuffer, 0,
+                                  static_cast<uint64_t>(countWordBase) * sizeof(uint32_t), _countRegionSize);
         commandBuffer->barrierIndirectArgumentBuffer(_visibleListBuffer);
 
-        const auto dispatchBatches = [this, commandBuffer](VkmPipelineStateBase* pipeline) {
+        const auto dispatchBatches = [&](VkmPipelineStateBase* pipeline) {
             commandBuffer->bindPipeline(pipeline);
             for (const DrawBatch& batch : _drawBatches)
             {
                 SceneBatchConstants constants{};
                 constants._firstObject = batch._firstObject;
                 constants._objectCount = batch._objectCount;
-                constants._visibleWordOffset = batch._visibleWordOffset;
-                constants._countWordOffset = batch._countWordOffset;
-                constants._argumentWordOffset = batch._argumentWordOffset;
+                constants._visibleWordOffset = batch._visibleWordOffset + visibleWordBase;
+                constants._countWordOffset = batch._countWordOffset + countWordBase;
+                constants._argumentWordOffset = batch._argumentWordOffset + argumentWordBase;
+                constants._frameDataIndex = viewIndex;
                 commandBuffer->setPushConstants(&constants, sizeof(constants));
 
                 const uint32_t groupCount =
@@ -596,9 +619,15 @@ namespace vkm
 
     void VkmScene::recordDrawBatches(VkmCommandBufferBase* commandBuffer,
                                      const std::function<VkmPipelineStateBase*(const DrawBatch&)>& pipelineResolver,
-                                     const std::function<void(VkmCommandBufferBase*, const DrawBatch&)>& beforeDraw)
+                                     const std::function<void(VkmCommandBufferBase*, const DrawBatch&)>& beforeDraw,
+                                     uint32_t viewIndex)
     {
         VKM_ASSERT(commandBuffer != nullptr, "VkmScene::recordDrawBatches requires a command buffer");
+        VKM_ASSERT(viewIndex < kVkmSceneMaxCullViews, "VkmScene::recordDrawBatches view index is out of range");
+
+        // Must match the view recordCull() filled, or the draws fetch another view's arguments.
+        const uint32_t countWordBase = viewIndex * static_cast<uint32_t>(_drawBatches.size());
+        const uint32_t argumentWordBase = viewIndex * _argumentViewStrideWords;
 
         for (const DrawBatch& batch : _drawBatches)
         {
@@ -622,8 +651,10 @@ namespace vkm
             // SV_InstanceID.
             commandBuffer->drawIndirectCount(
                 kSceneArgumentLayout,
-                _argumentBuffer, static_cast<uint64_t>(batch._argumentWordOffset) * sizeof(uint32_t),
-                _argumentBuffer, static_cast<uint64_t>(batch._countWordOffset) * sizeof(uint32_t),
+                _argumentBuffer,
+                static_cast<uint64_t>(batch._argumentWordOffset + argumentWordBase) * sizeof(uint32_t),
+                _argumentBuffer,
+                static_cast<uint64_t>(batch._countWordOffset + countWordBase) * sizeof(uint32_t),
                 batch._objectCount);
         }
     }

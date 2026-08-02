@@ -46,7 +46,7 @@ void CSMain(uint3 threadId : SV_DispatchThreadID)
 
     for (uint plane = 0; plane < 6; ++plane)
     {
-        const float4 frustumPlane = g_FrameData[0].frustumPlanes[plane];
+        const float4 frustumPlane = g_FrameData[g_Batch.frameDataIndex].frustumPlanes[plane];
         if (dot(frustumPlane.xyz, centre) + frustumPlane.w < -radius)
         {
             return; // Entirely outside this half-space.

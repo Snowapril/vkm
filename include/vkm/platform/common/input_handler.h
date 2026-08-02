@@ -131,6 +131,13 @@ namespace vkm
         void removeListener(uint32_t listenerHandle);
 
         inline bool shouldExit() const { return _exitRequested.load(std::memory_order_relaxed); }
+        /*
+        * @brief Ends the run loop, as pressing escape does.
+        *
+        * Exposed so a program can finish on its own terms rather than only on user input -- a run
+        * that exists to produce a screenshot has to be able to stop once it has one.
+        */
+        inline void requestExit() { _exitRequested.store(true, std::memory_order_relaxed); }
 
         /*
         * @brief Cursor-move events arrive at pointer report rate and would flood the debug

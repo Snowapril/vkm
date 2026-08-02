@@ -111,6 +111,10 @@ namespace vkm
         {
             return fail(outError, "A probe capture face needs a non-zero size");
         }
+        if (descriptor._cullViewIndex >= kVkmSceneMaxCullViews)
+        {
+            return fail(outError, "A probe updater's cull view index is out of range");
+        }
 
         _driver = driver;
         _volume = volume;
@@ -402,14 +406,15 @@ namespace vkm
 
         VkmRenderTransferSubGraph* updateSubGraph = renderGraph->beginTransferSubGraph("ProbeSceneUpdate");
         referenceScene(updateSubGraph);
-        updateSubGraph->setTransferCallback([scene, frameIndex, probeFrameData](VkmCommandBufferBase* commandBuffer) {
-            scene->recordUpdate(commandBuffer, frameIndex, probeFrameData);
+        const uint32_t cullView = _descriptor._cullViewIndex;
+        updateSubGraph->setTransferCallback([scene, frameIndex, probeFrameData, cullView](VkmCommandBufferBase* commandBuffer) {
+            scene->recordUpdate(commandBuffer, frameIndex, probeFrameData, cullView);
         });
 
         VkmRenderComputeSubGraph* cullSubGraph = renderGraph->beginComputeSubGraph("ProbeSceneCull");
         referenceScene(cullSubGraph);
-        cullSubGraph->setComputeCallback([scene](VkmCommandBufferBase* commandBuffer) {
-            scene->recordCull(commandBuffer);
+        cullSubGraph->setComputeCallback([scene, cullView](VkmCommandBufferBase* commandBuffer) {
+            scene->recordCull(commandBuffer, cullView);
         });
 
         VkmFrameBufferDescriptor captureFb{};
@@ -458,7 +463,8 @@ namespace vkm
                         [this, &push](VkmCommandBufferBase* cb, const VkmScene::DrawBatch& batch) {
                             cb->bindPerPassResources(_captureTables[static_cast<uint32_t>(batch._layout)]);
                             cb->setPushConstants(&push, sizeof(push));
-                        });
+                        },
+                        _descriptor._cullViewIndex);
                 }
             }
         });

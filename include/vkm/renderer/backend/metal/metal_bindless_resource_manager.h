@@ -30,7 +30,7 @@ namespace vkm
     {
     public:
         static constexpr uint32_t PUSH_CONSTANT_ENTRY_STRIDE = 256;
-        static constexpr uint32_t PUSH_CONSTANT_ENTRY_COUNT  = 1024;
+        static constexpr uint32_t PUSH_CONSTANT_ENTRY_COUNT  = kVkmPushConstantRingEntryCount;
 
         explicit VkmBindlessResourceManagerMetal(VkmDriverMetal* driver);
         ~VkmBindlessResourceManagerMetal();

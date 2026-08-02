@@ -68,6 +68,10 @@ namespace vkm
             // so it should cover the scene the probes sit in.
             float _nearZ = 0.05f;
             float _farZ = 100.0f;
+            // Which of VkmScene's cull views this refresh owns. A frame that also renders a camera
+            // view must give them different indices: a probe looks in every direction, so the two
+            // cannot share a cull result.
+            uint32_t _cullViewIndex = 0u;
         };
 
         // Face tiles per capture-atlas row. Six faces land as a 3x2 block per probe, which keeps the
