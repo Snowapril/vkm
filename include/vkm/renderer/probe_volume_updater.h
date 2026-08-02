@@ -64,10 +64,20 @@ namespace vkm
             float _hysteresis = 0.97f;
             // One cube face's edge, in texels, inside the shared capture atlas.
             uint32_t _captureFaceSize = 16u;
-            // Probe range. The far plane bounds what the Chebyshev test can ever report as "seen",
-            // so it should cover the scene the probes sit in.
-            float _nearZ = 0.05f;
-            float _farZ = 100.0f;
+            /*
+            * Probe range. **Leave these at 0 to derive them from the volume**, which is almost
+            * always what you want: they are world-space distances, so a fixed value silently
+            * assumes a scene scale. A far plane shorter than the room clips away everything a
+            * probe should have seen -- the capture comes back nearly empty, the distance moments
+            * are meaningless, and the Chebyshev test then rejects every probe around a surface,
+            * which the lookup honestly reports as black.
+            *
+            * Derived: far = the grid's diagonal (a probe can see across the volume it belongs to,
+            * and the grid is normally fitted to the scene), near = a small fraction of the probe
+            * spacing, which is the smallest feature the grid can resolve anyway.
+            */
+            float _nearZ = 0.0f;
+            float _farZ = 0.0f;
             // Which of VkmScene's cull views this refresh owns. A frame that also renders a camera
             // view must give them different indices: a probe looks in every direction, so the two
             // cannot share a cull result.

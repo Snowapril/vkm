@@ -1706,3 +1706,39 @@ WebGPU is verified by building and by the suite rather than by looking at an ima
 
 Metal 195/195 and Vulkan 192/192 Debug, 194/194 and 192/192 Release, WebGPU green; the sample builds
 on all three.
+
+## 2026-08-02 — The probe range was a guess about scene scale
+
+Reported by the user from a screenshot of the sample taken *inside* Sponza: large hard-edged black
+regions across interior surfaces. Not normal, and the cause was a class of bug worth naming.
+
+`VkmProbeVolumeUpdater::Descriptor` carried `_nearZ = 0.05f, _farZ = 100.0f` — world-space
+distances, and therefore a silent assumption about scene scale. Sponza's AABB is
+3721 x 1556 x 2288 units, so a 100-unit far plane clips everything past the nearest column. The
+capture comes back nearly empty, the distance moments are meaningless, the Chebyshev test then
+rejects every probe around a surface, and `probe_lighting` honestly returns black rather than
+normalising by a near-zero weight. `VkmSsgiConstants::_params.y` (ray length 0.5) had the same
+problem: half a unit in a scene 3721 units across contributes nothing.
+
+Both are now derived. The updater computes its range from the volume it is given -- far = the
+grid's diagonal x 1.5, near = 1% of the smallest probe spacing -- and treats 0 as "derive". The
+sample derives SSGI's reach from the probe spacing, since the contact term exists to cover what
+falls between probes.
+
+**How this got past verification.** The sample frames its camera on the scene's bounding sphere,
+so every screenshot taken of it was from *outside* the building, where surfaces near the exterior
+have usable probes. The colour bleeding visible there was real and did establish that the atlas is
+addressed the way it is written -- but it said nothing about scale, and the interior was never
+looked at. A `--gv_gi_camera_distance` flag now exists so a screenshot run can put the camera
+inside, which is where a probe volume is actually judged.
+
+**What is still wrong, and is not a scale bug.** With the range fixed, interior indirect is broadly
+non-zero, but saturated patches sit beside hard black ones. That is the signature of probes landing
+*inside geometry*: such a probe captures the wall's interior and the lookup blends it in. DDGI's
+answer is probe relocation or classification -- detect them, nudge them into open space or mark
+them inactive -- and neither is implemented. The Chebyshev test cannot cover for it, because it
+weights a probe by whether the surface is visible *to* it and cannot repair a probe whose own
+capture is wrong. Logged in restir.md §12 and TODO.md.
+
+One flake seen: the propagation test failed once in three otherwise identical runs on a loaded
+machine and did not reproduce. Its 20 s budget may be tight while other worktrees run tests.

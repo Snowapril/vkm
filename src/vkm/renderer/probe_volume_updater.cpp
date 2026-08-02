@@ -15,6 +15,8 @@
 #include <vkm/renderer/backend/common/texture.h>
 
 #include <glm/common.hpp>
+#include <glm/geometric.hpp>
+#include <glm/gtx/component_wise.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -120,6 +122,26 @@ namespace vkm
         _volume = volume;
         _descriptor = descriptor;
         _descriptor._budget = std::min(descriptor._budget, volume->getProbeCount());
+
+        // Derive the probe range from the volume unless the caller pinned it. These are world-space
+        // distances, so any fixed default is a guess about scene scale -- and the guess that a
+        // 100-unit far plane suits every scene is how a centimetre-scale model ends up with probes
+        // that cannot see past the nearest column.
+        const VkmProbeVolume::Descriptor& volumeDescriptor = volume->getDescriptor();
+        const glm::vec3 gridExtent =
+            glm::vec3(volumeDescriptor._probeCounts - glm::uvec3(1u)) * volumeDescriptor._spacing;
+        const float gridDiagonal = glm::length(gridExtent);
+        const float minSpacing = glm::compMin(volumeDescriptor._spacing);
+        if (_descriptor._farZ <= 0.0f)
+        {
+            // Across the volume, plus a margin: light also arrives from geometry just outside it.
+            _descriptor._farZ = std::max(gridDiagonal * 1.5f, 1.0f);
+        }
+        if (_descriptor._nearZ <= 0.0f)
+        {
+            // Well inside one cell -- anything nearer than that the grid cannot resolve regardless.
+            _descriptor._nearZ = std::max(minSpacing * 0.01f, 1e-3f);
+        }
         _everRefreshed.assign(volume->getProbeCount(), false);
         _slice.reserve(_descriptor._budget);
 
