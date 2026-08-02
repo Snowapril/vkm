@@ -1,0 +1,37 @@
+{
+    "name": "ssgi_pso",
+    "primitive_topology": "triangle_list",
+    "rasterization_state": {
+        "fill_mode": "solid",
+        "cull_mode": "none",
+        "front_face": "counter_clockwise"
+    },
+    "depth_stencil_state": {
+        "depth_test_enable": false,
+        "depth_write_enable": false,
+        "stencil_test_enable": false
+    },
+    "color_attachments": [
+        {
+            "format": "r16g16b16a16_sfloat",
+            "blend_enable": true,
+            "src_color_blend_factor": "one",
+            "dst_color_blend_factor": "one",
+            "color_blend_op": "add",
+            "src_alpha_blend_factor": "one",
+            "dst_alpha_blend_factor": "zero",
+            "alpha_blend_op": "add"
+        }
+    ],
+    "per_pass_resources": [
+        { "binding": 0, "type": "sampled_texture" },
+        { "binding": 1, "type": "sampled_texture" },
+        { "binding": 2, "type": "sampled_texture" },
+        { "binding": 3, "type": "sampler" },
+        { "binding": 4, "type": "uniform_buffer" }
+    ],
+    "shaders": {
+        "vertex": { "filepath": "ssgi.hlsl", "entry_point": "VSMain" },
+        "fragment": { "filepath": "ssgi.hlsl", "entry_point": "PSMain" }
+    }
+}

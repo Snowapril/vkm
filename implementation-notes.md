@@ -1582,3 +1582,36 @@ looked for "error" and the failure said "No rule to make target" -- the build di
 reconfigured with BUILD_SAMPLES=OFF, so several screenshot runs used a stale binary.
 
 Metal 194/194 and Vulkan 192/192 Debug, 193/193 and 192/192 Release.
+
+## 2026-08-02 — 4.4 SSGI, and closing Phase 4
+
+- **`vkm_random.hlsli`**: PCG hash, uint/float stream, cosine-weighted hemisphere sampler, seeded
+  per (pixel, frame, pass). Written because SSGI needed ray directions; it closes Phase 3's last
+  open item. Stateless is load-bearing rather than convenient: ReSTIR's validation modes replay a
+  frame's sampling decisions, which only works if the stream is a pure function of what identifies
+  the sample.
+- **`ssgi.hlsl`** + `ssgi.json`: short cosine-weighted rays marched against the G-buffer's
+  camera-distance channel, sampling the direct lighting where they contact. Its PSO blends
+  one-to-one into the *same* indirect target the probe pass wrote, with a `Load` -- so it can only
+  brighten what the probes produced. That is what keeps it an additive contact term rather than a
+  second technique with screen-space's view dependence baked in.
+  The direct-lighting barrier had to move earlier, since SSGI samples what the probe pass does not.
+- **`resources/tests/gltf_two_rooms.gltf`**: a white room, a black room and a black divider,
+  generated rather than hand-typed. Probe capture applies no shadowing, so the *materials* are what
+  make a leak identifiable.
+
+**A test that did not test what it claimed.** The first version of the two-room test asserted it
+verified the Chebyshev leak prevention. Disabling that term left it passing -- because the test
+reads the atlas directly and never runs the lookup, which is where Chebyshev lives. The comment now
+says what it actually covers (capture-side occlusion: depth test, face matrices, octahedral
+integration) and what it does not. It *is* a real test -- making the dark room's material white
+fails it -- just a narrower one than first written. Caught by running the sabotage check that the
+repo's practice asks for; without it the wrong claim would have shipped.
+
+**Phase 4's gate is reconciled in restir.md rather than declared met.** Three parts are open and
+each says why: the technique switcher has one technique to choose from (Phase 8 supplies the
+second), the lookup-side leak check needs `probe_lighting` run against real captured atlases, and
+WebGPU is verified by building and by the suite rather than by looking at an image.
+
+Metal 195/195 and Vulkan 192/192 Debug, 194/194 and 192/192 Release, WebGPU green; the sample builds
+on all three.
