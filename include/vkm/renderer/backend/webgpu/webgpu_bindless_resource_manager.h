@@ -40,7 +40,7 @@ namespace vkm
         static constexpr uint32_t VERTEX_MEGA_BUFFER_SIZE = 16 * 1024 * 1024;
         static constexpr uint32_t INDEX_MEGA_BUFFER_SIZE  = 8 * 1024 * 1024;
         static constexpr uint32_t PUSH_CONSTANT_ENTRY_STRIDE = 256; // WebGPU minUniformBufferOffsetAlignment default
-        static constexpr uint32_t PUSH_CONSTANT_ENTRY_COUNT  = 1024;
+        static constexpr uint32_t PUSH_CONSTANT_ENTRY_COUNT  = kVkmPushConstantRingEntryCount;
         // b0..b3 are the push-constant ring, the two mega-buffers and the slot table.
         static constexpr uint32_t kFirstSingletonBinding = 4;
         // Enough for one u32; only ever read by a shader whose singleton was never published.

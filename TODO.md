@@ -84,9 +84,11 @@
 - `VkmGpuProfiler` skips a submission's timing when all `kMaxPendingSubmissions` timestamp slot buckets are still in flight.
 - `VkmGpuProfilerInspector` has no unit-test coverage; only the collector and the trace format are tested.
 - The WebGPU per-pass compute test is skipped: `newBuffer` returns null for its storage buffer with no Dawn validation error and no engine log, and the cause is unknown.
-- A probe capture and a main camera view cannot cull in the same frame: VkmScene has one frame-data staging slot per frame.
 - The probe blend render pass loads and stores the whole atlas every frame to update at most the per-frame probe budget of cells.
 - VkmProbeVolumeUpdater's probe budget is capped at 32 by the Metal/WebGPU 1024-entry push-constant ring, which has no per-frame reset.
 - Probe capture, blend and update have GPU test coverage on Metal only; Vulkan covers the probe volume's addressing and the round-robin schedule.
+- No automated test asserts that an atlas the probe updater wrote is addressed the way probe_lighting reads it; the junction is only checked by looking at the gi sample's indirect debug view.
+- The gi sample has no automated pixel check (screenshots are compared by eye) and no reprojection debug view.
+- The probe capture pushes constants once per (probe, face, draw batch), so the per-frame probe budget has to shrink as a scene gains batches to stay inside the 1024-entry push-constant ring.
 - The probe GI update converges too slowly at its default hysteresis: 2048 probes at budget 32 with hysteresis 0.97 take 4864 frames to shed 90% of a light change.
 - `scripts/run_tests.py` and `scripts/run_sample.py` duplicate about ten helper functions, including the host vkm-compiler build, instead of sharing a module.

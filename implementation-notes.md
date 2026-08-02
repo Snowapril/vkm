@@ -1500,3 +1500,85 @@ and readback in earlier iterations, so everything upstream works; the cause is u
 The validation half of the same test runs and passes.
 
 Verified: Metal 193/193 and Vulkan 191/191 Debug, 192/192 and 191/191 Release, WebGPU green.
+
+## 2026-08-02 — VkmScene: two cull views per frame
+
+Deferred out of 4.2c because it had no consumer then; 4.5 gives it one. A probe capture sees in
+every direction, so culling it against the camera frustum drops exactly the geometry behind the
+camera that indirect light comes from -- a GI frame has to cull twice, against different frusta.
+
+`kVkmSceneMaxCullViews = 2`. `recordUpdate`/`recordCull`/`recordDrawBatches` take a `viewIndex`
+(default 0, so every existing caller is unchanged), and `SceneBatchConstants` carries a
+`frameDataIndex` that `scene_cull.hlsl` indexes the frame data with.
+
+Two layout details carry the design:
+
+- **All views' count words sit at the front of both buffers**, not beside each view's payload. A
+  batch uses ONE index into the visible-list and argument buffers, and their payloads have
+  different strides (`assignBatchRegions` produces two different cursors), so no single per-view
+  offset would serve both. Counts are `viewIndex * batchCount + i`; the payloads get their own
+  strides.
+- **Each view needs its own staging region, not just its own device region.** Both `recordUpdate`
+  calls write host memory immediately, long before either GPU copy runs, so a shared staging slot
+  leaves the first cull reading the second view's frustum. This was the actual blocker all along.
+
+`SceneBatchConstants`'s padding also changed from `uint3` to scalars: WebGPU lowers push constants
+to a uniform buffer, where a vector aligns to its own size and would land at a different offset
+than in the scalar layout Vulkan and Metal use. The used fields were all below the padding, so
+nothing was broken -- but adding a field right above it would have been.
+
+New `tests/TestSceneCullViewsShared.hpp` culls one object against a seeing and a blind frustum in
+one frame and checks the two counts. Both failure modes were confirmed by sabotage, and they fail
+*different* assertions: forcing `g_FrameData[0]` makes view 1 report 1, and sharing the staging
+region makes view 0 report 0. Runs on Metal and Vulkan.
+
+Metal 194/194 and Vulkan 192/192 Debug, 193/193 and 192/192 Release, WebGPU green.
+
+## 2026-08-02 — 4.5: the GI sample, and the shared composite
+
+`src/samples/gi` is the first application to drive the deferred chain, so it is also where Phase 3's
+gate ("G-buffer channels visualizable via a debug view") finally gets settled.
+
+Per frame: probe refresh (cull view 1) -> scene update and cull (view 0) -> G-buffer -> deferred
+lighting -> probe lighting -> composite -> tone map, with `barrierTextureForShaderRead` between each
+render-target-then-sampled hand-off.
+
+- **The sample owns no shaders.** Every pass is an engine PSO, which is what lets it build on WebGPU
+  without a per-sample WGSL cache -- it needs only the engine's MEMFS preload.
+- **New shared pass `gi_composite`** (`resources/Shaders/gi_composite.hlsl`,
+  `include/vkm/renderer/gi_composite.h`). This is the consuming end of the technique interface §5
+  describes: the only place a technique's output is combined (irradiance x albedo / pi, added to
+  direct), so a second technique means adding passes rather than editing this. It also carries the
+  ten debug views, since it is the pass that already has every G-buffer channel bound.
+- **The probe grid is fitted to `VkmScene::computeWorldBounds()`** rather than guessed, with a 20%
+  margin so edge surfaces sit between probes instead of outside the grid, where the lookup is black.
+- **The probe budget is derived, not fixed.** The capture pushes once per (probe, face, batch) and
+  the Metal/WebGPU push-constant ring has no per-frame reset, so a fixed budget wraps the ring onto
+  entries a running frame still references -- which the first Sponza run did, 365 times. The sample
+  now computes a budget from the draw-batch count. `kVkmPushConstantRingEntryCount` moved to the
+  common bindless header for this, since it is a budget callers have to plan against rather than a
+  backend detail.
+- Per-frame composite settings ride a staging buffer per frame slot, mirroring `VkmScene`: the table
+  binding the uniform buffer stays immutable while its contents change, which is how a per-pass
+  table is meant to be used. Resizing rebuilds every table, and the old ones wait out
+  FRAME_BUFFER_COUNT frames rather than being deleted under a running GPU.
+
+**Verification.** `vkmWriteTexturePng` (new, `renderer/screenshot.{h,cpp}`) reads a colour texture
+back and writes a PNG; the sample drives it with `--gv_gi_screenshot=<png>`,
+`--gv_gi_screenshot_frame=<n>` and `--gv_gi_debug_view=<n>`, tone-mapping a second time into an
+owned target on the capture frame and exiting once the file is written. The backbuffer itself
+cannot be the source -- Metal keeps `framebufferOnly = YES` on the drawable. `VkmInputHandler`
+gained a `requestExit()` so a screenshot run can stop itself.
+
+That is what verifies any of this without a display, and the indirect-only view over Sponza settles
+the question the atlas tests could not reach: it shows real colour bleeding, green where light
+bounced off the green material and grey where it did not, so the atlas the updater writes *is*
+addressed the way `probe_lighting` reads it. Still no *automated* pixel check -- screenshots are
+compared by eye (`TODO.md`).
+
+A correction to an earlier claim in this session: a Sponza run that appeared to render cleanly for
+35 s was mostly spent importing the scene, and a later "built" check passed only because the grep
+looked for "error" and the failure said "No rule to make target" -- the build directory had been
+reconfigured with BUILD_SAMPLES=OFF, so several screenshot runs used a stale binary.
+
+Metal 194/194 and Vulkan 192/192 Debug, 193/193 and 192/192 Release.

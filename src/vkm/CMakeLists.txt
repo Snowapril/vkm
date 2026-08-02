@@ -56,7 +56,9 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/image_loader.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/camera.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/gbuffer.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/gi_composite.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/probe_volume.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/screenshot.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/probe_volume_updater.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_geometry_pool.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene.h
@@ -108,9 +110,12 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/scene/image_loader.cpp
     ${SRC_DIR}/vkm/renderer/camera.cpp
     ${SRC_DIR}/vkm/renderer/gbuffer.cpp
+    ${SRC_DIR}/vkm/renderer/gi_composite.cpp
     ${SRC_DIR}/vkm/renderer/probe_volume.cpp
     ${SRC_DIR}/vkm/renderer/probe_volume_updater.cpp
     ${SRC_DIR}/vkm/renderer/scene/stb_image_impl.cpp
+    ${SRC_DIR}/vkm/renderer/scene/stb_image_write_impl.cpp
+    ${SRC_DIR}/vkm/renderer/screenshot.cpp
     ${SRC_DIR}/vkm/renderer/scene/scene_geometry_pool.cpp
     ${SRC_DIR}/vkm/renderer/scene/scene.cpp
     ${SRC_DIR}/vkm/renderer/engine.cpp

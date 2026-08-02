@@ -3,10 +3,10 @@
 Living document for the ReSTIR GI implementation: what the technique is, the staged plan,
 current status, remaining TODOs, and the reading list. Updated at the end of every phase.
 
-**Status:** Phases 1-3 implemented (toolchain, shared infrastructure, G-buffer + deferred lighting),
-but Phase 3's gate is **not** met: nothing outside `tests/` owns those passes yet, so the debug
-views it asks for do not exist. Phase 4's item 4.5 is where an application first drives the chain
-and where that gate is settled. Now in Phase 4 — the low-spec probe tier, the first real GI.
+**Status:** Phases 1-3 complete, including Phase 3's gate — the `gi` sample owns the
+G-buffer/deferred/tone-map chain and offers the channel views it asked for. Phase 4 is nearly
+done: the low-spec probe tier renders on screen on all three backends. Remaining there are the
+SSGI contact term (4.4) and a runtime technique switcher, which needs a second technique.
 
 ---
 
@@ -677,8 +677,12 @@ The de-risking phase. Delivers visible GI on **all five** platform combinations 
 Technique decided in §5: **raster-updated dynamic probe volume + SSGI contact term.**
 
 - [x] Decide the low-spec technique (§5)
-- [ ] Define the **technique interface**: a technique owns its passes and resources and produces an
-      indirect-radiance texture (+ optional confidence channel) for one shared composite pass
+- [x] Define the **technique interface**: a technique owns its passes and resources and produces an
+      indirect-radiance texture for one shared composite pass. `VkmProbeVolumeUpdater` is the first
+      technique and `gi_composite` is that pass — it is the only thing that knows how the output is
+      combined (irradiance × albedo / pi, added to direct), so a second technique means adding
+      passes rather than editing the composite. The optional confidence channel is not there yet:
+      nothing consumes one until the Phase 9 denoiser
 - [ ] Runtime selection gated on `VkmDriverCapabilityFlags::RayTracing` + a quality setting, not `#ifdef`
 - [x] **4.1 Probe volume storage.** `VkmProbeVolume`: probe grid, both atlases (8×8 irradiance,
       16×16 distance/moments), double-buffered for hysteresis blending, with a **one-texel border
@@ -720,9 +724,18 @@ Technique decided in §5: **raster-updated dynamic probe volume + SSGI contact t
       - **The budget is clamped, not wrapped**, so a round refreshes every probe exactly once even
         when the budget does not divide the probe count, and a probe's first refresh ignores
         hysteresis so a cold start does not cost a full convergence
-- [ ] **Second cull view.** A probe capture and a main camera need different frusta in one frame,
-      and `VkmScene` has one frame-data staging slot, so today the updater owns the frame's only
-      cull. Deferred to 4.5, which is where a second consumer appears (see the note there)
+- [x] **Second cull view.** `kVkmSceneMaxCullViews = 2`: each view gets its own `VkmFrameData`
+      region, its own count words and its own payload regions in the visible-list and argument
+      buffers, so two culls in one frame never write the same words and need no barrier between
+      them. `recordUpdate`/`recordCull`/`recordDrawBatches` all take a `viewIndex`.
+
+      Two details are what make the layout work. The counts for *every* view sit at the front of
+      both buffers rather than beside each view's payload, because a batch uses one index into
+      both and their payloads have different strides — there is no single per-view offset that
+      would serve both. And each view needs its own **staging** region, not just its own device
+      region: both `recordUpdate` calls write host memory immediately, long before either GPU copy
+      runs, so a shared staging slot leaves the first cull reading the second view's frustum. That
+      was the actual blocker, and it is the one a test has to pin
 - [x] **4.3 Probe sampling.** `probe_lighting.hlsl`: trilinear over the 8 surrounding probes,
       weighted by the **Chebyshev visibility test** against the distance atlas, plus normal bias and
       a smoothed backface term. Addressing and the octahedral mapping live in
@@ -732,13 +745,29 @@ Technique decided in §5: **raster-updated dynamic probe volume + SSGI contact t
       leak the distance atlas exists to prevent
 - [ ] **4.4 SSGI contact term** — depth-buffer ray march, added on top of the probe result. Keep it
       strictly additive and strictly in this tier (see the warning in §5)
-- [ ] **4.5 GI sample** with a runtime technique switcher and per-term debug views (probe irradiance,
-      probe depth/moments, Chebyshev weight, SSGI only, composite). Must build on WebGPU.
-      **This also settles Phase 3's gate**: it is the first application to own the G-buffer,
-      deferred lighting and tone-mapping passes, so the G-buffer channel views and the reprojection
-      view Phase 3 asks for belong here. It is also where a second cull view earns its keep — a
-      main camera and a probe capture then need different frusta in one frame, which `VkmScene`
-      cannot do today
+- [x] **4.5 GI sample** — `src/samples/gi`. Drives the whole chain per frame: probe refresh (cull
+      view 1) → scene update and cull (view 0) → G-buffer → deferred lighting → probe lighting →
+      composite → tone map. It owns **no shaders at all** — every pass is an engine PSO — which is
+      what lets it build on WebGPU without a per-sample WGSL cache, and it is the first application
+      to own the G-buffer/deferred/tone-map chain, so **Phase 3's gate is settled here**.
+      Ten debug views (composite, direct, indirect, albedo, both normals, roughness, metallic,
+      motion, camera distance) run through the new shared `gi_composite` pass, which is also the
+      one place a technique's output is combined — the abstraction boundary §5 describes.
+      The probe grid is fitted to the scene's bounds, and the per-frame probe budget is derived
+      from the draw-batch count rather than fixed: the capture pushes once per (probe, face, batch)
+      and the Metal/WebGPU push-constant ring has no per-frame reset, so a fixed budget wraps it
+      onto entries a running frame still references.
+
+      Verified by screenshot: `--gv_gi_screenshot=<png> --gv_gi_screenshot_frame=<n>` tone-maps a
+      second time into an owned target, reads it back and writes a PNG, then exits — the only way
+      to check any of this on a machine where nobody sees the window. The indirect-only view over
+      Sponza shows real colour bleeding, green where light bounced off the green material and grey
+      where it did not, which is what closes the capture→lookup addressing question the atlas tests
+      could not reach on their own.
+
+      Not yet done here: a runtime *technique* switcher (there is one technique), the SSGI term
+      (4.4), a reprojection debug view, and any *automated* pixel check — screenshots are still
+      compared by eye
 - [x] **Light-propagation latency measured, and it is as bad as feared.** The decay is exactly
       geometric — a probe retains `hysteresis` of its old value per refresh and is refreshed once
       per round of `ceil(probeCount / budget)` frames — so the latency is
@@ -1117,6 +1146,7 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-08-01 | 4 | Probe volume storage + the lookup pass. `probe_lighting.hlsl` samples 8 probes trilinearly with Chebyshev visibility weighting; verified on Metal against CPU-authored atlases, including that fully occluded probes contribute nothing. Found that the update pass is blocked on the RHI having no viewport control (six cube faces cannot share a render pass) — recorded as the next decision. |
 | 2026-08-01 | 4 | Added `setViewportAndScissor` to the RHI (all three backends), which unblocks the probe update: six cube faces can now share one render pass rather than needing six. Vulkan and Metal agree on the top-left origin, pinned by a test that also covers several viewports writing separate tiles in one pass. |
 | 2026-08-01 | 4 | Probe capture (six cube faces in one render pass, via the new viewport control) and probe blend (octahedral integration + border + hysteresis). The write path now reaches the atlases that the read path already samples. Verified on Metal: per-face capture correctness, and a directional octahedral map whose border matches its mirrored interior. |
+| 2026-08-02 | 4 | **GI is on screen.** `src/samples/gi` drives probe refresh -> scene cull -> G-buffer -> deferred lighting -> probe lighting -> composite -> tone map, using two cull views in one frame (the probe capture cannot share the camera's frustum). It owns no shaders of its own -- every pass is an engine PSO -- so it builds on WebGPU too, and being the first app to own the G-buffer chain it settles Phase 3's gate. The new shared `gi_composite` pass is the technique interface's consuming end: it is the only place a technique's output is combined, and it carries ten debug views over the G-buffer channels. `VkmScene` gained the second cull view, with all views' count words packed at the front of both bookkeeping buffers (a batch uses one index into two payloads of different strides) and a staging region per view (both updates write host memory before either copy runs). Sponza renders with zero validation errors on Metal; the sample builds on Vulkan and WebGPU. Not verified: any automated check that a captured atlas feeds the lookup correctly -- both halves are tested, their junction is not (`TODO.md`). |
 | 2026-08-02 | 4 | **WebGPU can compile and run shaders.** The blocker recorded since Phase 2 -- that `VKM_COMPILER_ENABLE_WGSL` needs a Dawn build no configuration provides -- was simply untrue: Dawn is vendored and pinned, the CMake wiring existed, and `run_sample.py` already built a WGSL host compiler. `run_tests.py` now does the same, so every engine PSO ships as WGSL in MEMFS and the set-2 path executes there. The gap was hiding **four** real bugs, all invisible to a compile: implicit-LOD sampling in non-uniform control flow; staging buffers left mapped at creation (WebGPU forbids the GPU or queue touching a mapped buffer, which broke `readbackTexture` and every `writeDirect` upload); the compute path never binding group 1, which the graphics path already did *and explained in a comment*; and every unpublished bindless singleton sharing one placeholder buffer, rejected both for overlapping writable-storage bindings and for mixing read-write with read-only use of one buffer -- that alone invalidated any WebGPU pass without a scene. Metal 193/193, Vulkan 191/191, both Release, WebGPU green. One test stays skipped with the cause unknown (`TODO.md`). |
 | 2026-08-01 | 4 | **4.2c: the probe volume runs as a frame loop.** `VkmProbeVolumeUpdater` refreshes a round-robin budget of probes per frame (scene update -> probe-aimed cull -> one capture pass for every budgeted probe's six faces -> barrier -> two atlas blends). Making a *partial* update correct forced three changes: hysteresis moved to the blend hardware and the atlas lost its second copy (a swapped pair leaves un-refreshed probes alternating between stale values, and the old previous-atlas fetch used cell-relative UV — correct only for the one-cell atlas the test used); both passes turned out to need no per-probe constant buffer at all, since the face matrices are `P·R·T(−p)` and the position cancels, leaving only a position/tile/hysteresis small enough to push from the vertex stage; and the budget is clamped rather than wrapped so a round covers every probe exactly once. **Propagation latency measured** and asserted against the analytic model: geometric decay at `hysteresis` per refresh, so the defaults (2048 probes, budget 32, h = 0.97) need **4864 frames / ~81 s at 60 Hz** to shed 90% of a light change. Unusable as shipped; the levers are hysteresis, budget and grid size, all recorded in §12. Also reconciled §8's Phase 3 checkboxes with the code and noted that Phase 3's gate is unmet until 4.5 gives those passes an owning application. Metal 193/193 and Vulkan 191/191 in Debug, 192/192 and 191/191 in Release, validation clean throughout; both new tests were checked to fail when the blend factors and the round-robin clamp are sabotaged. Two things only Vulkan caught: releasing at destroy through the deferred reclaimer leaks past the allocator's teardown (it frees on a GPU timeline that will never advance again), and `~VkmScene()` is defaulted so both the new fixture and the pre-existing `runProbeCaptureTest` leaked a scene — Metal has no allocator assert, so both had been passing there. |
 | 2026-07-30 | 4 | Low-spec tier must be **fully dynamic** (no bake) → technique decided: raster-updated dynamic probe volume (DDGI-style octahedral irradiance + distance moments, Chebyshev visibility) plus an additive SSGI contact term. Storage/sampling are update-mechanism-agnostic, so Phase 5's rays can later refresh the same volume, and ReSTIR GI can query it for multi-bounce `L_o`. |
