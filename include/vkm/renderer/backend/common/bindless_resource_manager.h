@@ -84,6 +84,18 @@ namespace vkm
     // it fits within the Metal/WebGPU push-constant ring's 256-byte entry stride.
     inline constexpr uint32_t kVkmBindlessPushConstantSize = 128;
 
+    /*
+    * @brief How many push-constant allocations the Metal and WebGPU rings hold.
+    *
+    * @details Those backends have no push-constant instruction, so every setPushConstants() call
+    * takes a ring entry and the draw references it by dynamic offset. The cursor never resets, so
+    * a frame that pushes more than this many times over FRAME_BUFFER_COUNT frames reuses entries a
+    * running frame still references. Named here rather than only inside each backend because it is
+    * a budget callers have to plan against -- a pass that pushes per (item, sub-item, batch), like
+    * the probe capture, can reach it (see VkmProbeVolumeUpdater::kMaxBudget).
+    */
+    inline constexpr uint32_t kVkmPushConstantRingEntryCount = 1024;
+
     // Metal (argument buffers Tier 2): [[buffer(0)]]/[[buffer(1)]] remain the vertex-stream
     // indices; the set-0 argument buffer and the push-constant buffer are pinned after them.
     // Within the Tier-2 argument buffer each resource occupies one 8-byte entry (GPU address

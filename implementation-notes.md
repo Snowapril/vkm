@@ -1533,3 +1533,41 @@ one frame and checks the two counts. Both failure modes were confirmed by sabota
 region makes view 0 report 0. Runs on Metal and Vulkan.
 
 Metal 194/194 and Vulkan 192/192 Debug, 193/193 and 192/192 Release, WebGPU green.
+
+## 2026-08-02 — 4.5: the GI sample, and the shared composite
+
+`src/samples/gi` is the first application to drive the deferred chain, so it is also where Phase 3's
+gate ("G-buffer channels visualizable via a debug view") finally gets settled.
+
+Per frame: probe refresh (cull view 1) -> scene update and cull (view 0) -> G-buffer -> deferred
+lighting -> probe lighting -> composite -> tone map, with `barrierTextureForShaderRead` between each
+render-target-then-sampled hand-off.
+
+- **The sample owns no shaders.** Every pass is an engine PSO, which is what lets it build on WebGPU
+  without a per-sample WGSL cache -- it needs only the engine's MEMFS preload.
+- **New shared pass `gi_composite`** (`resources/Shaders/gi_composite.hlsl`,
+  `include/vkm/renderer/gi_composite.h`). This is the consuming end of the technique interface §5
+  describes: the only place a technique's output is combined (irradiance x albedo / pi, added to
+  direct), so a second technique means adding passes rather than editing this. It also carries the
+  ten debug views, since it is the pass that already has every G-buffer channel bound.
+- **The probe grid is fitted to `VkmScene::computeWorldBounds()`** rather than guessed, with a 20%
+  margin so edge surfaces sit between probes instead of outside the grid, where the lookup is black.
+- **The probe budget is derived, not fixed.** The capture pushes once per (probe, face, batch) and
+  the Metal/WebGPU push-constant ring has no per-frame reset, so a fixed budget wraps the ring onto
+  entries a running frame still references -- which the first Sponza run did, 365 times. The sample
+  now computes a budget from the draw-batch count. `kVkmPushConstantRingEntryCount` moved to the
+  common bindless header for this, since it is a budget callers have to plan against rather than a
+  backend detail.
+- Per-frame composite settings ride a staging buffer per frame slot, mirroring `VkmScene`: the table
+  binding the uniform buffer stays immutable while its contents change, which is how a per-pass
+  table is meant to be used. Resizing rebuilds every table, and the old ones wait out
+  FRAME_BUFFER_COUNT frames rather than being deleted under a running GPU.
+
+**Verification and its limits.** The sample renders Sponza for 35 s with zero Metal validation
+errors and no ring wraps, and builds on Metal, Vulkan and WebGPU. It is *not* verified by pixels:
+this environment cannot see the window, and there is no automated check that an atlas the updater
+wrote is addressed the way `probe_lighting` reads it. The capture->blend half is covered (the
+propagation test reads a lit probe's cell) and the lookup half is covered (the lighting test authors
+atlases from the CPU); their junction is not. Both gaps are in `TODO.md`.
+
+Metal 194/194 and Vulkan 192/192 Debug, 193/193 and 192/192 Release.
