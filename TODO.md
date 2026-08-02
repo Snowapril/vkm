@@ -37,7 +37,9 @@
 - Render graph capture records swapchain backbuffer outputs as metadata only (`CAMetalLayer.framebufferOnly` stays YES).
 - Render graph capture texture previews in ImGui are Metal-only (`getTextureID` returns 0 on Vulkan/WebGPU).
 - Programmatic .gputrace capture scopes only the Metal Graphics queue 0; Vulkan/WebGPU `requestGpuFrameCapture()` is a no-op (no RenderDoc integration).
-- glTF import covers geometry and material factors only: no textures, no samplers, no animation/skinning, no Draco/KTX2/`EXT_meshopt_compression` (the texture upload/bindless path it would need now exists).
+- glTF import reads material texture *references* but nothing uploads them yet; no per-texture samplers, no animation/skinning, no Draco/KTX2/`EXT_meshopt_compression`.
+- glTF images embedded in a buffer view or a data URI are skipped by the importer; only file URIs resolve.
+- A glTF texture's sampler is discarded on import: set 0 carries one fixed linear/clamp sampler, so materials wanting repeat or nearest address wrong at the edges.
 - Metal's emit stage is the shared HLSL one (`scene_emit_draws.hlsl`) and its `drawIndirectCount` encodes one `drawPrimitives:indirectBuffer:` per candidate slot. The planned Metal-only variant — an MSL kernel filling an `MTLIndirectCommandBuffer` plus `executeCommandsInBuffer:indirectBuffer:` — is not implemented; it needs the emit dispatch to become a backend service (Vulkan/WebGPU dispatch the engine HLSL PSO, Metal dispatches an embedded metallib kernel) so `VkmScene` stays backend-free, and it needs `inheritBuffers` proven against an MTL4 argument table first.
 - WebGPU indirect batches encode `maxDrawCount` draws per frame; no render-bundle caching, so the per-draw encode cost is paid every frame.
 - The culling pass and the WebGPU emit path are compile-verified only: the GPU-driven path is pixel- and count-verified on Metal, and the WebGPU/wasm test path needs emsdk plus Chrome, which `run_tests.py` skips when they are absent.

@@ -1742,3 +1742,51 @@ capture is wrong. Logged in restir.md §12 and TODO.md.
 
 One flake seen: the propagation test failed once in three otherwise identical runs on a loaded
 machine and did not reproduce. Its 20 s budget may be tight while other worktrees run tests.
+
+## 2026-08-02 — glTF material texture references (step 1 of texturing)
+
+The importer read material *factors* only, so every scene rendered flat. This reads the texture
+references; nothing uploads them yet.
+
+- `VkmSceneMaterial` gains four image indices (base colour, metallic-roughness, normal, emissive),
+  each `INVALID_VALUE32` when the material has no texture for that channel. glTF multiplies factor
+  by texture, so "no texture" has to be distinguishable from "image 0" or every untextured material
+  samples image 0.
+- `VkmSceneModel` gains `_images`: **paths, not decoded pixels**. A glTF's images are usually larger
+  than its geometry and `importGltfModel` runs on the main thread, so decoding is left to whoever
+  uploads and can be skipped, deferred or threaded without the importer having an opinion. The type
+  also stays GPU-free, which is its stated contract.
+- URIs are resolved against the glTF's own directory and percent-decoded. Both are easy to skip and
+  produce a plausible-looking path that no loader can open, so the test checks the resolved path is
+  a file that actually exists rather than checking the string.
+- New fixture `resources/tests/gltf_textured.gltf`, pointing at the reference PNGs already in the
+  repo, with one channel deliberately absent and one URI deliberately percent-encoded.
+
+Sabotage-checked: removing `cgltf_decode_uri` fails three assertions.
+
+### Design for the next step, agreed but not built: descriptor set 3
+
+Textures reach shaders differently per backend, and Tint settles it -- a sized array does not help:
+
+    Texture2D g_Tex[4096]   Vulkan: compiles.  Metal: compiles.
+                            WebGPU: "arrays of handle types are not supported"
+
+Tint has no notion of an array of texture handles at all, and WebGPU's default
+`maxSampledTexturesPerShaderStage` is 16 regardless. So:
+
+- **Vulkan / Metal**: a sized bindless array at set 0; `VkmMaterialData` carries slot indices; the
+  material index comes from `VkmObjectData`, so one indirect draw still covers many materials.
+- **WebGPU**: descriptor set 3 (per-draw), one table per material, bound per draw.
+- One `vkm_material.hlsli` hides the difference, the way `vkm_bindless.hlsli` already hides the
+  backend split -- shaders call `vkmSampleBaseColor(materialIndex, uv)` and never test `VKM_BACKEND_*`.
+
+The consequence worth planning for: on WebGPU the *material* is chosen by the CPU at encode time
+while the *visible set* is chosen by the GPU at cull time, and the cull compacts with
+`InterlockedAdd`, so the CPU cannot know which object landed in which draw slot. Either the emit
+pass writes uncompacted arguments there (slot i == object i, culled ones zero-vertex) or draws are
+grouped per material -- objects are already sorted by `(pipelineId, layout, materialIndex)`, so the
+runs are contiguous either way.
+
+Set 3 itself is the larger half: 33 files carry the set-2 machinery, and the two sets differ only by
+an index and which declaration they validate against, so it wants generalizing rather than
+duplicating.

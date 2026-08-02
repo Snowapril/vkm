@@ -50,7 +50,15 @@ namespace vkm
         VkmSceneAABB _bounds;
     };
 
-    // glTF metallic-roughness material factors. Texture references are not imported yet.
+    /*
+    * @brief glTF metallic-roughness material factors, plus references into VkmSceneModel::_images.
+    *
+    * @details A texture index is an index into the model's own image list, not a GPU slot -- the
+    * model stays GPU-free (see the type's comment), so who uploads the image and how it is
+    * addressed afterwards is the scene's business. INVALID_VALUE32 means the material has no
+    * texture for that channel and the factor alone applies, which is what every shader has to
+    * handle anyway: glTF says the two multiply, so a missing texture is white.
+    */
     struct VkmSceneMaterial
     {
         std::string _name;
@@ -58,6 +66,27 @@ namespace vkm
         glm::vec3 _emissiveFactor{ 0.0f, 0.0f, 0.0f };
         float _metallicFactor = 1.0f;
         float _roughnessFactor = 1.0f;
+
+        uint32_t _baseColorImage = INVALID_VALUE32;
+        // glTF packs occlusion/roughness/metallic into one image's b/g/r channels.
+        uint32_t _metallicRoughnessImage = INVALID_VALUE32;
+        uint32_t _normalImage = INVALID_VALUE32;
+        uint32_t _emissiveImage = INVALID_VALUE32;
+    };
+
+    /*
+    * @brief An image the model references, as a path to decode later.
+    *
+    * @details Deliberately a path rather than decoded pixels: a glTF's images are often larger than
+    * its geometry, and importGltfModel() is called on the main thread. Decoding is left to whoever
+    * uploads, so it can be skipped, deferred or threaded without the importer having an opinion.
+    *
+    * Empty when the glTF embedded the image as a buffer view or a data URI rather than a file --
+    * neither is handled yet, and an empty path is how a consumer tells.
+    */
+    struct VkmSceneImage
+    {
+        std::string _uri; // resolved against the glTF's own directory
     };
 
     struct VkmSceneNode
@@ -85,6 +114,7 @@ namespace vkm
 
         std::vector<VkmSceneMesh> _meshes;
         std::vector<VkmSceneMaterial> _materials;
+        std::vector<VkmSceneImage> _images;
         std::vector<VkmSceneNode> _nodes;
         std::vector<uint32_t> _rootNodeIndices;
 
