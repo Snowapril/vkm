@@ -156,7 +156,10 @@ namespace vkm
 
         _queue = wgpuDeviceGetQueue(_device);
 
-        _driverCapabilityFlags = VkmDriverCapabilityFlags::None;
+        // TextureUpload without BindlessTextures: wgpuQueueWriteTexture gets pixels in
+        // (VkmTextureWebGPU::writeRegion), but WGSL has no array-of-handle type, so nothing can
+        // index them from set 0. Material textures reach a shader here through descriptor set 3.
+        _driverCapabilityFlags = VkmDriverCapabilityFlags::TextureUpload;
 
         return VkmInitResult{VkmInitResultCode::Success, ""};
     }

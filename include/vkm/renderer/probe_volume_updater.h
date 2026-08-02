@@ -4,6 +4,7 @@
 
 #include <vkm/renderer/probe_volume.h>
 #include <vkm/renderer/scene/scene.h>
+#include <vkm/renderer/scene/scene_material_tables.h>
 #include <vkm/renderer/scene/vertex_layout.h>
 
 #include <glm/vec2.hpp>
@@ -126,6 +127,17 @@ namespace vkm
         */
         void record(VkmRenderGraph* renderGraph, VkmScene* scene, const VkmFrameData& frameData);
 
+        /*
+        * @brief Builds the per-material set-3 tables the capture pass binds, where the backend
+        * needs them.
+        *
+        * @details Separate from initialize() because the scene does not exist yet there, and it
+        * must follow VkmScene::build(), which is where the material textures are created. A no-op
+        * on a backend whose capture shader reaches materials through the bindless array, so every
+        * caller can call it unconditionally.
+        */
+        bool buildMaterialTables(const VkmScene& scene, std::string* outError = nullptr);
+
         // Probes refreshed by the most recent record(), and their indices. The count can be smaller
         // than the budget on the last frame of a round: the slice is clamped rather than wrapped, so
         // a round refreshes every probe exactly once.
@@ -177,6 +189,9 @@ namespace vkm
         // pipeline it was built for and each layout permutation is a different pipeline.
         std::array<VkmPipelineStateBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _capturePipelines{};
         std::array<VkmResourceTableBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _captureTables{};
+        // One set-3 table per material, per capture permutation. Empty on a backend whose shader
+        // samples materials through the bindless array; see VkmSceneMaterialTables.
+        std::array<VkmSceneMaterialTables, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _materialTables{};
         VkmPipelineStateBase* _irradianceBlendPipeline = nullptr;
         VkmPipelineStateBase* _distanceBlendPipeline = nullptr;
         VkmResourceTableBase* _irradianceBlendTable = nullptr;

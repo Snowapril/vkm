@@ -80,6 +80,7 @@ namespace vkm
         // MTLBuffer.gpuAddress is unconditional on Metal -- the argument buffers and push
         // constant ring have been binding by address since the MTL4 port.
         _driverCapabilityFlags = VkmDriverCapabilityFlags::TextureContentCapture | VkmDriverCapabilityFlags::TextureUpload |
+                                 VkmDriverCapabilityFlags::BindlessTextures |
                                  VkmDriverCapabilityFlags::BufferDeviceAddress;
         if (_hasUnifiedMemory)
         {

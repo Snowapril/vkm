@@ -316,6 +316,11 @@ namespace vkm
             return;
         }
 
+        for (VkmSceneMaterialTables& tables : _materialTables)
+        {
+            tables.destroy(_driver);
+        }
+
         const auto destroyTable = [](VkmResourceTableBase*& table) {
             if (table != nullptr)
             {
@@ -381,6 +386,19 @@ namespace vkm
             _sliceHysteresis.push_back(_everRefreshed[probeIndex] ? _descriptor._hysteresis : 0.0f);
         }
         _cursor = (_cursor + count) % probeCount;
+    }
+
+    bool VkmProbeVolumeUpdater::buildMaterialTables(const VkmScene& scene, std::string* outError)
+    {
+        for (uint32_t i = 0; i < static_cast<uint32_t>(VkmVertexLayoutPreset::Count); ++i)
+        {
+            if (_capturePipelines[i] != nullptr &&
+                !_materialTables[i].initialize(_driver, scene, _capturePipelines[i], outError))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     void VkmProbeVolumeUpdater::record(VkmRenderGraph* renderGraph, VkmScene* scene,
@@ -484,6 +502,9 @@ namespace vkm
                         },
                         [this, &push](VkmCommandBufferBase* cb, const VkmScene::DrawBatch& batch) {
                             cb->bindResourceTable(_captureTables[static_cast<uint32_t>(batch._layout)]);
+                            // Set 3 where the backend needs it, so a probe records textured
+                            // radiance rather than a per-material average; a no-op elsewhere.
+                            _materialTables[static_cast<uint32_t>(batch._layout)].bind(cb, batch._materialIndex);
                             cb->setPushConstants(&push, sizeof(push));
                         },
                         _descriptor._cullViewIndex);

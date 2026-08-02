@@ -50,6 +50,8 @@
 #include <vkm/renderer/probe_volume.h>
 #include <vkm/renderer/probe_volume_updater.h>
 #include <vkm/renderer/screenshot.h>
+
+#include <cstdio>
 #include <vkm/renderer/scene/gltf_importer.h>
 #include <vkm/renderer/backend/common/staging_buffer.h>
 #include <vkm/renderer/scene/scene.h>
@@ -71,11 +73,21 @@
 
 using namespace vkm;
 
+#if defined(VKM_WASM_GI_SCENE_GLTF)
+// A wasm build has no filesystem to browse and no command line, so the scene baked into MEMFS at
+// link time is the default (see this sample's CMakeLists and -DVKM_WASM_GI_SCENE).
+VKM_GLOBAL_VARIABLE(std::string, gv_gi_model_path, VKM_WASM_GI_SCENE_GLTF);
+#else
 VKM_GLOBAL_VARIABLE(std::string, gv_gi_model_path,
                     std::string(RESOURCES_DIR) + "Scenes/Sponza/Sponza.gltf");
+#endif
 // Write a PNG of the composed frame and quit. This is how the sample gets verified at all on a
 // machine where nobody can look at the window -- see vkmWriteTexturePng.
+#if defined(VKM_WASM_GI_AUTO_SCREENSHOT)
+VKM_GLOBAL_VARIABLE(std::string, gv_gi_screenshot, "/vkm_gi.png");
+#else
 VKM_GLOBAL_VARIABLE(std::string, gv_gi_screenshot, "");
+#endif
 // Which frame to capture. Probes refresh a slice per frame and converge over rounds, so a
 // screenshot taken too early shows a half-lit volume rather than the technique's actual output.
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_screenshot_frame, 600u);
@@ -703,9 +715,56 @@ private:
         }
         _screenshotPending = false;
         vkmWriteTexturePng(_engine->getDriver(), _screenshotTarget, gv_gi_screenshot.get());
+#if defined(__EMSCRIPTEN__)
+        // A wasm build writes into MEMFS, which nothing outside the page can open, so the file is
+        // echoed to the console as base64 for a headless run to recover. This is how the WebGPU
+        // render path gets *looked at* rather than only built and unit-tested; Chrome's own
+        // --screenshot fires before the device has finished initializing and captures a blank page.
+        dumpScreenshotAsBase64(gv_gi_screenshot.get());
+#endif
         // A screenshot run exists to produce the file, so it stops once it has one.
         _engine->getInputHandler().requestExit();
     }
+
+
+#if defined(__EMSCRIPTEN__)
+    // Prints "VKM_SCREENSHOT_BASE64:<data>" on one line. Verification scaffolding, wasm only.
+    static void dumpScreenshotAsBase64(const std::string& path)
+    {
+        std::FILE* file = std::fopen(path.c_str(), "rb");
+        if (file == nullptr)
+        {
+            VKM_DEBUG_ERROR("screenshot base64 dump: could not reopen the PNG from MEMFS");
+            return;
+        }
+        std::vector<unsigned char> bytes;
+        unsigned char chunk[4096];
+        size_t read = 0;
+        while ((read = std::fread(chunk, 1, sizeof(chunk), file)) > 0)
+        {
+            bytes.insert(bytes.end(), chunk, chunk + read);
+        }
+        std::fclose(file);
+
+        static const char* kAlphabet =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string encoded;
+        encoded.reserve(((bytes.size() + 2) / 3) * 4);
+        for (size_t i = 0; i < bytes.size(); i += 3)
+        {
+            const uint32_t remaining = static_cast<uint32_t>(bytes.size() - i);
+            const uint32_t triple = (static_cast<uint32_t>(bytes[i]) << 16) |
+                                    ((remaining > 1 ? static_cast<uint32_t>(bytes[i + 1]) : 0u) << 8) |
+                                    (remaining > 2 ? static_cast<uint32_t>(bytes[i + 2]) : 0u);
+            encoded.push_back(kAlphabet[(triple >> 18) & 0x3F]);
+            encoded.push_back(kAlphabet[(triple >> 12) & 0x3F]);
+            encoded.push_back(remaining > 1 ? kAlphabet[(triple >> 6) & 0x3F] : '=');
+            encoded.push_back(remaining > 2 ? kAlphabet[triple & 0x3F] : '=');
+        }
+        std::printf("VKM_SCREENSHOT_BASE64:%s\n", encoded.c_str());
+        std::fflush(stdout);
+    }
+#endif
 
     void drawUi()
     {

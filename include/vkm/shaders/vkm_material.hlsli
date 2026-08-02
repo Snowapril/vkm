@@ -11,13 +11,12 @@
 //                   ray-tracing shader can evaluate a material at an arbitrary hit point -- which
 //                   is why this, and not a per-draw table, is the native path.
 //
-//   WebGPU          neither. WGSL has no array-of-handle type (Tint rejects `Texture2D t[4096]`
-//                   outright) and maxSampledTexturesPerShaderStage defaults to 16, so
-//                   registerTexture is a hard error there. The sampling functions return 1 and the
-//                   material's factor passes through unchanged -- which is honest, and matches what
-//                   VkmScene uploads on that backend: nothing. Descriptor set 3 carries a
-//                   per-material table there instead; when that lands it replaces this branch and
-//                   no drawing shader changes.
+//   WebGPU          descriptor set 3 (per-draw), one table per material, bound before each draw.
+//                   WGSL has no array-of-handle type (Tint rejects `Texture2D t[4096]` outright)
+//                   and maxSampledTexturesPerShaderStage defaults to 16, so there is no bindless
+//                   array to index: VkmScene uploads the pixels there but registers no slot, and
+//                   it splits draw batches per material so a per-draw table has somewhere to be
+//                   bound. The material record's slot fields are unused on this branch.
 //
 // Everything is emitted by one macro because HLSL resolves names top-down and the arrays these
 // functions read are themselves declared by macros in the shader -- a plain function here would
@@ -92,14 +91,36 @@ struct VkmMaterial
 
 #if defined(VKM_BACKEND_WEBGPU)
 
-// No texture array exists on this backend, so every channel is its factor alone.
+/*
+* Set 3 holds this draw's material directly, so there is nothing to index: the two textures are
+* bindings 0 and 1, the sampler is binding 2, and every draw of this batch shares them. A channel
+* the material has no texture for still needs a binding -- an unbound entry in a declared group is
+* a WebGPU validation error, not a silently absent one -- so the table binds a 1x1 white
+* placeholder there, which samples to 1 and leaves the factor exactly, matching the other branch.
+*
+* SampleLevel rather than Sample: WGSL allows an implicit-LOD sample only under uniform control
+* flow, and these run after early returns in the G-buffer and probe-capture shaders. Every material
+* texture is single-mip today, so the implicit LOD could only ever have been 0 anyway (the same
+* reasoning the deferred-lighting and probe-lighting passes already record).
+*
+* The declaration order must match the PSO's per_draw_resources array and the table the runtime
+* builds; VkmGiMaterialTables is the one that fills it.
+*/
 #define VKM_MATERIAL_DECLARE()                                                                      \
-    float4 vkmSampleMaterialTexture(uint slot, float2 uv)                                           \
-    {                                                                                               \
-        return float4(1.0, 1.0, 1.0, 1.0);                                                          \
-    }                                                                                               \
+    [[vk::binding(0, 3)]] Texture2D    g_VkmMaterialBaseColor         : register(t0, space3);       \
+    [[vk::binding(1, 3)]] Texture2D    g_VkmMaterialMetallicRoughness : register(t1, space3);       \
+    [[vk::binding(2, 3)]] SamplerState g_VkmMaterialSampler           : register(s0, space3);       \
     VKM_MATERIAL_LOADER()                                                                           \
-    VKM_MATERIAL_SAMPLERS()
+    float4 vkmSampleBaseColor(VkmMaterial material, float2 uv)                                      \
+    {                                                                                               \
+        return material.baseColorFactor *                                                           \
+               g_VkmMaterialBaseColor.SampleLevel(g_VkmMaterialSampler, uv, 0);                     \
+    }                                                                                               \
+    float2 vkmSampleMetallicRoughness(VkmMaterial material, float2 uv)                              \
+    {                                                                                               \
+        const float4 s = g_VkmMaterialMetallicRoughness.SampleLevel(g_VkmMaterialSampler, uv, 0);   \
+        return float2(material.metallic * s.b, material.roughness * s.g);                           \
+    }
 
 #else
 

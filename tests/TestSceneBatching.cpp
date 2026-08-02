@@ -63,15 +63,15 @@ VkmSceneModel makeModel(const std::vector<VkmVertexLayoutPreset>& presets,
 }
 } // namespace
 
-TEST_CASE("VkmScene - one batch per (pipeline, vertex layout) run") {
+TEST_CASE("VkmScene - one batch per (pipeline, vertex layout, material) run") {
     VkmScene scene;
     std::string error;
 
-    SUBCASE("a single layout produces one batch covering every object") {
+    SUBCASE("one layout and one material produce one batch covering every object") {
         REQUIRE(scene.addModel(makeModel({ VkmVertexLayoutPreset::StandardPBR,
                                            VkmVertexLayoutPreset::StandardPBR,
                                            VkmVertexLayoutPreset::StandardPBR },
-                                         { 0, 1, 2 }),
+                                         { 0, 0, 0 }),
                                &error));
         CHECK(error.empty());
         REQUIRE(scene.getObjects().size() == 3);
@@ -80,16 +80,18 @@ TEST_CASE("VkmScene - one batch per (pipeline, vertex layout) run") {
         const VkmScene::DrawBatch& batch = scene.getDrawBatches()[0];
         CHECK(batch._layout == VkmVertexLayoutPreset::StandardPBR);
         CHECK(batch._pipelineId == 0);
+        CHECK(batch._materialIndex == 0);
         CHECK(batch._firstObject == 0);
         CHECK(batch._objectCount == 3);
     }
 
     SUBCASE("mixed layouts split into one batch each, contiguous and covering") {
+        // One material throughout, so the split here is the layout's doing alone.
         REQUIRE(scene.addModel(makeModel({ VkmVertexLayoutPreset::StandardPBR,
                                            VkmVertexLayoutPreset::PositionOnly,
                                            VkmVertexLayoutPreset::StandardPBR,
                                            VkmVertexLayoutPreset::Compact },
-                                         { 0, 0, 1, 0 }),
+                                         { 0, 0, 0, 0 }),
                                &error));
         REQUIRE(scene.getObjects().size() == 4);
         REQUIRE(scene.getDrawBatches().size() == 3);
@@ -114,10 +116,12 @@ TEST_CASE("VkmScene - one batch per (pipeline, vertex layout) run") {
 }
 
 /*
-* Material is a per-object index the shader reads out of ObjectData, not pipeline state, so it must
-* order objects (for material-pool locality) without ever splitting a draw batch.
+* Material splits a batch, even though it is not pipeline state: a backend without bindless
+* textures binds a per-material set-3 table before the draw, and a table is per-draw, so one
+* material per batch is what makes that expressible. Objects are sorted by material first, so each
+* material's run is contiguous and becomes exactly one batch.
 */
-TEST_CASE("VkmScene - material index orders objects but does not split a batch") {
+TEST_CASE("VkmScene - material index splits a batch and its runs stay contiguous") {
     VkmScene scene;
     std::string error;
     REQUIRE(scene.addModel(makeModel({ VkmVertexLayoutPreset::StandardPBR,
@@ -127,8 +131,29 @@ TEST_CASE("VkmScene - material index orders objects but does not split a batch")
                                      { 2, 0, 2, 1 }),
                            &error));
 
-    REQUIRE(scene.getDrawBatches().size() == 1);
-    CHECK(scene.getDrawBatches()[0]._objectCount == 4);
+    // Three distinct materials (0, 1, 2) over four objects, so three batches -- one of them two
+    // objects wide, which is what shows a run is merged rather than one batch per object.
+    REQUIRE(scene.getDrawBatches().size() == 3);
+
+    uint32_t expectedFirst = 0;
+    uint32_t totalObjects = 0;
+    uint32_t previousMaterial = 0;
+    for (size_t i = 0; i < scene.getDrawBatches().size(); ++i)
+    {
+        const VkmScene::DrawBatch& batch = scene.getDrawBatches()[i];
+        CHECK(batch._firstObject == expectedFirst);
+        CHECK(batch._objectCount > 0);
+        if (i > 0)
+        {
+            // Ascending, so no material is ever split across two non-adjacent batches.
+            CHECK(batch._materialIndex > previousMaterial);
+        }
+        previousMaterial = batch._materialIndex;
+        expectedFirst += batch._objectCount;
+        totalObjects += batch._objectCount;
+    }
+    CHECK(totalObjects == 4);
+    CHECK(scene.getDrawBatches()[2]._objectCount == 2); // the two objects sharing material 2
 }
 
 TEST_CASE("VkmScene - addModel is additive across calls") {
@@ -139,6 +164,8 @@ TEST_CASE("VkmScene - addModel is additive across calls") {
     CHECK(scene.getObjects().size() == 1);
     CHECK(scene.getDrawBatches().size() == 1);
 
+    // A second model's materials are appended, so this object has material 1, not 0 -- it would
+    // be its own batch on the material alone even without the differing layout.
     REQUIRE(scene.addModel(makeModel({ VkmVertexLayoutPreset::PositionOnly }, { 0 }), &error));
     CHECK(scene.getObjects().size() == 2);
     CHECK(scene.getDrawBatches().size() == 2);

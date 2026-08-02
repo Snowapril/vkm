@@ -345,6 +345,21 @@ namespace vkm
         */
         std::vector<VkmTableResourceBinding> perDrawResources;
 
+        /*
+        * @brief Backends this pipeline's set-3 declaration applies to. Empty means all of them.
+        *
+        * @details Set 3 is the one declaration that is genuinely backend-specific rather than
+        * merely expressed differently: material textures reach a shader through the set-0 bindless
+        * array on Vulkan and Metal, and only WebGPU -- which has no array-of-handle type -- needs a
+        * per-draw table. Declaring it everywhere would put a set in two backends' pipeline layouts
+        * that their shaders never reference, so the JSON scopes it, mirroring the
+        * `#if defined(VKM_BACKEND_WEBGPU)` the shader already has.
+        *
+        * Resolved by expandPipelineStateOptions(), which is where the target backend is known;
+        * a pipeline built for a backend outside the list sees perDrawResources empty.
+        */
+        std::vector<VkmShaderCacheBackend> perDrawResourceBackends;
+
         // The declaration for one set kind, so shared code selects instead of branching.
         inline const std::vector<VkmTableResourceBinding>& resourcesFor(VkmResourceSetKind kind) const
         {

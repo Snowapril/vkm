@@ -154,11 +154,14 @@ namespace vkm
     class VkmScene
     {
     public:
-        // One run of objects that share a pipeline and a vertex layout, so they share a PSO.
+        // One run of objects that share a pipeline, a vertex layout and a material -- so they
+        // share a PSO, and a per-draw material table if the backend needs one.
         struct DrawBatch
         {
             VkmVertexLayoutPreset _layout = VkmVertexLayoutPreset::StandardPBR;
             uint32_t _pipelineId = 0;
+            // Every object in the batch has this material; see buildDrawBatches().
+            uint32_t _materialIndex = 0;
             uint32_t _firstObject = 0; // index into the sorted object array == ObjectData index
             uint32_t _objectCount = 0; // == this batch's maxDrawCount
 
@@ -254,6 +257,27 @@ namespace vkm
         // World-space bounds of every placed object; invalid when the scene is empty.
         VkmSceneAABB computeWorldBounds() const;
 
+        // The textures one material samples, for a backend that binds them per draw rather than
+        // indexing a bindless array. Invalid where the material has no texture for that channel.
+        struct MaterialTextures
+        {
+            VkmResourceHandle _baseColor{ VKM_INVALID_RESOURCE_HANDLE };
+            VkmResourceHandle _metallicRoughness{ VKM_INVALID_RESOURCE_HANDLE };
+        };
+
+        inline uint32_t getMaterialCount() const { return static_cast<uint32_t>(_materials.size()); }
+
+        /*
+        * @brief The textures a material samples, for building a per-draw (set 3) table.
+        *
+        * @details Only meaningful on a backend without VkmDriverCapabilityFlags::BindlessTextures;
+        * elsewhere the shader indexes the bindless array from the slots in VkmMaterialData and
+        * these are the same textures reached the other way. A channel with no texture is
+        * VKM_INVALID_RESOURCE_HANDLE, which a table builder substitutes a placeholder for -- an
+        * unbound entry is a validation error, not a silently absent one.
+        */
+        MaterialTextures getMaterialTextures(uint32_t materialIndex) const;
+
     private:
         /*
         * @brief One material's texture references, as resolved file paths plus the colour space
@@ -287,9 +311,9 @@ namespace vkm
             VkmSceneAABB _bounds;
         };
 
-        // Sorts _objects by (pipelineId, layout, materialIndex) and emits one batch per
-        // (pipelineId, layout) run. Material is a per-object index the shader reads out of
-        // ObjectData rather than pipeline state, so it orders objects but never splits a batch.
+        // Sorts _objects by (pipelineId, layout, materialIndex) and emits one batch per run of
+        // all three. The shader still reads the material index out of ObjectData; the split
+        // exists so a backend that binds material textures per draw has somewhere to bind them.
         void buildDrawBatches();
         void fillObjectData();
         // Assigns each batch its word regions and returns the two buffers' sizes in bytes.
@@ -303,6 +327,7 @@ namespace vkm
         // Textures this scene owns, one per (path, colour space) actually uploaded.
         std::vector<VkmResourceHandle> _materialTextures;
         std::vector<uint32_t> _materialTextureSlots; // 1:1 with _materialTextures
+        std::vector<MaterialTextures> _materialTextureHandles; // 1:1 with _materials
         std::vector<VkmObjectData> _objectData;
         std::vector<DrawBatch> _drawBatches;
 

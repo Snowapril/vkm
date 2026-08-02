@@ -849,7 +849,8 @@ namespace vkm
             }
         }
 
-        _driverCapabilityFlags = VkmDriverCapabilityFlags::CommandBufferReusable | VkmDriverCapabilityFlags::TextureUpload;
+        _driverCapabilityFlags = VkmDriverCapabilityFlags::CommandBufferReusable | VkmDriverCapabilityFlags::TextureUpload |
+                                 VkmDriverCapabilityFlags::BindlessTextures;
         // Both halves are required: the extension makes a host write to an OPTIMAL-tiled
         // image correct, unified memory makes it worth doing.
         if (_hostImageCopyEnabled && _hasUnifiedMemory)

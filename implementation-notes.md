@@ -2023,3 +2023,80 @@ Looked at, not just measured: DamagedHelmet's albedo view now matches its source
 region (teal dome with the red decal, white plating, gold trim, green lens elements), and Sponza
 renders brick courses and a tiled roof where it was flat grey. The roof tiles also show exactly the
 distance aliasing the deferred mipmap work is for.
+
+## 2026-08-02 — Material textures on WebGPU: descriptor set 3 and per-material batches
+
+The third texturing step. Vulkan and Metal index a bindless array; WebGPU has no array-of-handle
+type, so a material's textures arrive through a per-draw table instead.
+
+- **`uploadToTexture` on WebGPU** turned out not to need the buffer copy the plan assumed.
+  `wgpuQueueWriteTexture` *is* this engine's host-write path -- CPU bytes plus a queue, no staging
+  buffer and no command buffer -- so `VkmTextureWebGPU` just implements `writeRegion()` and reports
+  `isHostWritable()`, and the common `uploadToTexture` routes there unchanged. It also sidesteps the
+  256-byte `bytesPerRow` alignment the plan flagged as a trap: that rule is on
+  `GPUTexelCopyBufferInfo` (buffer<->texture copies), not on a queue write, so tightly packed
+  sources upload without repacking.
+- **`BindlessTextures` split out of `TextureUpload`**, because WebGPU now has one and not the
+  other. A consumer needs that distinction to tell "this backend has no such array" (fall back)
+  from "the array is exhausted" (error) -- `VkmScene` uploads and keeps the textures either way,
+  and only registers slots where they can be indexed.
+- **One material per draw batch.** `buildDrawBatches` already sorted by
+  `(pipelineId, layout, materialIndex)`; the run-break test now compares the material too, so a
+  batch carries exactly one and a per-draw table has somewhere to bind. Applied on every backend
+  rather than gated, so there is one code path and it can be exercised where the result can be
+  looked at. The existing batching tests asserted the *old* contract and were rewritten.
+- **Backend-scoped `per_draw_resources`.** Set 3 is the one declaration that is backend-specific in
+  substance rather than expression, so the JSON scopes it:
+  `{"backends": ["webgpu"], "bindings": [...]}`, resolved in `expandPipelineStateOptions()` where
+  the target backend is known. Vulkan and Metal pipeline layouts are untouched, and the scoping
+  mirrors the shader's own `#if defined(VKM_BACKEND_WEBGPU)`. The plain array form still means
+  "every backend".
+- **`VkmSceneMaterialTables`** builds one set-3 table per material and owns a 1x1 white placeholder
+  for channels a material has no texture for -- an unbound entry in a declared set is a WebGPU
+  validation error, and white samples to 1, leaving the factor exactly as the bindless path does.
+  Whether tables are needed is read off the **pipeline's own declaration**, not a capability flag,
+  so it cannot disagree with the shader that consumes them.
+
+This also produces the two shapes PR 2's tests were built for: `gbuffer_pso` declares set 3 without
+set 2, and `probe_capture_pso` declares both.
+
+### Looking at a WebGPU frame, and what it showed
+
+`restir.md` recorded that WebGPU was "verified by building and by the suite, not by looking". This
+closes that, and the answer is not the one hoped for: **the `gi` sample does not run on WebGPU, and
+never has.** The frame is blank, and the console carries 1804 errors per run of
+`BufferUsage::(MapWrite|CopySrc)` missing `CopyDst` from the scene upload -- which invalidates the
+cull pipeline and every command buffer -- plus six "Entry point's stage (Fragment) is not in the
+binding visibility in the layout (Compute)", one ReadOnlyStorage-vs-Storage mismatch, and one
+"Binding doesn't exist in VkmBindlessBindGroupLayout".
+
+**None of it is this work.** Rebuilding the wasm sample with the set-3 path removed and the shader
+reverted to factor-only produces a byte-identical signature -- 1804 / 1201 / 6 / 1 / 1 either way.
+The set-3 path therefore ships structurally complete and unit-verified but **not visually
+confirmed**, because nothing renders there to confirm it against. All four are logged in `TODO.md`;
+fixing them is the natural next piece of work.
+
+Getting a frame at all needed scaffolding, since a wasm build has no command line and Chrome's own
+`--screenshot` fires before the WebGPU device finishes initializing (it captured a blank page ~1 s
+in, while the log showed the adapter had only just been selected). Both parts are opt-in and off by
+default: `-DVKM_WASM_GI_SCENE=<dir>` bakes a glTF into MEMFS and makes it the default model path,
+and `-DVKM_WASM_GI_AUTO_SCREENSHOT=ON` captures a frame and echoes the PNG to the console as
+base64 for a headless run to recover.
+
+**Verification.** Metal 207/207 with Metal API Validation, Vulkan 203/203, WebGPU PASS, zero
+validation output on the two native backends. `TestEngineSetup`'s WebGPU capability case pinned the
+old contract ("nothing beyond timestamp support") and now pins the new one: `TextureUpload` present,
+`BindlessTextures` absent -- the pair that distinguishes this backend. Three parser cases cover the
+scoped declaration form, the plain-array form, and the missing-`bindings` error.
+
+### Deviations
+
+- Planned: implement `copyBufferToTexture` on WebGPU and repack rows to a 256-byte pitch. Did
+  instead: `writeRegion()` via `wgpuQueueWriteTexture`, which needs no repacking and no new
+  plumbing, because the alignment rule does not apply to queue writes.
+- Planned: gate the per-material batch split on a capability so only WebGPU pays. Did instead:
+  split everywhere, so there is one code path and the WebGPU-shaped behaviour can be exercised on a
+  backend whose output can be inspected.
+- Planned: verify by looking at a WebGPU image. Did instead: looked, found the sample does not run
+  there for pre-existing reasons, proved that by A/B, and recorded it rather than reporting the
+  path as visually confirmed.

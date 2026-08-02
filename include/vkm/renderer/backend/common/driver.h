@@ -42,10 +42,8 @@ namespace vkm
         // snapshot texture contents. (copyTextureToBuffer/readbackTexture are cross-backend
         // and not gated by this flag.)
         TextureContentCapture   = 0x00000002,
-        // Backend implements copyBufferToTexture, and therefore uploadToTexture and the
-        // bindless texture array. WebGPU does not: it has no unsized texture arrays to bind
-        // into (its bindless layer is mega-buffer emulation), so nothing there can sample a
-        // texture even once the pixels are uploaded.
+        // Backend can get pixels into a texture at all, by whichever route: a
+        // copyBufferToTexture staging copy (Vulkan, Metal) or a queue write (WebGPU).
         TextureUpload           = 0x00000004,
         // Backend can write a texture's memory from the CPU, so uploadToTexture can skip the
         // staging buffer and the queue submit entirely. Requires both the mechanism (Metal:
@@ -66,6 +64,16 @@ namespace vkm
         // (Vulkan needs timestampComputeAndGraphics, WebGPU needs the optional timestamp-query
         // feature), so it is only meaningful after driver initialization.
         TimestampQuery          = 0x00000020,
+        /*
+        * Backend has the set-0 bindless texture array, so registerTexture returns a slot a
+        * shader can index. Separate from TextureUpload because WebGPU has one and not the other:
+        * WGSL has no array-of-handle type, so pixels upload there but nothing can index them --
+        * material textures reach a WebGPU shader through descriptor set 3 instead.
+        *
+        * A consumer needs the distinction to tell "this backend has no such array" from
+        * "the array is exhausted", which are a fallback and an error respectively.
+        */
+        BindlessTextures        = 0x00000040,
     };
 
     inline VkmDriverCapabilityFlags operator|(VkmDriverCapabilityFlags lhs, VkmDriverCapabilityFlags rhs)

@@ -217,10 +217,17 @@ namespace vkm
             const MeshEntry& entry = _meshEntries[_objects[i]._meshEntryIndex];
             const uint32_t pipelineId = _objects[i]._pipelineId;
 
-            // A batch breaks only on what is actually pipeline state.
+            // A batch breaks on pipeline state *and* on material. Material is not pipeline state,
+            // but a backend without bindless textures binds a per-material set-3 table before the
+            // draw, and a table is per-draw -- so one material per batch is what makes that
+            // expressible at all. It costs one more drawIndirectCount per material run; the total
+            // encoded draws are unchanged on Metal and WebGPU, which already encode maxDrawCount
+            // per batch. Split on every backend rather than only where it is needed, so there is
+            // one code path and it can be exercised where the result can be looked at.
             if (!_drawBatches.empty() &&
                 _drawBatches.back()._pipelineId == pipelineId &&
-                _drawBatches.back()._layout == entry._layout)
+                _drawBatches.back()._layout == entry._layout &&
+                _drawBatches.back()._materialIndex == entry._materialIndex)
             {
                 _drawBatches.back()._objectCount++;
                 continue;
@@ -229,6 +236,7 @@ namespace vkm
             DrawBatch batch;
             batch._layout = entry._layout;
             batch._pipelineId = pipelineId;
+            batch._materialIndex = entry._materialIndex;
             batch._firstObject = i;
             batch._objectCount = 1;
             _drawBatches.push_back(batch);
@@ -315,11 +323,14 @@ namespace vkm
     * the geometry. Returning false is reserved for running out of bindless slots, where continuing
     * would silently mis-address whatever slot came back.
     */
+    VkmScene::MaterialTextures VkmScene::getMaterialTextures(uint32_t materialIndex) const
+    {
+        return (materialIndex < _materialTextureHandles.size()) ? _materialTextureHandles[materialIndex]
+                                                                : MaterialTextures{};
+    }
+
     bool VkmScene::uploadMaterialTextures(VkmDriverBase* driver, std::string* outError)
     {
-        // WebGPU implements neither uploadToTexture nor registerTexture, so every slot stays
-        // invalid there and every material renders factor-only. Deliberately silent: it is the
-        // documented state of that backend, not a failure of this scene.
         if ((driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::TextureUpload) == 0u)
         {
             return true;
@@ -331,8 +342,16 @@ namespace vkm
             return true;
         }
 
+        // Two separate capabilities. WebGPU can upload pixels but has no set-0 texture array to
+        // index them from, so there the textures are created and kept -- getMaterialTexture()
+        // hands them to a per-material set-3 table -- while every slot stays INVALID_VALUE32 and
+        // the shader's bindless branch is never taken.
+        const bool bindlessAvailable =
+            (driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::BindlessTextures) != 0u;
+
         // Keyed on (path, sRGB) so one image serving two colour spaces gets one texture each.
         std::map<std::pair<std::string, bool>, uint32_t> uploaded;
+        std::map<std::pair<std::string, bool>, VkmResourceHandle> textureHandles;
         bool slotsExhausted = false;
 
         const auto slotFor = [&](const std::string& path, bool srgb) -> uint32_t {
@@ -384,17 +403,30 @@ namespace vkm
                 return INVALID_VALUE32;
             }
 
-            const uint32_t slot = bindlessManager->registerTexture(texture->getHandle());
-            if (slot == INVALID_VALUE32)
+            uint32_t slot = INVALID_VALUE32;
+            if (bindlessAvailable)
             {
-                driver->getRenderResourcePool()->releaseResource(texture->getHandle());
-                slotsExhausted = true;
-                return INVALID_VALUE32;
+                slot = bindlessManager->registerTexture(texture->getHandle());
+                if (slot == INVALID_VALUE32)
+                {
+                    driver->getRenderResourcePool()->releaseResource(texture->getHandle());
+                    slotsExhausted = true;
+                    return INVALID_VALUE32;
+                }
+                _materialTextureSlots.push_back(slot);
             }
             _materialTextures.push_back(texture->getHandle());
-            _materialTextureSlots.push_back(slot);
+            textureHandles.emplace(key, texture->getHandle());
             uploaded.emplace(key, slot);
             return slot;
+        };
+
+        // Per-material handles regardless of bindless: a set-3 table binds the texture itself
+        // rather than a slot index, so this is what the WebGPU path consumes.
+        _materialTextureHandles.assign(_materials.size(), {});
+        const auto handleFor = [&](const std::string& path, bool srgb) -> VkmResourceHandle {
+            const auto existing = textureHandles.find(std::make_pair(path, srgb));
+            return (existing != textureHandles.end()) ? existing->second : VKM_INVALID_RESOURCE_HANDLE;
         };
 
         for (size_t i = 0; i < _materials.size(); ++i)
@@ -405,6 +437,10 @@ namespace vkm
             slots.y = slotFor(refs._metallicRoughness, /*srgb=*/false);
             slots.z = slotFor(refs._normal, /*srgb=*/false);
             slots.w = slotFor(refs._emissive, /*srgb=*/true);
+
+            MaterialTextures& handles = _materialTextureHandles[i];
+            handles._baseColor = handleFor(refs._baseColor, true);
+            handles._metallicRoughness = handleFor(refs._metallicRoughness, false);
         }
 
         if (slotsExhausted)
