@@ -81,6 +81,8 @@ VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_screenshot_frame, 600u);
 // Which channel to show, as a VkmGiDebugView. Settable here as well as through the UI so a
 // screenshot run can capture a specific term without anyone touching the window.
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_debug_view, 0u);
+// Off switch for the contact term, so a screenshot run can A/B it against the probes alone.
+VKM_GLOBAL_VARIABLE(bool, gv_gi_ssgi, true);
 
 namespace
 {
@@ -165,9 +167,10 @@ public:
         }
         _lightingPipeline = manager->getPipelineState("deferred_lighting_pso", VkmPipelineStateOrigin::Engine);
         _probeLightingPipeline = manager->getPipelineState("probe_lighting_pso", VkmPipelineStateOrigin::Engine);
+        _ssgiPipeline = manager->getPipelineState("ssgi_pso", VkmPipelineStateOrigin::Engine);
         _compositePipeline = manager->getPipelineState("gi_composite_pso", VkmPipelineStateOrigin::Engine);
         _tonemapPipeline = manager->getPipelineState("tonemap_pso", VkmPipelineStateOrigin::Engine);
-        if (_lightingPipeline == nullptr || _probeLightingPipeline == nullptr ||
+        if (_lightingPipeline == nullptr || _probeLightingPipeline == nullptr || _ssgiPipeline == nullptr ||
             _compositePipeline == nullptr || _tonemapPipeline == nullptr)
         {
             VKM_DEBUG_ERROR("The GI sample needs the engine PSO cache; run a build that generates it");
@@ -184,7 +187,9 @@ public:
         VkmBuffer* tonemapBuffer = createUniformBuffer(driver, sizeof(TonemapConstants), "GiTonemapConstants");
         VkmBuffer* compositeBuffer = createUniformBuffer(driver, sizeof(VkmGiCompositeConstants), "GiCompositeConstants");
         VkmBuffer* volumeBuffer = createUniformBuffer(driver, sizeof(VkmProbeVolumeConstants), "GiProbeVolumeConstants");
-        if (lightBuffer == nullptr || tonemapBuffer == nullptr || compositeBuffer == nullptr || volumeBuffer == nullptr)
+        VkmBuffer* ssgiBuffer = createUniformBuffer(driver, sizeof(VkmSsgiConstants), "GiSsgiConstants");
+        if (lightBuffer == nullptr || tonemapBuffer == nullptr || compositeBuffer == nullptr ||
+            volumeBuffer == nullptr || ssgiBuffer == nullptr)
         {
             VKM_DEBUG_ERROR("Failed to create the GI sample's uniform buffers");
             return;
@@ -193,6 +198,7 @@ public:
         _tonemapBuffer = tonemapBuffer->getHandle();
         _compositeBuffer = compositeBuffer->getHandle();
         _volumeBuffer = volumeBuffer->getHandle();
+        _ssgiBuffer = ssgiBuffer->getHandle();
 
         for (uint32_t frame = 0; frame < FRAME_BUFFER_COUNT; ++frame)
         {
@@ -214,7 +220,10 @@ public:
         driver->uploadToBuffer(_lightBuffer, &light, sizeof(light));
         const TonemapConstants tonemap{};
         driver->uploadToBuffer(_tonemapBuffer, &tonemap, sizeof(tonemap));
+        const VkmSsgiConstants ssgi{};
+        driver->uploadToBuffer(_ssgiBuffer, &ssgi, sizeof(ssgi));
 
+        _ssgiEnabled = gv_gi_ssgi.get();
         if (gv_gi_debug_view.get() < static_cast<uint32_t>(VkmGiDebugView::Count))
         {
             _debugView = static_cast<VkmGiDebugView>(gv_gi_debug_view.get());
@@ -337,11 +346,37 @@ public:
         });
 
         recordFullscreen(renderGraph, "GiDirectLighting", _directTarget, _lightingPipeline, _tables._lighting);
+
+        // Before the probe and contact passes, not after: SSGI samples the direct lighting as the
+        // radiance that bounces, so it has to be readable by the time that pass runs.
+        VkmRenderComputeSubGraph* directBarrier = renderGraph->beginComputeSubGraph("GiDirectToShaderRead");
+        directBarrier->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
+            commandBuffer->barrierTextureForShaderRead(_directTarget);
+        });
         recordFullscreen(renderGraph, "GiProbeLighting", _indirectTarget, _probeLightingPipeline, _tables._probeLighting);
 
-        VkmRenderComputeSubGraph* lightingBarrier = renderGraph->beginComputeSubGraph("GiLightingToShaderRead");
+        // The contact term is added on top of the probe result, in the same target: its PSO blends
+        // one-to-one and the pass loads rather than discards, so it can only ever brighten what the
+        // probes produced. Keeping it strictly additive is what stops it becoming a second GI
+        // technique with screen-space's view dependence baked in (restir.md section 5).
+        if (_ssgiEnabled)
+        {
+            VkmFrameBufferDescriptor ssgiFb = makeFullscreenFb(_extent, _indirectTarget);
+            ssgiFb._renderPass._colorAttachments[0]._loadAction = VkmLoadAction::Load;
+            VkmRenderGraphicsSubGraph* ssgiSubGraph = renderGraph->beginGraphicsSubGraph(ssgiFb, "GiSsgi");
+            ssgiSubGraph->addReferencedResource(_indirectTarget);
+            ssgiSubGraph->addReferencedResource(_directTarget);
+            VkmPipelineStateBase* ssgiPipeline = _ssgiPipeline;
+            VkmPerPassResourceTableBase* ssgiTable = _tables._ssgi;
+            ssgiSubGraph->setRenderCallback([ssgiPipeline, ssgiTable](VkmCommandBufferBase* commandBuffer) {
+                commandBuffer->bindPipeline(ssgiPipeline);
+                commandBuffer->bindPerPassResources(ssgiTable);
+                commandBuffer->draw(3, 1, 0, 0);
+            });
+        }
+
+        VkmRenderComputeSubGraph* lightingBarrier = renderGraph->beginComputeSubGraph("GiIndirectToShaderRead");
         lightingBarrier->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
-            commandBuffer->barrierTextureForShaderRead(_directTarget);
             commandBuffer->barrierTextureForShaderRead(_indirectTarget);
         });
 
@@ -394,12 +429,14 @@ private:
     {
         VkmPerPassResourceTableBase* _lighting = nullptr;
         VkmPerPassResourceTableBase* _probeLighting = nullptr;
+        VkmPerPassResourceTableBase* _ssgi = nullptr;
         VkmPerPassResourceTableBase* _composite = nullptr;
         VkmPerPassResourceTableBase* _tonemap = nullptr;
 
         bool isComplete() const
         {
-            return _lighting != nullptr && _probeLighting != nullptr && _composite != nullptr && _tonemap != nullptr;
+            return _lighting != nullptr && _probeLighting != nullptr && _ssgi != nullptr &&
+                   _composite != nullptr && _tonemap != nullptr;
         }
     };
 
@@ -435,7 +472,7 @@ private:
     void destroyTables(Tables& tables)
     {
         for (VkmPerPassResourceTableBase** table :
-             { &tables._lighting, &tables._probeLighting, &tables._composite, &tables._tonemap })
+             { &tables._lighting, &tables._probeLighting, &tables._ssgi, &tables._composite, &tables._tonemap })
         {
             if (*table != nullptr)
             {
@@ -616,6 +653,9 @@ private:
             _probeLightingPipeline,
             {{ 0, normal }, { 1, motion }, { 2, _volume.getIrradianceTexture() },
              { 3, _volume.getDistanceTexture() }, { 4, _sampler }, { 5, _volumeBuffer }}, &error);
+        _tables._ssgi = driver->newPerPassResourceTable(
+            _ssgiPipeline,
+            {{ 0, normal }, { 1, motion }, { 2, _directTarget }, { 3, _sampler }, { 4, _ssgiBuffer }}, &error);
         _tables._composite = driver->newPerPassResourceTable(
             _compositePipeline,
             {{ 0, _directTarget }, { 1, _indirectTarget }, { 2, baseColor }, { 3, normal },
@@ -661,6 +701,7 @@ private:
             ImGui::EndCombo();
         }
         ImGui::DragFloat("Indirect intensity", &_indirectIntensity, 0.05f, 0.0f, 8.0f);
+        ImGui::Checkbox("SSGI contact term", &_ssgiEnabled);
 
         ImGui::Separator();
         ImGui::Text("Probes: %u, budget %u/frame", _volume.getProbeCount(), _updater.getDescriptor()._budget);
@@ -688,6 +729,7 @@ private:
     std::array<VkmPipelineStateBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _gbufferPipelines{};
     VkmPipelineStateBase* _lightingPipeline = nullptr;
     VkmPipelineStateBase* _probeLightingPipeline = nullptr;
+    VkmPipelineStateBase* _ssgiPipeline = nullptr;
     VkmPipelineStateBase* _compositePipeline = nullptr;
     VkmPipelineStateBase* _tonemapPipeline = nullptr;
 
@@ -696,6 +738,7 @@ private:
     VkmResourceHandle _tonemapBuffer{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _compositeBuffer{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _volumeBuffer{ VKM_INVALID_RESOURCE_HANDLE };
+    VkmResourceHandle _ssgiBuffer{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _directTarget{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _indirectTarget{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _compositeTarget{ VKM_INVALID_RESOURCE_HANDLE };
@@ -714,6 +757,7 @@ private:
 
     VkmGiDebugView _debugView = VkmGiDebugView::Composite;
     float _indirectIntensity = 1.0f;
+    bool _ssgiEnabled = true;
     uint32_t _probeBudget = 32u;
     float _hysteresis = 0.9f;
 };

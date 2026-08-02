@@ -50,4 +50,22 @@ namespace vkm
     };
     static_assert(sizeof(VkmGiCompositeConstants) == 16,
                   "VkmGiCompositeConstants must match GiCompositeConstants in gi_composite.hlsl");
+
+    /*
+    * @brief The screen-space contact term's parameters.
+    *
+    * @details Rays are deliberately short: this pass exists for what the probe grid is too coarse
+    * to hold -- contact darkening, near-field bounce -- and everything beyond that range is the
+    * probe volume's job. Lengthening them does not make it a general GI solution, it just makes a
+    * screen-space one, with all the view dependence that implies.
+    *
+    * Mirrors SsgiConstants in shaders/ssgi.hlsl.
+    */
+    struct VkmSsgiConstants
+    {
+        // x = ray count, y = world-space ray length, z = steps per ray, w = intensity
+        glm::vec4 _params{ 4.0f, 0.5f, 8.0f, 1.0f };
+    };
+    static_assert(sizeof(VkmSsgiConstants) == 16,
+                  "VkmSsgiConstants must match SsgiConstants in ssgi.hlsl");
 } // namespace vkm

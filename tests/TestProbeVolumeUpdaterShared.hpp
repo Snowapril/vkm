@@ -13,6 +13,7 @@
 #include <vkm/renderer/scene/gltf_importer.h>
 #include <vkm/renderer/scene/scene.h>
 
+#include <algorithm>
 #include <cmath>
 #include <set>
 #include <string>
@@ -69,7 +70,10 @@ namespace vkmtest
         vkm::VkmProbeVolume volume;
         vkm::VkmProbeVolumeUpdater updater;
 
-        explicit ProbeUpdaterFixture(vkm::VkmDriverBase* driver, uint32_t budget, float hysteresis)
+        // Defaults describe the tiny cadence fixture; the leak test overrides all three.
+        explicit ProbeUpdaterFixture(vkm::VkmDriverBase* driver, uint32_t budget, float hysteresis,
+                                     const char* scenePath = "tests/gltf_triangle.gltf",
+                                     const vkm::VkmProbeVolume::Descriptor* volumeOverride = nullptr)
             : driver(driver), manager(driver)
         {
             std::string error;
@@ -80,8 +84,7 @@ namespace vkmtest
 
             vkm::VkmGltfImportOptions importOptions;
             importOptions._optimizeMeshes = false;
-            REQUIRE(vkm::importGltfModel(std::string(RESOURCES_DIR) + "tests/gltf_triangle.gltf",
-                                         &model, &error, importOptions));
+            REQUIRE(vkm::importGltfModel(std::string(RESOURCES_DIR) + scenePath, &model, &error, importOptions));
             REQUIRE(scene.addModel(model, &error));
             REQUIRE(scene.build(driver, &manager, &error));
             scene.setObjectTransform(0, glm::mat4(1.0f));
@@ -92,6 +95,10 @@ namespace vkmtest
             volumeDescriptor._probeCounts = glm::uvec3(kProbeCountX, kProbeCountY, kProbeCountZ);
             volumeDescriptor._spacing = glm::vec3(1.0f, 1.0f, 1.0f);
             volumeDescriptor._origin = glm::vec3(0.0f, 0.5f, -2.0f);
+            if (volumeOverride != nullptr)
+            {
+                volumeDescriptor = *volumeOverride;
+            }
             REQUIRE(volume.initialize(driver, volumeDescriptor));
 
             vkm::VkmProbeVolumeUpdater::Descriptor updaterDescriptor{};
@@ -285,6 +292,75 @@ namespace vkmtest
         MESSAGE("Probe GI propagation measured: " << framesToNinetyPercent
                 << " frames to 90% (model predicts at most " << predicted << ").");
     }
+
+    /*
+    * @brief A probe walled off from a light source captures none of it.
+    *
+    * @details A volume spanning two rooms -- one white, one black, with a black divider -- checked
+    * by reading the atlas the updater filled. Probe capture applies no shadowing (it is
+    * `baseColor * nDotL`), so a directional light reaches both rooms equally and the *materials*,
+    * not the lighting, are what make a leak identifiable: irradiance in a black-room probe had to
+    * come from the white room, through the divider.
+    *
+    * What this covers is the **capture** side: the depth test, the six face matrices and the
+    * octahedral integration together have to keep the white room out of a probe that cannot see it.
+    * A face-selection or depth error shows up here as a bright probe in the dark room.
+    *
+    * What it does **not** cover is the Chebyshev visibility test, which lives in the lookup rather
+    * than the capture -- disabling it leaves this test passing. That failure mode is a surface in
+    * the dark room trilinearly sampling probes on both sides of the divider, and reaching it needs
+    * probe_lighting run over an authored G-buffer against these real atlases. The lookup's
+    * rejection is covered against CPU-authored atlases in runProbeLightingTest; the two have not
+    * been joined up (TODO.md).
+    */
+    inline void runProbeGiWallLeakTest(vkm::VkmDriverBase* driver)
+    {
+        // 4 x 1 x 2 probes at 1-unit spacing across x in [-1.5, 1.5]: two columns inside the white
+        // room, two inside the black one, straddling the divider at x = 0.
+        vkm::VkmProbeVolume::Descriptor volumeDescriptor{};
+        volumeDescriptor._probeCounts = glm::uvec3(4u, 1u, 2u);
+        volumeDescriptor._spacing = glm::vec3(1.0f, 1.0f, 2.0f);
+        volumeDescriptor._origin = glm::vec3(-1.5f, 1.0f, -1.0f);
+
+        ProbeUpdaterFixture fixture(driver, /*budget=*/8u, /*hysteresis=*/0.0f,
+                                    "tests/gltf_two_rooms.gltf", &volumeDescriptor);
+
+        // One full round with hysteresis 0, so every probe holds its capture exactly.
+        const vkm::VkmFrameData frameData = fixture.makeFrameData(glm::vec3(0.0f, 1.0f, 0.0f));
+        for (uint32_t frame = 0; frame < fixture.updater.getRoundLengthInFrames(); ++frame)
+        {
+            vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+            fixture.updater.record(&renderGraph, &fixture.scene, frameData);
+            renderGraph.compile();
+            renderGraph.execute();
+            renderGraph.ensureCompleted();
+        }
+
+        const vkm::VkmTextureReadbackResult readback =
+            driver->readbackTexture(fixture.volume.getIrradianceTexture());
+        REQUIRE(readback.channels == 8); // bytes per texel, RGBA16F
+
+        const uint32_t cellSize = fixture.volume.getDescriptor()._irradianceResolution +
+                                  2u * vkm::VkmProbeVolume::kBorderTexels;
+        const auto probeCentre = [&](uint32_t probeIndex) {
+            const glm::uvec2 origin = fixture.volume.getIrradianceProbeTexelOrigin(probeIndex);
+            const size_t texel = (static_cast<size_t>(origin.y + cellSize / 2) * readback.width +
+                                  (origin.x + cellSize / 2)) * readback.channels;
+            return readHalfComponent(&readback.pixels[texel], 0);
+        };
+
+        // Probes 0 and 1 sit at x = -1.5 and -0.5, inside the white room; 2 and 3 at x = 0.5 and
+        // 1.5, inside the black one. The grid is x-major (see VkmProbeVolume::getProbeCoord).
+        const float bright = std::max(probeCentre(0), probeCentre(1));
+        const float dark = std::max(probeCentre(2), probeCentre(3));
+
+        REQUIRE_MESSAGE(bright > 0.01f, "the white room's probes recorded no light to leak");
+        // The divider occludes the white room from every direction a dark-room probe looks, so its
+        // capture is black and stays black. A probe that reads bright here means the capture saw
+        // through the wall -- a depth or face-selection error, not a lookup one.
+        CHECK(dark < bright * 0.1f);
+    }
+
 #endif // TEST_ENGINE_PIPELINE_DIR
 } // namespace vkmtest
 

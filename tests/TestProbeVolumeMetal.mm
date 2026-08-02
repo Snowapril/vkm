@@ -76,6 +76,13 @@ TEST_CASE("Metal probe GI - a light change propagates at the rate the hysteresis
     vkmtest::runProbeGiPropagationTest(fixture.driver.get());
 }
 
+TEST_CASE("Metal probe GI - a probe walled off from a light captures none of it"
+          * doctest::timeout(20.0)) {
+    MetalProbeVolumeFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runProbeGiWallLeakTest(fixture.driver.get());
+}
+
 TEST_CASE("Metal probe blend - a capture integrates into a directional octahedral map") {
     MetalProbeVolumeFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
