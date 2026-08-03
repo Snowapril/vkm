@@ -98,10 +98,12 @@ struct VkmMaterial
 * a WebGPU validation error, not a silently absent one -- so the table binds a 1x1 white
 * placeholder there, which samples to 1 and leaves the factor exactly, matching the other branch.
 *
-* SampleLevel rather than Sample: WGSL allows an implicit-LOD sample only under uniform control
-* flow, and these run after early returns in the G-buffer and probe-capture shaders. Every material
-* texture is single-mip today, so the implicit LOD could only ever have been 0 anyway (the same
-* reasoning the deferred-lighting and probe-lighting passes already record).
+* Sample, not SampleLevel: material textures carry a full mip chain, so the implicit LOD is the
+* whole point -- pinning it to 0 would upload the chain and then never read it. WGSL restricts an
+* implicit-LOD sample to uniform control flow, which both callers satisfy: neither the G-buffer nor
+* the probe-capture pixel shader has an early return or a branch around this. (The fullscreen
+* passes that *do* branch -- deferred lighting, gi_composite -- keep SampleLevel for that reason,
+* and their inputs are single-mip anyway.)
 *
 * The declaration order must match the PSO's per_draw_resources array and the table the runtime
 * builds; VkmGiMaterialTables is the one that fills it.
@@ -114,11 +116,11 @@ struct VkmMaterial
     float4 vkmSampleBaseColor(VkmMaterial material, float2 uv)                                      \
     {                                                                                               \
         return material.baseColorFactor *                                                           \
-               g_VkmMaterialBaseColor.SampleLevel(g_VkmMaterialSampler, uv, 0);                     \
+               g_VkmMaterialBaseColor.Sample(g_VkmMaterialSampler, uv);                             \
     }                                                                                               \
     float2 vkmSampleMetallicRoughness(VkmMaterial material, float2 uv)                              \
     {                                                                                               \
-        const float4 s = g_VkmMaterialMetallicRoughness.SampleLevel(g_VkmMaterialSampler, uv, 0);   \
+        const float4 s = g_VkmMaterialMetallicRoughness.Sample(g_VkmMaterialSampler, uv);           \
         return float2(material.metallic * s.b, material.roughness * s.g);                           \
     }
 

@@ -2151,3 +2151,52 @@ gold trim, metal plating -- against the blank white page it produced before, wit
 validation errors where there were 1812. It is dark because four frames is nowhere near probe
 convergence, which is a property of the capture, not of the render. Metal and Vulkan re-verified
 after the change.
+
+## 2026-08-04 — Material textures get a mip chain
+
+Every material texture was uploaded as a single level, so a minified surface sampled one texel per
+pixel. On Sponza's roof that is the textbook case: the tiles are small, the surface recedes, and
+the result sparkles under any camera motion.
+
+The chain is built on the CPU in `vkmBuildMipChain` (`image_loader.cpp`) and uploaded level by
+level. That needed no new GPU path -- `uploadToTexture` has always taken a mip index, and every
+backend's copy already computes `max(1u, extent >> mipLevel)`. The alternative, downsampling on
+the GPU by rendering each level, would have needed per-level texture views the engine does not
+use today (`VkmTextureView` exists but nothing resolves framebuffer attachments through it).
+
+**sRGB is the part that is easy to get wrong.** Averaging gamma-encoded bytes averages the wrong
+quantity: half black and half white gives 128 instead of the ~188 that averaging in linear light
+and re-encoding gives, so a naively built chain is visibly too dark and worst at the coarsest
+level. `vkmBuildMipChain` therefore takes the `srgb` flag that already decides the texture's
+format, decodes through a 256-entry table, averages, and re-encodes -- for channels 0-2 only.
+Alpha is linear even in an sRGB texture.
+
+**`SampleLevel(..., 0)` had to become `Sample()` on the WebGPU branch of `vkm_material.hlsli`,**
+or the chain would have been uploaded and then never read. The comment justifying the pinned LOD
+claimed the callers "run after early returns"; neither `gbuffer.hlsl`'s nor `probe_capture.hlsl`'s
+`PSMain` has one, so WGSL's uniform-control-flow restriction on implicit-LOD sampling was never in
+play. Tint emits `textureSample` for both, and the headless WebGPU suite passes.
+
+**Verification.** Five unit tests in `TestMipChain.cpp`, each sabotage-checked: averaging in the
+encoded space, running alpha through the curve, stopping the chain one level early, and taking the
+level count from the shorter edge all fail loudly. The alpha check needed a second pass -- with
+alpha 255 on both source texels it passed under sabotage, because the curve maps 255 to 255. The
+fixture now runs alpha 255/0 so the two halves of the claim are separable.
+
+On Sponza's exterior at `--gv_gi_debug_view=3`, mean |gradient| over the minified roof region
+drops from **30.5 to 11.1** with the chain enabled -- measured by rebuilding with the levels
+discarded and capturing the same frame.
+
+### Deviations
+
+- The 2x2 box filter drops the last row/column on an odd extent rather than weighting three taps.
+  A correct answer there needs a real resampling kernel; the conservative option was to keep the
+  box, note the drift in `TODO.md`, and not invent a filter as a side effect of this task.
+- `TODO.md` carried two lines that the merged set-3 work had already falsified (WebGPU having no
+  `uploadToTexture`, and material textures being Vulkan/Metal only). Both were corrected while
+  editing the lines beside them rather than left standing as known-false.
+- Running the gi sample from a terminal captures nothing once the display goes idle: the window
+  never becomes visible, no frame is driven, and the process sits in `nextEventMatchingMask`
+  burning ~2% CPU -- indistinguishable from slow progress. `caffeinate -u` while it runs is what
+  makes a screenshot run finish. (`open -n` is not an alternative: it launches with cwd `/`, the
+  logger cannot create `vkm.log`, and engine init fails outright.)

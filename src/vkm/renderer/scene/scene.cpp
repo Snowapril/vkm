@@ -380,8 +380,15 @@ namespace vkm
             info._flags = static_cast<VkmResourceCreateInfo>(
                 static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
                 static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst));
+            // A full mip chain. Without one, a minified material texture samples a single texel
+            // per pixel and sparkles under any camera motion -- Sponza's roof tiles are the
+            // obvious case. The levels are built on the CPU and uploaded like any other level,
+            // which needs no new GPU path: uploadToTexture has always taken a mip index.
+            std::vector<VkmImageData> mipLevels;
+            vkmBuildMipChain(image, srgb, &mipLevels);
+
             info._extent = glm::uvec3(image._width, image._height, 1);
-            info._numMipLevels = 1;
+            info._numMipLevels = 1u + static_cast<uint32_t>(mipLevels.size());
             info._numArrayLayers = 1;
             // The colour space belongs to the channel that references the image, not to the file:
             // base colour and emissive are sRGB-encoded, metallic-roughness and normal are linear
@@ -390,8 +397,19 @@ namespace vkm
             info._debugName = "SceneMaterialTexture";
 
             VkmTexture* texture = driver->newTexture(info);
-            if (texture == nullptr ||
-                !driver->uploadToTexture(texture->getHandle(), image._pixels.data(), image.getByteSize()))
+            bool uploadedAllLevels = texture != nullptr;
+            if (uploadedAllLevels)
+            {
+                uploadedAllLevels =
+                    driver->uploadToTexture(texture->getHandle(), image._pixels.data(), image.getByteSize());
+                for (size_t level = 0; uploadedAllLevels && level < mipLevels.size(); ++level)
+                {
+                    uploadedAllLevels = driver->uploadToTexture(
+                        texture->getHandle(), mipLevels[level]._pixels.data(), mipLevels[level].getByteSize(),
+                        static_cast<uint32_t>(level + 1));
+                }
+            }
+            if (!uploadedAllLevels)
             {
                 VKM_DEBUG_WARN(("Material texture '" + path +
                                 "' could not be uploaded; the material falls back to its factor").c_str());
