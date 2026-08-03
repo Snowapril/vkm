@@ -2200,3 +2200,68 @@ discarded and capturing the same frame.
   burning ~2% CPU -- indistinguishable from slow progress. `caffeinate -u` while it runs is what
   makes a screenshot run finish. (`open -n` is not an alternative: it launches with cwd `/`, the
   logger cannot create `vkm.log`, and engine init fails outright.)
+
+## 2026-08-04 — The GI probe volume was green because Metal 4 render passes had no barriers
+
+The gi sample's indirect term was pure saturated green on Sponza and DamagedHelmet alike, and
+exactly zero before the probe volume had converged.
+
+**What the evidence said, in order.** The composite's Indirect view was uniformly zero, and stayed
+zero with the probe capture forced to a constant colour -- so the fault was downstream of the
+capture. A per-corner diagnostic in `probe_lighting.hlsl` showed all eight surrounding probes
+inside the grid but every one rejected, and bypassing the Chebyshev test showed the accumulated
+irradiance was still zero: both atlases were failing the lookup, not one. Sampling the atlases at
+screen UV showed they *did* hold content -- correct grey octahedral cells interleaved with pure
+green ones.
+
+A raw half-float readback of both atlases settled it. The irradiance atlas held **273,136 NaN in
+R, 273,037 in B, only 21,423 in G**, with finite values ranging to +-9000 where irradiance should
+be in [0,1]; the distance atlas held negative mean distances and G saturated at 65504. NaN in R
+and B with a large finite G is exactly what tone-maps to (0,255,0). And NaN is permanent here:
+hysteresis is the blend hardware, and `NaN * 0 + src * 1` is still NaN, so one bad frame poisons a
+cell forever.
+
+**Isolating the source.** Replacing the capture fetch in `probe_blend.hlsl` with a constant made
+every written cell exactly the constant, zero NaN -- so the blend maths, the viewport placement,
+the hysteresis and the blend state were all correct. Dumping the push constants and blend
+constants into the atlas showed `captureTileBase`, `hysteresis` and `captureAtlasSize` all
+correct in every cell, and dumping the computed `atlasUv` showed it finite and in range. Yet a
+readback of the capture atlas at the same frame showed no NaN at all. A fetch of clean data at a
+correct UV was returning NaN.
+
+**The cause.** Metal 4 does no automatic hazard tracking -- the backend says so itself at
+`onBindPipeline`. The barriers that publish a pass's writes are emitted only when a compute
+pipeline is bound or a blit is recorded; **nothing was emitted around render passes at all**. The
+handoff was supposed to come from the `ProbeCaptureToShaderRead` compute subgraph, but its
+callback only calls `barrierTextureForShaderRead`, which records nothing on Metal, and it binds no
+pipeline -- so no encoder was ever opened and no barrier ever issued. The probe blend was reading
+the capture atlas while it was still being written. The same hole covered every render-to-render
+handoff in the gi sample (`GiGBufferToShaderRead`, `GiDirectToShaderRead`, `GiIndirectToShaderRead`,
+`GiCompositeToShaderRead`).
+
+**The fix.** `VkmCommandEncoderMetal` now brackets every render pass with the same barrier pair the
+compute path already uses: `barrierAfterQueueStages:MTLStageAll beforeStages:vertex|fragment` when
+the encoder opens, and `barrierAfterStages:vertex|fragment beforeQueueStages:MTLStageAll` before
+`endEncoding`. It rides an encoder that exists anyway, so it does not reintroduce the
+`MTL4CommandQueueErrorTimeout` that banning per-barrier encoders was meant to avoid.
+
+**Verification.** Both atlases come back with **zero NaN and zero Inf**, irradiance in [0, 0.23]
+and distance moments non-negative, where before the same run had 13,113 NaN by frame 60. The
+indirect view is a smooth neutral field with the probe grid visible instead of saturated green,
+and the composite renders textured Sponza cleanly. Metal Debug 212/212 and Release 211/211 pass.
+900 frames took 4m34s against 4m31s before, so the conservative `MTLStageAll` mask costs nothing
+measurable here.
+
+### Deviations
+
+- The barrier mask is `MTLStageAll` on the queue side, which serializes render passes against each
+  other rather than only against the passes they actually depend on. That is the conservative
+  option and it mirrors what the compute path already does; a finer mask is a performance question,
+  not a correctness one, and is recorded in `TODO.md`.
+- `barrierTextureForShaderRead` was left as a no-op on Metal rather than made to emit a real
+  barrier. Making it emit one requires an open encoder, and opening one per barrier is the
+  documented cause of a queue timeout. The call sites now get their ordering from the encoder pair,
+  which is why the no-op is still correct -- but it is a trap, so it is recorded in `TODO.md`.
+- The indirect term is dim and needs ~900 frames to converge on Sponza. That is the probe budget
+  (6 per frame at 25 draw batches) and the 0.97 hysteresis, both already recorded; it was not
+  touched here.

@@ -102,6 +102,8 @@
 - `scripts/run_tests.py` and `scripts/run_sample.py` duplicate about ten helper functions, including the host vkm-compiler build, instead of sharing a module.
 - A shader cache file is named `<shader>[<option>].<stage>.<backend>` and carries no entry point, so two PSOs sharing one HLSL file and option name silently overwrite each other's cache.
 - Metal's MTL4ArgumentTable caps buffer binds at 31 and sampler binds at 16, which is what bounds sets 2 and 3 to 13 buffers / 8 samplers / 16 textures each.
+- Metal brackets every render pass with an `MTLStageAll` encoder barrier pair, which serializes render passes against each other; a finer mask (or a real per-resource barrier in `barrierTextureForShaderRead`) would let independent passes overlap.
+- `barrierTextureForShaderRead` and `barrierIndirectArgumentBuffer` still record nothing on Metal: the ordering they name comes from the encoder-opening barriers instead, so a call sitting in a subgraph that binds no pipeline has no effect of its own.
 - Vulkan/Metal validation errors at ImGui teardown (`VUID-vkDestroyBuffer-buffer-00922` and three others) fire on every unit-test run: `ImGui_ImplVulkan_Shutdown` destroys its frame buffers without waiting for the last submission.
 - Normal maps are unsampled because tangents may be zero (no MikkTSpace generator), and emissive because the G-buffer has no channel to carry it.
 - Material textures have no automated coverage on Vulkan: the offscreen scene-render harness is Metal-only, since the Vulkan fixture renders black on this machine's MoltenVK/lavapipe.
