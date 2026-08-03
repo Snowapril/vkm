@@ -69,8 +69,27 @@ namespace vkm
 
         void beginFrame(uint32_t frameSlot) override final;
 
-        inline WGPUBindGroupLayout getBindGroupLayout() const { return _bindGroupLayout; }
-        inline WGPUBindGroup getBindGroup() const { return _bindGroup; }
+        /*
+        * @brief Set 0's layout and bind group, in the two shapes a WebGPU pipeline can want.
+        *
+        * @details The graphics shape omits the read-write singletons (IndirectArgument,
+        * VisibleList). It has to: WebGPU forbids a buffer from carrying a writable usage and any
+        * other usage in one synchronization scope, and a render pass that binds set 0 while also
+        * fetching `drawIndirect` arguments out of the very same buffer is exactly that. Omitting
+        * the entries takes them out of the pass's usage scope -- merely not *declaring* them in the
+        * shader is not enough, because the scope covers the bind group, not the shader.
+        *
+        * No render pipeline may declare those two anyway (see vkm_bindless.hlsli), so the graphics
+        * shape loses nothing.
+        */
+        inline WGPUBindGroupLayout getBindGroupLayout(bool compute) const
+        {
+            return compute ? _bindGroupLayout : _graphicsBindGroupLayout;
+        }
+        inline WGPUBindGroup getBindGroup(bool compute) const
+        {
+            return compute ? _bindGroup : _graphicsBindGroup;
+        }
 
     private:
         VkmDriverWebGPU* _driver;
@@ -85,6 +104,9 @@ namespace vkm
         WGPUBuffer _pushConstantRing = nullptr;
         WGPUBindGroupLayout _bindGroupLayout = nullptr;
         WGPUBindGroup _bindGroup = nullptr;
+        // The same bindings minus the two read-write singletons; see getBindGroupLayout().
+        WGPUBindGroupLayout _graphicsBindGroupLayout = nullptr;
+        WGPUBindGroup _graphicsBindGroup = nullptr;
         uint64_t _slotTableSize = 0;
 
         /*

@@ -256,7 +256,9 @@ namespace vkm
         // neither. Groups 2-3 remain reserved (see common/frame_constants.h).
         // Four groups exactly exhausts WebGPU's default maxBindGroups.
         WGPUBindGroupLayout bindGroupLayouts[kVkmPerDrawSetIndex + 1]{
-            driverWebGPU->getBindlessResourceManager()->getBindGroupLayout(),
+            // A render pipeline gets the graphics shape, which omits the read-write singletons so
+            // the argument buffer is not both writable-storage and indirect in one render pass.
+            driverWebGPU->getBindlessResourceManager()->getBindGroupLayout(isCompute()),
             driverWebGPU->getFrameConstantManager()->getBindGroupLayout(),
             nullptr,
             nullptr,

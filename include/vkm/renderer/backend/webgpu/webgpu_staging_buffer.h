@@ -5,14 +5,29 @@
 #include <vkm/renderer/backend/common/staging_buffer.h>
 #include <webgpu/webgpu.h>
 
+#include <vector>
+
 namespace vkm
 {
     /*
-    * @brief `mappedAtCreation` gives a mapped pointer valid only until the first
-    * wgpuBufferUnmap(). Re-mapping after that needs the async wgpuBufferMapAsync, bridged
-    * with the same Asyncify emscripten_sleep-spin pattern VkmDriverWebGPU::initializeInner
-    * uses for adapter/device requests. unmap() invalidates the previously-returned pointer --
-    * callers must not cache it across an unmap() call.
+    * @brief WebGPU staging buffers come in two shapes, and they cannot be one buffer.
+    *
+    * **Readback** (VkmResourceCreateInfo::AllowTransferDst) is `CopyDst | MapRead`: the GPU copies
+    * into it and the CPU maps it to read. Mapping is genuinely async, bridged with the same
+    * Asyncify emscripten_sleep-spin VkmDriverWebGPU::initializeInner uses.
+    *
+    * **Upload** is `CopySrc | CopyDst` and is **not mappable at all**. It cannot be: a staging
+    * buffer is written both by map()+memcpy (uploadToBuffer) and by writeDirect(), which is a
+    * wgpuQueueWriteBuffer and therefore needs CopyDst -- and WebGPU allows MapWrite to combine
+    * only with CopySrc, so no single usage set satisfies both. Every writeDirect() against a
+    * MapWrite buffer was silently failing validation, once per call, which is what made the gi
+    * sample render nothing on this backend.
+    *
+    * So an upload buffer keeps a CPU shadow: map() hands back the shadow, unmap()/flush() push it
+    * with wgpuQueueWriteBuffer, and writeDirect() writes both. That also removes the async round
+    * trip from the upload path entirely -- it was only ever needed to re-map.
+    *
+    * unmap() invalidates the pointer a readback map() returned; callers must not cache it.
     */
     class VkmStagingBufferWebGPU final : public VkmStagingBuffer
     {
@@ -32,10 +47,24 @@ namespace vkm
 
         inline WGPUBuffer getBuffer() const { return _wgpuBuffer; }
 
+        // True for the readback shape; the upload shape is queue-written and never mapped.
+        inline bool isReadback() const
+        {
+            return (_stagingBufferInfo._flags & VkmResourceCreateInfo::AllowTransferDst) != 0;
+        }
+
     private:
+        // wgpuQueueWriteBuffer requires both the offset and the size to be 4-byte multiples, so a
+        // write is widened to the enclosing aligned range. Correct because the shadow always holds
+        // the buffer's whole contents, so the extra bytes are re-sent unchanged rather than
+        // clobbered with stale data.
+        void flushShadow(uint64_t offset, uint64_t size);
+
         WGPUBuffer _wgpuBuffer{nullptr};
-        // Whether the next map() has to go through wgpuBufferMapAsync. Starts true: this buffer is
-        // created unmapped, because WebGPU rejects any GPU or queue use of a mapped buffer.
+        // Whether the next readback map() has to go through wgpuBufferMapAsync. Starts true: the
+        // buffer is created unmapped, because WebGPU rejects any GPU or queue use of a mapped one.
         bool _needsRemap{true};
+        // Upload shape only: the CPU-side contents map() exposes and the queue writes push.
+        std::vector<uint8_t> _shadow;
     };
 } // namespace vkm

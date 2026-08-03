@@ -2100,3 +2100,54 @@ scoped declaration form, the plain-array form, and the missing-`bindings` error.
 - Planned: verify by looking at a WebGPU image. Did instead: looked, found the sample does not run
   there for pre-existing reasons, proved that by A/B, and recorded it rather than reporting the
   path as visually confirmed.
+
+## 2026-08-03 — The gi sample runs on WebGPU: four validation bugs
+
+The previous entry recorded that the sample rendered nothing on WebGPU and that the failures
+predated the texturing work. These are those failures. The frame now renders the scene with zero
+validation errors, which also makes descriptor set 3 verifiable by looking rather than only by
+building.
+
+**Buffer labels first.** Every message named `[Buffer (unlabeled)]`, because both WebGPU buffer
+classes passed a constant label instead of `_debugName`. Fixing that is what turned an anonymous
+wall of errors into something placeable, and it is the change to make first next time.
+
+- **Every `writeDirect()` on an upload staging buffer was failing** -- 1804 per run, three per
+  frame. It is a `wgpuQueueWriteBuffer`, which requires `CopyDst`, but an upload staging buffer was
+  `CopySrc | MapWrite`, and WebGPU allows `MapWrite` to combine only with `CopySrc`. No single
+  usage set serves both `map()` and `writeDirect()`, so the upload shape now carries **no map usage
+  at all** and keeps a CPU shadow: `map()` hands back the shadow, `unmap()`/`flush()` push it with
+  a queue write, and `writeDirect()` writes both so the two routes cannot disagree. That also
+  deletes the async round trip from the upload path, which only ever existed to re-map. The buffer
+  and its shadow are rounded to 4 bytes because a queue write works in 4-byte units.
+- **The WebGPU singleton bindings were off by one.** The shader used 5/6/7/8 where the runtime
+  layout uses 4/5/6/7, on the stated reasoning that this backend "shifts by one for the
+  push-constant ring". It does not: both branches have four entries ahead of the singletons
+  (native is textures/vertex/index/sampler, WebGPU is pushConstants/vertexMega/indexMega/slotTable).
+  FrameData therefore landed on IndirectArgument's compute-only writable entry -- the six
+  "Fragment is not in the binding visibility" errors and the ReadOnlyStorage-vs-Storage one -- and
+  VisibleList ran off the end of the layout, which is the "Binding doesn't exist".
+- **The argument buffer was writable-storage and indirect in one render pass.**
+  `vkm_bindless.hlsli` already warned about this and concluded "no render pipeline's shader may
+  declare it" -- but WebGPU's synchronization scope covers the *bind group*, not the shader, so not
+  declaring them is not enough. Set 0 now exists in two shapes: the compute one as before, and a
+  graphics one that stops before the two read-write singletons. Render pipelines are created and
+  bound with the graphics shape, which takes those buffers out of the render pass's scope. They are
+  the last entries, so it is a prefix rather than a filtered copy.
+- **The fourth was mine, and the previous entry's claim was wrong.** A `git checkout` used to undo
+  an unrelated edit had also reverted the gi sample's material-table wiring, and it was committed
+  that way -- so the PSOs declared set 3 and nothing ever bound it ("No bind group set at group
+  index 3"). The previous entry called the set-3 path "structurally complete"; it was not. Restored.
+
+**Two traps worth knowing.** Changing a shader does **not** relink an Emscripten target --
+`--preload-file` inputs are not dependencies -- so the first fix appeared to do nothing until
+`gi.data` turned out to be a minute older than the regenerated cache. And a headless run
+rasterizes in software: the capture frame was still the interactive default of 600, which one run
+spent 24 hours and 127 CPU-hours failing to reach, because this sample draws every budgeted probe's
+six cube faces per frame. `VKM_WASM_GI_SCREENSHOT_FRAME` now defaults to 4.
+
+**Verification.** The WebGPU frame shows the textured DamagedHelmet -- surface detail, scratches,
+gold trim, metal plating -- against the blank white page it produced before, with **zero**
+validation errors where there were 1812. It is dark because four frames is nowhere near probe
+convergence, which is a property of the capture, not of the render. Metal and Vulkan re-verified
+after the change.

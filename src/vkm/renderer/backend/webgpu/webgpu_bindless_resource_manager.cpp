@@ -86,6 +86,9 @@ namespace vkm
         */
         constexpr uint32_t kSingletonCount = static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count);
         constexpr uint32_t kEntryCount = kFirstSingletonBinding + kSingletonCount;
+        // Everything up to but excluding IndirectArgument, which is the first writable singleton.
+        constexpr uint32_t kGraphicsEntryCount =
+            kFirstSingletonBinding + static_cast<uint32_t>(VkmBindlessSingletonBuffer::IndirectArgument);
 
         WGPUBindGroupLayoutEntry layoutEntries[kEntryCount]{};
         layoutEntries[0].binding = 0;
@@ -124,6 +127,19 @@ namespace vkm
             return false;
         }
 
+        // The graphics shape stops before the read-write singletons -- see getBindGroupLayout().
+        // They are the last entries, so this is a prefix rather than a filtered copy.
+        WGPUBindGroupLayoutDescriptor graphicsLayoutDescriptor{};
+        graphicsLayoutDescriptor.label = toWGPUStringView("VkmBindlessGraphicsBindGroupLayout");
+        graphicsLayoutDescriptor.entryCount = kGraphicsEntryCount;
+        graphicsLayoutDescriptor.entries = layoutEntries;
+        _graphicsBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &graphicsLayoutDescriptor);
+        if (_graphicsBindGroupLayout == nullptr)
+        {
+            VKM_DEBUG_ERROR("Failed to create the graphics bindless bind group layout");
+            return false;
+        }
+
         return recreateBindGroup();
     }
 
@@ -131,6 +147,9 @@ namespace vkm
     {
         constexpr uint32_t kSingletonCount = static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count);
         constexpr uint32_t kEntryCount = kFirstSingletonBinding + kSingletonCount;
+        // Everything up to but excluding IndirectArgument, which is the first writable singleton.
+        constexpr uint32_t kGraphicsEntryCount =
+            kFirstSingletonBinding + static_cast<uint32_t>(VkmBindlessSingletonBuffer::IndirectArgument);
 
         WGPUBindGroupEntry bindEntries[kEntryCount]{};
         bindEntries[0].binding = 0;
@@ -168,11 +187,31 @@ namespace vkm
             return false;
         }
 
+        // The graphics shape is the same entries minus the read-write singletons, which are last.
+        WGPUBindGroupDescriptor graphicsDescriptor{};
+        graphicsDescriptor.label = toWGPUStringView("VkmBindlessGraphicsBindGroup");
+        graphicsDescriptor.layout = _graphicsBindGroupLayout;
+        graphicsDescriptor.entryCount = kGraphicsEntryCount;
+        graphicsDescriptor.entries = bindEntries;
+
+        WGPUBindGroup graphicsBindGroup = wgpuDeviceCreateBindGroup(_driver->getDevice(), &graphicsDescriptor);
+        if (graphicsBindGroup == nullptr)
+        {
+            wgpuBindGroupRelease(bindGroup);
+            VKM_DEBUG_ERROR("Failed to create the graphics bindless bind group");
+            return false;
+        }
+
         if (_bindGroup != nullptr)
         {
             wgpuBindGroupRelease(_bindGroup);
         }
         _bindGroup = bindGroup;
+        if (_graphicsBindGroup != nullptr)
+        {
+            wgpuBindGroupRelease(_graphicsBindGroup);
+        }
+        _graphicsBindGroup = graphicsBindGroup;
         return true;
     }
 
@@ -212,10 +251,20 @@ namespace vkm
             wgpuBindGroupRelease(_bindGroup);
             _bindGroup = nullptr;
         }
+        if (_graphicsBindGroup != nullptr)
+        {
+            wgpuBindGroupRelease(_graphicsBindGroup);
+            _graphicsBindGroup = nullptr;
+        }
         if (_bindGroupLayout != nullptr)
         {
             wgpuBindGroupLayoutRelease(_bindGroupLayout);
             _bindGroupLayout = nullptr;
+        }
+        if (_graphicsBindGroupLayout != nullptr)
+        {
+            wgpuBindGroupLayoutRelease(_graphicsBindGroupLayout);
+            _graphicsBindGroupLayout = nullptr;
         }
         for (WGPUBuffer& placeholder : _singletonPlaceholders)
         {

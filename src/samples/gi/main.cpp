@@ -55,6 +55,7 @@
 #include <vkm/renderer/scene/gltf_importer.h>
 #include <vkm/renderer/backend/common/staging_buffer.h>
 #include <vkm/renderer/scene/scene.h>
+#include <vkm/renderer/scene/scene_material_tables.h>
 
 #if defined(VKM_PLATFORM_WINDOWS)
 #include <vkm/platform/windows/application.h>
@@ -90,7 +91,11 @@ VKM_GLOBAL_VARIABLE(std::string, gv_gi_screenshot, "");
 #endif
 // Which frame to capture. Probes refresh a slice per frame and converge over rounds, so a
 // screenshot taken too early shows a half-lit volume rather than the technique's actual output.
+#if defined(VKM_WASM_GI_SCREENSHOT_FRAME)
+VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_screenshot_frame, VKM_WASM_GI_SCREENSHOT_FRAME);
+#else
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_screenshot_frame, 600u);
+#endif
 // Which channel to show, as a VkmGiDebugView. Settable here as well as through the UI so a
 // screenshot run can capture a specific term without anyone touching the window.
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_debug_view, 0u);
@@ -271,6 +276,10 @@ public:
         _updater.destroy();
         _volume.destroy();
         _gbuffer.destroy();
+        for (VkmSceneMaterialTables& tables : _gbufferMaterialTables)
+        {
+            tables.destroy(_engine->getDriver());
+        }
         _scene.destroy(_engine->getDriver());
     }
 
@@ -353,7 +362,13 @@ public:
                 [this](const VkmScene::DrawBatch& batch) {
                     return _gbufferPipelines[static_cast<uint32_t>(batch._layout)];
                 },
-                {}, kCameraCullView);
+                // Binds this batch's material at set 3 where the backend needs one (WebGPU); a
+                // no-op where the shader indexes the bindless array instead. A batch carries
+                // exactly one material, which is why VkmScene splits them that way.
+                [this](VkmCommandBufferBase* cb, const VkmScene::DrawBatch& batch) {
+                    _gbufferMaterialTables[static_cast<uint32_t>(batch._layout)].bind(cb, batch._materialIndex);
+                },
+                kCameraCullView);
         });
 
         // 4. Everything the fullscreen passes sample has to leave its attachment layout first.
@@ -537,6 +552,17 @@ private:
             return;
         }
 
+        // Must follow build(), which is where the material textures are created.
+        for (uint32_t i = 0; i < static_cast<uint32_t>(VkmVertexLayoutPreset::Count); ++i)
+        {
+            if (_gbufferPipelines[i] != nullptr &&
+                !_gbufferMaterialTables[i].initialize(driver, _scene, _gbufferPipelines[i], &error))
+            {
+                VKM_DEBUG_ERROR(("Failed to build the GI sample's material tables: " + error).c_str());
+                return;
+            }
+        }
+
         // Fit the grid to what was loaded. A probe outside the geometry contributes nothing but
         // still costs a full capture, so the grid is sized from the scene rather than guessed.
         const VkmSceneAABB bounds = _scene.computeWorldBounds();
@@ -590,6 +616,13 @@ private:
         if (!_updater.initialize(driver, _engine->getPipelineStateManager(), &_volume, updaterDescriptor, &error))
         {
             VKM_DEBUG_ERROR(("Failed to create the probe updater: " + error).c_str());
+            return;
+        }
+        // The capture pass shades with the material's albedo, so it needs the same per-material
+        // tables the G-buffer does wherever the backend cannot sample bindlessly.
+        if (!_updater.buildMaterialTables(_scene, &error))
+        {
+            VKM_DEBUG_ERROR(("Failed to build the probe capture's material tables: " + error).c_str());
             return;
         }
 
@@ -810,6 +843,9 @@ private:
     VkmProbeVolumeUpdater _updater;
 
     std::array<VkmPipelineStateBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _gbufferPipelines{};
+    // One set-3 table per material, per G-buffer permutation. Empty on a backend whose shader
+    // samples materials through the bindless array; see VkmSceneMaterialTables.
+    std::array<VkmSceneMaterialTables, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _gbufferMaterialTables{};
     VkmPipelineStateBase* _lightingPipeline = nullptr;
     VkmPipelineStateBase* _probeLightingPipeline = nullptr;
     VkmPipelineStateBase* _ssgiPipeline = nullptr;

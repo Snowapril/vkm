@@ -6,6 +6,9 @@
 
 #include <emscripten/emscripten.h>
 
+#include <algorithm>
+#include <cstring>
+
 namespace vkm
 {
     namespace
@@ -52,13 +55,14 @@ namespace vkm
         VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
 
         // WebGPU buffer usage is map-mode-exclusive: MapRead may only combine with CopyDst,
-        // MapWrite may only combine with CopySrc -- a buffer can never be both CPU-write- and
-        // CPU-read-mappable. AllowTransferDst therefore selects a read-back buffer (GPU/CPU
-        // writes it via copy/wgpuQueueWriteBuffer, CPU reads it back); otherwise this is the
-        // default upload buffer (CPU writes it via map, GPU reads it).
+        // AllowTransferDst selects the readback shape (GPU copies in, CPU maps to read). Otherwise
+        // this is an upload buffer, and it deliberately carries NO map usage: it must be a
+        // wgpuQueueWriteBuffer destination for writeDirect(), and WebGPU allows MapWrite only
+        // alongside CopySrc, so CopyDst and MapWrite cannot coexist. See the class comment -- the
+        // upload shape is served by a CPU shadow instead.
         const uint64_t usage = (info._flags & VkmResourceCreateInfo::AllowTransferDst) != 0
             ? (WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead)
-            : (WGPUBufferUsage_CopySrc | WGPUBufferUsage_MapWrite);
+            : (WGPUBufferUsage_CopySrc | WGPUBufferUsage_CopyDst);
 
         // Created UNMAPPED, unlike the Vulkan and Metal staging buffers which stay persistently
         // mapped. WebGPU forbids a mapped buffer from being used by the GPU at all: a submit that
@@ -68,10 +72,17 @@ namespace vkm
         // before it is ever read, and writeDirect() is a queue write -- so mapping at creation
         // makes the first operation on a fresh buffer invalid. Callers that want the pointer ask
         // for it with map(), which is what the async round trip below is for.
+        // See VkmBufferWebGPU: the caller's name reaches Dawn's validation messages.
+        const std::string label = (info._debugName != nullptr) ? std::string(info._debugName)
+                                                               : std::string("VkmStagingBufferWebGPU");
+        // wgpuQueueWriteBuffer works in 4-byte units, so round up rather than leave a tail that
+        // can never be written.
+        const uint64_t alignedSize = (info._size + 3ull) & ~3ull;
+
         const WGPUBufferDescriptor bufferDesc{
-            .label            = toWGPUStringView("VkmStagingBufferWebGPU"),
+            .label            = toWGPUStringView(label.c_str()),
             .usage            = static_cast<WGPUBufferUsage>(usage),
-            .size             = info._size,
+            .size             = alignedSize,
             .mappedAtCreation = false,
         };
         _wgpuBuffer = wgpuDeviceCreateBuffer(driverWebGPU->getDevice(), &bufferDesc);
@@ -83,11 +94,22 @@ namespace vkm
 
         _mappedPointer = nullptr;
         _needsRemap = true;
+        if (!isReadback())
+        {
+            _shadow.assign(static_cast<size_t>(alignedSize), 0);
+        }
         return true;
     }
 
     void* VkmStagingBufferWebGPU::map()
     {
+        if (!isReadback())
+        {
+            // No map usage on this buffer at all; the shadow *is* the mapped range, and unmap()
+            // is what pushes it. Synchronous, unlike the readback path below.
+            return _shadow.data();
+        }
+
         if (!_needsRemap)
         {
             // Still valid from mappedAtCreation (or a previous still-open map).
@@ -128,25 +150,66 @@ namespace vkm
 
     void VkmStagingBufferWebGPU::unmap()
     {
+        if (!isReadback())
+        {
+            // Everything the caller wrote through map() lives in the shadow; this is where it
+            // reaches the buffer. Per spec the queue write lands before the next submit.
+            flushShadow(0, _shadow.size());
+            return;
+        }
+
         wgpuBufferUnmap(_wgpuBuffer);
         _mappedPointer = nullptr; // invalidated -- callers must not cache it across unmap()
         _needsRemap = true;
     }
 
-    void VkmStagingBufferWebGPU::flush(uint64_t, uint64_t)
+    void VkmStagingBufferWebGPU::flush(uint64_t offset, uint64_t size)
     {
-        // No-op: writes to a mapped range become visible on unmap()/submit, no explicit
-        // flush step exists in the WebGPU API.
+        // A readback buffer needs nothing: writes to a mapped range become visible on
+        // unmap()/submit, and WebGPU has no explicit flush. An upload buffer pushes the range,
+        // so a caller that flushes without unmapping still gets its bytes across.
+        if (!isReadback())
+        {
+            flushShadow(offset, size);
+        }
+    }
+
+    void VkmStagingBufferWebGPU::flushShadow(uint64_t offset, uint64_t size)
+    {
+        if (_shadow.empty() || size == 0)
+        {
+            return;
+        }
+        const uint64_t alignedOffset = offset & ~3ull;
+        const uint64_t end = std::min<uint64_t>((offset + size + 3ull) & ~3ull, _shadow.size());
+        if (end <= alignedOffset)
+        {
+            return;
+        }
+        VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
+        wgpuQueueWriteBuffer(driverWebGPU->getQueue(), _wgpuBuffer, alignedOffset,
+                             _shadow.data() + alignedOffset, static_cast<size_t>(end - alignedOffset));
     }
 
     void VkmStagingBufferWebGPU::writeDirect(uint64_t offset, const void* data, uint64_t size)
     {
-        // Unlike map()+memcpy(), this works regardless of the buffer's current map state --
-        // required for a buffer a GPU command stream also writes into (map()/unmap() would
-        // otherwise be needed around every write, each a real async round trip on this
-        // backend). Per spec, the write takes effect before the next wgpuQueueSubmit().
-        VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
-        wgpuQueueWriteBuffer(driverWebGPU->getQueue(), _wgpuBuffer, offset, data, size);
+        // Per spec the write takes effect before the next wgpuQueueSubmit(). The shadow is updated
+        // too, so a later map() sees what was written here rather than stale bytes -- the two
+        // routes address the same buffer and must not disagree.
+        if (isReadback())
+        {
+            VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
+            wgpuQueueWriteBuffer(driverWebGPU->getQueue(), _wgpuBuffer, offset, data, size);
+            return;
+        }
+
+        if (offset + size > _shadow.size())
+        {
+            VKM_DEBUG_ERROR("writeDirect: range exceeds the staging buffer");
+            return;
+        }
+        std::memcpy(_shadow.data() + offset, data, static_cast<size_t>(size));
+        flushShadow(offset, size);
     }
 
     void VkmStagingBufferWebGPU::setDebugName(const char* name)

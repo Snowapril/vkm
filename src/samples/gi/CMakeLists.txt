@@ -92,7 +92,17 @@ if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
         # interactive wasm build -- and turned on only for a headless verification run:
         #   -DVKM_WASM_GI_SCENE=... -DVKM_WASM_GI_AUTO_SCREENSHOT=ON
         if (VKM_WASM_GI_AUTO_SCREENSHOT)
-            target_compile_definitions(${target} PRIVATE VKM_WASM_GI_AUTO_SCREENSHOT=1)
+            # Which frame to capture. Deliberately tiny: a headless run rasterizes in software
+            # (SwiftShader), and this sample draws every budgeted probe's six cube faces per frame,
+            # so the interactive default of 600 is unreachable -- one measured run spent 24 hours
+            # and 127 CPU-hours without getting there. A handful of frames is enough to show the
+            # frame renders; it is not enough for the probe volume to converge.
+            if (NOT VKM_WASM_GI_SCREENSHOT_FRAME)
+                set(VKM_WASM_GI_SCREENSHOT_FRAME 4)
+            endif()
+            target_compile_definitions(${target} PRIVATE
+                VKM_WASM_GI_AUTO_SCREENSHOT=1
+                VKM_WASM_GI_SCREENSHOT_FRAME=${VKM_WASM_GI_SCREENSHOT_FRAME})
         endif()
         message(STATUS "gi: preloading ${VKM_WASM_GI_SCENE_ABS} into MEMFS at /scene")
     endif()

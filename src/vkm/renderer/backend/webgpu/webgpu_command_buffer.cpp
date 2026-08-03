@@ -150,7 +150,7 @@ namespace vkm
             VkmBindlessResourceManagerWebGPU* computeBindlessManager =
                 static_cast<VkmDriverWebGPU*>(_driver)->getBindlessResourceManager();
             const uint32_t computeZeroOffset = 0;
-            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, 0, computeBindlessManager->getBindGroup(),
+            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, 0, computeBindlessManager->getBindGroup(true),
                                                1, &computeZeroOffset);
             // And group 1, for the same reason the graphics path below does it: WebGPU requires
             // every group the pipeline layout declares to be set before a dispatch, referenced by
@@ -172,7 +172,7 @@ namespace vkm
         VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
         const uint32_t zeroOffset = 0;
         wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, 0,
-                                          driverWebGPU->getBindlessResourceManager()->getBindGroup(),
+                                          driverWebGPU->getBindlessResourceManager()->getBindGroup(false),
                                           1, &zeroOffset);
         // Group 1 is this frame slot's camera constants. Set unconditionally: WebGPU requires
         // every group the pipeline layout declares to be set before a draw, whether or not the
@@ -279,10 +279,10 @@ namespace vkm
         // A compute pass has its own encoder; the render-pass encoder is null there.
         if (_computePassEncoder != nullptr)
         {
-            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, 0, bindlessManager->getBindGroup(), 1, &dynamicOffset);
+            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, 0, bindlessManager->getBindGroup(true), 1, &dynamicOffset);
             return;
         }
-        wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, 0, bindlessManager->getBindGroup(), 1, &dynamicOffset);
+        wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, 0, bindlessManager->getBindGroup(false), 1, &dynamicOffset);
     }
 
     void VkmCommandBufferWebGPU::onDrawIndirectCount(VkmIndirectArgumentLayout layout,
