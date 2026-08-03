@@ -49,8 +49,13 @@ namespace vkm
 
         VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
 
+        // The caller's name, not a constant: Dawn puts the label in its validation messages, and
+        // "[Buffer (unlabeled)]" is the difference between an error that names the offender and one
+        // that needs a bisect to place.
+        const std::string label =
+            (info._debugName != nullptr) ? std::string(info._debugName) : std::string("VkmBufferWebGPU");
         const WGPUBufferDescriptor bufferDesc{
-            .label = toWGPUStringView("VkmBufferWebGPU"),
+            .label = toWGPUStringView(label.c_str()),
             .usage = toWGPUBufferUsage(info._flags),
             .size  = info._size,
         };

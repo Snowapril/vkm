@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include <vkm/renderer/backend/common/per_pass_resource_table.h>
+#include <vkm/renderer/backend/common/resource_table.h>
 
 #include <cstdint>
 #include <vector>
@@ -25,18 +25,18 @@ namespace vkm
     * Resolving at build time is also what makes the immutability in the base class meaningful
     * here: a resource that moved or was recreated needs a rebuilt table, exactly as on Vulkan.
     */
-    class VkmPerPassResourceTableMetal : public VkmPerPassResourceTableBase
+    class VkmResourceTableMetal : public VkmResourceTableBase
     {
     public:
-        explicit VkmPerPassResourceTableMetal(VkmDriverBase* driver);
-        ~VkmPerPassResourceTableMetal() override;
+        explicit VkmResourceTableMetal(VkmDriverBase* driver);
+        ~VkmResourceTableMetal() override;
 
         // Applies every resolved entry to `argumentTable`. Called from the command buffer, which
         // owns the encoder the table is attached to.
         void applyTo(id<MTL4ArgumentTable> argumentTable) const;
 
     protected:
-        bool createInner(const std::vector<VkmPerPassResourceEntry>& entries, std::string* outError) override final;
+        bool createInner(const std::vector<VkmTableResourceEntry>& entries, std::string* outError) override final;
         void destroyInner() override final;
 
     private:

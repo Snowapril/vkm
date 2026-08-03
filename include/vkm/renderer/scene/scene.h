@@ -97,14 +97,28 @@ namespace vkm
     };
     static_assert(sizeof(SceneBatchConstants) == 32, "SceneBatchConstants must match the shader-side struct");
 
-    // Material factors as uploaded into the scene's material pool.
+    /*
+    * @brief Material factors plus texture slots, as uploaded into the scene's material pool.
+    *
+    * glTF multiplies factor by texture, so a slot of INVALID_VALUE32 ("no texture") has to be
+    * distinguishable from slot 0 or every untextured material samples whatever lives there.
+    *
+    * All four slots are present even though only base colour and metallic-roughness are sampled
+    * today: the importer already produces four image references, and the alternative is paying the
+    * same ABI churn twice (the record's word stride is mirrored in vkm_material.hlsli and pinned by
+    * TestObjectDataLayout).
+    */
     struct VkmMaterialData
     {
         glm::vec4 _baseColorFactor{ 1.0f, 1.0f, 1.0f, 1.0f };
         glm::vec4 _emissive{ 0.0f, 0.0f, 0.0f, 0.0f };            // xyz = emissive factor
         glm::vec4 _metallicRoughness{ 1.0f, 1.0f, 0.0f, 0.0f };   // x = metallic, y = roughness
+        // Bindless texture-array slots: x = base colour, y = metallic-roughness, z = normal,
+        // w = emissive. INVALID_VALUE32 where the material has no texture for that channel, which
+        // is also what every slot holds on a backend without VkmDriverCapabilityFlags::TextureUpload.
+        glm::uvec4 _textureSlots{ INVALID_VALUE32, INVALID_VALUE32, INVALID_VALUE32, INVALID_VALUE32 };
     };
-    static_assert(sizeof(VkmMaterialData) == 48, "VkmMaterialData must match the shader-side material record");
+    static_assert(sizeof(VkmMaterialData) == 64, "VkmMaterialData must match the shader-side material record");
 
     // One placed instance of an imported mesh.
     struct VkmSceneObject
@@ -140,11 +154,14 @@ namespace vkm
     class VkmScene
     {
     public:
-        // One run of objects that share a pipeline and a vertex layout, so they share a PSO.
+        // One run of objects that share a pipeline, a vertex layout and a material -- so they
+        // share a PSO, and a per-draw material table if the backend needs one.
         struct DrawBatch
         {
             VkmVertexLayoutPreset _layout = VkmVertexLayoutPreset::StandardPBR;
             uint32_t _pipelineId = 0;
+            // Every object in the batch has this material; see buildDrawBatches().
+            uint32_t _materialIndex = 0;
             uint32_t _firstObject = 0; // index into the sorted object array == ObjectData index
             uint32_t _objectCount = 0; // == this batch's maxDrawCount
 
@@ -240,7 +257,51 @@ namespace vkm
         // World-space bounds of every placed object; invalid when the scene is empty.
         VkmSceneAABB computeWorldBounds() const;
 
+        // The textures one material samples, for a backend that binds them per draw rather than
+        // indexing a bindless array. Invalid where the material has no texture for that channel.
+        struct MaterialTextures
+        {
+            VkmResourceHandle _baseColor{ VKM_INVALID_RESOURCE_HANDLE };
+            VkmResourceHandle _metallicRoughness{ VKM_INVALID_RESOURCE_HANDLE };
+        };
+
+        inline uint32_t getMaterialCount() const { return static_cast<uint32_t>(_materials.size()); }
+
+        /*
+        * @brief The textures a material samples, for building a per-draw (set 3) table.
+        *
+        * @details Only meaningful on a backend without VkmDriverCapabilityFlags::BindlessTextures;
+        * elsewhere the shader indexes the bindless array from the slots in VkmMaterialData and
+        * these are the same textures reached the other way. A channel with no texture is
+        * VKM_INVALID_RESOURCE_HANDLE, which a table builder substitutes a placeholder for -- an
+        * unbound entry is a validation error, not a silently absent one.
+        */
+        MaterialTextures getMaterialTextures(uint32_t materialIndex) const;
+
     private:
+        /*
+        * @brief One material's texture references, as resolved file paths plus the colour space
+        * each is sampled in.
+        *
+        * Held as paths from addModel() until build(), which is where a driver first exists. Colour
+        * space is a property of the *channel that references* the image, not of the image: base
+        * colour and emissive are sRGB-encoded, metallic-roughness and normal are linear data. The
+        * upload cache is therefore keyed on (path, sRGB) so an image used as both gets two
+        * textures rather than one that is wrong for one of them.
+        */
+        struct MaterialImageRefs
+        {
+            std::string _baseColor;
+            std::string _metallicRoughness;
+            std::string _normal;
+            std::string _emissive;
+        };
+
+        // Decodes, uploads and registers every referenced image, filling _materials' texture slots.
+        // Skipped entirely without VkmDriverCapabilityFlags::TextureUpload, which leaves every slot
+        // invalid and every material factor-only -- what WebGPU gets until set 3 carries them.
+        bool uploadMaterialTextures(VkmDriverBase* driver, std::string* outError);
+
         // One mesh appended into a pool, plus the object-space data every instance of it shares.
         struct MeshEntry
         {
@@ -250,9 +311,9 @@ namespace vkm
             VkmSceneAABB _bounds;
         };
 
-        // Sorts _objects by (pipelineId, layout, materialIndex) and emits one batch per
-        // (pipelineId, layout) run. Material is a per-object index the shader reads out of
-        // ObjectData rather than pipeline state, so it orders objects but never splits a batch.
+        // Sorts _objects by (pipelineId, layout, materialIndex) and emits one batch per run of
+        // all three. The shader still reads the material index out of ObjectData; the split
+        // exists so a backend that binds material textures per draw has somewhere to bind them.
         void buildDrawBatches();
         void fillObjectData();
         // Assigns each batch its word regions and returns the two buffers' sizes in bytes.
@@ -262,6 +323,11 @@ namespace vkm
         std::vector<MeshEntry> _meshEntries;
         std::vector<VkmSceneObject> _objects;
         std::vector<VkmMaterialData> _materials;
+        std::vector<MaterialImageRefs> _materialImages; // 1:1 with _materials
+        // Textures this scene owns, one per (path, colour space) actually uploaded.
+        std::vector<VkmResourceHandle> _materialTextures;
+        std::vector<uint32_t> _materialTextureSlots; // 1:1 with _materialTextures
+        std::vector<MaterialTextures> _materialTextureHandles; // 1:1 with _materials
         std::vector<VkmObjectData> _objectData;
         std::vector<DrawBatch> _drawBatches;
 

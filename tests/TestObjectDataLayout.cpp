@@ -44,16 +44,27 @@ TEST_CASE("VkmFrameData - matches the shader-side FrameData layout") {
 
 /*
 * The shaders read the material pool out of the untyped u32 Buffer array, so they index it with a
-* hardcoded stride in words. 48 bytes == 12 words, with baseColorFactor first.
+* hardcoded stride in words -- VKM_MATERIAL_WORD_STRIDE in vkm_material.hlsli, which is the only
+* place that stride now lives. 64 bytes == 16 words, with baseColorFactor first and the texture
+* slots last.
 */
-TEST_CASE("VkmMaterialData - is 12 u32 words with the base color first") {
-    CHECK(sizeof(vkm::VkmMaterialData) == 48);
+TEST_CASE("VkmMaterialData - is 16 u32 words with the base color first and the texture slots last") {
+    CHECK(sizeof(vkm::VkmMaterialData) == 64);
     CHECK(sizeof(vkm::VkmMaterialData) % 4 == 0);
-    CHECK(sizeof(vkm::VkmMaterialData) / 4 == 12);
+    CHECK(sizeof(vkm::VkmMaterialData) / 4 == 16);
 
     CHECK(offsetof(vkm::VkmMaterialData, _baseColorFactor) == 0);
     CHECK(offsetof(vkm::VkmMaterialData, _emissive) == 16);
     CHECK(offsetof(vkm::VkmMaterialData, _metallicRoughness) == 32);
+    CHECK(offsetof(vkm::VkmMaterialData, _textureSlots) == 48);
+
+    // "No texture for this channel" must be distinguishable from slot 0, or every untextured
+    // material samples whatever happens to live there.
+    const vkm::VkmMaterialData defaults;
+    CHECK(defaults._textureSlots.x == vkm::INVALID_VALUE32);
+    CHECK(defaults._textureSlots.y == vkm::INVALID_VALUE32);
+    CHECK(defaults._textureSlots.z == vkm::INVALID_VALUE32);
+    CHECK(defaults._textureSlots.w == vkm::INVALID_VALUE32);
 }
 
 /*

@@ -12,7 +12,7 @@
 #include <vkm/renderer/backend/common/buffer.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/frame_constants.h>
-#include <vkm/renderer/backend/common/per_pass_resource_table.h>
+#include <vkm/renderer/backend/common/resource_table.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/render_graph.h>
@@ -292,7 +292,7 @@ namespace vkmtest
         fbDesc._colorAttachments[0] = target->getHandle();
 
         const auto shade = [&]() {
-            const std::vector<vkm::VkmPerPassResourceEntry> entries{
+            const std::vector<vkm::VkmTableResourceEntry> entries{
                 { 0, normalTexture->getHandle() },
                 { 1, motionTexture->getHandle() },
                 { 2, volume.getIrradianceTexture() },
@@ -301,7 +301,7 @@ namespace vkmtest
                 { 5, volumeBuffer->getHandle() },
             };
             std::string tableError;
-            vkm::VkmPerPassResourceTableBase* table = driver->newPerPassResourceTable(pso, entries, &tableError);
+            vkm::VkmResourceTableBase* table = driver->newResourceTable(pso, vkm::VkmResourceSetKind::PerPass, entries, &tableError);
             REQUIRE_MESSAGE(table != nullptr, tableError);
 
             vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
@@ -315,7 +315,7 @@ namespace vkmtest
             auto* subGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
             subGraph->setRenderCallback([pso, table](vkm::VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->bindPipeline(pso);
-                commandBuffer->bindPerPassResources(table);
+                commandBuffer->bindResourceTable(table);
                 commandBuffer->draw(3, 1, 0, 0);
             });
             renderGraph.compile();
@@ -433,8 +433,8 @@ namespace vkmtest
         REQUIRE(driver->uploadToBuffer(captureBuffer->getHandle(), &captureConstants, sizeof(captureConstants)));
 
         std::string tableError;
-        vkm::VkmPerPassResourceTableBase* table = driver->newPerPassResourceTable(
-            pso, {{ 0, captureBuffer->getHandle() }}, &tableError);
+        vkm::VkmResourceTableBase* table = driver->newResourceTable(
+            pso, vkm::VkmResourceSetKind::PerPass, {{ 0, captureBuffer->getHandle() }}, &tableError);
         REQUIRE_MESSAGE(table != nullptr, tableError);
 
         const glm::uvec2 captureExtent(kFaceSize * kFacesX, kFaceSize * kFacesY);
@@ -521,7 +521,7 @@ namespace vkmtest
                     commandBuffer,
                     [pso](const vkm::VkmScene::DrawBatch&) { return pso; },
                     [table, &push](vkm::VkmCommandBufferBase* cb, const vkm::VkmScene::DrawBatch&) {
-                        cb->bindPerPassResources(table);
+                        cb->bindResourceTable(table);
                         cb->setPushConstants(&push, sizeof(push));
                     });
             }
@@ -659,8 +659,8 @@ namespace vkmtest
         REQUIRE(sampler != nullptr);
 
         std::string tableError;
-        vkm::VkmPerPassResourceTableBase* table = driver->newPerPassResourceTable(
-            pso,
+        vkm::VkmResourceTableBase* table = driver->newResourceTable(
+            pso, vkm::VkmResourceSetKind::PerPass,
             {{ 0, captureTexture->getHandle() },
              { 1, sampler->getHandle() },
              { 2, blendBuffer->getHandle() }},
@@ -684,7 +684,7 @@ namespace vkmtest
         auto* blendSubGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
         blendSubGraph->setRenderCallback([pso, table](vkm::VkmCommandBufferBase* commandBuffer) {
             commandBuffer->bindPipeline(pso);
-            commandBuffer->bindPerPassResources(table);
+            commandBuffer->bindResourceTable(table);
 
             // Hysteresis 0 so this measures the integration alone: the blend state then weights the
             // new value 1 and the cleared attachment 0, making the pass a plain overwrite.

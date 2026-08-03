@@ -207,24 +207,24 @@ namespace vkm
         }
 
     // Set-2 mappings. Shader visibility is derived from the resource type rather than declared per
-    // binding (see VkmPerPassResourceType), so these two stay the single place that decision lives.
-    VkDescriptorType toVkDescriptorType(VkmPerPassResourceType type)
+    // binding (see VkmTableResourceType), so these two stay the single place that decision lives.
+    VkDescriptorType toVkDescriptorType(VkmTableResourceType type)
     {
         switch (type)
         {
-            case VkmPerPassResourceType::SampledTexture: return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-            case VkmPerPassResourceType::Sampler:        return VK_DESCRIPTOR_TYPE_SAMPLER;
-            case VkmPerPassResourceType::StorageBuffer:  return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            case VkmPerPassResourceType::UniformBuffer:  return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            case VkmTableResourceType::SampledTexture: return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            case VkmTableResourceType::Sampler:        return VK_DESCRIPTOR_TYPE_SAMPLER;
+            case VkmTableResourceType::StorageBuffer:  return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            case VkmTableResourceType::UniformBuffer:  return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         }
         return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     }
 
-    VkShaderStageFlags toVkShaderStageFlags(VkmPerPassResourceType type)
+    VkShaderStageFlags toVkShaderStageFlags(VkmTableResourceType type)
     {
         // Storage buffers are compute-only to match the constraint the other backends impose (see
-        // VkmPerPassResourceType::StorageBuffer); the rest are visible everywhere, like set 1.
-        if (type == VkmPerPassResourceType::StorageBuffer)
+        // VkmTableResourceType::StorageBuffer); the rest are visible everywhere, like set 1.
+        if (type == VkmTableResourceType::StorageBuffer)
         {
             return VK_SHADER_STAGE_COMPUTE_BIT;
         }
@@ -260,36 +260,75 @@ namespace vkm
             driverVulkan->getFrameConstantManager()->getSetLayout(),
         };
 
-        // Set 2 is this pipeline's own, built from its `perPassResources` declaration. Declaring
-        // it makes this pipeline layout-incompatible with one that does not -- the first time that
-        // has been true in this engine -- so it is only added when the PSO actually asked for it,
-        // leaving every existing pipeline exactly as it was.
-        if (!desc.perPassResources.empty())
+        // Sets 2 and 3 are this pipeline's own, built from its `perPassResources` /
+        // `perDrawResources` declarations. Declaring either makes this pipeline
+        // layout-incompatible with one that does not, so each is only added when the PSO actually
+        // asked for it, leaving every existing pipeline exactly as it was.
+        //
+        // A set must land at its own index, so a pipeline that declares set 3 and not set 2 --
+        // which a G-buffer pass wanting only per-material textures does -- needs an empty
+        // placeholder at index 2. `setLayouts` is positional; pushing set 3 onto a two-element
+        // vector would silently make it set 2.
+        auto buildSetLayout = [&](VkmResourceSetKind kind, VkDescriptorSetLayout& outLayout) -> bool
         {
-            std::vector<VkDescriptorSetLayoutBinding> perPassBindings;
-            perPassBindings.reserve(desc.perPassResources.size());
-            for (const VkmPerPassResourceBinding& resource : desc.perPassResources)
+            const std::vector<VkmTableResourceBinding>& declaration = desc.resourcesFor(kind);
+            std::vector<VkDescriptorSetLayoutBinding> bindings;
+            bindings.reserve(declaration.size());
+            for (const VkmTableResourceBinding& resource : declaration)
             {
-                perPassBindings.push_back(VkDescriptorSetLayoutBinding{
+                bindings.push_back(VkDescriptorSetLayoutBinding{
                     .binding         = resource.binding,
                     .descriptorType  = toVkDescriptorType(resource.type),
                     .descriptorCount = 1,
                     .stageFlags      = toVkShaderStageFlags(resource.type),
                 });
             }
-            const VkDescriptorSetLayoutCreateInfo perPassLayoutCreateInfo{
+            const VkDescriptorSetLayoutCreateInfo layoutCreateInfo{
                 .sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-                .bindingCount = static_cast<uint32_t>(perPassBindings.size()),
-                .pBindings    = perPassBindings.data(),
+                .bindingCount = static_cast<uint32_t>(bindings.size()),
+                .pBindings    = bindings.data(),
             };
             const VkResult layoutResult =
-                vkCreateDescriptorSetLayout(device, &perPassLayoutCreateInfo, nullptr, &_perPassSetLayout);
-            if (!VKM_VK_CHECK_RESULT_MSG(layoutResult, "Failed to create per-pass descriptor set layout"))
+                vkCreateDescriptorSetLayout(device, &layoutCreateInfo, nullptr, &outLayout);
+            if (!VKM_VK_CHECK_RESULT_MSG(layoutResult, "Failed to create a resource-table descriptor set layout"))
             {
-                setError(outError, "Failed to create the set-2 layout for " + desc.name);
+                setError(outError, std::string("Failed to create the ") + vkmResourceSetKindName(kind) +
+                                       " set layout for " + desc.name);
+                return false;
+            }
+            return true;
+        };
+
+        if (!desc.perPassResources.empty())
+        {
+            if (!buildSetLayout(VkmResourceSetKind::PerPass, _perPassSetLayout))
+            {
                 return false;
             }
             setLayouts.push_back(_perPassSetLayout);
+        }
+        if (!desc.perDrawResources.empty())
+        {
+            if (setLayouts.size() == kVkmPerPassSetIndex)
+            {
+                // No set 2 was declared; occupy index 2 with an empty layout so set 3 is set 3.
+                const VkDescriptorSetLayoutCreateInfo emptyLayoutCreateInfo{
+                    .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                };
+                const VkResult emptyResult =
+                    vkCreateDescriptorSetLayout(device, &emptyLayoutCreateInfo, nullptr, &_emptySetLayout);
+                if (!VKM_VK_CHECK_RESULT_MSG(emptyResult, "Failed to create the placeholder set-2 layout"))
+                {
+                    setError(outError, "Failed to create the placeholder set-2 layout for " + desc.name);
+                    return false;
+                }
+                setLayouts.push_back(_emptySetLayout);
+            }
+            if (!buildSetLayout(VkmResourceSetKind::PerDraw, _perDrawSetLayout))
+            {
+                return false;
+            }
+            setLayouts.push_back(_perDrawSetLayout);
         }
         const VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
@@ -607,10 +646,13 @@ namespace vkm
             vkDestroyPipelineLayout(device, _pipelineLayout, nullptr);
             _pipelineLayout = VK_NULL_HANDLE;
         }
-        if (_perPassSetLayout != VK_NULL_HANDLE)
+        for (VkDescriptorSetLayout* layout : {&_perPassSetLayout, &_perDrawSetLayout, &_emptySetLayout})
         {
-            vkDestroyDescriptorSetLayout(device, _perPassSetLayout, nullptr);
-            _perPassSetLayout = VK_NULL_HANDLE;
+            if (*layout != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorSetLayout(device, *layout, nullptr);
+                *layout = VK_NULL_HANDLE;
+            }
         }
     }
 } // namespace vkm

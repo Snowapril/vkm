@@ -75,11 +75,11 @@ namespace vkm
             { "clockwise", VkmFrontFace::Clockwise },
         };
 
-        const std::unordered_map<std::string_view, VkmPerPassResourceType> kPerPassResourceTypeTable = {
-            { "sampled_texture", VkmPerPassResourceType::SampledTexture },
-            { "sampler", VkmPerPassResourceType::Sampler },
-            { "storage_buffer", VkmPerPassResourceType::StorageBuffer },
-            { "uniform_buffer", VkmPerPassResourceType::UniformBuffer },
+        const std::unordered_map<std::string_view, VkmTableResourceType> kTableResourceTypeTable = {
+            { "sampled_texture", VkmTableResourceType::SampledTexture },
+            { "sampler", VkmTableResourceType::Sampler },
+            { "storage_buffer", VkmTableResourceType::StorageBuffer },
+            { "uniform_buffer", VkmTableResourceType::UniformBuffer },
         };
 
         const std::unordered_map<std::string_view, VkmCompareOp> kCompareOpTable = {
@@ -383,8 +383,8 @@ namespace vkm
         * backend would either reject or silently alias them, and a silent alias is the worse of
         * the two to debug.
         */
-        bool parsePerPassResourcesArray(ParseState& state, const Json& resources,
-            const std::string& fieldNamePrefix, std::vector<VkmPerPassResourceBinding>& out)
+        bool parseResourceTableArray(ParseState& state, const Json& resources,
+            const std::string& fieldNamePrefix, std::vector<VkmTableResourceBinding>& out)
         {
             if (!resources.is_array())
             {
@@ -404,26 +404,26 @@ namespace vkm
                     return false;
                 }
 
-                VkmPerPassResourceBinding binding{};
+                VkmTableResourceBinding binding{};
                 parseUint32Field(state, resource, "binding", fieldPrefix + ".binding", binding.binding);
-                parseEnumField(state, resource, "type", fieldPrefix + ".type", kPerPassResourceTypeTable, binding.type);
+                parseEnumField(state, resource, "type", fieldPrefix + ".type", kTableResourceTypeTable, binding.type);
                 if (state.failed())
                 {
                     return false;
                 }
 
-                if (binding.binding >= kVkmPerPassResourceMaxBindings)
+                if (binding.binding >= kVkmResourceTableMaxBindings)
                 {
                     // Capped engine-wide, not per backend: Metal reserves argument-table slots up
                     // front, and letting a higher index parse would turn a pipeline that loads on
                     // Vulkan into a runtime failure there only.
                     state.fail("Field '" + fieldPrefix + ".binding' is " + std::to_string(binding.binding) +
-                               ", but per-pass bindings must be below " +
-                               std::to_string(kVkmPerPassResourceMaxBindings));
+                               ", but resource-table bindings must be below " +
+                               std::to_string(kVkmResourceTableMaxBindings));
                     return false;
                 }
 
-                for (const VkmPerPassResourceBinding& existing : out)
+                for (const VkmTableResourceBinding& existing : out)
                 {
                     if (existing.binding == binding.binding)
                     {
@@ -433,6 +433,41 @@ namespace vkm
                     }
                 }
                 out.push_back(binding);
+            }
+
+            // Metal reserves argument-table slots per resource type up front, and its table caps
+            // buffers at 31 and samplers at 16 across both sets -- so a declaration that overruns
+            // one type's share is rejected here, engine-wide, rather than becoming a device-level
+            // abort on one backend only. The binding-index cap above bounds the *indices*; this
+            // bounds how many of each kind a single set may hold.
+            uint32_t typeCounts[4] = {0, 0, 0, 0};
+            for (const VkmTableResourceBinding& declared : out)
+            {
+                ++typeCounts[static_cast<size_t>(declared.type)];
+            }
+            const auto checkCapacity = [&](VkmTableResourceType type, uint32_t capacity, const char* what) {
+                if (typeCounts[static_cast<size_t>(type)] > capacity)
+                {
+                    state.fail("Field '" + fieldNamePrefix + "' declares " +
+                               std::to_string(typeCounts[static_cast<size_t>(type)]) + " " + what +
+                               " resources, but one set may hold at most " + std::to_string(capacity));
+                    return false;
+                }
+                return true;
+            };
+            if (!checkCapacity(VkmTableResourceType::SampledTexture, kVkmMetalTableTextureCapacity, "sampled_texture") ||
+                !checkCapacity(VkmTableResourceType::Sampler, kVkmMetalTableSamplerCapacity, "sampler"))
+            {
+                return false;
+            }
+            const uint32_t bufferCount = typeCounts[static_cast<size_t>(VkmTableResourceType::StorageBuffer)] +
+                                         typeCounts[static_cast<size_t>(VkmTableResourceType::UniformBuffer)];
+            if (bufferCount > kVkmMetalTableBufferCapacity)
+            {
+                state.fail("Field '" + fieldNamePrefix + "' declares " + std::to_string(bufferCount) +
+                           " buffer resources, but one set may hold at most " +
+                           std::to_string(kVkmMetalTableBufferCapacity));
+                return false;
             }
             return true;
         }
@@ -731,8 +766,71 @@ namespace vkm
 
             if (root.contains("per_pass_resources"))
             {
-                if (!parsePerPassResourcesArray(state, root.at("per_pass_resources"), "per_pass_resources",
-                                                desc.perPassResources))
+                if (!parseResourceTableArray(state, root.at("per_pass_resources"), "per_pass_resources",
+                                             desc.perPassResources))
+                {
+                    return false;
+                }
+            }
+
+            /*
+            * Set 3 parses identically to set 2 -- same element shape, same binding cap, same
+            * duplicate rejection. A PSO may declare either, both, or neither; declaring set 3
+            * alone is legal and is what a G-buffer pass wanting only per-material textures does.
+            *
+            * It additionally accepts an object form scoping the declaration to some backends:
+            *
+            *     "per_draw_resources": [ ... ]                          every backend
+            *     "per_draw_resources": { "backends": ["webgpu"],        those backends only
+            *                             "bindings": [ ... ] }
+            *
+            * because set 3 is the one declaration that is backend-specific in substance rather
+            * than in expression: only WebGPU, lacking an array-of-handle type, reaches material
+            * textures through a per-draw table. The scoping mirrors the shader's own
+            * `#if defined(VKM_BACKEND_WEBGPU)`.
+            */
+            if (root.contains("per_draw_resources"))
+            {
+                const Json& perDraw = root.at("per_draw_resources");
+                if (perDraw.is_object())
+                {
+                    if (!perDraw.contains("bindings"))
+                    {
+                        state.fail("Field 'per_draw_resources' in object form requires a 'bindings' array");
+                        return false;
+                    }
+                    if (perDraw.contains("backends"))
+                    {
+                        const Json& backendsJson = perDraw.at("backends");
+                        if (!backendsJson.is_array())
+                        {
+                            state.fail("Field 'per_draw_resources.backends' must be an array of backend name strings");
+                            return false;
+                        }
+                        for (const Json& entry : backendsJson)
+                        {
+                            if (!entry.is_string())
+                            {
+                                state.fail("Field 'per_draw_resources.backends' entries must be strings");
+                                return false;
+                            }
+                            const std::string name = entry.get<std::string>();
+                            const auto backendIt = kShaderCacheBackendTable.find(name);
+                            if (backendIt == kShaderCacheBackendTable.end())
+                            {
+                                state.fail("Unknown value '" + name + "' for field 'per_draw_resources.backends'");
+                                return false;
+                            }
+                            desc.perDrawResourceBackends.push_back(backendIt->second);
+                        }
+                    }
+                    if (!parseResourceTableArray(state, perDraw.at("bindings"), "per_draw_resources.bindings",
+                                                 desc.perDrawResources))
+                    {
+                        return false;
+                    }
+                }
+                else if (!parseResourceTableArray(state, perDraw, "per_draw_resources", desc.perDrawResources))
                 {
                     return false;
                 }
@@ -908,9 +1006,20 @@ namespace vkm
     }
 
     std::optional<std::vector<VkmPipelineStateDescriptor>> expandPipelineStateOptions(
-        const VkmPipelineStateDescriptor& base, VkmShaderCacheBackend backend, std::string* outError)
+        const VkmPipelineStateDescriptor& baseIn, VkmShaderCacheBackend backend, std::string* outError)
     {
         std::vector<VkmPipelineStateDescriptor> variants;
+
+        // Set 3's declaration may be scoped to specific backends; drop it everywhere else, so a
+        // pipeline layout only ever carries a set its own shader can reference.
+        VkmPipelineStateDescriptor scopedBase = baseIn;
+        if (!scopedBase.perDrawResourceBackends.empty() &&
+            std::find(scopedBase.perDrawResourceBackends.begin(), scopedBase.perDrawResourceBackends.end(),
+                      backend) == scopedBase.perDrawResourceBackends.end())
+        {
+            scopedBase.perDrawResources.clear();
+        }
+        const VkmPipelineStateDescriptor& base = scopedBase;
 
         if (base.options.empty())
         {

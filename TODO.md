@@ -5,7 +5,7 @@
 - Vulkan `UnitTests` in GitHub Actions CI still lack a software Vulkan ICD on the Windows and macOS runners (Ubuntu now installs lavapipe).
 - `MemoryTracker`'s global mutex serializes every allocation/deallocation across all threads.
 - The unit-test hang watchdog is native-only; the wasm build links no pthreads, so a hung test there is bounded only by `scripts/run_tests.py`'s 60 s Chrome timeout and is not attributed to a test.
-- Design and implement descriptor sets 2 (per-pass) and 3 (per-draw) of the engine/user resource-binding convention (sets 0 bindless and 1 per-frame are implemented on all backends).
+- Sets 0-3 exhaust WebGPU's default maxBindGroups of 4, so a fifth descriptor set is not expressible there.
 - Set 1 has one frame-constants region per frame slot engine-wide, so a second scene-rendering window would render with the main swapchain's aspect ratio and share that region unsynchronized.
 - The frame-constant buffers bypass `newBuffer()` (no `VkmBuffer` is host-writable), so they are absent from the memory tracker, like the bindless managers' own buffers.
 - The WebGPU set-1 path has no test that reads per-frame constants in a WGSL shader, though one can now be built (`scripts/run_tests.py` builds a WGSL-capable host vkm-compiler).
@@ -20,7 +20,8 @@
 - `VkmEngine::initializeEngine()` registers process-wide loggers, so only one `VkmEngine` can exist per process; a second one throws and the unit tests can host exactly one live-engine test.
 - WebGPU bindless mega-buffers are fixed-capacity (16 MiB vertex / 8 MiB index) with no growth; registerBuffer fails hard when exhausted.
 - WebGPU bindless-registered buffers must be tightly packed engine VertexData/uint element arrays (typed mega-buffers; Vulkan/Metal treat them as opaque).
-- The Metal/WebGPU push-constant ring wraps after 1024 allocations with no per-frame reset; overlapping in-flight entries would be overwritten.
+- The Metal/WebGPU push-constant ring gives each frame slot 1024 entries and rewinds them per frame, so a single frame pushing more than 1024 times still overwrites entries it is using.
+- The push-constant ring's per-slot region is rewound by window 0 only, so a second scene-rendering window would share that region unsynchronized (the same caveat descriptor set 1 carries).
 - wasm.yml CI builds no WebGPU shader caches: `scripts/run_tests.py` does it now, but CI has no actions cache for the ~30-minute Dawn/tint build.
 - Extend `VkmResourcePoolType` with Graphics/Compute categories for narrower Metal residency sets.
 - Metal resources bound via `overrideExternalHandle()` rely on the caller registering them (`VkmRenderResourcePoolMetal::registerExternalAllocation`); the swapchain deliberately opts out because `CAMetalLayer.residencySet` already covers its drawables.
@@ -31,15 +32,15 @@
 - Render graph capture records depth/stencil attachments as metadata only (no snapshot/preview).
 - Render graph capture snapshots cube/array inputs as slice 0 only; other faces are viewable only through the texture browser's per-layer readback.
 - PSO reload keeps variants that an edit removed from the json registered, since callers hold raw non-owning pointers to them; only a restart drops them.
-- Reloading a PSO whose set-2 (per-pass) declaration changed leaves any `VkmPerPassResourceTableBase` already built from it stale, with no notification; only tests build such tables today, so nothing holds one across a reload yet.
+- Reloading a PSO whose set-2/set-3 declaration changed leaves any `VkmResourceTableBase` already built from it stale, with no notification; only tests build such tables today, so nothing holds one across a reload yet.
 - The texture browser's cube/array face preview goes through a blocking `readbackTexture` (full queue wait) on every face change.
 - Runtime shader recompilation needs a baked-in `VKM_COMPILER_EXECUTABLE`, so installed and Emscripten builds can reload PSO json render state but not shaders.
 - Render graph capture records swapchain backbuffer outputs as metadata only (`CAMetalLayer.framebufferOnly` stays YES).
 - Render graph capture texture previews in ImGui are Metal-only (`getTextureID` returns 0 on Vulkan/WebGPU).
 - Programmatic .gputrace capture scopes only the Metal Graphics queue 0; Vulkan/WebGPU `requestGpuFrameCapture()` is a no-op (no RenderDoc integration).
-- glTF import reads material texture *references* but nothing uploads them yet; no per-texture samplers, no animation/skinning, no Draco/KTX2/`EXT_meshopt_compression`.
+- glTF import has no animation/skinning and no Draco/KTX2/`EXT_meshopt_compression`; material textures upload on Vulkan/Metal but normal and emissive maps are imported and never sampled.
 - glTF images embedded in a buffer view or a data URI are skipped by the importer; only file URIs resolve.
-- A glTF texture's sampler is discarded on import: set 0 carries one fixed linear/clamp sampler, so materials wanting repeat or nearest address wrong at the edges.
+- A glTF texture's sampler is discarded on import: set 0 carries one fixed linear/repeat sampler (glTF's default wrap), so materials wanting clamp or nearest address wrong at the edges.
 - Metal's emit stage is the shared HLSL one (`scene_emit_draws.hlsl`) and its `drawIndirectCount` encodes one `drawPrimitives:indirectBuffer:` per candidate slot. The planned Metal-only variant — an MSL kernel filling an `MTLIndirectCommandBuffer` plus `executeCommandsInBuffer:indirectBuffer:` — is not implemented; it needs the emit dispatch to become a backend service (Vulkan/WebGPU dispatch the engine HLSL PSO, Metal dispatches an embedded metallib kernel) so `VkmScene` stays backend-free, and it needs `inheritBuffers` proven against an MTL4 argument table first.
 - WebGPU indirect batches encode `maxDrawCount` draws per frame; no render-bundle caching, so the per-draw encode cost is paid every frame.
 - The culling pass and the WebGPU emit path are compile-verified only: the GPU-driven path is pixel- and count-verified on Metal, and the WebGPU/wasm test path needs emsdk plus Chrome, which `run_tests.py` skips when they are absent.
@@ -48,7 +49,7 @@
 - meshoptimizer clusterization is unused: `VkmSceneGeometryPool` is shaped to carry a meshlet pool (one more bindless slot, two more `MeshRange` fields) but nothing builds meshlets and there is no mesh-shader pipeline.
 - Imported vertices keep a zeroed `TANGENT` when the asset omits one (no MikkTSpace-style generator), and generated normals are area-weighted smooth rather than the spec's flat normals.
 - `copyBufferToTexture`/`uploadToTexture`, `registerTexture` and the set-0 sampler are Vulkan/Metal-only; WebGPU has error-logging stubs (WGSL has no runtime-sized texture arrays).
-- Set 0 has one fixed linear/clamp-to-edge sampler at binding 3 rather than a sampler array, so per-texture filter/address modes are not selectable in shaders.
+- Set 0 has one fixed linear/repeat sampler at binding 3 rather than a sampler array, so per-texture filter/address modes are not selectable in shaders.
 - Only one texture type may be declared at set 0 binding 0 per shader, and texture slots come from one allocator shared by all types (convention only, unenforced).
 - Texture upload has no mipmap generation: `uploadToTexture` writes one mip level per call and nothing downsamples.
 - `uploadToTexture` blocks per call on the staging path, so a 6-face cubemap stalls the graphics queue six times at load on any device without `VkmDriverCapabilityFlags::TextureHostCopy`.
@@ -88,13 +89,23 @@
 - `VkmGpuProfilerInspector` has no unit-test coverage; only the collector and the trace format are tested.
 - The WebGPU per-pass compute test is skipped: `newBuffer` returns null for its storage buffer with no Dawn validation error and no engine log, and the cause is unknown.
 - The probe blend render pass loads and stores the whole atlas every frame to update at most the per-frame probe budget of cells.
-- VkmProbeVolumeUpdater's probe budget is capped at 32 by the Metal/WebGPU 1024-entry push-constant ring, which has no per-frame reset.
+- VkmProbeVolumeUpdater's probe budget is capped at 128 by the Metal/WebGPU push-constant ring's 1024 entries per frame slot.
 - Probe capture, blend and update have GPU test coverage on Metal only; Vulkan covers the probe volume's addressing and the round-robin schedule.
 - No automated test asserts that an atlas the probe updater wrote is addressed the way probe_lighting reads it, nor that the Chebyshev test stops a leak against a real captured atlas; both are only checked by eye in the gi sample.
 - Probes that land inside geometry are neither detected nor relocated, so they inject their interior into the lookup; it shows as saturated patches beside hard black ones on interior surfaces.
 - The probe propagation test failed once out of three identical runs on a loaded machine and did not reproduce; its 20 s budget may be tight when other worktrees are running tests.
 - SSGI's ray length and intensity are unvalidated guesses; there is no ground truth to tune them against until the Phase 6 reference path tracer.
 - The gi sample has no automated pixel check (screenshots are compared by eye) and no reprojection debug view.
-- The probe capture pushes constants once per (probe, face, draw batch), so the per-frame probe budget has to shrink as a scene gains batches to stay inside the 1024-entry push-constant ring.
+- The probe capture pushes constants once per (probe, face, draw batch) though the pushed value depends only on (probe, face), so the probe budget still shrinks as a scene gains batches: 128 at one batch, 6 at Sponza's 25 materials.
 - The probe GI update converges too slowly at its default hysteresis: 2048 probes at budget 32 with hysteresis 0.97 take 4864 frames to shed 90% of a light change.
 - `scripts/run_tests.py` and `scripts/run_sample.py` duplicate about ten helper functions, including the host vkm-compiler build, instead of sharing a module.
+- A shader cache file is named `<shader>[<option>].<stage>.<backend>` and carries no entry point, so two PSOs sharing one HLSL file and option name silently overwrite each other's cache.
+- Metal's MTL4ArgumentTable caps buffer binds at 31 and sampler binds at 16, which is what bounds sets 2 and 3 to 13 buffers / 8 samplers / 16 textures each.
+- Material textures are Vulkan/Metal only: WebGPU implements neither `uploadToTexture` nor `registerTexture`, so every material's texture slot stays invalid there and shading falls back to the factor.
+- Normal maps are unsampled because tangents may be zero (no MikkTSpace generator), and emissive because the G-buffer has no channel to carry it.
+- Material textures have no automated coverage on Vulkan: the offscreen scene-render harness is Metal-only, since the Vulkan fixture renders black on this machine's MoltenVK/lavapipe.
+- Seeing a WebGPU frame at all needs `-DVKM_WASM_GI_SCENE=<dir> -DVKM_WASM_GI_AUTO_SCREENSHOT=ON`, which bakes a scene into MEMFS and echoes the captured PNG to the console as base64; Chrome's own `--screenshot` fires before the WebGPU device finishes initializing and captures a blank page.
+- A headless WebGPU run rasterizes in software, and the gi sample draws every budgeted probe's six cube faces per frame, so it manages well under 600 frames per day: `VKM_WASM_GI_SCREENSHOT_FRAME` defaults to 4 and the probe volume is nowhere near converged in the captured image.
+- Editing a shader does not relink an Emscripten target: `--preload-file` inputs are not tracked as dependencies, so the MEMFS bundle keeps a stale shader cache until something else forces a relink.
+- WebGPU upload staging buffers carry no map usage and keep a full CPU shadow that `unmap()`/`flush()` push with `wgpuQueueWriteBuffer`, so a large upload costs a host-side copy of itself.
+- WebGPU render pipelines bind a second, smaller bind group 0 that omits the read-write singletons, so set 0 exists in two shapes there and a shader visible to both stages must not declare them.

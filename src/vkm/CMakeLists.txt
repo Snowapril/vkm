@@ -40,7 +40,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/render_resource.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/texture.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/buffer.h
-    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/per_pass_resource_table.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/resource_table.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/staging_buffer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/sampler.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/texture_view.h
@@ -62,6 +62,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/probe_volume_updater.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_geometry_pool.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_material_tables.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/engine.h
 )
 
@@ -93,7 +94,7 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/backend/common/render_resource.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/texture.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/buffer.cpp
-    ${SRC_DIR}/vkm/renderer/backend/common/per_pass_resource_table.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/resource_table.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/staging_buffer.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/sampler.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/texture_view.cpp
@@ -118,6 +119,7 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/screenshot.cpp
     ${SRC_DIR}/vkm/renderer/scene/scene_geometry_pool.cpp
     ${SRC_DIR}/vkm/renderer/scene/scene.cpp
+    ${SRC_DIR}/vkm/renderer/scene/scene_material_tables.cpp
     ${SRC_DIR}/vkm/renderer/engine.cpp
 )
 
@@ -177,7 +179,7 @@ if (VKM_USE_VULKAN_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_texture.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_buffer.h
-        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_per_pass_resource_table.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_resource_table.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_staging_buffer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_sampler.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_texture_view.h
@@ -195,7 +197,7 @@ if (VKM_USE_VULKAN_API)
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_texture.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_buffer.cpp
-        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_per_pass_resource_table.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_resource_table.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_staging_buffer.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_sampler.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_texture_view.cpp
@@ -229,7 +231,7 @@ if (VKM_USE_METAL_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_pipeline_state.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_util.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_buffer.h
-        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_per_pass_resource_table.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_resource_table.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_staging_buffer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_sampler.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_texture_view.h
@@ -248,7 +250,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_pipeline_state.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_util.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_buffer.mm
-        ${SRC_DIR}/vkm/renderer/backend/metal/metal_per_pass_resource_table.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_resource_table.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_staging_buffer.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_sampler.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_texture_view.mm
@@ -320,7 +322,7 @@ if (VKM_USE_WEBGPU_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_swapchain.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_texture.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_buffer.h
-        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_per_pass_resource_table.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_resource_table.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_staging_buffer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_sampler.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/webgpu/webgpu_texture_view.h
@@ -339,7 +341,7 @@ if (VKM_USE_WEBGPU_API)
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_swapchain.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_texture.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_buffer.cpp
-        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_per_pass_resource_table.cpp
+        ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_resource_table.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_staging_buffer.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_sampler.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_texture_view.cpp

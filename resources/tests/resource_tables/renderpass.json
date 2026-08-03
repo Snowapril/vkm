@@ -1,11 +1,14 @@
 {
-    "name": "per_pass_resources_pso",
+    "name": "resource_tables_pso",
     "shaders": {
-        "compute": { "filepath": "per_pass_resources.hlsl", "entry_point": "CSMain" }
+        "compute": { "filepath": "resource_tables.hlsl", "entry_point": "CSMain" }
     },
     "per_pass_resources": [
         { "binding": 0, "type": "uniform_buffer" },
         { "binding": 1, "type": "storage_buffer" }
+    ],
+    "per_draw_resources": [
+        { "binding": 0, "type": "uniform_buffer" }
     ],
     "options": {
         "default": {}

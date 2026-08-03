@@ -33,9 +33,14 @@ namespace vkm
             .magFilter    = VK_FILTER_LINEAR,
             .minFilter    = VK_FILTER_LINEAR,
             .mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-            .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            // REPEAT because that is glTF's default wrap, and material textures are what this
+            // sampler mostly serves: DamagedHelmet's V runs 1.0..2.0 and relies on wrapping, which
+            // under clamp collapsed every pixel onto the texture's bottom row. The cubemap is
+            // unaffected -- a cube lookup derives in-range face coordinates and hardware seamless
+            // filtering handles the edges, so the address mode never applies there.
+            .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
             .maxLod       = VK_LOD_CLAMP_NONE,
         };
         VkResult vkResult = vkCreateSampler(device, &samplerCreateInfo, nullptr, &_defaultSampler);

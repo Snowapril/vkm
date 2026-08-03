@@ -66,8 +66,51 @@ namespace vkm
                 .sampleCount   = 1,
             };
             _wgpuTexture = wgpuDeviceCreateTexture(driverWebGPU->getDevice(), &textureDesc);
+
+            // A queue write needs CopyDst, which AllowTransferDst already asked for. Reporting
+            // host-writability here is what routes uploadToTexture through writeRegion() instead
+            // of the staging path -- this backend has no buffer->texture copy.
+            _isHostWritable = (_wgpuTexture != nullptr) &&
+                              ((info._flags & VkmResourceCreateInfo::AllowTransferDst) != 0);
         }
 
+        return true;
+    }
+
+    bool VkmTextureWebGPU::writeRegion(const void* data, uint64_t size, uint32_t mipLevel, uint32_t arrayLayer)
+    {
+        if (!_isHostWritable || _wgpuTexture == nullptr)
+        {
+            VKM_DEBUG_ERROR("writeRegion requires a host-writable texture");
+            return false;
+        }
+
+        const uint32_t mipWidth = std::max(1u, _textureInfo._extent.x >> mipLevel);
+        const uint32_t mipHeight = std::max(1u, _textureInfo._extent.y >> mipLevel);
+        // Tightly packed, matching what the Metal and Vulkan host paths expect of the same source.
+        const uint32_t bytesPerRow = mipWidth * vkmBytesPerTexel(_textureInfo._format);
+        const uint64_t expectedSize = static_cast<uint64_t>(bytesPerRow) * mipHeight;
+        if (size < expectedSize)
+        {
+            VKM_DEBUG_ERROR("writeRegion: the source is smaller than the destination mip level");
+            return false;
+        }
+
+        WGPUTexelCopyTextureInfo destination{};
+        destination.texture = _wgpuTexture;
+        destination.mipLevel = mipLevel;
+        destination.origin = WGPUOrigin3D{0, 0, arrayLayer};
+        destination.aspect = WGPUTextureAspect_All;
+
+        WGPUTexelCopyBufferLayout layout{};
+        layout.offset = 0;
+        layout.bytesPerRow = bytesPerRow;
+        layout.rowsPerImage = mipHeight;
+
+        const WGPUExtent3D writeSize{mipWidth, mipHeight, 1};
+        VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
+        wgpuQueueWriteTexture(driverWebGPU->getQueue(), &destination, data,
+                              static_cast<size_t>(expectedSize), &layout, &writeSize);
         return true;
     }
 

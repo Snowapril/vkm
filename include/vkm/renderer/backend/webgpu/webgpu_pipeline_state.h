@@ -17,11 +17,14 @@ namespace vkm
         inline WGPUComputePipeline getComputePipeline() const { return _computePipeline; }
 
         /*
-        * @brief This pipeline's bind group 2 layout, or null when it declares no per-pass
-        * resources. Owned here because, unlike groups 0 and 1, it is built from this pipeline's
-        * own declaration; VkmPerPassResourceTableWebGPU creates its bind group from it.
+        * @brief This pipeline's layout for one PSO-declared bind group, or null when it declares
+        * nothing there. Owned here because, unlike groups 0 and 1, these are built from this
+        * pipeline's own declarations; VkmResourceTableWebGPU creates its bind group from one.
         */
-        inline WGPUBindGroupLayout getPerPassBindGroupLayout() const { return _perPassBindGroupLayout; }
+        inline WGPUBindGroupLayout getBindGroupLayout(VkmResourceSetKind kind) const
+        {
+            return (kind == VkmResourceSetKind::PerPass) ? _perPassBindGroupLayout : _perDrawBindGroupLayout;
+        }
 
     protected:
         virtual bool createInner(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError) override final;
@@ -31,5 +34,9 @@ namespace vkm
         WGPURenderPipeline _renderPipeline{nullptr};
         WGPUComputePipeline _computePipeline{nullptr};
         WGPUBindGroupLayout _perPassBindGroupLayout{nullptr};
+        WGPUBindGroupLayout _perDrawBindGroupLayout{nullptr};
+        // Empty stand-in for group 2 when only group 3 is declared -- a group must land at its own
+        // index, and the pipeline layout's array is positional.
+        WGPUBindGroupLayout _emptyBindGroupLayout{nullptr};
     };
 } // namespace vkm

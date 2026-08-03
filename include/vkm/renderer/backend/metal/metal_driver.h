@@ -80,7 +80,7 @@ namespace vkm
         virtual bool postInitializeInner() override final;
         virtual void destroyInner() override final;
         virtual VkmSwapChainBase* newSwapChainInner() override final;
-        virtual VkmPerPassResourceTableBase* newPerPassResourceTableInner() override final;
+        virtual VkmResourceTableBase* newResourceTableInner() override final;
         virtual VkmTexture* newTextureInner() override final;
         virtual VkmBuffer* newBufferInner() override final;
         virtual VkmStagingBuffer* newStagingBufferInner() override final;

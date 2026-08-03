@@ -4,6 +4,7 @@
 
 #include <vkm/renderer/probe_volume.h>
 #include <vkm/renderer/scene/scene.h>
+#include <vkm/renderer/scene/scene_material_tables.h>
 #include <vkm/renderer/scene/vertex_layout.h>
 
 #include <glm/vec2.hpp>
@@ -17,7 +18,7 @@
 namespace vkm
 {
     class VkmDriverBase;
-    class VkmPerPassResourceTableBase;
+    class VkmResourceTableBase;
     class VkmPipelineStateBase;
     class VkmPipelineStateManager;
     class VkmRenderGraph;
@@ -91,13 +92,18 @@ namespace vkm
         /*
         * @brief The largest budget the push-constant ring can carry.
         *
-        * @details Metal and WebGPU hand out a push-constant ring entry per setPushConstants() call
-        * and never reset it per frame (1024 entries, VkmBindlessResourceManagerMetal). The capture
-        * pass pushes once per (probe, face, batch) and the blend pass once per (probe, atlas), so a
-        * frame costs at least 6*budget + 2*budget entries, and FRAME_COUNT frames may be in flight.
-        * Above this the ring wraps onto entries a running frame still references.
+        * @details Metal and WebGPU hand out a push-constant ring entry per setPushConstants() call.
+        * The capture pass pushes once per (probe, face, batch) and the blend pass once per
+        * (probe, atlas), so a single-batch frame costs 6*budget + 2*budget entries. The ring gives
+        * each frame slot its own region of kVkmPushConstantRingEntryCount (1024) entries and
+        * rewinds it every frame, so this bounds *one* frame's pushes: 1024 / 8 = 128. It was 32
+        * while the cursor never reset and FRAME_COUNT frames had to share one region.
+        *
+        * A scene with more than one draw batch costs proportionally more and has to lower the
+        * budget itself -- the capture's push count scales with the batch count, which only the
+        * caller knows (see the gi sample).
         */
-        static constexpr uint32_t kMaxBudget = 32u;
+        static constexpr uint32_t kMaxBudget = 128u;
 
         VkmProbeVolumeUpdater() = default;
         ~VkmProbeVolumeUpdater();
@@ -120,6 +126,17 @@ namespace vkm
         * probe looks in all six directions and the six faces share one cull result.
         */
         void record(VkmRenderGraph* renderGraph, VkmScene* scene, const VkmFrameData& frameData);
+
+        /*
+        * @brief Builds the per-material set-3 tables the capture pass binds, where the backend
+        * needs them.
+        *
+        * @details Separate from initialize() because the scene does not exist yet there, and it
+        * must follow VkmScene::build(), which is where the material textures are created. A no-op
+        * on a backend whose capture shader reaches materials through the bindless array, so every
+        * caller can call it unconditionally.
+        */
+        bool buildMaterialTables(const VkmScene& scene, std::string* outError = nullptr);
 
         // Probes refreshed by the most recent record(), and their indices. The count can be smaller
         // than the budget on the last frame of a round: the slice is clamped rather than wrapped, so
@@ -171,11 +188,14 @@ namespace vkm
         // One capture PSO and table per vertex layout, because a table is validated against the
         // pipeline it was built for and each layout permutation is a different pipeline.
         std::array<VkmPipelineStateBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _capturePipelines{};
-        std::array<VkmPerPassResourceTableBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _captureTables{};
+        std::array<VkmResourceTableBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _captureTables{};
+        // One set-3 table per material, per capture permutation. Empty on a backend whose shader
+        // samples materials through the bindless array; see VkmSceneMaterialTables.
+        std::array<VkmSceneMaterialTables, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _materialTables{};
         VkmPipelineStateBase* _irradianceBlendPipeline = nullptr;
         VkmPipelineStateBase* _distanceBlendPipeline = nullptr;
-        VkmPerPassResourceTableBase* _irradianceBlendTable = nullptr;
-        VkmPerPassResourceTableBase* _distanceBlendTable = nullptr;
+        VkmResourceTableBase* _irradianceBlendTable = nullptr;
+        VkmResourceTableBase* _distanceBlendTable = nullptr;
 
         std::vector<uint32_t> _slice;
         // Resolved during record() rather than read from _everRefreshed inside the render callback:

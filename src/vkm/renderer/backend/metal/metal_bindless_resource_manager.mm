@@ -52,7 +52,7 @@ namespace vkm
         _argumentBuffer.label = @"VkmBindlessArgumentBuffer";
         std::memset(_argumentBuffer.contents, 0, argumentBufferSize);
 
-        _pushConstantRing = [device newBufferWithLength:PUSH_CONSTANT_ENTRY_COUNT * PUSH_CONSTANT_ENTRY_STRIDE
+        _pushConstantRing = [device newBufferWithLength:kVkmPushConstantRingTotalEntryCount * PUSH_CONSTANT_ENTRY_STRIDE
                                                 options:MTLResourceStorageModeShared];
         if (_pushConstantRing == nil)
         {
@@ -69,9 +69,14 @@ namespace vkm
         samplerDesc.minFilter = MTLSamplerMinMagFilterLinear;
         samplerDesc.magFilter = MTLSamplerMinMagFilterLinear;
         samplerDesc.mipFilter = MTLSamplerMipFilterLinear;
-        samplerDesc.sAddressMode = MTLSamplerAddressModeClampToEdge;
-        samplerDesc.tAddressMode = MTLSamplerAddressModeClampToEdge;
-        samplerDesc.rAddressMode = MTLSamplerAddressModeClampToEdge;
+        // REPEAT because that is glTF's default wrap, and material textures are what this sampler
+        // mostly serves: DamagedHelmet's V runs 1.0..2.0 and relies on wrapping, which under clamp
+        // collapsed every pixel onto the texture's bottom row. The cubemap is unaffected -- a cube
+        // lookup derives in-range face coordinates and hardware seamless filtering handles the
+        // edges, so the address mode never applies there.
+        samplerDesc.sAddressMode = MTLSamplerAddressModeRepeat;
+        samplerDesc.tAddressMode = MTLSamplerAddressModeRepeat;
+        samplerDesc.rAddressMode = MTLSamplerAddressModeRepeat;
         samplerDesc.supportArgumentBuffers = YES;
         samplerDesc.label = @"VkmBindlessDefaultSampler";
         _defaultSampler = [device newSamplerStateWithDescriptor:samplerDesc];
@@ -243,19 +248,22 @@ namespace vkm
         return true;
     }
 
+    void VkmBindlessResourceManagerMetal::beginFrame(uint32_t frameSlot)
+    {
+        _pushConstantEntries.beginFrame(frameSlot);
+    }
+
     uint64_t VkmBindlessResourceManagerMetal::allocatePushConstantSlot(const void* data, uint32_t size)
     {
         VKM_ASSERT(size <= PUSH_CONSTANT_ENTRY_STRIDE, "Push constant data exceeds ring entry stride");
 
-        if (_pushConstantCursor != 0 && (_pushConstantCursor % PUSH_CONSTANT_ENTRY_COUNT) == 0)
+        bool overflowed = false;
+        const uint32_t entryIndex = _pushConstantEntries.allocate(&overflowed);
+        if (overflowed)
         {
-            // Wrapping reuses entry 0's storage; safe only if the GPU already consumed the
-            // draw that referenced it PUSH_CONSTANT_ENTRY_COUNT allocations ago.
-            VKM_DEBUG_WARN("Push-constant ring wrapped; entries older than 1024 allocations are being reused");
+            VKM_DEBUG_WARN("Push-constant ring region overflowed: this frame pushed more than "
+                           "kVkmPushConstantRingEntryCount times and is reusing its own entries");
         }
-
-        const uint32_t entryIndex = _pushConstantCursor % PUSH_CONSTANT_ENTRY_COUNT;
-        _pushConstantCursor++;
 
         const uint64_t byteOffset = static_cast<uint64_t>(entryIndex) * PUSH_CONSTANT_ENTRY_STRIDE;
         std::memcpy(static_cast<uint8_t*>(_pushConstantRing.contents) + byteOffset, data, size);

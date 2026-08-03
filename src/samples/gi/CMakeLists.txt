@@ -72,6 +72,40 @@ if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
     target_link_options(${target} PRIVATE
         ${VKM_WASM_ENGINE_RESOURCE_PRELOAD}
     )
+
+    # Opt-in scene preload, so the WebGPU render path can be *looked at* rather than only built and
+    # unit-tested -- which restir.md records as the last unverified part of the Phase 4 gate.
+    # Point it at a small glTF directory (DamagedHelmet, ~4 MB); Sponza-scale assets exceed both
+    # MEMFS sensibility and this backend's fixed bindless mega-buffers.
+    #   -DVKM_WASM_GI_SCENE=resources/Scenes/DamagedHelmet
+    if (VKM_WASM_GI_SCENE)
+        get_filename_component(VKM_WASM_GI_SCENE_ABS "${VKM_WASM_GI_SCENE}" ABSOLUTE BASE_DIR "${ROOT_DIR}")
+        get_filename_component(VKM_WASM_GI_SCENE_NAME "${VKM_WASM_GI_SCENE_ABS}" NAME)
+        target_link_options(${target} PRIVATE
+            "SHELL:--preload-file ${VKM_WASM_GI_SCENE_ABS}@/scene"
+        )
+        # A wasm build has no command line, so the preloaded scene has to be the default path.
+        target_compile_definitions(${target} PRIVATE
+            VKM_WASM_GI_SCENE_GLTF="/scene/${VKM_WASM_GI_SCENE_NAME}.gltf")
+        # There is no command line either, so capturing a frame has to be baked in. Off by
+        # default -- it makes the sample exit after one screenshot, which is wrong for an
+        # interactive wasm build -- and turned on only for a headless verification run:
+        #   -DVKM_WASM_GI_SCENE=... -DVKM_WASM_GI_AUTO_SCREENSHOT=ON
+        if (VKM_WASM_GI_AUTO_SCREENSHOT)
+            # Which frame to capture. Deliberately tiny: a headless run rasterizes in software
+            # (SwiftShader), and this sample draws every budgeted probe's six cube faces per frame,
+            # so the interactive default of 600 is unreachable -- one measured run spent 24 hours
+            # and 127 CPU-hours without getting there. A handful of frames is enough to show the
+            # frame renders; it is not enough for the probe volume to converge.
+            if (NOT VKM_WASM_GI_SCREENSHOT_FRAME)
+                set(VKM_WASM_GI_SCREENSHOT_FRAME 4)
+            endif()
+            target_compile_definitions(${target} PRIVATE
+                VKM_WASM_GI_AUTO_SCREENSHOT=1
+                VKM_WASM_GI_SCREENSHOT_FRAME=${VKM_WASM_GI_SCREENSHOT_FRAME})
+        endif()
+        message(STATUS "gi: preloading ${VKM_WASM_GI_SCENE_ABS} into MEMFS at /scene")
+    endif()
 endif()
 
 if (TARGET vkm_engine_shaders)

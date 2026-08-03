@@ -7,7 +7,7 @@
 
 #include <vkm/renderer/backend/metal/metal_driver.h>
 
-#include "TestPerPassResourcesShared.hpp"
+#include "TestResourceTablesShared.hpp"
 
 #import <Metal/MTLDevice.h>
 
@@ -15,12 +15,12 @@
 
 namespace
 {
-    struct MetalPerPassFixture
+    struct MetalResourceTableFixture
     {
         std::unique_ptr<vkm::VkmDriverMetal> driver;
         vkm::VkmInitResult initResult;
 
-        MetalPerPassFixture()
+        MetalResourceTableFixture()
         {
             id<MTLDevice> device = MTLCreateSystemDefaultDevice();
             if (device == nil)
@@ -33,7 +33,7 @@ namespace
             driver = std::make_unique<vkm::VkmDriverMetal>(device);
             initResult = driver->initialize(&opts);
         }
-        ~MetalPerPassFixture()
+        ~MetalResourceTableFixture()
         {
             if (driver)
             {
@@ -44,16 +44,22 @@ namespace
     };
 }
 
-TEST_CASE("Metal per-pass resources - a compute pass reads and writes only through set 2") {
-    MetalPerPassFixture fixture;
+TEST_CASE("Metal resource tables - sets 2 and 3 both reach a compute pass") {
+    MetalResourceTableFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
-    vkmtest::runPerPassResourceTest(fixture.driver.get());
+    vkmtest::runResourceTableTest(fixture.driver.get());
 }
 
-TEST_CASE("Metal per-pass resources - a table is rejected when it does not match the declaration") {
-    MetalPerPassFixture fixture;
+TEST_CASE("Metal resource tables - set 3 lands at set 3 when set 2 is not declared") {
+    MetalResourceTableFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
-    vkmtest::runPerPassValidationTest(fixture.driver.get());
+    vkmtest::runPerDrawOnlyTableTest(fixture.driver.get());
+}
+
+TEST_CASE("Metal resource tables - a table is rejected when it does not match the declaration") {
+    MetalResourceTableFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runResourceTableValidationTest(fixture.driver.get());
 }
 
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE

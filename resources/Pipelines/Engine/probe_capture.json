@@ -14,18 +14,60 @@
         "stencil_test_enable": false
     },
     "color_attachments": [
-        { "format": "r16g16b16a16_sfloat" }
+        {
+            "format": "r16g16b16a16_sfloat"
+        }
     ],
     "per_pass_resources": [
-        { "binding": 0, "type": "uniform_buffer" }
+        {
+            "binding": 0,
+            "type": "uniform_buffer"
+        }
     ],
+    "per_draw_resources": {
+        "backends": [
+            "webgpu"
+        ],
+        "bindings": [
+            {
+                "binding": 0,
+                "type": "sampled_texture"
+            },
+            {
+                "binding": 1,
+                "type": "sampled_texture"
+            },
+            {
+                "binding": 2,
+                "type": "sampler"
+            }
+        ]
+    },
     "shaders": {
-        "vertex": { "filepath": "probe_capture.hlsl", "entry_point": "VSMain" },
-        "fragment": { "filepath": "probe_capture.hlsl", "entry_point": "PSMain" }
+        "vertex": {
+            "filepath": "probe_capture.hlsl",
+            "entry_point": "VSMain"
+        },
+        "fragment": {
+            "filepath": "probe_capture.hlsl",
+            "entry_point": "PSMain"
+        }
     },
     "options": {
-        "standard_pbr":  { "definitions": { "VKM_VERTEX_LAYOUT_STANDARD_PBR":  true } },
-        "compact":       { "definitions": { "VKM_VERTEX_LAYOUT_COMPACT":       true } },
-        "position_only": { "definitions": { "VKM_VERTEX_LAYOUT_POSITION_ONLY": true } }
+        "standard_pbr": {
+            "definitions": {
+                "VKM_VERTEX_LAYOUT_STANDARD_PBR": true
+            }
+        },
+        "compact": {
+            "definitions": {
+                "VKM_VERTEX_LAYOUT_COMPACT": true
+            }
+        },
+        "position_only": {
+            "definitions": {
+                "VKM_VERTEX_LAYOUT_POSITION_ONLY": true
+            }
+        }
     }
 }

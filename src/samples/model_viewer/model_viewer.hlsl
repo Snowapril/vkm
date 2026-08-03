@@ -18,6 +18,7 @@
 // fetchTangent(); the PSO JSON "options" supply exactly one VKM_VERTEX_LAYOUT_* define per build.
 
 #include "vkm_bindless.hlsli"
+#include "vkm_material.hlsli"
 #include "vkm_frame_constants.hlsli"
 
 #if defined(VKM_VERTEX_LAYOUT_STANDARD_PBR)
@@ -71,13 +72,14 @@ struct FrameData
 VKM_BINDLESS_VERTEX_PULLING(uint);
 VKM_BINDLESS_OBJECT_DATA(ObjectData, g_VkmObjectData);
 VKM_BINDLESS_FRAME_DATA(FrameData, g_VkmSceneFrame);
+VKM_MATERIAL_DECLARE();
 VKM_FRAME_CONSTANTS(g_VkmFrame);
 
 struct VSOutput
 {
     float4 position : SV_POSITION;
     [[vk::location(0)]] float3 normal : NORMAL0;
-    [[vk::location(1)]] float4 baseColor : COLOR0;
+    [[vk::location(1)]] float2 uv : TEXCOORD1;
     // World-space tangent, w = bitangent sign. Zero when the layout or the asset has no tangent.
     [[vk::location(2)]] float4 tangent : TANGENT0;
     // Push constants are vertex-stage only, so the debug views carry what they need as
@@ -135,14 +137,18 @@ float4 fetchTangent(ObjectData obj, uint wordBase)
 #endif
 }
 
-float4 fetchBaseColor(uint materialPoolSlot, uint materialIndex)
+float2 fetchUV(uint slot, uint wordBase)
 {
-    // VkmMaterialData is 48 bytes = 12 words, with baseColorFactor first.
-    const uint wordBase = materialIndex * 12;
-    return float4(asfloat(VKM_LOAD_VERTEX(materialPoolSlot, wordBase + 0)),
-                  asfloat(VKM_LOAD_VERTEX(materialPoolSlot, wordBase + 1)),
-                  asfloat(VKM_LOAD_VERTEX(materialPoolSlot, wordBase + 2)),
-                  asfloat(VKM_LOAD_VERTEX(materialPoolSlot, wordBase + 3)));
+    // See gbuffer.hlsl's fetchUV -- same layouts, same offsets.
+#if defined(VKM_VERTEX_LAYOUT_STANDARD_PBR)
+    return float2(asfloat(VKM_LOAD_VERTEX(slot, wordBase + 8)),
+                  asfloat(VKM_LOAD_VERTEX(slot, wordBase + 9)));
+#elif defined(VKM_VERTEX_LAYOUT_COMPACT)
+    const uint packed = VKM_LOAD_VERTEX(slot, wordBase + 4);
+    return float2(f16tof32(packed & 0xFFFFu), f16tof32(packed >> 16));
+#else
+    return float2(0.0, 0.0);
+#endif
 }
 
 VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
@@ -166,7 +172,10 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
     // A tangent is a direction along the surface, so it rides the world matrix itself rather than
     // its inverse-transpose; the handedness sign is a scalar and passes through untouched.
     output.tangent = float4(mul((float3x3)obj.worldTransform, tangent.xyz), tangent.w);
-    output.baseColor = fetchBaseColor(g_VkmSceneFrame[0].materialPoolSlot, obj.materialIndex);
+    // The base colour is resolved in the pixel stage now that it can be textured: a texture
+    // sample needs the interpolated UV, and interpolating an already-sampled colour would
+    // flatten every material to one value per vertex.
+    output.uv = fetchUV(obj.vertexPoolSlot, wordBase);
     output.materialIndex = obj.materialIndex;
     return output;
 }
@@ -188,9 +197,12 @@ float4 PSMain(VSOutput input) : SV_TARGET
     const float3 normal = normalize(input.normal);
     const uint debugMode = g_VkmSceneFrame[0].debugMode;
 
+    const VkmMaterial material = vkmLoadMaterial(g_VkmSceneFrame[0].materialPoolSlot, input.materialIndex);
+    const float4 baseColor = vkmSampleBaseColor(material, input.uv);
+
     if (debugMode == VKM_DEBUG_MODE_BASE_COLOR)
     {
-        return float4(input.baseColor.rgb, 1.0);
+        return float4(baseColor.rgb, 1.0);
     }
     if (debugMode == VKM_DEBUG_MODE_MATERIAL_INDEX)
     {
@@ -220,5 +232,5 @@ float4 PSMain(VSOutput input) : SV_TARGET
 
     // Half-Lambert wrap so backfacing-but-visible geometry stays readable instead of black.
     const float diffuse = saturate(dot(normal, lightDirection)) * 0.8 + 0.2;
-    return float4(input.baseColor.rgb * diffuse, input.baseColor.a);
+    return float4(baseColor.rgb * diffuse, baseColor.a);
 }

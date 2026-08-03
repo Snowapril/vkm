@@ -1,6 +1,6 @@
 // Copyright (c) 2025 Snowapril
 
-#include <vkm/renderer/backend/metal/metal_per_pass_resource_table.h>
+#include <vkm/renderer/backend/metal/metal_resource_table.h>
 
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
@@ -29,22 +29,26 @@ namespace vkm
         }
     }
 
-    VkmPerPassResourceTableMetal::VkmPerPassResourceTableMetal(VkmDriverBase* driver)
-        : VkmPerPassResourceTableBase(driver)
+    VkmResourceTableMetal::VkmResourceTableMetal(VkmDriverBase* driver)
+        : VkmResourceTableBase(driver)
     {
     }
 
-    VkmPerPassResourceTableMetal::~VkmPerPassResourceTableMetal()
+    VkmResourceTableMetal::~VkmResourceTableMetal()
     {
         destroyInner();
     }
 
-    bool VkmPerPassResourceTableMetal::createInner(const std::vector<VkmPerPassResourceEntry>& entries,
+    bool VkmResourceTableMetal::createInner(const std::vector<VkmTableResourceEntry>& entries,
                                                    std::string* outError)
     {
-        const std::vector<VkmPerPassResourceBinding>& declaration =
-            _pipelineState->getDescriptor().perPassResources;
+        const std::vector<VkmTableResourceBinding>& declaration = getDeclaration();
         VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+
+        // Metal has no set index, so which set this table fills is carried entirely by these
+        // indices -- get them wrong and set 3 silently aliases onto set 2. The assigner walks the
+        // declaration in the same order vkm-compiler did when it pinned the shader's arguments.
+        VkmMetalTableIndexAssigner indexAssigner(getSetKind());
 
         _bindings.clear();
         _bindings.reserve(entries.size());
@@ -54,13 +58,13 @@ namespace vkm
         // add_msl_resource_binding, which uses these same bases.
         for (size_t i = 0; i < entries.size(); ++i)
         {
-            const VkmPerPassResourceEntry& entry = entries[i];
-            const VkmPerPassResourceBinding& declared = declaration[i];
+            const VkmTableResourceEntry& entry = entries[i];
+            const VkmTableResourceBinding& declared = declaration[i];
 
             ResolvedBinding resolved{};
             switch (declared.type)
             {
-                case VkmPerPassResourceType::SampledTexture:
+                case VkmTableResourceType::SampledTexture:
                 {
                     VkmTextureMetal* textureMetal = static_cast<VkmTextureMetal*>(
                         renderResourcePool->getResource<VkmTexture>(entry.resource));
@@ -71,11 +75,11 @@ namespace vkm
                         return false;
                     }
                     resolved.kind = BindingKind::Texture;
-                    resolved.index = kVkmMetalPerPassTextureIndexBase + declared.binding;
+                    resolved.index = indexAssigner.next(declared.type);
                     resolved.resourceId = [textureMetal->getInternalHandle() gpuResourceID];
                     break;
                 }
-                case VkmPerPassResourceType::Sampler:
+                case VkmTableResourceType::Sampler:
                 {
                     VkmSamplerMetal* samplerMetal = static_cast<VkmSamplerMetal*>(
                         renderResourcePool->getResource<VkmSampler>(entry.resource));
@@ -86,12 +90,12 @@ namespace vkm
                         return false;
                     }
                     resolved.kind = BindingKind::SamplerState;
-                    resolved.index = kVkmMetalPerPassSamplerIndexBase + declared.binding;
+                    resolved.index = indexAssigner.next(declared.type);
                     resolved.resourceId = [samplerMetal->getSampler() gpuResourceID];
                     break;
                 }
-                case VkmPerPassResourceType::StorageBuffer:
-                case VkmPerPassResourceType::UniformBuffer:
+                case VkmTableResourceType::StorageBuffer:
+                case VkmTableResourceType::UniformBuffer:
                 {
                     VkmBufferMetal* bufferMetal = static_cast<VkmBufferMetal*>(
                         renderResourcePool->getResource<VkmBuffer>(entry.resource));
@@ -102,7 +106,7 @@ namespace vkm
                         return false;
                     }
                     resolved.kind = BindingKind::Address;
-                    resolved.index = kVkmMetalPerPassBufferIndexBase + declared.binding;
+                    resolved.index = indexAssigner.next(declared.type);
                     resolved.address = bufferMetal->getBuffer().gpuAddress;
                     break;
                 }
@@ -112,7 +116,7 @@ namespace vkm
         return true;
     }
 
-    void VkmPerPassResourceTableMetal::applyTo(id<MTL4ArgumentTable> argumentTable) const
+    void VkmResourceTableMetal::applyTo(id<MTL4ArgumentTable> argumentTable) const
     {
         for (const ResolvedBinding& binding : _bindings)
         {
@@ -131,7 +135,7 @@ namespace vkm
         }
     }
 
-    void VkmPerPassResourceTableMetal::destroyInner()
+    void VkmResourceTableMetal::destroyInner()
     {
         // Nothing owned: the addresses and resource IDs belong to the resources themselves, which
         // outlive this table by the caller's contract.

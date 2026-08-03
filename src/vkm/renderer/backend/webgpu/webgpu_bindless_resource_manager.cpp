@@ -46,7 +46,8 @@ namespace vkm
         _slotTable = createBindlessBuffer(device, "VkmBindlessSlotTable", slotTableSize,
                                           WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
         _pushConstantRing = createBindlessBuffer(device, "VkmPushConstantRing",
-                                                 PUSH_CONSTANT_ENTRY_COUNT * PUSH_CONSTANT_ENTRY_STRIDE,
+                                                 static_cast<uint64_t>(kVkmPushConstantRingTotalEntryCount) *
+                                                     PUSH_CONSTANT_ENTRY_STRIDE,
                                                  WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst);
         if (_vertexMegaBuffer == nullptr || _indexMegaBuffer == nullptr ||
             _slotTable == nullptr || _pushConstantRing == nullptr)
@@ -85,6 +86,9 @@ namespace vkm
         */
         constexpr uint32_t kSingletonCount = static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count);
         constexpr uint32_t kEntryCount = kFirstSingletonBinding + kSingletonCount;
+        // Everything up to but excluding IndirectArgument, which is the first writable singleton.
+        constexpr uint32_t kGraphicsEntryCount =
+            kFirstSingletonBinding + static_cast<uint32_t>(VkmBindlessSingletonBuffer::IndirectArgument);
 
         WGPUBindGroupLayoutEntry layoutEntries[kEntryCount]{};
         layoutEntries[0].binding = 0;
@@ -123,6 +127,19 @@ namespace vkm
             return false;
         }
 
+        // The graphics shape stops before the read-write singletons -- see getBindGroupLayout().
+        // They are the last entries, so this is a prefix rather than a filtered copy.
+        WGPUBindGroupLayoutDescriptor graphicsLayoutDescriptor{};
+        graphicsLayoutDescriptor.label = toWGPUStringView("VkmBindlessGraphicsBindGroupLayout");
+        graphicsLayoutDescriptor.entryCount = kGraphicsEntryCount;
+        graphicsLayoutDescriptor.entries = layoutEntries;
+        _graphicsBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &graphicsLayoutDescriptor);
+        if (_graphicsBindGroupLayout == nullptr)
+        {
+            VKM_DEBUG_ERROR("Failed to create the graphics bindless bind group layout");
+            return false;
+        }
+
         return recreateBindGroup();
     }
 
@@ -130,6 +147,9 @@ namespace vkm
     {
         constexpr uint32_t kSingletonCount = static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count);
         constexpr uint32_t kEntryCount = kFirstSingletonBinding + kSingletonCount;
+        // Everything up to but excluding IndirectArgument, which is the first writable singleton.
+        constexpr uint32_t kGraphicsEntryCount =
+            kFirstSingletonBinding + static_cast<uint32_t>(VkmBindlessSingletonBuffer::IndirectArgument);
 
         WGPUBindGroupEntry bindEntries[kEntryCount]{};
         bindEntries[0].binding = 0;
@@ -167,11 +187,31 @@ namespace vkm
             return false;
         }
 
+        // The graphics shape is the same entries minus the read-write singletons, which are last.
+        WGPUBindGroupDescriptor graphicsDescriptor{};
+        graphicsDescriptor.label = toWGPUStringView("VkmBindlessGraphicsBindGroup");
+        graphicsDescriptor.layout = _graphicsBindGroupLayout;
+        graphicsDescriptor.entryCount = kGraphicsEntryCount;
+        graphicsDescriptor.entries = bindEntries;
+
+        WGPUBindGroup graphicsBindGroup = wgpuDeviceCreateBindGroup(_driver->getDevice(), &graphicsDescriptor);
+        if (graphicsBindGroup == nullptr)
+        {
+            wgpuBindGroupRelease(bindGroup);
+            VKM_DEBUG_ERROR("Failed to create the graphics bindless bind group");
+            return false;
+        }
+
         if (_bindGroup != nullptr)
         {
             wgpuBindGroupRelease(_bindGroup);
         }
         _bindGroup = bindGroup;
+        if (_graphicsBindGroup != nullptr)
+        {
+            wgpuBindGroupRelease(_graphicsBindGroup);
+        }
+        _graphicsBindGroup = graphicsBindGroup;
         return true;
     }
 
@@ -211,10 +251,20 @@ namespace vkm
             wgpuBindGroupRelease(_bindGroup);
             _bindGroup = nullptr;
         }
+        if (_graphicsBindGroup != nullptr)
+        {
+            wgpuBindGroupRelease(_graphicsBindGroup);
+            _graphicsBindGroup = nullptr;
+        }
         if (_bindGroupLayout != nullptr)
         {
             wgpuBindGroupLayoutRelease(_bindGroupLayout);
             _bindGroupLayout = nullptr;
+        }
+        if (_graphicsBindGroupLayout != nullptr)
+        {
+            wgpuBindGroupLayoutRelease(_graphicsBindGroupLayout);
+            _graphicsBindGroupLayout = nullptr;
         }
         for (WGPUBuffer& placeholder : _singletonPlaceholders)
         {
@@ -331,17 +381,24 @@ namespace vkm
         // Nothing was ever registered, so there is no slot to release.
     }
 
+    void VkmBindlessResourceManagerWebGPU::beginFrame(uint32_t frameSlot)
+    {
+        _pushConstantEntries.beginFrame(frameSlot);
+    }
+
     uint32_t VkmBindlessResourceManagerWebGPU::writePushConstants(const void* data, uint32_t size)
     {
         VKM_ASSERT(size <= PUSH_CONSTANT_ENTRY_STRIDE, "Push constant data exceeds ring entry stride");
 
-        if (_pushConstantCursor != 0 && (_pushConstantCursor % PUSH_CONSTANT_ENTRY_COUNT) == 0)
+        bool overflowed = false;
+        const uint32_t entryIndex = _pushConstantEntries.allocate(&overflowed);
+        if (overflowed)
         {
-            VKM_DEBUG_WARN("Push-constant ring wrapped; entries older than 1024 allocations are being reused");
+            // Wrapping within a frame slot's own region reuses entries *this* frame is still
+            // referencing, which no wait can make safe.
+            VKM_DEBUG_WARN("Push-constant ring region overflowed: this frame pushed more than "
+                           "kVkmPushConstantRingEntryCount times and is reusing its own entries");
         }
-
-        const uint32_t entryIndex = _pushConstantCursor % PUSH_CONSTANT_ENTRY_COUNT;
-        _pushConstantCursor++;
 
         const uint32_t byteOffset = entryIndex * PUSH_CONSTANT_ENTRY_STRIDE;
         wgpuQueueWriteBuffer(_driver->getQueue(), _pushConstantRing, byteOffset, data, size);

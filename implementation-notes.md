@@ -1790,3 +1790,364 @@ runs are contiguous either way.
 Set 3 itself is the larger half: 33 files carry the set-2 machinery, and the two sets differ only by
 an index and which declaration they validate against, so it wants generalizing rather than
 duplicating.
+
+## 2026-08-02 — The push-constant ring gets a per-frame reset
+
+Prerequisite for the texturing work rather than part of it. Binding a per-material descriptor
+table on WebGPU means splitting draw batches per material, and the probe capture pushes once per
+(probe, face, batch) — so more batches multiply the ring traffic. At the old budget arithmetic
+Sponza would have driven the probe budget from 32 down to 2, on top of an already-unusable 81 s
+propagation latency. The ring is the actual constraint, so it got fixed first.
+
+- **The bug.** `writePushConstants` / `allocatePushConstantSlot` did `cursor % 1024` and never
+  reset, so a frame could hand out an entry a still-executing frame was referencing. Callers
+  worked around it by budgeting against `1024 / FRAME_BUFFER_COUNT`, which is where the probe
+  budget's cap of 32 came from.
+- **The fix.** The ring is now `FRAME_BUFFER_COUNT` regions of `kVkmPushConstantRingEntryCount`
+  entries (the buffer grew 3x, to 768 KiB), and a new
+  `VkmBindlessResourceManagerBase::beginFrame(frameSlot)` rewinds the cursor to its region base.
+  Safety is by construction and is not a new assumption: `VkmEngine::render()` calls it right
+  after that slot's `renderGraph->ensureCompleted()`, which is exactly the point, and exactly the
+  reason, the set-1 frame constants are written a few lines below.
+- **Not pure virtual.** Vulkan inherits the base's no-op — it has a real push-constant
+  instruction and no ring — so this adds no entry point a backend must stub. A manager that never
+  receives the call keeps using region 0, which is what the unit tests do and what preserves their
+  previous behaviour exactly.
+- **The arithmetic moved into `VkmPushConstantRingAllocator`** (common/bindless_resource_manager),
+  next to the existing `VkmBindlessSlotAllocator`. Metal and WebGPU had byte-identical cursor
+  logic and only differ in the entry stride and in what the entry index is turned into (a GPU
+  address vs a dynamic offset). Sharing it is also what makes the interesting part testable with
+  no device on any backend.
+- **The warning changed meaning, so its text did too.** Wrapping used to mean "reusing entries
+  from N allocations ago, probably retired". Wrapping inside a region now means this *single*
+  frame pushed more than 1024 times and is overwriting entries it is still referencing — which no
+  wait can make safe. That is a budget overflow, not an ordering assumption, and it says so.
+- `VkmProbeVolumeUpdater::kMaxBudget` 32 -> 128 (1024 / 8, since a single-batch frame costs
+  `6*budget + 2*budget`), and the gi sample's derived budget lost its `FRAME_BUFFER_COUNT` factor.
+  The sample's default budget is unchanged at 32, so nothing about the shipped probe volume moves
+  — the cap simply stops being the binding constraint. `TODO.md` lost the "no per-frame reset"
+  entry and gained the two limits that remain: a single frame still cannot exceed 1024 pushes, and
+  the rewind is driven by window 0 only (the same single-region caveat set 1 already carries).
+
+**How much this actually buys, measured rather than assumed.** One frame slot's region gives
+`1024 / (6*batches + 2)` probes. Sponza is **one** draw batch today, so the ring allowed 42 before
+and 128 now — it was never the binding constraint there; the sample's default of 32 was. Splitting
+batches per material (25 materials, 103 primitives) takes that to 2 before and **6** now. So the
+reset is a 3x headroom, *not* enough on its own to make per-material batches affordable, and the
+next step has to stop the capture pushing per (probe, face, **batch**) as well — the pushed value
+depends only on (probe, face). Recorded here because the texturing plan had assumed this fix
+settled it.
+
+**A bug this run caught in the change itself.** The gi sample logged
+"Probe budget limited to 32 by the push-constant ring at 1 draw batches" — false, since the ring
+allowed 128 and 32 is the sample's own default. The condition was `_probeBudget < kMaxBudget`,
+which was silent only because `kMaxBudget` had been 32 too; raising it made a pre-existing
+imprecision start lying. It now compares against the *requested* budget, so it fires only when the
+ring is what reduced it, and prints both numbers.
+
+**Verification.** `tests/TestPushConstantRingAllocator.cpp`, five cases: consecutive entries
+within a frame, disjoint regions across every frame slot, a slot's region rewinding when the slot
+comes round again, region-local overflow reported rather than spilling into the neighbouring
+slot's region, and region 0 without any `beginFrame` call. Both failure modes were confirmed by
+sabotage and they fail *different* assertions: dropping the cursor rewind fails "rewinds a slot's
+region" (1028 != 1024), and collapsing every region base to 0 fails the overflow case
+(1023 != 2047), i.e. the pre-fix single-region ring is detected as such.
+
+Metal 202/202 (20292 assertions) with Metal API Validation on and no validation output.
+
+### Deviations
+
+- Planned: `beginFrame` would live only on the two backends that have a ring, with the cursor and
+  region base as plain members. Did instead: factored the bookkeeping into a shared
+  `VkmPushConstantRingAllocator`. The two copies would have been identical, and the plan's own
+  verification step — a test of the region arithmetic — is much better served by a headless class
+  than by two near-duplicate backend tests, one of which (WebGPU) only runs under Chrome.
+
+## 2026-08-02 — Descriptor set 3 (per-draw), by generalizing set 2 rather than duplicating it
+
+WebGPU cannot do bindless textures (Tint has no array-of-handle type, and
+`maxSampledTexturesPerShaderStage` defaults to 16), so a material's textures have to reach a shader
+there through a per-draw descriptor set. This is that set. Nothing consumes it yet; the texturing
+PRs do.
+
+The two sets differ by an index, by which declaration they validate against, and -- on Metal, which
+has no descriptor set index at all -- by which argument-table indices they occupy. Everything else
+is shared, so this generalizes the ~40 files that carried set 2 instead of standing up a parallel
+hierarchy.
+
+- **Renamed to match.** `per_pass_resource_table.{h,cpp}` and its three backend pairs became
+  `resource_table.*`; `VkmPerPassResourceTableBase` -> `VkmResourceTableBase`,
+  `VkmPerPassResourceType` -> `VkmTableResourceType`, `bindPerPassResources()` ->
+  `bindResourceTable()`. A table stores its own `VkmResourceSetKind`, so the bind site passes
+  nothing extra.
+- **`VkmResourceSetKind` lives in `frame_constants.h`**, beside the set-index constants it selects
+  between, rather than in `pipeline_state.h` -- that header is where the set convention is
+  documented, and it avoids a cycle.
+- **Bind-time compatibility is checked against the declaration, not the pipeline pointer.** A PSO's
+  permutations are distinct pipeline objects sharing one declaration (the G-buffer has three vertex
+  layouts), and requiring a table per permutation would multiply per-material tables by the
+  permutation count for nothing.
+- **A PSO may declare set 3 without set 2**, which is exactly what a G-buffer pass wanting only
+  per-material textures does. Both Vulkan's `setLayouts` vector and WebGPU's `bindGroupLayouts[]`
+  are positional, so that case needs an **empty placeholder layout at index 2** or the set silently
+  slides down and the shader reads nothing.
+- **vkm-compiler's set-2 pin block became a lambda called twice.** Vulkan and WGSL need no compiler
+  work at all -- they store or transpile the SPIR-V verbatim; only Metal pins indices.
+
+### Metal's argument table has hard caps, and only validation says so
+
+The first full-suite run after wiring set 3 aborted in the *first* test, presenting as a hang. The
+cause was two layers deep:
+
+```
+-[MTLDebugDevice newArgumentTableWithDescriptor:error:]: failed assertion `Argument Table Descriptor
+Validation / max buffer bind count must not be more than 31. / max sampler state bind count must not
+be more than 16.'
+```
+
+Reserving `kVkmResourceTableMaxBindings` (16) of every index space *per set* asks for 37 buffer and
+32 sampler binds. Both exceed Metal's limits, so device creation aborted -- and, per `TODO.md`, an
+abort inside mimalloc recurses forever through backward-cpp's signal handler, so it read as a
+spinning process rather than a failure. It reproduced only with `MTL_DEBUG_LAYER=1`; the filtered
+runs I had been iterating with had validation off and passed.
+
+The fix is not a smaller binding cap. Indices were assigned as `base + bindingIndex`, so
+`gi_composite` -- five textures, a sampler at binding 5, a uniform at binding 6 -- consumed six
+sampler slots to hold one sampler. Halving the cap to fit would have left it one binding from the
+limit. New `VkmMetalTableIndexAssigner` instead assigns **densely per resource type**, walking the
+declaration in order; both vkm-compiler's pins and the runtime table drive the same assigner over
+the same declaration, which is what keeps them in agreement. Per-set capacities are now 16 textures
+/ 8 samplers / 13 buffers, `static_assert`ed against Metal's 31 and 16, and the parser rejects a
+declaration that overruns one -- engine-wide, so a PSO that loads on Vulkan cannot fail on Metal
+only.
+
+### Verification
+
+`tests/TestResourceTables*` (renamed from `TestPerPassResources*`), two fixture PSOs:
+
+- `resource_tables_pso` declares **both** sets and outputs `pass.base + draw.base + threadId`, so a
+  set 3 aliased onto set 2 is a wrong number rather than a plausible one.
+- `per_draw_only_pso` declares **set 3 alone**, which is what exercises the placeholder layout.
+
+Both failure modes were confirmed by sabotage, on different backends and with different signatures:
+pointing the assigner at set 2's bases for both sets makes the *metallib compile* fail
+("cannot reserve 'buffer' resource location at index 5") and then the test fail; dropping Vulkan's
+placeholder layout makes pipeline creation fail validation
+(`VUID-VkComputePipelineCreateInfo-layout-07988`).
+
+Metal 203/203 (20321 assertions) with Metal API Validation, Vulkan 200/200 (5044), zero validation
+output on either.
+
+### Deviations
+
+- Planned: reserve `kVkmResourceTableMaxBindings` of each Metal index space per set. Did instead:
+  per-type capacities with dense assignment, because the planned reservation exceeds Metal's
+  argument-table caps and the obvious repair (halve the binding cap to 8) would have left an
+  existing PSO one binding from the limit.
+- Planned: one fixture PSO with two entry points in one HLSL file. Did instead: two HLSL files. A
+  shader cache is named `<shader>[<option>].<stage>.<backend>` and carries **no entry point**, so
+  the two PSOs overwrote each other's cache and the per-draw-only pipeline silently loaded the
+  other's shader -- which is how the test first failed. Logged in `TODO.md` as the latent footgun
+  it is.
+
+## 2026-08-02 — glTF material textures on Vulkan/Metal (step 2 of texturing)
+
+The importer read texture *references* in the previous session; this uploads them and samples them.
+Base colour and metallic-roughness only -- normal maps need tangents the importer may leave zeroed,
+and emissive has no G-buffer channel to land in. Both are recorded with their prerequisites rather
+than half-done.
+
+- **`VkmMaterialData` 48 -> 64 bytes**, gaining a `uvec4` of bindless texture slots. All four are
+  added at once though two are sampled: the importer already produces four references, and the
+  alternative is paying the same ABI churn twice -- the record's word stride is mirrored in the
+  shaders and pinned by `TestObjectDataLayout`. `INVALID_VALUE32` means "no texture", which has to
+  be distinguishable from slot 0 or every untextured material samples whatever lives there.
+- **`VkmScene` owns the upload.** `addModel()` has no driver, so it records resolved paths and
+  `build()` -- which already owns the material pool -- decodes with the existing
+  `loadImageFromFile`, uploads, and registers. The dedup cache is keyed on **(path, colour space)**,
+  because colour space belongs to the *channel that references* the image rather than to the file:
+  base colour and emissive are sRGB-encoded, metallic-roughness and normal are linear data that
+  must not be de-gamma'd. An image used as both genuinely needs two textures.
+- **One unreadable image warns and leaves its slot invalid**, falling back to the factor, rather
+  than failing the scene; returning false is reserved for exhausting the bindless array, where
+  continuing would silently mis-address whatever slot came back.
+- **`vkm_material.hlsli`** is the only place that branches on the backend, exactly as
+  `vkm_bindless.hlsli` is for the resource arrays. Vulkan/Metal get the bindless `Texture2D` array;
+  WebGPU gets functions returning 1, so the factor passes through unchanged -- honest, and matching
+  what `VkmScene` uploads there: nothing.
+- **It is all one macro**, which is not stylistic. HLSL resolves names top-down and the arrays these
+  functions read are themselves declared by macros in the shader, so plain functions in the header
+  referenced identifiers that did not exist yet and failed to compile. `VKM_BINDLESS_VERTEX_PULLING`
+  has the same shape for the same reason.
+- **`NonUniformResourceIndex` is required, not decorative.** One indirect draw covers many
+  materials, so the slot is divergent across a wave -- precisely the case Vulkan's
+  descriptor-indexing non-uniform rule exists for.
+- **`probe_capture.hlsl` samples base colour too**, which is what makes indirect colour bleeding
+  carry the scene's actual colours instead of a per-material average. Leaving it factor-only would
+  have made direct and indirect light disagree about what the surface looks like.
+- `model_viewer.hlsl` resolved base colour in the *vertex* stage; that moved to the pixel stage,
+  since a texture sample needs the interpolated UV and interpolating an already-sampled colour
+  flattens every material to one value per vertex.
+
+### The engine sampler was clamp-to-edge, and glTF's default is repeat
+
+The first textured render of DamagedHelmet came out heavily streaked and mostly green, against a
+source albedo that is white/grey/yellow/teal with green in one corner. Not a fetch bug: the asset's
+**V runs 1.003 .. 1.998** and it declares `"samplers": [{}]`, i.e. the glTF default wrap, which is
+REPEAT. vkm's one engine sampler was clamp-to-edge, so every pixel collapsed onto the texture's
+bottom row -- which is where that green corner is.
+
+This is the limitation `TODO.md` already recorded ("a glTF texture's sampler is discarded on
+import"); nothing consumed it until now. The sampler is now linear/**repeat** on both backends,
+because repeat is glTF's default and material textures are what it mostly serves. The other
+consumer, the skybox cubemap, is unaffected either way: a cube lookup derives in-range face
+coordinates and hardware seamless filtering handles the edges, so the address mode never applies
+there. `TestCubemapTexture` still passes on both backends, and the limitation entry is inverted
+rather than deleted -- a material wanting *clamp* now addresses wrong, and per-texture samplers
+remain the real fix.
+
+Worth noting for what tests can and cannot do: the unit test below uses a **solid** texture, which
+is UV-invariant by construction, so it could never have caught this. It took looking at a real
+asset.
+
+**Verification.** `runMaterialTextureTest` renders `gltf_textured.gltf` -- baseColorFactor
+(0.25, 0.5, 0.75) against a solid green (0, 255, 0) baseColorTexture -- through the G-buffer PSO.
+glTF multiplies the two, so the result is (0, 0.5, 0) and every channel discriminates: red and blue
+collapse only if the texture was sampled, green survives only if the factor was still applied.
+**Sabotage** by forcing the base-colour slot invalid reads back 0.251 and 0.749 -- the factor
+exactly -- so the test distinguishes "textured" from "untextured", not merely "changed".
+
+Metal 204/204 with Metal API Validation, Vulkan 200/200, zero validation output on either.
+
+Looked at, not just measured: DamagedHelmet's albedo view now matches its source texture region for
+region (teal dome with the red decal, white plating, gold trim, green lens elements), and Sponza
+renders brick courses and a tiled roof where it was flat grey. The roof tiles also show exactly the
+distance aliasing the deferred mipmap work is for.
+
+## 2026-08-02 — Material textures on WebGPU: descriptor set 3 and per-material batches
+
+The third texturing step. Vulkan and Metal index a bindless array; WebGPU has no array-of-handle
+type, so a material's textures arrive through a per-draw table instead.
+
+- **`uploadToTexture` on WebGPU** turned out not to need the buffer copy the plan assumed.
+  `wgpuQueueWriteTexture` *is* this engine's host-write path -- CPU bytes plus a queue, no staging
+  buffer and no command buffer -- so `VkmTextureWebGPU` just implements `writeRegion()` and reports
+  `isHostWritable()`, and the common `uploadToTexture` routes there unchanged. It also sidesteps the
+  256-byte `bytesPerRow` alignment the plan flagged as a trap: that rule is on
+  `GPUTexelCopyBufferInfo` (buffer<->texture copies), not on a queue write, so tightly packed
+  sources upload without repacking.
+- **`BindlessTextures` split out of `TextureUpload`**, because WebGPU now has one and not the
+  other. A consumer needs that distinction to tell "this backend has no such array" (fall back)
+  from "the array is exhausted" (error) -- `VkmScene` uploads and keeps the textures either way,
+  and only registers slots where they can be indexed.
+- **One material per draw batch.** `buildDrawBatches` already sorted by
+  `(pipelineId, layout, materialIndex)`; the run-break test now compares the material too, so a
+  batch carries exactly one and a per-draw table has somewhere to bind. Applied on every backend
+  rather than gated, so there is one code path and it can be exercised where the result can be
+  looked at. The existing batching tests asserted the *old* contract and were rewritten.
+- **Backend-scoped `per_draw_resources`.** Set 3 is the one declaration that is backend-specific in
+  substance rather than expression, so the JSON scopes it:
+  `{"backends": ["webgpu"], "bindings": [...]}`, resolved in `expandPipelineStateOptions()` where
+  the target backend is known. Vulkan and Metal pipeline layouts are untouched, and the scoping
+  mirrors the shader's own `#if defined(VKM_BACKEND_WEBGPU)`. The plain array form still means
+  "every backend".
+- **`VkmSceneMaterialTables`** builds one set-3 table per material and owns a 1x1 white placeholder
+  for channels a material has no texture for -- an unbound entry in a declared set is a WebGPU
+  validation error, and white samples to 1, leaving the factor exactly as the bindless path does.
+  Whether tables are needed is read off the **pipeline's own declaration**, not a capability flag,
+  so it cannot disagree with the shader that consumes them.
+
+This also produces the two shapes PR 2's tests were built for: `gbuffer_pso` declares set 3 without
+set 2, and `probe_capture_pso` declares both.
+
+### Looking at a WebGPU frame, and what it showed
+
+`restir.md` recorded that WebGPU was "verified by building and by the suite, not by looking". This
+closes that, and the answer is not the one hoped for: **the `gi` sample does not run on WebGPU, and
+never has.** The frame is blank, and the console carries 1804 errors per run of
+`BufferUsage::(MapWrite|CopySrc)` missing `CopyDst` from the scene upload -- which invalidates the
+cull pipeline and every command buffer -- plus six "Entry point's stage (Fragment) is not in the
+binding visibility in the layout (Compute)", one ReadOnlyStorage-vs-Storage mismatch, and one
+"Binding doesn't exist in VkmBindlessBindGroupLayout".
+
+**None of it is this work.** Rebuilding the wasm sample with the set-3 path removed and the shader
+reverted to factor-only produces a byte-identical signature -- 1804 / 1201 / 6 / 1 / 1 either way.
+The set-3 path therefore ships structurally complete and unit-verified but **not visually
+confirmed**, because nothing renders there to confirm it against. All four are logged in `TODO.md`;
+fixing them is the natural next piece of work.
+
+Getting a frame at all needed scaffolding, since a wasm build has no command line and Chrome's own
+`--screenshot` fires before the WebGPU device finishes initializing (it captured a blank page ~1 s
+in, while the log showed the adapter had only just been selected). Both parts are opt-in and off by
+default: `-DVKM_WASM_GI_SCENE=<dir>` bakes a glTF into MEMFS and makes it the default model path,
+and `-DVKM_WASM_GI_AUTO_SCREENSHOT=ON` captures a frame and echoes the PNG to the console as
+base64 for a headless run to recover.
+
+**Verification.** Metal 207/207 with Metal API Validation, Vulkan 203/203, WebGPU PASS, zero
+validation output on the two native backends. `TestEngineSetup`'s WebGPU capability case pinned the
+old contract ("nothing beyond timestamp support") and now pins the new one: `TextureUpload` present,
+`BindlessTextures` absent -- the pair that distinguishes this backend. Three parser cases cover the
+scoped declaration form, the plain-array form, and the missing-`bindings` error.
+
+### Deviations
+
+- Planned: implement `copyBufferToTexture` on WebGPU and repack rows to a 256-byte pitch. Did
+  instead: `writeRegion()` via `wgpuQueueWriteTexture`, which needs no repacking and no new
+  plumbing, because the alignment rule does not apply to queue writes.
+- Planned: gate the per-material batch split on a capability so only WebGPU pays. Did instead:
+  split everywhere, so there is one code path and the WebGPU-shaped behaviour can be exercised on a
+  backend whose output can be inspected.
+- Planned: verify by looking at a WebGPU image. Did instead: looked, found the sample does not run
+  there for pre-existing reasons, proved that by A/B, and recorded it rather than reporting the
+  path as visually confirmed.
+
+## 2026-08-03 — The gi sample runs on WebGPU: four validation bugs
+
+The previous entry recorded that the sample rendered nothing on WebGPU and that the failures
+predated the texturing work. These are those failures. The frame now renders the scene with zero
+validation errors, which also makes descriptor set 3 verifiable by looking rather than only by
+building.
+
+**Buffer labels first.** Every message named `[Buffer (unlabeled)]`, because both WebGPU buffer
+classes passed a constant label instead of `_debugName`. Fixing that is what turned an anonymous
+wall of errors into something placeable, and it is the change to make first next time.
+
+- **Every `writeDirect()` on an upload staging buffer was failing** -- 1804 per run, three per
+  frame. It is a `wgpuQueueWriteBuffer`, which requires `CopyDst`, but an upload staging buffer was
+  `CopySrc | MapWrite`, and WebGPU allows `MapWrite` to combine only with `CopySrc`. No single
+  usage set serves both `map()` and `writeDirect()`, so the upload shape now carries **no map usage
+  at all** and keeps a CPU shadow: `map()` hands back the shadow, `unmap()`/`flush()` push it with
+  a queue write, and `writeDirect()` writes both so the two routes cannot disagree. That also
+  deletes the async round trip from the upload path, which only ever existed to re-map. The buffer
+  and its shadow are rounded to 4 bytes because a queue write works in 4-byte units.
+- **The WebGPU singleton bindings were off by one.** The shader used 5/6/7/8 where the runtime
+  layout uses 4/5/6/7, on the stated reasoning that this backend "shifts by one for the
+  push-constant ring". It does not: both branches have four entries ahead of the singletons
+  (native is textures/vertex/index/sampler, WebGPU is pushConstants/vertexMega/indexMega/slotTable).
+  FrameData therefore landed on IndirectArgument's compute-only writable entry -- the six
+  "Fragment is not in the binding visibility" errors and the ReadOnlyStorage-vs-Storage one -- and
+  VisibleList ran off the end of the layout, which is the "Binding doesn't exist".
+- **The argument buffer was writable-storage and indirect in one render pass.**
+  `vkm_bindless.hlsli` already warned about this and concluded "no render pipeline's shader may
+  declare it" -- but WebGPU's synchronization scope covers the *bind group*, not the shader, so not
+  declaring them is not enough. Set 0 now exists in two shapes: the compute one as before, and a
+  graphics one that stops before the two read-write singletons. Render pipelines are created and
+  bound with the graphics shape, which takes those buffers out of the render pass's scope. They are
+  the last entries, so it is a prefix rather than a filtered copy.
+- **The fourth was mine, and the previous entry's claim was wrong.** A `git checkout` used to undo
+  an unrelated edit had also reverted the gi sample's material-table wiring, and it was committed
+  that way -- so the PSOs declared set 3 and nothing ever bound it ("No bind group set at group
+  index 3"). The previous entry called the set-3 path "structurally complete"; it was not. Restored.
+
+**Two traps worth knowing.** Changing a shader does **not** relink an Emscripten target --
+`--preload-file` inputs are not dependencies -- so the first fix appeared to do nothing until
+`gi.data` turned out to be a minute older than the regenerated cache. And a headless run
+rasterizes in software: the capture frame was still the interactive default of 600, which one run
+spent 24 hours and 127 CPU-hours failing to reach, because this sample draws every budgeted probe's
+six cube faces per frame. `VKM_WASM_GI_SCREENSHOT_FRAME` now defaults to 4.
+
+**Verification.** The WebGPU frame shows the textured DamagedHelmet -- surface detail, scratches,
+gold trim, metal plating -- against the blank white page it produced before, with **zero**
+validation errors where there were 1812. It is dark because four frames is nowhere near probe
+convergence, which is a property of the capture, not of the render. Metal and Vulkan re-verified
+after the change.

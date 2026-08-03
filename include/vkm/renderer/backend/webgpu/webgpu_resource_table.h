@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include <vkm/renderer/backend/common/per_pass_resource_table.h>
+#include <vkm/renderer/backend/common/resource_table.h>
 
 #include <webgpu/webgpu.h>
 
@@ -20,16 +20,16 @@ namespace vkm
     * none (see VkmBindlessResourceManagerWebGPU::registerTexture, which is a hard error). Group 2's
     * fixed bindings are the only way a shader samples a texture on this backend.
     */
-    class VkmPerPassResourceTableWebGPU : public VkmPerPassResourceTableBase
+    class VkmResourceTableWebGPU : public VkmResourceTableBase
     {
     public:
-        explicit VkmPerPassResourceTableWebGPU(VkmDriverBase* driver);
-        ~VkmPerPassResourceTableWebGPU() override;
+        explicit VkmResourceTableWebGPU(VkmDriverBase* driver);
+        ~VkmResourceTableWebGPU() override;
 
         inline WGPUBindGroup getBindGroup() const { return _bindGroup; }
 
     protected:
-        bool createInner(const std::vector<VkmPerPassResourceEntry>& entries, std::string* outError) override final;
+        bool createInner(const std::vector<VkmTableResourceEntry>& entries, std::string* outError) override final;
         void destroyInner() override final;
 
     private:

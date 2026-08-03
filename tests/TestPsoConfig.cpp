@@ -240,10 +240,10 @@ TEST_CASE("VkmPipelineStateDescriptor - per-pass resource (set 2) declaration") 
 
         REQUIRE(result->perPassResources.size() == 4);
         CHECK(result->perPassResources[0].binding == 0);
-        CHECK(result->perPassResources[0].type == vkm::VkmPerPassResourceType::SampledTexture);
-        CHECK(result->perPassResources[1].type == vkm::VkmPerPassResourceType::Sampler);
-        CHECK(result->perPassResources[2].type == vkm::VkmPerPassResourceType::StorageBuffer);
-        CHECK(result->perPassResources[3].type == vkm::VkmPerPassResourceType::UniformBuffer);
+        CHECK(result->perPassResources[0].type == vkm::VkmTableResourceType::SampledTexture);
+        CHECK(result->perPassResources[1].type == vkm::VkmTableResourceType::Sampler);
+        CHECK(result->perPassResources[2].type == vkm::VkmTableResourceType::StorageBuffer);
+        CHECK(result->perPassResources[3].type == vkm::VkmTableResourceType::UniformBuffer);
     }
 
     SUBCASE("binding indices need not be contiguous or ordered") {
@@ -327,7 +327,7 @@ TEST_CASE("VkmPipelineStateDescriptor - per-pass resource (set 2) declaration") 
         REQUIRE_MESSAGE(variants.has_value(), outError);
         REQUIRE(variants->size() == 1);
         REQUIRE((*variants)[0].perPassResources.size() == 1);
-        CHECK((*variants)[0].perPassResources[0].type == vkm::VkmPerPassResourceType::StorageBuffer);
+        CHECK((*variants)[0].perPassResources[0].type == vkm::VkmTableResourceType::StorageBuffer);
     }
 }
 
@@ -684,4 +684,82 @@ TEST_CASE("parsePipelineStateFromString - unknown backend name in allowlist fail
     std::optional<vkm::VkmPipelineStateDescriptor> parsed = vkm::parsePipelineStateFromString(jsonText, &outError);
     CHECK_FALSE(parsed.has_value());
     CHECK(outError.find("direct3d") != std::string::npos);
+}
+
+/*
+* Set 3's declaration can be scoped to backends, because it is the one declaration that is
+* backend-specific in substance: only WebGPU, lacking an array-of-handle type, reaches material
+* textures through a per-draw table. A pipeline built for any other backend must not carry a set
+* its own shader never references.
+*/
+TEST_CASE("per_draw_resources - a backends allowlist scopes the declaration") {
+    const std::string json = R"({
+        "name": "scoped_pso",
+        "shaders": { "compute": { "filepath": "x.hlsl", "entry_point": "CSMain" } },
+        "per_draw_resources": {
+            "backends": ["webgpu"],
+            "bindings": [ { "binding": 0, "type": "sampled_texture" } ]
+        }
+    })";
+
+    std::string error;
+    const auto parsed = vkm::parsePipelineStateFromString(json, &error);
+    REQUIRE_MESSAGE(parsed.has_value(), error);
+    CHECK(parsed->perDrawResources.size() == 1);
+    REQUIRE(parsed->perDrawResourceBackends.size() == 1);
+    CHECK(parsed->perDrawResourceBackends[0] == vkm::VkmShaderCacheBackend::WebGPU);
+
+    SUBCASE("the named backend keeps it") {
+        const auto variants =
+            vkm::expandPipelineStateOptions(*parsed, vkm::VkmShaderCacheBackend::WebGPU, &error);
+        REQUIRE_MESSAGE(variants.has_value(), error);
+        REQUIRE(variants->size() == 1);
+        CHECK((*variants)[0].perDrawResources.size() == 1);
+    }
+
+    SUBCASE("every other backend drops it") {
+        for (const vkm::VkmShaderCacheBackend backend :
+             { vkm::VkmShaderCacheBackend::Vulkan, vkm::VkmShaderCacheBackend::Metal })
+        {
+            const auto variants = vkm::expandPipelineStateOptions(*parsed, backend, &error);
+            REQUIRE_MESSAGE(variants.has_value(), error);
+            REQUIRE(variants->size() == 1);
+            CHECK((*variants)[0].perDrawResources.empty());
+        }
+    }
+}
+
+TEST_CASE("per_draw_resources - the plain array form applies to every backend") {
+    const std::string json = R"({
+        "name": "unscoped_pso",
+        "shaders": { "compute": { "filepath": "x.hlsl", "entry_point": "CSMain" } },
+        "per_draw_resources": [ { "binding": 0, "type": "uniform_buffer" } ]
+    })";
+
+    std::string error;
+    const auto parsed = vkm::parsePipelineStateFromString(json, &error);
+    REQUIRE_MESSAGE(parsed.has_value(), error);
+    CHECK(parsed->perDrawResourceBackends.empty());
+
+    for (const vkm::VkmShaderCacheBackend backend :
+         { vkm::VkmShaderCacheBackend::Vulkan, vkm::VkmShaderCacheBackend::Metal,
+           vkm::VkmShaderCacheBackend::WebGPU })
+    {
+        const auto variants = vkm::expandPipelineStateOptions(*parsed, backend, &error);
+        REQUIRE_MESSAGE(variants.has_value(), error);
+        REQUIRE(variants->size() == 1);
+        CHECK((*variants)[0].perDrawResources.size() == 1);
+    }
+}
+
+TEST_CASE("per_draw_resources - the object form requires its bindings array") {
+    const std::string json = R"({
+        "name": "bad_pso",
+        "shaders": { "compute": { "filepath": "x.hlsl", "entry_point": "CSMain" } },
+        "per_draw_resources": { "backends": ["webgpu"] }
+    })";
+
+    std::string error;
+    CHECK_FALSE(vkm::parsePipelineStateFromString(json, &error).has_value());
+    CHECK(error.find("bindings") != std::string::npos);
 }

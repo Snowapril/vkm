@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <vkm/renderer/backend/common/frame_constants.h>
+#include <vkm/renderer/backend/common/pipeline_state.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 
 #include <vector>
@@ -55,9 +57,11 @@ namespace vkm
     * @details Binding 0 is a sampled-image array with no sampler attached (which is the shape
     * HLSL wants: DXC always emits a separate texture and SamplerState, and spirv-cross
     * outright refuses combined image samplers inside an argument-buffer runtime array).
-    * Rather than a sampler array nothing would index yet, there is a single
-    * linear/clamp-to-edge sampler -- what a cubemap wants, and enough for any texture the
-    * engine samples today.
+    * Rather than a sampler array nothing would index yet, there is a single linear/repeat
+    * sampler. Repeat because it is glTF's default wrap and material textures are the main
+    * consumer; a cube lookup derives in-range face coordinates, so the address mode does not
+    * apply there either way. A material wanting clamp addresses wrong at the edges -- per-texture
+    * samplers are the fix, and are not built.
     */
     inline constexpr uint32_t kVkmBindlessSamplerBinding = 3;
 
@@ -85,16 +89,24 @@ namespace vkm
     inline constexpr uint32_t kVkmBindlessPushConstantSize = 128;
 
     /*
-    * @brief How many push-constant allocations the Metal and WebGPU rings hold.
+    * @brief How many push-constant allocations the Metal and WebGPU rings hold **per frame slot**.
     *
     * @details Those backends have no push-constant instruction, so every setPushConstants() call
-    * takes a ring entry and the draw references it by dynamic offset. The cursor never resets, so
-    * a frame that pushes more than this many times over FRAME_BUFFER_COUNT frames reuses entries a
-    * running frame still references. Named here rather than only inside each backend because it is
-    * a budget callers have to plan against -- a pass that pushes per (item, sub-item, batch), like
-    * the probe capture, can reach it (see VkmProbeVolumeUpdater::kMaxBudget).
+    * takes a ring entry and the draw references it by dynamic offset. The ring is partitioned into
+    * FRAME_BUFFER_COUNT regions of this many entries, one per frame slot, and
+    * VkmBindlessResourceManagerBase::beginFrame() rewinds the cursor to its region base. That is
+    * what makes reuse safe: a slot's region is only rewritten after that slot's render graph has
+    * been waited on, which is the same guarantee descriptor set 1's per-slot region relies on.
+    *
+    * Named here rather than only inside each backend because it is still a budget callers have to
+    * plan against -- it now bounds one frame's pushes rather than all frames in flight together,
+    * but a pass that pushes per (item, sub-item, batch), like the probe capture, can reach it.
     */
     inline constexpr uint32_t kVkmPushConstantRingEntryCount = 1024;
+
+    // Total entries the ring buffer holds: one region per frame slot.
+    inline constexpr uint32_t kVkmPushConstantRingTotalEntryCount =
+        kVkmPushConstantRingEntryCount * FRAME_BUFFER_COUNT;
 
     // Metal (argument buffers Tier 2): [[buffer(0)]]/[[buffer(1)]] remain the vertex-stream
     // indices; the set-0 argument buffer and the push-constant buffer are pinned after them.
@@ -117,30 +129,107 @@ namespace vkm
     * everywhere: Metal has to reserve argument-table slots up front, and a per-backend cap would
     * turn a valid pipeline into a runtime failure on one backend only.
     */
-    inline constexpr uint32_t kVkmPerPassResourceMaxBindings = 16;
+    inline constexpr uint32_t kVkmResourceTableMaxBindings = 16;
 
     /*
-    * @brief Set 2 (per-pass) on Metal: discrete bindings, one Metal index per declared binding.
+    * @brief Sets 2 (per-pass) and 3 (per-draw) on Metal: discrete bindings, one Metal index per
+    * declared binding.
     *
-    * Discrete for the same reason set 1 is -- it keeps set 2 out of the padding walk
+    * Discrete for the same reason set 1 is -- it keeps them out of the padding walk
     * pad_argument_buffer_resources drives, which needs a registered base type for every id it
     * steps over and cannot cope with the sparse binding indices a PSO is allowed to declare.
     *
-    * Metal keeps separate index spaces for buffers, textures and samplers. The buffer space
-    * continues after set 1's; the texture and sampler spaces start at 0, because set 0's bindless
-    * textures and sampler live *inside* its argument buffer rather than in argument-table slots,
-    * leaving both spaces otherwise unused.
+    * Metal keeps separate index spaces for buffers, textures and samplers, and has **no descriptor
+    * set index at all** -- which is the one place the two sets genuinely differ rather than merely
+    * being parameterized. Their separation is carried entirely by these bases, so set 3 starts
+    * where set 2's kVkmResourceTableMaxBindings end in every one of the three spaces. Getting this
+    * wrong aliases set 3 onto set 2 silently.
+    *
+    * The buffer space continues after set 1's; the texture and sampler spaces start at 0, because
+    * set 0's bindless textures and sampler live *inside* its argument buffer rather than in
+    * argument-table slots, leaving both spaces otherwise unused.
     */
+    /*
+    * @brief How many resources of each kind ONE set may declare, on Metal.
+    *
+    * @details MTL4ArgumentTable enforces hard caps -- `max buffer bind count must not be more than
+    * 31` and `max sampler state bind count must not be more than 16`, per its descriptor
+    * validation -- and sets 2 and 3 have to share them. These are what the sums below fit into.
+    *
+    * They bound resources *per type*, not binding indices, because the index assignment is dense
+    * per type (see VkmMetalTableIndexAssigner): a PSO declaring five textures, one sampler and one
+    * uniform at bindings 0..6 uses sampler slot 0, not slot 5. Assigning `base + bindingIndex`
+    * instead would have made the sampler cap bind at 8 binding indices per set -- one more than
+    * gi_composite already declares.
+    */
+    inline constexpr uint32_t kVkmMetalTableTextureCapacity = 16;
+    inline constexpr uint32_t kVkmMetalTableSamplerCapacity = 8;
+    inline constexpr uint32_t kVkmMetalTableBufferCapacity  = 13;
+
     inline constexpr uint32_t kVkmMetalPerPassBufferIndexBase  = kVkmMetalFrameConstantBufferIndex + 1;
     inline constexpr uint32_t kVkmMetalPerPassTextureIndexBase = 0;
     inline constexpr uint32_t kVkmMetalPerPassSamplerIndexBase = 0;
 
+    inline constexpr uint32_t kVkmMetalPerDrawBufferIndexBase  = kVkmMetalPerPassBufferIndexBase + kVkmMetalTableBufferCapacity;
+    inline constexpr uint32_t kVkmMetalPerDrawTextureIndexBase = kVkmMetalPerPassTextureIndexBase + kVkmMetalTableTextureCapacity;
+    inline constexpr uint32_t kVkmMetalPerDrawSamplerIndexBase = kVkmMetalPerPassSamplerIndexBase + kVkmMetalTableSamplerCapacity;
+
     inline constexpr uint32_t kVkmMetalArgumentTableBufferBindCount =
-        kVkmMetalPerPassBufferIndexBase + kVkmPerPassResourceMaxBindings;
+        kVkmMetalPerDrawBufferIndexBase + kVkmMetalTableBufferCapacity;
     inline constexpr uint32_t kVkmMetalArgumentTableTextureBindCount =
-        kVkmMetalPerPassTextureIndexBase + kVkmPerPassResourceMaxBindings;
+        kVkmMetalPerDrawTextureIndexBase + kVkmMetalTableTextureCapacity;
     inline constexpr uint32_t kVkmMetalArgumentTableSamplerBindCount =
-        kVkmMetalPerPassSamplerIndexBase + kVkmPerPassResourceMaxBindings;
+        kVkmMetalPerDrawSamplerIndexBase + kVkmMetalTableSamplerCapacity;
+
+    // The caps MTL4ArgumentTableDescriptor validation enforces. Exceeding one aborts at device
+    // level with "Argument Table Descriptor Validation", and only with Metal API Validation on --
+    // which is exactly how this was found, and why it is asserted here instead.
+    static_assert(kVkmMetalArgumentTableBufferBindCount <= 31, "MTL4ArgumentTable allows at most 31 buffer binds");
+    static_assert(kVkmMetalArgumentTableSamplerBindCount <= 16, "MTL4ArgumentTable allows at most 16 sampler binds");
+
+    /*
+    * @brief Assigns a set's Metal argument-table indices, densely per resource type.
+    *
+    * @details Metal keeps separate index spaces for buffers, textures and samplers, and has no
+    * descriptor set index at all -- which set a binding belongs to is carried entirely by these
+    * indices. Walking the declaration in order and taking the next index of that resource's type
+    * is what keeps the scarce sampler space proportional to the samplers actually declared.
+    *
+    * Both vkm-compiler's add_msl_resource_binding pins and VkmResourceTableMetal's bind-time
+    * writes drive this same assigner over the same declaration, in the same order. They must agree
+    * exactly: a mismatch is a shader reading a slot nobody wrote, with no diagnostic.
+    */
+    class VkmMetalTableIndexAssigner
+    {
+    public:
+        explicit VkmMetalTableIndexAssigner(VkmResourceSetKind kind)
+            : _textureIndex((kind == VkmResourceSetKind::PerPass) ? kVkmMetalPerPassTextureIndexBase
+                                                                 : kVkmMetalPerDrawTextureIndexBase)
+            , _samplerIndex((kind == VkmResourceSetKind::PerPass) ? kVkmMetalPerPassSamplerIndexBase
+                                                                  : kVkmMetalPerDrawSamplerIndexBase)
+            , _bufferIndex((kind == VkmResourceSetKind::PerPass) ? kVkmMetalPerPassBufferIndexBase
+                                                                 : kVkmMetalPerDrawBufferIndexBase)
+        {
+        }
+
+        // The Metal index for the next declared resource of `type`, in declaration order.
+        uint32_t next(VkmTableResourceType type)
+        {
+            switch (type)
+            {
+                case VkmTableResourceType::SampledTexture: return _textureIndex++;
+                case VkmTableResourceType::Sampler:        return _samplerIndex++;
+                case VkmTableResourceType::StorageBuffer:
+                case VkmTableResourceType::UniformBuffer:  return _bufferIndex++;
+            }
+            return 0;
+        }
+
+    private:
+        uint32_t _textureIndex;
+        uint32_t _samplerIndex;
+        uint32_t _bufferIndex;
+    };
     inline constexpr uint32_t kVkmMetalBindlessTextureIdBase     = 0;
     inline constexpr uint32_t kVkmMetalBindlessBufferIdBase      = kVkmBindlessTextureCapacity;
     inline constexpr uint32_t kVkmMetalBindlessIndexBufferIdBase = kVkmBindlessTextureCapacity + kVkmBindlessBufferCapacity;
@@ -151,6 +240,35 @@ namespace vkm
     inline constexpr uint32_t kVkmMetalBindlessSingletonIdBase = kVkmMetalBindlessSamplerId + 1;
     inline constexpr uint32_t kVkmMetalBindlessArgumentEntryCount =
         kVkmMetalBindlessSingletonIdBase + static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count);
+
+    /*
+    * @brief Hands out push-constant ring entries from the current frame slot's region.
+    *
+    * @details The ring is FRAME_BUFFER_COUNT regions of kVkmPushConstantRingEntryCount entries.
+    * beginFrame() rewinds the cursor to a slot's region base, which is only safe once that slot's
+    * render graph has been waited on -- see VkmBindlessResourceManagerBase::beginFrame().
+    *
+    * Shared by the Metal and WebGPU managers rather than duplicated in each: the arithmetic is
+    * identical (only the entry stride and what the entry index is turned into differ), and it is
+    * the part worth testing without a device.
+    */
+    class VkmPushConstantRingAllocator
+    {
+    public:
+        // Rewinds to `frameSlot`'s region. Out-of-range slots are clamped to region 0, which is
+        // also the region a manager that never gets a beginFrame() call keeps using.
+        void beginFrame(uint32_t frameSlot);
+
+        // Returns the absolute entry index to write. Wrapping inside a region means this frame
+        // pushed more than kVkmPushConstantRingEntryCount times and is reusing entries it still
+        // references -- unlike a wrap across frames, no wait can make that safe, so it is a
+        // budget overflow rather than an ordering assumption. `outOverflowed` reports the wrap.
+        uint32_t allocate(bool* outOverflowed = nullptr);
+
+    private:
+        uint32_t _cursor = 0;
+        uint32_t _regionBase = 0;
+    };
 
     // Fixed-capacity slot allocator for one bindless array: LIFO free-list plus a monotonic
     // high-water mark (a plain free-list, not VkmOffsetAllocator's byte-range coalescing,
@@ -205,5 +323,19 @@ namespace vkm
         * immutable, so this recreates bind group 0.
         */
         virtual bool setSingletonBuffer(VkmBindlessSingletonBuffer which, VkmResourceHandle bufferHandle) = 0;
+
+        /*
+        * @brief Rewinds this frame slot's push-constant ring region.
+        *
+        * Called once per frame by VkmEngine::render(), after that slot's render graph has been
+        * waited on -- the same point, and for the same reason, that the frame constants of
+        * descriptor set 1 are written. Overwriting the region before that wait would clobber
+        * entries a running frame still references.
+        *
+        * Not pure virtual, and Vulkan deliberately inherits the no-op: it has a real
+        * push-constant instruction, so there is no ring and nothing to rewind. A manager that
+        * never receives this call keeps using region 0, which is what the unit tests do.
+        */
+        virtual void beginFrame(uint32_t frameSlot) { (void)frameSlot; }
     };
 } // namespace vkm

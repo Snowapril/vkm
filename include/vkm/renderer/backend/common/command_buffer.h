@@ -18,7 +18,7 @@ namespace vkm
     class VkmCommandBufferPoolBase;
     class VkmGpuEventTimelineBase;
     class VkmPipelineStateBase;
-    class VkmPerPassResourceTableBase;
+    class VkmResourceTableBase;
     struct VkmGpuEventTimelineObject;
 
     /*
@@ -166,18 +166,21 @@ namespace vkm
         void barrierTextureForShaderRead(VkmResourceHandle texture);
 
         /*
-        * @brief Binds `table` as descriptor set 2 for subsequent draws or dispatches.
+        * @brief Binds `table` at whichever set it was built for -- set 2 (per-pass) or set 3
+        * (per-draw) -- for subsequent draws or dispatches. The table carries its own set kind, so
+        * there is nothing to pass alongside it.
         *
-        * @details Must be recorded with a pipeline bound, and that pipeline must be the one the
-        * table was built against -- set 2's layout comes from the pipeline's own declaration, so a
-        * table built for a different one describes a different set. This is the first bind site in
-        * the engine that needs per-PSO knowledge; sets 0 and 1 are engine-global and bound
-        * unconditionally by bindPipeline().
+        * @details Must be recorded with a pipeline bound, and that pipeline's declaration for the
+        * table's set must *equal* the one the table was built against. Equality rather than
+        * pipeline identity is deliberate: a PSO's permutations are distinct pipeline objects that
+        * share one declaration, and requiring a table per permutation would multiply per-material
+        * tables by the permutation count for nothing. Sets 0 and 1 are engine-global and bound
+        * unconditionally by bindPipeline(); these two are the ones needing per-PSO knowledge.
         *
-        * A pipeline that declares per-pass resources must have them bound before it draws or
-        * dispatches: an unbound declared set is a validation error, not a silently empty one.
+        * A pipeline that declares either set must have it bound before it draws or dispatches: an
+        * unbound declared set is a validation error, not a silently empty one.
         */
-        void bindPerPassResources(VkmPerPassResourceTableBase* table);
+        void bindResourceTable(VkmResourceTableBase* table);
 
         void setPushConstants(const void* data, uint32_t size, uint32_t offset = 0);
 
@@ -297,7 +300,7 @@ namespace vkm
         virtual void onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
         virtual void onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer) = 0;
         virtual void onBarrierTextureForShaderRead(VkmResourceHandle texture) = 0;
-        virtual void onBindPerPassResources(VkmPerPassResourceTableBase* table) = 0;
+        virtual void onBindResourceTable(VkmResourceTableBase* table) = 0;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) = 0;
         virtual void onSetDebugName(const char* name) = 0;
         virtual void onPushDebugGroup(const char* name) = 0;

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/metal/metal_driver.h>
-#include <vkm/renderer/backend/metal/metal_per_pass_resource_table.h>
+#include <vkm/renderer/backend/metal/metal_resource_table.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_staging_buffer.h>
@@ -80,6 +80,7 @@ namespace vkm
         // MTLBuffer.gpuAddress is unconditional on Metal -- the argument buffers and push
         // constant ring have been binding by address since the MTL4 port.
         _driverCapabilityFlags = VkmDriverCapabilityFlags::TextureContentCapture | VkmDriverCapabilityFlags::TextureUpload |
+                                 VkmDriverCapabilityFlags::BindlessTextures |
                                  VkmDriverCapabilityFlags::BufferDeviceAddress;
         if (_hasUnifiedMemory)
         {
@@ -445,9 +446,9 @@ namespace vkm
         return new VkmPipelineStateMetal(this);
     }
 
-    VkmPerPassResourceTableBase* VkmDriverMetal::newPerPassResourceTableInner()
+    VkmResourceTableBase* VkmDriverMetal::newResourceTableInner()
     {
-        return new VkmPerPassResourceTableMetal(this);
+        return new VkmResourceTableMetal(this);
     }
 
     VkmSwapChainBase* VkmDriverMetal::newSwapChainInner()

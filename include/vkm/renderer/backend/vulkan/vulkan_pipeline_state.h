@@ -21,15 +21,18 @@ namespace vkm
         inline VkPipelineLayout getPipelineLayout() const { return _pipelineLayout; }
 
         /*
-        * @brief This pipeline's descriptor set 2 layout, or VK_NULL_HANDLE when it declares no
-        * per-pass resources.
+        * @brief This pipeline's layout for one PSO-declared set, or VK_NULL_HANDLE when it declares
+        * nothing there.
         *
         * Unlike sets 0 and 1 -- which every pipeline shares, and which therefore live on the
-        * bindless and frame-constant managers -- set 2's layout is built from this pipeline's own
-        * `perPassResources` declaration, so it is owned here. VkmPerPassResourceTableVulkan
-        * allocates its descriptor set from it.
+        * bindless and frame-constant managers -- these are built from this pipeline's own
+        * `perPassResources` / `perDrawResources` declarations, so they are owned here.
+        * VkmResourceTableVulkan allocates its descriptor set from the matching one.
         */
-        inline VkDescriptorSetLayout getPerPassSetLayout() const { return _perPassSetLayout; }
+        inline VkDescriptorSetLayout getSetLayout(VkmResourceSetKind kind) const
+        {
+            return (kind == VkmResourceSetKind::PerPass) ? _perPassSetLayout : _perDrawSetLayout;
+        }
 
     protected:
         virtual bool createInner(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError) override final;
@@ -39,10 +42,13 @@ namespace vkm
         VkPipeline _pipeline{VK_NULL_HANDLE};
 
         // Every Vulkan pipeline shares the engine-global bindless set 0 (see
-        // VkmBindlessResourceManagerVulkan) plus a small push-constant range carrying the
-        // current draw's bindless slot indices. Sets 1-3 ("engine managed", per TODO.md)
-        // remain unreserved/deferred follow-up work.
+        // VkmBindlessResourceManagerVulkan) and per-frame set 1, plus a small push-constant range.
+        // Sets 2 and 3 are this pipeline's own; see the layouts below.
         VkPipelineLayout _pipelineLayout{VK_NULL_HANDLE};
         VkDescriptorSetLayout _perPassSetLayout{VK_NULL_HANDLE};
+        VkDescriptorSetLayout _perDrawSetLayout{VK_NULL_HANDLE};
+        // Empty stand-in for a set this pipeline skipped but a later set needs to sit above -- a
+        // pipeline declaring set 3 and not set 2 still has to put set 3 at index 3.
+        VkDescriptorSetLayout _emptySetLayout{VK_NULL_HANDLE};
     };
 } // namespace vkm

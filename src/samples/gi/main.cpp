@@ -37,7 +37,7 @@
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/driver.h>
-#include <vkm/renderer/backend/common/per_pass_resource_table.h>
+#include <vkm/renderer/backend/common/resource_table.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/render_graph.h>
 #include <vkm/renderer/backend/common/sampler.h>
@@ -50,9 +50,12 @@
 #include <vkm/renderer/probe_volume.h>
 #include <vkm/renderer/probe_volume_updater.h>
 #include <vkm/renderer/screenshot.h>
+
+#include <cstdio>
 #include <vkm/renderer/scene/gltf_importer.h>
 #include <vkm/renderer/backend/common/staging_buffer.h>
 #include <vkm/renderer/scene/scene.h>
+#include <vkm/renderer/scene/scene_material_tables.h>
 
 #if defined(VKM_PLATFORM_WINDOWS)
 #include <vkm/platform/windows/application.h>
@@ -71,14 +74,28 @@
 
 using namespace vkm;
 
+#if defined(VKM_WASM_GI_SCENE_GLTF)
+// A wasm build has no filesystem to browse and no command line, so the scene baked into MEMFS at
+// link time is the default (see this sample's CMakeLists and -DVKM_WASM_GI_SCENE).
+VKM_GLOBAL_VARIABLE(std::string, gv_gi_model_path, VKM_WASM_GI_SCENE_GLTF);
+#else
 VKM_GLOBAL_VARIABLE(std::string, gv_gi_model_path,
                     std::string(RESOURCES_DIR) + "Scenes/Sponza/Sponza.gltf");
+#endif
 // Write a PNG of the composed frame and quit. This is how the sample gets verified at all on a
 // machine where nobody can look at the window -- see vkmWriteTexturePng.
+#if defined(VKM_WASM_GI_AUTO_SCREENSHOT)
+VKM_GLOBAL_VARIABLE(std::string, gv_gi_screenshot, "/vkm_gi.png");
+#else
 VKM_GLOBAL_VARIABLE(std::string, gv_gi_screenshot, "");
+#endif
 // Which frame to capture. Probes refresh a slice per frame and converge over rounds, so a
 // screenshot taken too early shows a half-lit volume rather than the technique's actual output.
+#if defined(VKM_WASM_GI_SCREENSHOT_FRAME)
+VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_screenshot_frame, VKM_WASM_GI_SCREENSHOT_FRAME);
+#else
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_screenshot_frame, 600u);
+#endif
 // Which channel to show, as a VkmGiDebugView. Settable here as well as through the UI so a
 // screenshot run can capture a specific term without anyone touching the window.
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_debug_view, 0u);
@@ -259,6 +276,10 @@ public:
         _updater.destroy();
         _volume.destroy();
         _gbuffer.destroy();
+        for (VkmSceneMaterialTables& tables : _gbufferMaterialTables)
+        {
+            tables.destroy(_engine->getDriver());
+        }
         _scene.destroy(_engine->getDriver());
     }
 
@@ -341,7 +362,13 @@ public:
                 [this](const VkmScene::DrawBatch& batch) {
                     return _gbufferPipelines[static_cast<uint32_t>(batch._layout)];
                 },
-                {}, kCameraCullView);
+                // Binds this batch's material at set 3 where the backend needs one (WebGPU); a
+                // no-op where the shader indexes the bindless array instead. A batch carries
+                // exactly one material, which is why VkmScene splits them that way.
+                [this](VkmCommandBufferBase* cb, const VkmScene::DrawBatch& batch) {
+                    _gbufferMaterialTables[static_cast<uint32_t>(batch._layout)].bind(cb, batch._materialIndex);
+                },
+                kCameraCullView);
         });
 
         // 4. Everything the fullscreen passes sample has to leave its attachment layout first.
@@ -377,10 +404,10 @@ public:
             ssgiSubGraph->addReferencedResource(_indirectTarget);
             ssgiSubGraph->addReferencedResource(_directTarget);
             VkmPipelineStateBase* ssgiPipeline = _ssgiPipeline;
-            VkmPerPassResourceTableBase* ssgiTable = _tables._ssgi;
+            VkmResourceTableBase* ssgiTable = _tables._ssgi;
             ssgiSubGraph->setRenderCallback([ssgiPipeline, ssgiTable](VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->bindPipeline(ssgiPipeline);
-                commandBuffer->bindPerPassResources(ssgiTable);
+                commandBuffer->bindResourceTable(ssgiTable);
                 commandBuffer->draw(3, 1, 0, 0);
             });
         }
@@ -402,10 +429,10 @@ public:
             renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_extent, backBuffer), "GiTonemap");
         tonemapSubGraph->addReferencedResource(_compositeTarget);
         VkmPipelineStateBase* tonemapPipeline = _tonemapPipeline;
-        VkmPerPassResourceTableBase* tonemapTable = _tables._tonemap;
+        VkmResourceTableBase* tonemapTable = _tables._tonemap;
         tonemapSubGraph->setRenderCallback([tonemapPipeline, tonemapTable](VkmCommandBufferBase* commandBuffer) {
             commandBuffer->bindPipeline(tonemapPipeline);
-            commandBuffer->bindPerPassResources(tonemapTable);
+            commandBuffer->bindResourceTable(tonemapTable);
             commandBuffer->draw(3, 1, 0, 0);
         });
 
@@ -418,10 +445,10 @@ public:
                 renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_extent, _screenshotTarget), "GiScreenshot");
             shotSubGraph->addReferencedResource(_screenshotTarget);
             VkmPipelineStateBase* pipeline = _tonemapPipeline;
-            VkmPerPassResourceTableBase* table = _tables._tonemap;
+            VkmResourceTableBase* table = _tables._tonemap;
             shotSubGraph->setRenderCallback([pipeline, table](VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->bindPipeline(pipeline);
-                commandBuffer->bindPerPassResources(table);
+                commandBuffer->bindResourceTable(table);
                 commandBuffer->draw(3, 1, 0, 0);
             });
             _screenshotPending = true;
@@ -437,11 +464,11 @@ private:
 
     struct Tables
     {
-        VkmPerPassResourceTableBase* _lighting = nullptr;
-        VkmPerPassResourceTableBase* _probeLighting = nullptr;
-        VkmPerPassResourceTableBase* _ssgi = nullptr;
-        VkmPerPassResourceTableBase* _composite = nullptr;
-        VkmPerPassResourceTableBase* _tonemap = nullptr;
+        VkmResourceTableBase* _lighting = nullptr;
+        VkmResourceTableBase* _probeLighting = nullptr;
+        VkmResourceTableBase* _ssgi = nullptr;
+        VkmResourceTableBase* _composite = nullptr;
+        VkmResourceTableBase* _tonemap = nullptr;
 
         bool isComplete() const
         {
@@ -467,21 +494,21 @@ private:
     }
 
     void recordFullscreen(VkmRenderGraph* renderGraph, const char* name, VkmResourceHandle target,
-                          VkmPipelineStateBase* pipeline, VkmPerPassResourceTableBase* table)
+                          VkmPipelineStateBase* pipeline, VkmResourceTableBase* table)
     {
         VkmRenderGraphicsSubGraph* subGraph =
             renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_extent, target), name);
         subGraph->addReferencedResource(target);
         subGraph->setRenderCallback([pipeline, table](VkmCommandBufferBase* commandBuffer) {
             commandBuffer->bindPipeline(pipeline);
-            commandBuffer->bindPerPassResources(table);
+            commandBuffer->bindResourceTable(table);
             commandBuffer->draw(3, 1, 0, 0);
         });
     }
 
     void destroyTables(Tables& tables)
     {
-        for (VkmPerPassResourceTableBase** table :
+        for (VkmResourceTableBase** table :
              { &tables._lighting, &tables._probeLighting, &tables._ssgi, &tables._composite, &tables._tonemap })
         {
             if (*table != nullptr)
@@ -525,6 +552,17 @@ private:
             return;
         }
 
+        // Must follow build(), which is where the material textures are created.
+        for (uint32_t i = 0; i < static_cast<uint32_t>(VkmVertexLayoutPreset::Count); ++i)
+        {
+            if (_gbufferPipelines[i] != nullptr &&
+                !_gbufferMaterialTables[i].initialize(driver, _scene, _gbufferPipelines[i], &error))
+            {
+                VKM_DEBUG_ERROR(("Failed to build the GI sample's material tables: " + error).c_str());
+                return;
+            }
+        }
+
         // Fit the grid to what was loaded. A probe outside the geometry contributes nothing but
         // still costs a full capture, so the grid is sized from the scene rather than guessed.
         const VkmSceneAABB bounds = _scene.computeWorldBounds();
@@ -548,20 +586,23 @@ private:
             return;
         }
 
-        // The capture pass pushes once per (probe, face, batch), and Metal/WebGPU hand out a
-        // push-constant ring entry per push with no per-frame reset (1024 entries, FRAME_BUFFER_COUNT
-        // frames in flight). A budget chosen without reference to the scene's batch count therefore
-        // wraps the ring onto entries a running frame still references -- so derive it, and say so
-        // when the scene is the thing limiting it rather than the knob.
+        // The capture pass pushes once per (probe, face, batch), so the budget still has to fit
+        // inside one frame's push-constant ring region on Metal/WebGPU -- but that region is now
+        // rewound every frame, so it is one frame's pushes that must fit rather than all frames in
+        // flight together. What remains is a plain per-frame capacity check, not the 3x-tighter
+        // "entries a running frame still references" constraint this used to work around.
         const uint32_t batchCount = static_cast<uint32_t>(_scene.getDrawBatches().size());
-        const uint32_t ringBudget =
-            kVkmPushConstantRingEntryCount /
-            (FRAME_BUFFER_COUNT * std::max(1u, 6u * batchCount + 2u));
+        const uint32_t ringBudget = kVkmPushConstantRingEntryCount / std::max(1u, 6u * batchCount + 2u);
+        const uint32_t requestedBudget = _probeBudget;
         _probeBudget = std::clamp(std::min(_probeBudget, ringBudget), 1u, VkmProbeVolumeUpdater::kMaxBudget);
-        if (_probeBudget < VkmProbeVolumeUpdater::kMaxBudget)
+        // Only when the ring is what took it down. Comparing against kMaxBudget instead would
+        // report every budget below the engine's ceiling as ring-limited, which is how this line
+        // came to claim "limited to 32 by the push-constant ring" for a scene the ring allowed 128.
+        if (_probeBudget < requestedBudget)
         {
-            VKM_DEBUG_INFO(("Probe budget limited to " + std::to_string(_probeBudget) +
-                            " by the push-constant ring at " + std::to_string(batchCount) + " draw batches").c_str());
+            VKM_DEBUG_INFO(("Probe budget limited to " + std::to_string(_probeBudget) + " (from " +
+                            std::to_string(requestedBudget) + ") by the push-constant ring at " +
+                            std::to_string(batchCount) + " draw batches").c_str());
         }
 
         // _nearZ / _farZ are left at 0 so the updater derives them from the volume. Fixed
@@ -575,6 +616,13 @@ private:
         if (!_updater.initialize(driver, _engine->getPipelineStateManager(), &_volume, updaterDescriptor, &error))
         {
             VKM_DEBUG_ERROR(("Failed to create the probe updater: " + error).c_str());
+            return;
+        }
+        // The capture pass shades with the material's albedo, so it needs the same per-material
+        // tables the G-buffer does wherever the backend cannot sample bindlessly.
+        if (!_updater.buildMaterialTables(_scene, &error))
+        {
+            VKM_DEBUG_ERROR(("Failed to build the probe capture's material tables: " + error).c_str());
             return;
         }
 
@@ -667,22 +715,22 @@ private:
         const VkmResourceHandle motion = _gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic);
 
         std::string error;
-        _tables._lighting = driver->newPerPassResourceTable(
-            _lightingPipeline,
+        _tables._lighting = driver->newResourceTable(
+            _lightingPipeline, VkmResourceSetKind::PerPass,
             {{ 0, normal }, { 1, baseColor }, { 2, motion }, { 3, _sampler }, { 4, _lightBuffer }}, &error);
-        _tables._probeLighting = driver->newPerPassResourceTable(
-            _probeLightingPipeline,
+        _tables._probeLighting = driver->newResourceTable(
+            _probeLightingPipeline, VkmResourceSetKind::PerPass,
             {{ 0, normal }, { 1, motion }, { 2, _volume.getIrradianceTexture() },
              { 3, _volume.getDistanceTexture() }, { 4, _sampler }, { 5, _volumeBuffer }}, &error);
-        _tables._ssgi = driver->newPerPassResourceTable(
-            _ssgiPipeline,
+        _tables._ssgi = driver->newResourceTable(
+            _ssgiPipeline, VkmResourceSetKind::PerPass,
             {{ 0, normal }, { 1, motion }, { 2, _directTarget }, { 3, _sampler }, { 4, _ssgiBuffer }}, &error);
-        _tables._composite = driver->newPerPassResourceTable(
-            _compositePipeline,
+        _tables._composite = driver->newResourceTable(
+            _compositePipeline, VkmResourceSetKind::PerPass,
             {{ 0, _directTarget }, { 1, _indirectTarget }, { 2, baseColor }, { 3, normal },
              { 4, motion }, { 5, _sampler }, { 6, _compositeBuffer }}, &error);
-        _tables._tonemap = driver->newPerPassResourceTable(
-            _tonemapPipeline, {{ 0, _compositeTarget }, { 1, _sampler }, { 2, _tonemapBuffer }}, &error);
+        _tables._tonemap = driver->newResourceTable(
+            _tonemapPipeline, VkmResourceSetKind::PerPass, {{ 0, _compositeTarget }, { 1, _sampler }, { 2, _tonemapBuffer }}, &error);
 
         if (!_tables.isComplete())
         {
@@ -700,9 +748,56 @@ private:
         }
         _screenshotPending = false;
         vkmWriteTexturePng(_engine->getDriver(), _screenshotTarget, gv_gi_screenshot.get());
+#if defined(__EMSCRIPTEN__)
+        // A wasm build writes into MEMFS, which nothing outside the page can open, so the file is
+        // echoed to the console as base64 for a headless run to recover. This is how the WebGPU
+        // render path gets *looked at* rather than only built and unit-tested; Chrome's own
+        // --screenshot fires before the device has finished initializing and captures a blank page.
+        dumpScreenshotAsBase64(gv_gi_screenshot.get());
+#endif
         // A screenshot run exists to produce the file, so it stops once it has one.
         _engine->getInputHandler().requestExit();
     }
+
+
+#if defined(__EMSCRIPTEN__)
+    // Prints "VKM_SCREENSHOT_BASE64:<data>" on one line. Verification scaffolding, wasm only.
+    static void dumpScreenshotAsBase64(const std::string& path)
+    {
+        std::FILE* file = std::fopen(path.c_str(), "rb");
+        if (file == nullptr)
+        {
+            VKM_DEBUG_ERROR("screenshot base64 dump: could not reopen the PNG from MEMFS");
+            return;
+        }
+        std::vector<unsigned char> bytes;
+        unsigned char chunk[4096];
+        size_t read = 0;
+        while ((read = std::fread(chunk, 1, sizeof(chunk), file)) > 0)
+        {
+            bytes.insert(bytes.end(), chunk, chunk + read);
+        }
+        std::fclose(file);
+
+        static const char* kAlphabet =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string encoded;
+        encoded.reserve(((bytes.size() + 2) / 3) * 4);
+        for (size_t i = 0; i < bytes.size(); i += 3)
+        {
+            const uint32_t remaining = static_cast<uint32_t>(bytes.size() - i);
+            const uint32_t triple = (static_cast<uint32_t>(bytes[i]) << 16) |
+                                    ((remaining > 1 ? static_cast<uint32_t>(bytes[i + 1]) : 0u) << 8) |
+                                    (remaining > 2 ? static_cast<uint32_t>(bytes[i + 2]) : 0u);
+            encoded.push_back(kAlphabet[(triple >> 18) & 0x3F]);
+            encoded.push_back(kAlphabet[(triple >> 12) & 0x3F]);
+            encoded.push_back(remaining > 1 ? kAlphabet[(triple >> 6) & 0x3F] : '=');
+            encoded.push_back(remaining > 2 ? kAlphabet[triple & 0x3F] : '=');
+        }
+        std::printf("VKM_SCREENSHOT_BASE64:%s\n", encoded.c_str());
+        std::fflush(stdout);
+    }
+#endif
 
     void drawUi()
     {
@@ -748,6 +843,9 @@ private:
     VkmProbeVolumeUpdater _updater;
 
     std::array<VkmPipelineStateBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _gbufferPipelines{};
+    // One set-3 table per material, per G-buffer permutation. Empty on a backend whose shader
+    // samples materials through the bindless array; see VkmSceneMaterialTables.
+    std::array<VkmSceneMaterialTables, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _gbufferMaterialTables{};
     VkmPipelineStateBase* _lightingPipeline = nullptr;
     VkmPipelineStateBase* _probeLightingPipeline = nullptr;
     VkmPipelineStateBase* _ssgiPipeline = nullptr;

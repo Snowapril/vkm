@@ -18,6 +18,7 @@
 #include "vkm_bindless.hlsli"
 #include "vkm_frame_constants.hlsli"
 #include "vkm_gbuffer.hlsli"
+#include "vkm_material.hlsli"
 
 // Deliberately NOT scene_common.hlsli, even though it defines these same records: that header also
 // declares the two read-write singletons, which are compute-only on purpose (WebGPU forbids
@@ -56,6 +57,7 @@ struct FrameData
 VKM_BINDLESS_VERTEX_PULLING(uint);
 VKM_BINDLESS_OBJECT_DATA(ObjectData, g_ObjectData);
 VKM_BINDLESS_FRAME_DATA(FrameData, g_FrameData);
+VKM_MATERIAL_DECLARE();
 
 #if defined(VKM_VERTEX_LAYOUT_STANDARD_PBR)
     // position f32x3 @0, normal f32x3 @16, uv0 f32x2 @32, tangent f32x4 @48; stride 64 = 16 words
@@ -82,6 +84,7 @@ struct VSOutput
     [[vk::location(2)]] float4 currentClip : TEXCOORD1;
     [[vk::location(3)]] float4 previousClip : TEXCOORD2;
     [[vk::location(4)]] nointerpolation uint materialIndex : TEXCOORD3;
+    [[vk::location(5)]] float2 uv : TEXCOORD4;
 };
 
 struct PSOutput
@@ -118,22 +121,20 @@ float3 fetchNormal(ObjectData obj, uint wordBase)
 #endif
 }
 
-// VkmMaterialData is 48 bytes = 12 words: baseColorFactor, emissive, then metallicRoughness with
-// x = metallic and y = roughness (see renderer/scene/scene.h).
-float4 fetchBaseColor(uint materialPoolSlot, uint materialIndex)
+// uv0 lives at byte 32 (word 8) in StandardPBR and byte 16 (word 4, packed f16x2) in Compact.
+// PositionOnly carries none, so its materials are factor-only -- correct rather than a fallback,
+// since there is no coordinate to sample at.
+float2 fetchUV(ObjectData obj, uint wordBase)
 {
-    const uint wordBase = materialIndex * 12;
-    return float4(asfloat(VKM_LOAD_VERTEX(materialPoolSlot, wordBase + 0)),
-                  asfloat(VKM_LOAD_VERTEX(materialPoolSlot, wordBase + 1)),
-                  asfloat(VKM_LOAD_VERTEX(materialPoolSlot, wordBase + 2)),
-                  asfloat(VKM_LOAD_VERTEX(materialPoolSlot, wordBase + 3)));
-}
-
-float2 fetchMetallicRoughness(uint materialPoolSlot, uint materialIndex)
-{
-    const uint wordBase = materialIndex * 12;
-    return float2(asfloat(VKM_LOAD_VERTEX(materialPoolSlot, wordBase + 8)),
-                  asfloat(VKM_LOAD_VERTEX(materialPoolSlot, wordBase + 9)));
+#if defined(VKM_VERTEX_LAYOUT_STANDARD_PBR)
+    return float2(asfloat(VKM_LOAD_VERTEX(obj.vertexPoolSlot, wordBase + 8)),
+                  asfloat(VKM_LOAD_VERTEX(obj.vertexPoolSlot, wordBase + 9)));
+#elif defined(VKM_VERTEX_LAYOUT_COMPACT)
+    const uint packed = VKM_LOAD_VERTEX(obj.vertexPoolSlot, wordBase + 4);
+    return float2(f16tof32(packed & 0xFFFFu), f16tof32(packed >> 16));
+#else
+    return float2(0.0, 0.0);
+#endif
 }
 
 VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
@@ -157,6 +158,7 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
     output.worldPosition = worldPosition.xyz;
     output.worldNormal = mul((float3x3)obj.normalTransform, normal);
     output.materialIndex = obj.materialIndex;
+    output.uv = fetchUV(obj, wordBase);
     return output;
 }
 
@@ -173,9 +175,9 @@ PSOutput PSMain(VSOutput input)
                                      ? normalize(input.worldNormal)
                                      : geometricNormal;
 
-    const uint materialPoolSlot = g_FrameData[0].materialPoolSlot;
-    const float4 baseColor = fetchBaseColor(materialPoolSlot, input.materialIndex);
-    const float2 metallicRoughness = fetchMetallicRoughness(materialPoolSlot, input.materialIndex);
+    const VkmMaterial material = vkmLoadMaterial(g_FrameData[0].materialPoolSlot, input.materialIndex);
+    const float4 baseColor = vkmSampleBaseColor(material, input.uv);
+    const float2 metallicRoughness = vkmSampleMetallicRoughness(material, input.uv);
 
     PSOutput output;
     output.normal = vkmPackGBufferNormals(shadingNormal, geometricNormal);

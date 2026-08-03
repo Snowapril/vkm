@@ -1,6 +1,6 @@
 // Copyright (c) 2025 Snowapril
 
-#include <vkm/renderer/backend/vulkan/vulkan_per_pass_resource_table.h>
+#include <vkm/renderer/backend/vulkan/vulkan_resource_table.h>
 
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
@@ -27,30 +27,30 @@ namespace vkm
             }
         }
 
-        VkDescriptorType toVkDescriptorType(VkmPerPassResourceType type)
+        VkDescriptorType toVkDescriptorType(VkmTableResourceType type)
         {
             switch (type)
             {
-                case VkmPerPassResourceType::SampledTexture: return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                case VkmPerPassResourceType::Sampler:        return VK_DESCRIPTOR_TYPE_SAMPLER;
-                case VkmPerPassResourceType::StorageBuffer:  return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                case VkmPerPassResourceType::UniformBuffer:  return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                case VkmTableResourceType::SampledTexture: return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                case VkmTableResourceType::Sampler:        return VK_DESCRIPTOR_TYPE_SAMPLER;
+                case VkmTableResourceType::StorageBuffer:  return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                case VkmTableResourceType::UniformBuffer:  return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             }
             return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         }
     }
 
-    VkmPerPassResourceTableVulkan::VkmPerPassResourceTableVulkan(VkmDriverBase* driver)
-        : VkmPerPassResourceTableBase(driver)
+    VkmResourceTableVulkan::VkmResourceTableVulkan(VkmDriverBase* driver)
+        : VkmResourceTableBase(driver)
     {
     }
 
-    VkmPerPassResourceTableVulkan::~VkmPerPassResourceTableVulkan()
+    VkmResourceTableVulkan::~VkmResourceTableVulkan()
     {
         destroyInner();
     }
 
-    bool VkmPerPassResourceTableVulkan::createInner(const std::vector<VkmPerPassResourceEntry>& entries,
+    bool VkmResourceTableVulkan::createInner(const std::vector<VkmTableResourceEntry>& entries,
                                                     std::string* outError)
     {
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
@@ -58,20 +58,20 @@ namespace vkm
 
         const VkmPipelineStateVulkan* pipelineStateVulkan =
             static_cast<const VkmPipelineStateVulkan*>(_pipelineState);
-        VkDescriptorSetLayout setLayout = pipelineStateVulkan->getPerPassSetLayout();
+        VkDescriptorSetLayout setLayout = pipelineStateVulkan->getSetLayout(getSetKind());
         if (setLayout == VK_NULL_HANDLE)
         {
-            setError(outError, "Pipeline '" + _pipelineState->getName() + "' has no set-2 layout");
+            setError(outError, "Pipeline '" + _pipelineState->getName() + "' has no set-" +
+                                   std::to_string(getSetIndex()) + " layout");
             return false;
         }
 
-        const std::vector<VkmPerPassResourceBinding>& declaration =
-            _pipelineState->getDescriptor().perPassResources;
+        const std::vector<VkmTableResourceBinding>& declaration = getDeclaration();
 
         // Exactly what this table needs and nothing more -- the pool is its own, so it is sized
         // from the declaration rather than from a guess about the engine's peak usage.
         std::vector<VkDescriptorPoolSize> poolSizes;
-        for (const VkmPerPassResourceBinding& declared : declaration)
+        for (const VkmTableResourceBinding& declared : declaration)
         {
             const VkDescriptorType descriptorType = toVkDescriptorType(declared.type);
             const auto existing = std::find_if(poolSizes.begin(), poolSizes.end(),
@@ -129,8 +129,8 @@ namespace vkm
         // lockstep.
         for (size_t i = 0; i < entries.size(); ++i)
         {
-            const VkmPerPassResourceEntry& entry = entries[i];
-            const VkmPerPassResourceBinding& declared = declaration[i];
+            const VkmTableResourceEntry& entry = entries[i];
+            const VkmTableResourceBinding& declared = declaration[i];
 
             VkWriteDescriptorSet write{
                 .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -142,7 +142,7 @@ namespace vkm
 
             switch (declared.type)
             {
-                case VkmPerPassResourceType::SampledTexture:
+                case VkmTableResourceType::SampledTexture:
                 {
                     VkmTextureVulkan* textureVulkan = static_cast<VkmTextureVulkan*>(
                         renderResourcePool->getResource<VkmTexture>(entry.resource));
@@ -162,7 +162,7 @@ namespace vkm
                     write.pImageInfo = &imageInfos.back();
                     break;
                 }
-                case VkmPerPassResourceType::Sampler:
+                case VkmTableResourceType::Sampler:
                 {
                     VkmSamplerVulkan* samplerVulkan = static_cast<VkmSamplerVulkan*>(
                         renderResourcePool->getResource<VkmSampler>(entry.resource));
@@ -177,8 +177,8 @@ namespace vkm
                     write.pImageInfo = &imageInfos.back();
                     break;
                 }
-                case VkmPerPassResourceType::StorageBuffer:
-                case VkmPerPassResourceType::UniformBuffer:
+                case VkmTableResourceType::StorageBuffer:
+                case VkmTableResourceType::UniformBuffer:
                 {
                     VkmBufferVulkan* bufferVulkan = static_cast<VkmBufferVulkan*>(
                         renderResourcePool->getResource<VkmBuffer>(entry.resource));
@@ -206,7 +206,7 @@ namespace vkm
         return true;
     }
 
-    void VkmPerPassResourceTableVulkan::destroyInner()
+    void VkmResourceTableVulkan::destroyInner()
     {
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
         VkDevice device = driverVulkan->getDevice();

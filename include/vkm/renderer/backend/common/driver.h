@@ -4,7 +4,7 @@
 
 #include <vkm/base/common.h>
 #include <vkm/platform/common/window.h>
-#include <vkm/renderer/backend/common/per_pass_resource_table.h>
+#include <vkm/renderer/backend/common/resource_table.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/engine.h>
 
@@ -42,10 +42,8 @@ namespace vkm
         // snapshot texture contents. (copyTextureToBuffer/readbackTexture are cross-backend
         // and not gated by this flag.)
         TextureContentCapture   = 0x00000002,
-        // Backend implements copyBufferToTexture, and therefore uploadToTexture and the
-        // bindless texture array. WebGPU does not: it has no unsized texture arrays to bind
-        // into (its bindless layer is mega-buffer emulation), so nothing there can sample a
-        // texture even once the pixels are uploaded.
+        // Backend can get pixels into a texture at all, by whichever route: a
+        // copyBufferToTexture staging copy (Vulkan, Metal) or a queue write (WebGPU).
         TextureUpload           = 0x00000004,
         // Backend can write a texture's memory from the CPU, so uploadToTexture can skip the
         // staging buffer and the queue submit entirely. Requires both the mechanism (Metal:
@@ -66,6 +64,16 @@ namespace vkm
         // (Vulkan needs timestampComputeAndGraphics, WebGPU needs the optional timestamp-query
         // feature), so it is only meaningful after driver initialization.
         TimestampQuery          = 0x00000020,
+        /*
+        * Backend has the set-0 bindless texture array, so registerTexture returns a slot a
+        * shader can index. Separate from TextureUpload because WebGPU has one and not the other:
+        * WGSL has no array-of-handle type, so pixels upload there but nothing can index them --
+        * material textures reach a WebGPU shader through descriptor set 3 instead.
+        *
+        * A consumer needs the distinction to tell "this backend has no such array" from
+        * "the array is exhausted", which are a fallback and an error respectively.
+        */
+        BindlessTextures        = 0x00000040,
     };
 
     inline VkmDriverCapabilityFlags operator|(VkmDriverCapabilityFlags lhs, VkmDriverCapabilityFlags rhs)
@@ -202,15 +210,17 @@ namespace vkm
         VkmPipelineStateBase* newPipelineState(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError = nullptr);
 
         /*
-        * @brief Builds the descriptor set 2 (per-pass) resources `pipelineState` declared.
-        * @details Returns nullptr if the pipeline declares no per-pass resources, if `entries`
-        * does not exactly cover the declaration, or if a resource is of the wrong kind -- see
-        * VkmPerPassResourceTableBase. The caller owns the result: destroy() then delete, once no
+        * @brief Builds the resources `pipelineState` declared for one PSO-declared set: set 2
+        * (VkmResourceSetKind::PerPass) or set 3 (PerDraw).
+        * @details Returns nullptr if the pipeline declares nothing for that set, if `entries` does
+        * not exactly cover the declaration, or if a resource is of the wrong kind -- see
+        * VkmResourceTableBase. The caller owns the result: destroy() then delete, once no
         * in-flight frame can still be using it.
         */
-        VkmPerPassResourceTableBase* newPerPassResourceTable(const VkmPipelineStateBase* pipelineState,
-                                                             const std::vector<VkmPerPassResourceEntry>& entries,
-                                                             std::string* outError = nullptr);
+        VkmResourceTableBase* newResourceTable(const VkmPipelineStateBase* pipelineState,
+                                               VkmResourceSetKind kind,
+                                               const std::vector<VkmTableResourceEntry>& entries,
+                                               std::string* outError = nullptr);
 
         /*
         * @brief Replace every VkmFormat::Swapchain color-format sentinel in `desc` with the
@@ -429,7 +439,7 @@ namespace vkm
         virtual VkmTextureView* newTextureViewInner() = 0;
         virtual VkmBufferView* newBufferViewInner() = 0;
         virtual VkmSwapChainBase* newSwapChainInner() = 0;
-        virtual VkmPerPassResourceTableBase* newPerPassResourceTableInner() = 0;
+        virtual VkmResourceTableBase* newResourceTableInner() = 0;
         virtual VkmCommandQueueBase* newCommandQueueInner() = 0;
         virtual VkmPipelineStateBase* newPipelineStateInner() = 0;
         virtual VkmRenderResourcePool* newRenderResourcePoolInner() = 0;

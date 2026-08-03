@@ -18,12 +18,16 @@ namespace vkm
     *   set 0  bindless   -- resource arrays, never change after registration
     *                        (bindless_resource_manager.h)
     *   set 1  per-frame  -- camera/view constants, written once per frame (this header)
-    *   set 2  per-pass   -- reserved, not declared by any pipeline layout yet
-    *   set 3  per-draw   -- reserved, not declared by any pipeline layout yet
+    *   set 2  per-pass   -- declared by a PSO, bound once per pass (resource_table.h)
+    *   set 3  per-draw   -- declared by a PSO, bound per draw (resource_table.h)
     *
     * Per-draw data that fits travels as push constants instead of through set 3 (see
-    * kVkmBindlessPushConstantSize). Unlike push constants, a set-1 read is visible to every
-    * shader stage.
+    * kVkmBindlessPushConstantSize); set 3 is for what does not fit or is not a constant at all,
+    * such as the per-material texture table WebGPU needs because it has no bindless arrays.
+    * Unlike push constants, a set-1 read is visible to every shader stage.
+    *
+    * These four exhaust WebGPU's default maxBindGroups of 4, so there is no room for a fifth set
+    * on that backend -- anything further has to be folded into one of these.
     *
     * These constants are the C++ half of a shader ABI whose other halves are
     * include/vkm/shaders/vkm_frame_constants.hlsli and vkm-compiler's Metal binding pins;
@@ -31,8 +35,32 @@ namespace vkm
     */
     inline constexpr uint32_t kVkmBindlessSetIndex      = 0;
     inline constexpr uint32_t kVkmFrameConstantSetIndex = 1;
-    inline constexpr uint32_t kVkmPerPassSetIndex       = 2; // reserved
-    inline constexpr uint32_t kVkmPerDrawSetIndex       = 3; // reserved
+    inline constexpr uint32_t kVkmPerPassSetIndex       = 2;
+    inline constexpr uint32_t kVkmPerDrawSetIndex       = 3;
+
+    /*
+    * @brief Which PSO-declared descriptor set a declaration or a resource table belongs to.
+    *
+    * Sets 2 and 3 differ only by their set index, by which declaration they validate against, and
+    * (on Metal, which has no set index at all) by which argument-table index bases they occupy.
+    * Everything else -- JSON parsing, validation, the backend table objects -- is shared, which is
+    * why this is a parameter rather than a duplicated hierarchy.
+    */
+    enum class VkmResourceSetKind : uint8_t
+    {
+        PerPass = 0, // set 2, bound once per pass
+        PerDraw = 1, // set 3, bound per draw
+    };
+
+    inline constexpr uint32_t vkmResourceSetIndex(VkmResourceSetKind kind)
+    {
+        return (kind == VkmResourceSetKind::PerPass) ? kVkmPerPassSetIndex : kVkmPerDrawSetIndex;
+    }
+
+    inline constexpr const char* vkmResourceSetKindName(VkmResourceSetKind kind)
+    {
+        return (kind == VkmResourceSetKind::PerPass) ? "per-pass" : "per-draw";
+    }
 
     inline constexpr uint32_t kVkmFrameConstantBinding = 0;
 

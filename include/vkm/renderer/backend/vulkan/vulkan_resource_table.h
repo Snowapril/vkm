@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include <vkm/renderer/backend/common/per_pass_resource_table.h>
+#include <vkm/renderer/backend/common/resource_table.h>
 
 #include <volk.h>
 
@@ -17,16 +17,16 @@ namespace vkm
     * VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT or a free-list. The bindless and
     * frame-constant managers own their pools for the same reason.
     */
-    class VkmPerPassResourceTableVulkan : public VkmPerPassResourceTableBase
+    class VkmResourceTableVulkan : public VkmResourceTableBase
     {
     public:
-        explicit VkmPerPassResourceTableVulkan(VkmDriverBase* driver);
-        ~VkmPerPassResourceTableVulkan() override;
+        explicit VkmResourceTableVulkan(VkmDriverBase* driver);
+        ~VkmResourceTableVulkan() override;
 
         inline VkDescriptorSet getDescriptorSet() const { return _descriptorSet; }
 
     protected:
-        bool createInner(const std::vector<VkmPerPassResourceEntry>& entries, std::string* outError) override final;
+        bool createInner(const std::vector<VkmTableResourceEntry>& entries, std::string* outError) override final;
         void destroyInner() override final;
 
     private:

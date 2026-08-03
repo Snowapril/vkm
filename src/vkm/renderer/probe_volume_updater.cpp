@@ -6,7 +6,7 @@
 #include <vkm/renderer/backend/common/buffer.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/driver.h>
-#include <vkm/renderer/backend/common/per_pass_resource_table.h>
+#include <vkm/renderer/backend/common/resource_table.h>
 #include <vkm/renderer/backend/common/pipeline_state.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/render_graph.h>
@@ -266,9 +266,9 @@ namespace vkm
                                              std::string* outError)
     {
         const auto buildTable = [&](VkmPipelineStateBase* pipeline,
-                                    const std::vector<VkmPerPassResourceEntry>& entries,
-                                    VkmPerPassResourceTableBase*& outTable) {
-            outTable = _driver->newPerPassResourceTable(pipeline, entries, outError);
+                                    const std::vector<VkmTableResourceEntry>& entries,
+                                    VkmResourceTableBase*& outTable) {
+            outTable = _driver->newResourceTable(pipeline, VkmResourceSetKind::PerPass, entries, outError);
             return outTable != nullptr;
         };
 
@@ -316,7 +316,12 @@ namespace vkm
             return;
         }
 
-        const auto destroyTable = [](VkmPerPassResourceTableBase*& table) {
+        for (VkmSceneMaterialTables& tables : _materialTables)
+        {
+            tables.destroy(_driver);
+        }
+
+        const auto destroyTable = [](VkmResourceTableBase*& table) {
             if (table != nullptr)
             {
                 table->destroy();
@@ -324,7 +329,7 @@ namespace vkm
                 table = nullptr;
             }
         };
-        for (VkmPerPassResourceTableBase*& table : _captureTables)
+        for (VkmResourceTableBase*& table : _captureTables)
         {
             destroyTable(table);
         }
@@ -381,6 +386,19 @@ namespace vkm
             _sliceHysteresis.push_back(_everRefreshed[probeIndex] ? _descriptor._hysteresis : 0.0f);
         }
         _cursor = (_cursor + count) % probeCount;
+    }
+
+    bool VkmProbeVolumeUpdater::buildMaterialTables(const VkmScene& scene, std::string* outError)
+    {
+        for (uint32_t i = 0; i < static_cast<uint32_t>(VkmVertexLayoutPreset::Count); ++i)
+        {
+            if (_capturePipelines[i] != nullptr &&
+                !_materialTables[i].initialize(_driver, scene, _capturePipelines[i], outError))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     void VkmProbeVolumeUpdater::record(VkmRenderGraph* renderGraph, VkmScene* scene,
@@ -483,7 +501,10 @@ namespace vkm
                             return _capturePipelines[static_cast<uint32_t>(batch._layout)];
                         },
                         [this, &push](VkmCommandBufferBase* cb, const VkmScene::DrawBatch& batch) {
-                            cb->bindPerPassResources(_captureTables[static_cast<uint32_t>(batch._layout)]);
+                            cb->bindResourceTable(_captureTables[static_cast<uint32_t>(batch._layout)]);
+                            // Set 3 where the backend needs it, so a probe records textured
+                            // radiance rather than a per-material average; a no-op elsewhere.
+                            _materialTables[static_cast<uint32_t>(batch._layout)].bind(cb, batch._materialIndex);
                             cb->setPushConstants(&push, sizeof(push));
                         },
                         _descriptor._cullViewIndex);
@@ -501,7 +522,7 @@ namespace vkm
         // at a different place in each.
         const auto recordBlend = [&](const char* name, VkmResourceHandle atlas, const glm::uvec2& atlasExtent,
                                      uint32_t cellSize, VkmPipelineStateBase* pipeline,
-                                     VkmPerPassResourceTableBase* table, VkmResourceHandle constants,
+                                     VkmResourceTableBase* table, VkmResourceHandle constants,
                                      bool distanceAtlas) {
             VkmFrameBufferDescriptor fb{};
             fb._width = atlasExtent.x;
@@ -524,7 +545,7 @@ namespace vkm
             subGraph->setRenderCallback([this, pipeline, table, cellSize, distanceAtlas](
                                             VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->bindPipeline(pipeline);
-                commandBuffer->bindPerPassResources(table);
+                commandBuffer->bindResourceTable(table);
                 for (uint32_t slot = 0; slot < _slice.size(); ++slot)
                 {
                     const uint32_t probeIndex = _slice[slot];

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/webgpu/webgpu_driver.h>
-#include <vkm/renderer/backend/webgpu/webgpu_per_pass_resource_table.h>
+#include <vkm/renderer/backend/webgpu/webgpu_resource_table.h>
 #include <vkm/renderer/backend/webgpu/webgpu_util.h>
 #include <vkm/renderer/backend/webgpu/webgpu_swapchain.h>
 #include <vkm/renderer/backend/webgpu/webgpu_texture.h>
@@ -156,7 +156,10 @@ namespace vkm
 
         _queue = wgpuDeviceGetQueue(_device);
 
-        _driverCapabilityFlags = VkmDriverCapabilityFlags::None;
+        // TextureUpload without BindlessTextures: wgpuQueueWriteTexture gets pixels in
+        // (VkmTextureWebGPU::writeRegion), but WGSL has no array-of-handle type, so nothing can
+        // index them from set 0. Material textures reach a shader here through descriptor set 3.
+        _driverCapabilityFlags = VkmDriverCapabilityFlags::TextureUpload;
 
         return VkmInitResult{VkmInitResultCode::Success, ""};
     }
@@ -375,9 +378,9 @@ namespace vkm
         return VkmFormat::BGRA8_UNORM;
     }
 
-    VkmPerPassResourceTableBase* VkmDriverWebGPU::newPerPassResourceTableInner()
+    VkmResourceTableBase* VkmDriverWebGPU::newResourceTableInner()
     {
-        return new VkmPerPassResourceTableWebGPU(this);
+        return new VkmResourceTableWebGPU(this);
     }
 
     VkmSwapChainBase* VkmDriverWebGPU::newSwapChainInner()

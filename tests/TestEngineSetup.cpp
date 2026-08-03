@@ -219,7 +219,7 @@ protected:
     vkm::VkmTextureView* newTextureViewInner() override { return new MockTextureView(this); }
     vkm::VkmBufferView* newBufferViewInner() override { return nullptr; }
     vkm::VkmSwapChainBase* newSwapChainInner() override { return nullptr; }
-    vkm::VkmPerPassResourceTableBase* newPerPassResourceTableInner() override { return nullptr; }
+    vkm::VkmResourceTableBase* newResourceTableInner() override { return nullptr; }
     vkm::VkmCommandQueueBase* newCommandQueueInner() override { return new FakeCommandQueue(this); }
     vkm::VkmPipelineStateBase* newPipelineStateInner() override { return nullptr; }
     vkm::VkmRenderResourcePool* newRenderResourcePoolInner() override { return new vkm::VkmRenderResourcePool(this); }
@@ -1037,15 +1037,19 @@ TEST_CASE("VkmDriverWebGPU - initialization succeeds") {
     SUBCASE("compute command queue is created") {
         CHECK(f.driver->getCommandQueue(vkm::VkmCommandQueueType::Compute, 0) != nullptr);
     }
-    SUBCASE("driver capability flags expose nothing beyond the adapter's timestamp support") {
-        // WebGPU still implements none of the texture/buffer capabilities. TimestampQuery is the
-        // one exception and is adapter-dependent -- VkmGpuProfiler's pool is only created when the
-        // adapter offers the optional timestamp-query feature -- so mask it out rather than
-        // assert a value that changes with the machine the test runs on.
+    SUBCASE("driver capability flags are TextureUpload plus the adapter's timestamp support") {
+        // TextureUpload without BindlessTextures is the distinguishing pair on this backend:
+        // wgpuQueueWriteTexture gets pixels in, but WGSL has no array-of-handle type, so nothing
+        // can index them from set 0 -- material textures arrive through descriptor set 3 instead.
+        // TimestampQuery is adapter-dependent (VkmGpuProfiler's pool is only created when the
+        // adapter offers the optional feature), so mask it out rather than assert a value that
+        // changes with the machine the test runs on.
         constexpr uint32_t kTimestampQuery =
             static_cast<uint32_t>(vkm::VkmDriverCapabilityFlags::TimestampQuery);
         const uint32_t flags = static_cast<uint32_t>(f.driver->getDriverCapabilityFlags());
-        CHECK((flags & ~kTimestampQuery) == static_cast<uint32_t>(vkm::VkmDriverCapabilityFlags::None));
+        CHECK((flags & ~kTimestampQuery) ==
+              static_cast<uint32_t>(vkm::VkmDriverCapabilityFlags::TextureUpload));
+        CHECK((flags & static_cast<uint32_t>(vkm::VkmDriverCapabilityFlags::BindlessTextures)) == 0u);
     }
 }
 

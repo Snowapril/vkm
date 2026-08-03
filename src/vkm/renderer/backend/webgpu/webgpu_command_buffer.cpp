@@ -4,7 +4,7 @@
 #include <vkm/renderer/backend/webgpu/webgpu_texture.h>
 #include <vkm/renderer/backend/webgpu/webgpu_util.h>
 #include <vkm/renderer/backend/webgpu/webgpu_pipeline_state.h>
-#include <vkm/renderer/backend/webgpu/webgpu_per_pass_resource_table.h>
+#include <vkm/renderer/backend/webgpu/webgpu_resource_table.h>
 #include <vkm/renderer/backend/webgpu/webgpu_buffer.h>
 #include <vkm/renderer/backend/webgpu/webgpu_staging_buffer.h>
 #include <vkm/renderer/backend/webgpu/webgpu_driver.h>
@@ -150,7 +150,7 @@ namespace vkm
             VkmBindlessResourceManagerWebGPU* computeBindlessManager =
                 static_cast<VkmDriverWebGPU*>(_driver)->getBindlessResourceManager();
             const uint32_t computeZeroOffset = 0;
-            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, 0, computeBindlessManager->getBindGroup(),
+            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, 0, computeBindlessManager->getBindGroup(true),
                                                1, &computeZeroOffset);
             // And group 1, for the same reason the graphics path below does it: WebGPU requires
             // every group the pipeline layout declares to be set before a dispatch, referenced by
@@ -172,7 +172,7 @@ namespace vkm
         VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
         const uint32_t zeroOffset = 0;
         wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, 0,
-                                          driverWebGPU->getBindlessResourceManager()->getBindGroup(),
+                                          driverWebGPU->getBindlessResourceManager()->getBindGroup(false),
                                           1, &zeroOffset);
         // Group 1 is this frame slot's camera constants. Set unconditionally: WebGPU requires
         // every group the pipeline layout declares to be set before a draw, whether or not the
@@ -279,10 +279,10 @@ namespace vkm
         // A compute pass has its own encoder; the render-pass encoder is null there.
         if (_computePassEncoder != nullptr)
         {
-            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, 0, bindlessManager->getBindGroup(), 1, &dynamicOffset);
+            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, 0, bindlessManager->getBindGroup(true), 1, &dynamicOffset);
             return;
         }
-        wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, 0, bindlessManager->getBindGroup(), 1, &dynamicOffset);
+        wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, 0, bindlessManager->getBindGroup(false), 1, &dynamicOffset);
     }
 
     void VkmCommandBufferWebGPU::onDrawIndirectCount(VkmIndirectArgumentLayout layout,
@@ -325,18 +325,18 @@ namespace vkm
         // image layouts, and one pass's writes are visible to the next by specification.
     }
 
-    void VkmCommandBufferWebGPU::onBindPerPassResources(VkmPerPassResourceTableBase* table)
+    void VkmCommandBufferWebGPU::onBindResourceTable(VkmResourceTableBase* table)
     {
         // Group 2 carries no dynamic offset, unlike group 0's push-constant ring, so this is a
         // plain bind on whichever encoder the bound pipeline opened.
-        WGPUBindGroup bindGroup = static_cast<VkmPerPassResourceTableWebGPU*>(table)->getBindGroup();
+        WGPUBindGroup bindGroup = static_cast<VkmResourceTableWebGPU*>(table)->getBindGroup();
         if (_computePassEncoder != nullptr)
         {
-            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, kVkmPerPassSetIndex, bindGroup, 0, nullptr);
+            wgpuComputePassEncoderSetBindGroup(_computePassEncoder, table->getSetIndex(), bindGroup, 0, nullptr);
             return;
         }
-        VKM_ASSERT(_renderPassEncoder != nullptr, "bindPerPassResources outside any pass");
-        wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, kVkmPerPassSetIndex, bindGroup, 0, nullptr);
+        VKM_ASSERT(_renderPassEncoder != nullptr, "bindResourceTable outside any pass");
+        wgpuRenderPassEncoderSetBindGroup(_renderPassEncoder, table->getSetIndex(), bindGroup, 0, nullptr);
     }
 
     void VkmCommandBufferWebGPU::onSetDebugName(const char* name)
