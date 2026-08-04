@@ -598,6 +598,23 @@ TEST_CASE("VkmDriverVulkan - initialization succeeds") {
     SUBCASE("CommandBufferReusable capability flag is set on Vulkan") {
         CHECK((f.driver->getDriverCapabilityFlags() & vkm::VkmDriverCapabilityFlags::CommandBufferReusable) != 0);
     }
+    SUBCASE("RayTracing implies BufferDeviceAddress") {
+        // Not a redundant pair. An acceleration structure is built from geometry addressed by
+        // device address (Vulkan's VK_KHR_acceleration_structure requires the
+        // bufferDeviceAddress feature outright), so a backend that claims to trace rays but
+        // cannot report a buffer's GPU address has nothing to build one from. Asserted as an
+        // implication rather than a value because the answer is per-device: MoltenVK exposes no
+        // RT extensions at all, and lavapipe only does from Mesa 24.1.
+        const uint32_t flags = static_cast<uint32_t>(f.driver->getDriverCapabilityFlags());
+        const bool rayTracing = (flags & static_cast<uint32_t>(vkm::VkmDriverCapabilityFlags::RayTracing)) != 0u;
+        const bool deviceAddress =
+            (flags & static_cast<uint32_t>(vkm::VkmDriverCapabilityFlags::BufferDeviceAddress)) != 0u;
+        // Logged, not asserted: this is how a CI run reports which platforms can host Phase 5
+        // at all, which is a property of the runner rather than of the code.
+        if (rayTracing) { MESSAGE("RayTracing capability on this device: yes"); }
+        else            { MESSAGE("RayTracing capability on this device: no"); }
+        CHECK((!rayTracing || deviceAddress));
+    }
 }
 
 TEST_CASE("VkmDriverVulkan - VmaAllocator is created on init") {
@@ -1050,6 +1067,10 @@ TEST_CASE("VkmDriverWebGPU - initialization succeeds") {
         CHECK((flags & ~kTimestampQuery) ==
               static_cast<uint32_t>(vkm::VkmDriverCapabilityFlags::TextureUpload));
         CHECK((flags & static_cast<uint32_t>(vkm::VkmDriverCapabilityFlags::BindlessTextures)) == 0u);
+        // Spelled out rather than left to the equality above: WebGPU has no acceleration
+        // structure or ray query in the API at all, so this is structural and not a property of
+        // the adapter -- a future flag change should not be able to make it true by accident.
+        CHECK((flags & static_cast<uint32_t>(vkm::VkmDriverCapabilityFlags::RayTracing)) == 0u);
     }
 }
 

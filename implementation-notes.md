@@ -2265,3 +2265,41 @@ measurable here.
 - The indirect term is dim and needs ~900 frames to converge on Sponza. That is the probe budget
   (6 per frame at 25 draw batches) and the 0.97 hysteresis, both already recorded; it was not
   touched here.
+
+## 2026-08-04 — Phase 5a: the ray-tracing capability seam
+
+The smallest piece of Phase 5 that is useful on its own: a runtime answer to "can this device
+trace rays at all", so the rest of the phase can be gated on something real rather than on a
+platform guess.
+
+**Requested as a set, checked as a pair.** Vulkan asks for `VK_KHR_acceleration_structure`,
+`VK_KHR_ray_query` and `VK_KHR_deferred_host_operations` together and only reports the capability
+when `accelerationStructure` *and* `rayQuery` both come back true. Any partial answer would make
+the flag ambiguous -- an acceleration structure nothing can traverse is not a ray-tracing
+capability, and the structure extension lists deferred host operations as a hard dependency.
+`VK_KHR_ray_tracing_pipeline` is absent on purpose: the engine casts rays from compute shaders, so
+shader binding tables buy nothing.
+
+**Metal asks the device, not the API version.** Metal 4 runs on Apple 5 and earlier, where the
+acceleration-structure API exists but `supportsRaytracing` is false, so assuming Metal 4 implies
+ray tracing would report a capability the hardware does not have.
+
+**The measurement is the point.** On this machine Metal reports **yes** and Vulkan-on-MoltenVK
+reports **no** -- the same physical GPU, two backends, opposite answers. That is the argument for
+a runtime flag over an `#ifdef`, and it is now asserted rather than assumed.
+
+**Verification.** The new subcase asserts an implication rather than a value, because the value is
+per-device: `RayTracing` must imply `BufferDeviceAddress`, since an acceleration structure is built
+from geometry addressed by device address and Vulkan requires that feature outright. Sabotaged by
+removing `BufferDeviceAddress` from the Metal capability set while leaving `RayTracing`, which
+fails the check at `TestMetalDriver.mm:70`. WebGPU's absence is asserted explicitly rather than
+left to the existing exact-equality check, so a later flag change cannot make it true by accident.
+Metal Debug 212/212 and Release 211/211, Vulkan 208/208.
+
+### Deviations
+
+- The implication is a weak assertion on any device where `BufferDeviceAddress` is unconditionally
+  on, which is both of the ones available here. It is worth having anyway -- it is the invariant a
+  future backend would break -- but it is not evidence that the detection itself is right. The
+  Metal-yes/Vulkan-no split is that evidence, and it is logged by the test rather than asserted,
+  because it is a property of the runner.

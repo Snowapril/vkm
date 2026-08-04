@@ -825,10 +825,18 @@ None of the three is a surprise from implementation; they are the parts that nee
 phase supplies.
 
 ### Phase 5 — Acceleration structures in the RHI
-Where the high tier starts.
-- [ ] New resource type + `VkmDriverCapabilityFlags::RayTracing` (pattern at `driver.h:34-59`)
-- [ ] Vulkan: enable `VK_KHR_acceleration_structure`, `VK_KHR_ray_query`,
-      `VK_KHR_deferred_host_operations`; BLAS per mesh, TLAS per scene
+Where the high tier starts. Split into three PRs: **5a** the capability seam, **5b** BLAS/TLAS
+built from `VkmSceneGeometryPool`, **5c** the TLAS as a bindless singleton plus the ray-query gate.
+- [x] **5a: `VkmDriverCapabilityFlags::RayTracing`.** Vulkan requests
+      `VK_KHR_acceleration_structure`, `VK_KHR_ray_query` and `VK_KHR_deferred_host_operations` as
+      a set (they are useless apart) and checks both feature bits; Metal asks
+      `MTLDevice.supportsRaytracing` rather than assuming Metal 4 implies it, since Metal 4 runs on
+      hardware that predates hardware RT; WebGPU never reports it. Measured on this machine:
+      **Metal yes, Vulkan-on-MoltenVK no** — which is why this is a runtime capability and not an
+      `#ifdef`. `VK_KHR_ray_tracing_pipeline` is deliberately not requested: the engine casts rays
+      from compute shaders, so it needs no shader binding tables (§4).
+- [ ] New AS resource type in the render resource pool, with WebGPU error-logging stubs
+- [ ] Vulkan: BLAS per mesh, TLAS per scene
 - [ ] Metal: `MTL4PrimitiveAccelerationStructureDescriptor` / instance descriptors via
       `MTL4ComputeCommandEncoder` (Metal 4 folded the AS encoder into the compute encoder)
 - [ ] Build BLAS from the existing `VkmSceneGeometryPool` so no vertex data is duplicated.

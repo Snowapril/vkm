@@ -74,6 +74,22 @@ namespace vkm
         * "the array is exhausted", which are a fallback and an error respectively.
         */
         BindlessTextures        = 0x00000040,
+        /*
+        * Backend can build acceleration structures and traverse them from a shader ray query.
+        * Reported as one flag rather than three because the pieces are useless apart: Vulkan
+        * requests VK_KHR_acceleration_structure, VK_KHR_ray_query and
+        * VK_KHR_deferred_host_operations as a set and checks both feature bits, and Metal 4
+        * answers through MTLDevice.supportsRaytracing.
+        *
+        * Ray tracing *pipelines* are deliberately outside this: the engine casts rays from
+        * compute shaders, so it needs no shader binding tables (restir.md section 4). A backend
+        * that gains them later wants its own flag.
+        *
+        * Absent on WebGPU, and absent on MoltenVK -- so on macOS the Vulkan backend reports no
+        * ray tracing while the Metal backend reports it, which is exactly why this is a runtime
+        * capability and not an #ifdef.
+        */
+        RayTracing              = 0x00000080,
     };
 
     inline VkmDriverCapabilityFlags operator|(VkmDriverCapabilityFlags lhs, VkmDriverCapabilityFlags rhs)
