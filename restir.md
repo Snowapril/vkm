@@ -840,7 +840,18 @@ built from `VkmSceneGeometryPool`, **5c** the TLAS as a bindless singleton plus 
 - [ ] Metal: `MTL4PrimitiveAccelerationStructureDescriptor` / instance descriptors via
       `MTL4ComputeCommandEncoder` (Metal 4 folded the AS encoder into the compute encoder)
 - [ ] Build BLAS from the existing `VkmSceneGeometryPool` so no vertex data is duplicated.
-      **Triangles only** — document why at the declaration site (§4.2)
+      **Triangles only** — document why at the declaration site (§4.2). The pool's shape already
+      fits: one vertex buffer, one index buffer, and a `MeshRange` per mesh carrying
+      `(vertexWordOffset, vertexCount, indexOffset, indexCount)`, which is exactly a BLAS geometry
+      descriptor's inputs. **Found before starting, and it is a trap:** on Vulkan a buffer only
+      picks up `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` on the *committed* path
+      (`vulkan_buffer.cpp:123-130`); a buffer small enough to be sub-allocated by
+      `allocateFromBufferPool` returns before that and inherits the pool block's usage instead. A
+      BLAS build input needs both that bit and
+      `VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR` on the underlying
+      `VkBuffer`, so 5b has to either add both to the pool blocks or keep geometry-pool buffers off
+      the pooled path. Deciding that quietly either way would produce a validation error far from
+      its cause.
 - [ ] Refit on transform change; full rebuild only on topology change
 - [ ] Bind one TLAS as a bindless singleton — extend `VkmBindlessSingletonBuffer`, all three
       backends' managers, and `vkm_bindless.hlsli`. **On Metal it must also get an
