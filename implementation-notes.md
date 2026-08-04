@@ -2303,3 +2303,34 @@ Metal Debug 212/212 and Release 211/211, Vulkan 208/208.
   future backend would break -- but it is not evidence that the detection itself is right. The
   Metal-yes/Vulkan-no split is that evidence, and it is logged by the test rather than asserted,
   because it is a property of the runner.
+
+## 2026-08-05 — A CI job that passed 208 tests without running one of them
+
+The `ubuntu-24.04` job added for lavapipe ray-query coverage went green on its first run and
+proved nothing. Its Vulkan step resolved the driver with
+`ls /usr/share/vulkan/icd.d/lvp_icd.*.json`; Mesa 25.x on noble ships that file as `lvp_icd.json`,
+without the `.x86_64` suffix, so the glob matched nothing, `ls` wrote its error to stderr where
+nothing was watching, and `VK_DRIVER_FILES` came out empty. Every device test then skipped through
+`VKM_REQUIRE_DEVICE`, and doctest reported **208 passed, 0 skipped** — because a skipped subcase is
+not a skipped test case. The check list showed a green tick.
+
+The 22.04 jobs were unaffected and skip nothing, so there was no contrast to notice. The only way
+to see it was to read a passing job's log.
+
+**The fix is the guard, not the path.** The step now searches the standard ICD locations by prefix
+and exits non-zero when it finds none, printing what `mesa-vulkan-drivers` actually installed. A
+job that cannot find a driver has to fail; correcting the glob alone would have left the next
+packaging change free to do this again.
+
+**What it answered.** With a real driver, the job skips nothing and reports
+`RayTracing capability on this device: yes` — lavapipe on Mesa 25.2.8 exposes ray query, so Phase
+5's gate can run in CI on Vulkan rather than being Metal-only. That was the whole reason for adding
+the runner, and until this it was unverified.
+
+### Deviations
+
+- The underlying property is broader than one job and is recorded in `TODO.md` rather than fixed
+  here: anywhere `VKM_REQUIRE_DEVICE` is used, a missing driver is indistinguishable from a passing
+  run. Making the suite fail when every device test skips is a real change to the test harness's
+  contract -- it would break local runs on machines without a given backend -- so it was not taken
+  as a side effect of a CI fix.

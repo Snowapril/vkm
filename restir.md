@@ -1161,8 +1161,12 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
       are the compiler floor. **The job's first run passed without executing a single Vulkan
       test**: it looked for lavapipe's ICD manifest at one hardcoded path, Mesa 25.x on noble does
       not put it there, and an empty `VK_DRIVER_FILES` makes every device test skip through
-      `VKM_REQUIRE_DEVICE` while the run still reports success. The lookup now searches the
-      standard locations and **fails the job** when it finds none, so this cannot recur silently. The cost of keeping them is that **`dxc-linux` stays pinned** to
+      `VKM_REQUIRE_DEVICE` while the run still reports success. The directory was right and the
+      *filename* had changed: Mesa 25.x ships `lvp_icd.json`, without the `.x86_64` suffix the
+      glob required. The lookup now searches the standard locations by prefix and **fails the job**
+      when it finds none, so this cannot recur silently. With that fixed the job skips nothing and
+      **lavapipe reports `RayTracing: yes`** — so Phase 5's gate can be exercised in CI on Vulkan,
+      which is what the runner was added for. The cost of keeping them is that **`dxc-linux` stays pinned** to
       v1.8.2505.1 (GLIBC 2.34) while Windows and macOS use v1.9.2602.24, so Linux CI still
       validates shaders with a different compiler than the other two platforms. Un-pinning it
       requires dropping 22.04 outright, which is a compiler-support decision, not a CI one.
