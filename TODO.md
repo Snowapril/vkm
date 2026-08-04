@@ -48,10 +48,11 @@
 - The culling pass tests one bounding sphere per object with no hierarchy, so a large object that straddles the frustum edge is never partially rejected, and there is no occlusion or LOD selection.
 - meshoptimizer clusterization is unused: `VkmSceneGeometryPool` is shaped to carry a meshlet pool (one more bindless slot, two more `MeshRange` fields) but nothing builds meshlets and there is no mesh-shader pipeline.
 - Imported vertices keep a zeroed `TANGENT` when the asset omits one (no MikkTSpace-style generator), and generated normals are area-weighted smooth rather than the spec's flat normals.
-- `copyBufferToTexture`/`uploadToTexture`, `registerTexture` and the set-0 sampler are Vulkan/Metal-only; WebGPU has error-logging stubs (WGSL has no runtime-sized texture arrays).
+- `copyBufferToTexture`, `registerTexture` and the set-0 sampler are Vulkan/Metal-only; WebGPU has error-logging stubs (WGSL has no runtime-sized texture arrays), and its `uploadToTexture` goes through `wgpuQueueWriteTexture` instead.
 - Set 0 has one fixed linear/repeat sampler at binding 3 rather than a sampler array, so per-texture filter/address modes are not selectable in shaders.
 - Only one texture type may be declared at set 0 binding 0 per shader, and texture slots come from one allocator shared by all types (convention only, unenforced).
-- Texture upload has no mipmap generation: `uploadToTexture` writes one mip level per call and nothing downsamples.
+- Only material textures get a mip chain, built on the CPU at scene load; every other texture in the engine is still single-level and there is no GPU downsample pass.
+- The material mip filter is a 2x2 box that drops the last row/column on an odd extent, so an odd-sized texture's coarse levels drift off-centre.
 - `uploadToTexture` blocks per call on the staging path, so a 6-face cubemap stalls the graphics queue six times at load on any device without `VkmDriverCapabilityFlags::TextureHostCopy`.
 - Host-copy texture upload covers whole mip levels only; there is no partial-region (sub-rectangle) host write, so a texture-atlas update still rewrites a full level.
 - Whether a texture is host-writable is decided entirely by the backend policy (unified memory + a plain upload destination); callers cannot request or refuse it at creation.
@@ -101,7 +102,9 @@
 - `scripts/run_tests.py` and `scripts/run_sample.py` duplicate about ten helper functions, including the host vkm-compiler build, instead of sharing a module.
 - A shader cache file is named `<shader>[<option>].<stage>.<backend>` and carries no entry point, so two PSOs sharing one HLSL file and option name silently overwrite each other's cache.
 - Metal's MTL4ArgumentTable caps buffer binds at 31 and sampler binds at 16, which is what bounds sets 2 and 3 to 13 buffers / 8 samplers / 16 textures each.
-- Material textures are Vulkan/Metal only: WebGPU implements neither `uploadToTexture` nor `registerTexture`, so every material's texture slot stays invalid there and shading falls back to the factor.
+- Metal brackets every render pass with an `MTLStageAll` encoder barrier pair, which serializes render passes against each other; a finer mask (or a real per-resource barrier in `barrierTextureForShaderRead`) would let independent passes overlap.
+- `barrierTextureForShaderRead` and `barrierIndirectArgumentBuffer` still record nothing on Metal: the ordering they name comes from the encoder-opening barriers instead, so a call sitting in a subgraph that binds no pipeline has no effect of its own.
+- Vulkan/Metal validation errors at ImGui teardown (`VUID-vkDestroyBuffer-buffer-00922` and three others) fire on every unit-test run: `ImGui_ImplVulkan_Shutdown` destroys its frame buffers without waiting for the last submission.
 - Normal maps are unsampled because tangents may be zero (no MikkTSpace generator), and emissive because the G-buffer has no channel to carry it.
 - Material textures have no automated coverage on Vulkan: the offscreen scene-render harness is Metal-only, since the Vulkan fixture renders black on this machine's MoltenVK/lavapipe.
 - Seeing a WebGPU frame at all needs `-DVKM_WASM_GI_SCENE=<dir> -DVKM_WASM_GI_AUTO_SCREENSHOT=ON`, which bakes a scene into MEMFS and echoes the captured PNG to the console as base64; Chrome's own `--screenshot` fires before the WebGPU device finishes initializing and captures a blank page.

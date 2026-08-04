@@ -160,6 +160,23 @@ namespace vkm
         _mtlRenderCommandEncoder = [_mtlCommandBuffer renderCommandEncoderWithDescriptor:mtlRenderPassDescriptor];
         _currentEncoderType = VkmCommandEncoderType::Graphics;
 
+        /*
+        * Metal 4 does no automatic hazard tracking, and that applies between two render passes as
+        * much as between a compute pass and a render pass. Without this, a pass that samples what
+        * an earlier pass rendered reads it while it is still being written: the probe blend read
+        * the probe capture that way and filled both atlases with NaN and out-of-range values,
+        * which the Chebyshev test then turned into a GI term of exactly zero.
+        *
+        * The compute path already brackets itself this way (see onBindPipeline / onUnbindPipeline).
+        * barrierTextureForShaderRead() cannot do it instead: it records nothing here, because
+        * opening an encoder per barrier is what caused the MTL4CommandQueueErrorTimeout in
+        * common/AGENTS.md -- so the barrier has to ride an encoder that exists anyway, which is
+        * this one. One pair per pass, not one per barrier call.
+        */
+        [_mtlRenderCommandEncoder barrierAfterQueueStages:MTLStageAll
+                                             beforeStages:MTLStageVertex | MTLStageFragment
+                                        visibilityOptions:MTL4VisibilityOptionDevice];
+
         // These sources are compiled without ARC (see the [release] pairs elsewhere in the
         // Metal backend), and the encoder does not keep the descriptor -- without this the
         // descriptor and its attachment sub-objects leak once per render pass, i.e. every frame.
@@ -177,6 +194,11 @@ namespace vkm
         switch(_currentEncoderType)
         {
             case VkmCommandEncoderType::Graphics:
+                // The producer half of the pair opened in beginRenderPass: publish this pass's
+                // attachment writes to everything recorded after it.
+                [_mtlRenderCommandEncoder barrierAfterStages:MTLStageVertex | MTLStageFragment
+                                           beforeQueueStages:MTLStageAll
+                                           visibilityOptions:MTL4VisibilityOptionDevice];
                 [_mtlRenderCommandEncoder endEncoding];
                 _mtlRenderCommandEncoder = nil;
                 break;

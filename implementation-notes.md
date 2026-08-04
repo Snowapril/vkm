@@ -2151,3 +2151,117 @@ gold trim, metal plating -- against the blank white page it produced before, wit
 validation errors where there were 1812. It is dark because four frames is nowhere near probe
 convergence, which is a property of the capture, not of the render. Metal and Vulkan re-verified
 after the change.
+
+## 2026-08-04 — Material textures get a mip chain
+
+Every material texture was uploaded as a single level, so a minified surface sampled one texel per
+pixel. On Sponza's roof that is the textbook case: the tiles are small, the surface recedes, and
+the result sparkles under any camera motion.
+
+The chain is built on the CPU in `vkmBuildMipChain` (`image_loader.cpp`) and uploaded level by
+level. That needed no new GPU path -- `uploadToTexture` has always taken a mip index, and every
+backend's copy already computes `max(1u, extent >> mipLevel)`. The alternative, downsampling on
+the GPU by rendering each level, would have needed per-level texture views the engine does not
+use today (`VkmTextureView` exists but nothing resolves framebuffer attachments through it).
+
+**sRGB is the part that is easy to get wrong.** Averaging gamma-encoded bytes averages the wrong
+quantity: half black and half white gives 128 instead of the ~188 that averaging in linear light
+and re-encoding gives, so a naively built chain is visibly too dark and worst at the coarsest
+level. `vkmBuildMipChain` therefore takes the `srgb` flag that already decides the texture's
+format, decodes through a 256-entry table, averages, and re-encodes -- for channels 0-2 only.
+Alpha is linear even in an sRGB texture.
+
+**`SampleLevel(..., 0)` had to become `Sample()` on the WebGPU branch of `vkm_material.hlsli`,**
+or the chain would have been uploaded and then never read. The comment justifying the pinned LOD
+claimed the callers "run after early returns"; neither `gbuffer.hlsl`'s nor `probe_capture.hlsl`'s
+`PSMain` has one, so WGSL's uniform-control-flow restriction on implicit-LOD sampling was never in
+play. Tint emits `textureSample` for both, and the headless WebGPU suite passes.
+
+**Verification.** Five unit tests in `TestMipChain.cpp`, each sabotage-checked: averaging in the
+encoded space, running alpha through the curve, stopping the chain one level early, and taking the
+level count from the shorter edge all fail loudly. The alpha check needed a second pass -- with
+alpha 255 on both source texels it passed under sabotage, because the curve maps 255 to 255. The
+fixture now runs alpha 255/0 so the two halves of the claim are separable.
+
+On Sponza's exterior at `--gv_gi_debug_view=3`, mean |gradient| over the minified roof region
+drops from **30.5 to 11.1** with the chain enabled -- measured by rebuilding with the levels
+discarded and capturing the same frame.
+
+### Deviations
+
+- The 2x2 box filter drops the last row/column on an odd extent rather than weighting three taps.
+  A correct answer there needs a real resampling kernel; the conservative option was to keep the
+  box, note the drift in `TODO.md`, and not invent a filter as a side effect of this task.
+- `TODO.md` carried two lines that the merged set-3 work had already falsified (WebGPU having no
+  `uploadToTexture`, and material textures being Vulkan/Metal only). Both were corrected while
+  editing the lines beside them rather than left standing as known-false.
+- Running the gi sample from a terminal captures nothing once the display goes idle: the window
+  never becomes visible, no frame is driven, and the process sits in `nextEventMatchingMask`
+  burning ~2% CPU -- indistinguishable from slow progress. `caffeinate -u` while it runs is what
+  makes a screenshot run finish. (`open -n` is not an alternative: it launches with cwd `/`, the
+  logger cannot create `vkm.log`, and engine init fails outright.)
+
+## 2026-08-04 — The GI probe volume was green because Metal 4 render passes had no barriers
+
+The gi sample's indirect term was pure saturated green on Sponza and DamagedHelmet alike, and
+exactly zero before the probe volume had converged.
+
+**What the evidence said, in order.** The composite's Indirect view was uniformly zero, and stayed
+zero with the probe capture forced to a constant colour -- so the fault was downstream of the
+capture. A per-corner diagnostic in `probe_lighting.hlsl` showed all eight surrounding probes
+inside the grid but every one rejected, and bypassing the Chebyshev test showed the accumulated
+irradiance was still zero: both atlases were failing the lookup, not one. Sampling the atlases at
+screen UV showed they *did* hold content -- correct grey octahedral cells interleaved with pure
+green ones.
+
+A raw half-float readback of both atlases settled it. The irradiance atlas held **273,136 NaN in
+R, 273,037 in B, only 21,423 in G**, with finite values ranging to +-9000 where irradiance should
+be in [0,1]; the distance atlas held negative mean distances and G saturated at 65504. NaN in R
+and B with a large finite G is exactly what tone-maps to (0,255,0). And NaN is permanent here:
+hysteresis is the blend hardware, and `NaN * 0 + src * 1` is still NaN, so one bad frame poisons a
+cell forever.
+
+**Isolating the source.** Replacing the capture fetch in `probe_blend.hlsl` with a constant made
+every written cell exactly the constant, zero NaN -- so the blend maths, the viewport placement,
+the hysteresis and the blend state were all correct. Dumping the push constants and blend
+constants into the atlas showed `captureTileBase`, `hysteresis` and `captureAtlasSize` all
+correct in every cell, and dumping the computed `atlasUv` showed it finite and in range. Yet a
+readback of the capture atlas at the same frame showed no NaN at all. A fetch of clean data at a
+correct UV was returning NaN.
+
+**The cause.** Metal 4 does no automatic hazard tracking -- the backend says so itself at
+`onBindPipeline`. The barriers that publish a pass's writes are emitted only when a compute
+pipeline is bound or a blit is recorded; **nothing was emitted around render passes at all**. The
+handoff was supposed to come from the `ProbeCaptureToShaderRead` compute subgraph, but its
+callback only calls `barrierTextureForShaderRead`, which records nothing on Metal, and it binds no
+pipeline -- so no encoder was ever opened and no barrier ever issued. The probe blend was reading
+the capture atlas while it was still being written. The same hole covered every render-to-render
+handoff in the gi sample (`GiGBufferToShaderRead`, `GiDirectToShaderRead`, `GiIndirectToShaderRead`,
+`GiCompositeToShaderRead`).
+
+**The fix.** `VkmCommandEncoderMetal` now brackets every render pass with the same barrier pair the
+compute path already uses: `barrierAfterQueueStages:MTLStageAll beforeStages:vertex|fragment` when
+the encoder opens, and `barrierAfterStages:vertex|fragment beforeQueueStages:MTLStageAll` before
+`endEncoding`. It rides an encoder that exists anyway, so it does not reintroduce the
+`MTL4CommandQueueErrorTimeout` that banning per-barrier encoders was meant to avoid.
+
+**Verification.** Both atlases come back with **zero NaN and zero Inf**, irradiance in [0, 0.23]
+and distance moments non-negative, where before the same run had 13,113 NaN by frame 60. The
+indirect view is a smooth neutral field with the probe grid visible instead of saturated green,
+and the composite renders textured Sponza cleanly. Metal Debug 212/212 and Release 211/211 pass.
+900 frames took 4m34s against 4m31s before, so the conservative `MTLStageAll` mask costs nothing
+measurable here.
+
+### Deviations
+
+- The barrier mask is `MTLStageAll` on the queue side, which serializes render passes against each
+  other rather than only against the passes they actually depend on. That is the conservative
+  option and it mirrors what the compute path already does; a finer mask is a performance question,
+  not a correctness one, and is recorded in `TODO.md`.
+- `barrierTextureForShaderRead` was left as a no-op on Metal rather than made to emit a real
+  barrier. Making it emit one requires an open encoder, and opening one per barrier is the
+  documented cause of a queue timeout. The call sites now get their ordering from the encoder pair,
+  which is why the no-op is still correct -- but it is a trap, so it is recorded in `TODO.md`.
+- The indirect term is dim and needs ~900 frames to converge on Sponza. That is the probe budget
+  (6 per frame at 25 draw batches) and the 0.97 hysteresis, both already recorded; it was not
+  touched here.
