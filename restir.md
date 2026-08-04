@@ -1135,8 +1135,14 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 - [ ] **Test scene.** No Cornell-box-style scene exists; `scripts/download_scenes.py` offers only
       `DamagedHelmet` and `Sponza`. Hand-author a small `.gltf` in `resources/tests/` (following
       `gltf_triangle.gltf`) for analytic validation.
-- [ ] **CI runner bump** to get lavapipe ≥ Mesa 24.1 for Vulkan ray-query coverage; also allows
-      un-pinning `dxc-linux`.
+- [x] ~~**CI runner bump**~~ **Decided 2026-08-04: add, do not replace.** `ubuntu.yml` gains one
+      `ubuntu-24.04` Vulkan job whose only purpose is ray-query coverage — 24.04 carries Mesa 25.x
+      through updates, well past the 24.1 that gave lavapipe `VK_KHR_ray_query`, so no PPA is
+      needed. The eight 22.04 jobs stay: noble ships neither gcc-10/11 nor clang-11/12, and those
+      are the compiler floor. The cost of keeping them is that **`dxc-linux` stays pinned** to
+      v1.8.2505.1 (GLIBC 2.34) while Windows and macOS use v1.9.2602.24, so Linux CI still
+      validates shaders with a different compiler than the other two platforms. Un-pinning it
+      requires dropping 22.04 outright, which is a compiler-support decision, not a CI one.
 - [ ] **Confirm `MTL4ArgumentTable` AS binding** empirically — no documented
       `setAccelerationStructure`; binding is inferred to go through `gpuResourceID`.
 - [x] ~~**Low-spec technique choice.**~~ **Decided 2026-07-30:** fully dynamic (no bake), so the
@@ -1172,9 +1178,15 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
       shader tests `VKM_BACKEND_*`. Still open, each with its own prerequisite: **normal maps**
       (needs tangent generation -- the importer leaves a zeroed `TANGENT` when the asset omits one)
       and **emissive** (the G-buffer has no channel to carry it).
-- [ ] **Direct lighting strategy.** ReSTIR GI needs `L_o` shaded at the secondary hit. Decide
-      whether that is plain NEE or a full ReSTIR DI implementation — DI usually lands before GI,
-      and ReSTIR PT Enhanced argues for unifying them into one reservoir set.
+- [x] ~~**Direct lighting strategy.**~~ **Decided 2026-08-04: plain NEE, behind a seam.** Phase 7
+      shades `L_o` at the secondary hit with ordinary next-event estimation, and every call site
+      goes through one `shadeSecondaryHit()` function so the implementation can be swapped without
+      touching the path code. ReSTIR DI is *not* built first, despite that being the usual ordering
+      and despite ReSTIR PT Enhanced arguing for one unified reservoir set — because the scene has
+      exactly one directional light today (`scene.h:63`; area/emissive representation is still open
+      under Phase 6), and many-light resampling is the entire value of DI. Building it now would be
+      building it against a light set that cannot exercise it. Revisit once Phase 6 supplies area
+      lights *and* a reference to measure a unified reservoir set against.
 - [ ] Decide whether to pursue ReSTIR PT later for unbiased specular, or accept the documented
       ReSTIR GI bias plus final-shading MIS.
 
@@ -1209,3 +1221,4 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-08-03 | — | **Material textures on WebGPU**, through set 3 and per-material draw batches, plus the four validation bugs that had kept the gi sample from ever producing a WebGPU frame: bindless singleton bindings numbered 5-8 instead of 4-7 on the stated but false reasoning that this backend "shifts by one for the ring"; the argument buffer being writable-storage and indirect in one render pass, which WebGPU forbids at *bind group* scope rather than shader scope (set 0 now exists in a compute shape and a graphics shape); and a `git checkout` that had silently reverted the sample's material-table wiring in an earlier commit. Validation errors went **1812 to 0**, and a WebGPU frame was looked at for the first time. |
 | 2026-08-04 | — | **Mipmaps for material textures.** Built on the CPU and uploaded level by level -- no new GPU path, since `uploadToTexture` always took a mip index. The load-bearing detail is sRGB: averaging gamma-encoded bytes averages the wrong quantity (half black + half white gives 128 where the answer is ~188), and it is invisible on any solid-colour fixture. `vkm_material.hlsli`'s WebGPU branch had to move from `SampleLevel(..., 0)` to `Sample()` or the chain would have been uploaded and never read; the comment justifying the pinned LOD was factually wrong about its callers. Sponza's roof: mean gradient over the minified region **30.5 to 11.1**. |
 | 2026-08-04 | 4 | **The GI was green because Metal 4 render passes had no barriers.** Metal 4 does no automatic hazard tracking and the backend only emitted barriers around compute dispatches and blits -- nothing around render passes. The handoff was meant to come from a compute subgraph calling `barrierTextureForShaderRead`, which records nothing on Metal and binds no pipeline, so no encoder opened and no barrier ever issued. The probe blend read the capture atlas mid-write; because hysteresis *is* the blend hardware, `NaN * 0 + src * 1` is still NaN, so a poisoned cell never recovered. The irradiance atlas held 273k NaN in R and B against 21k in G -- which tone-maps to exactly (0,255,0) -- and the distance atlas negative means, so the Chebyshev test rejected every probe and the indirect term collapsed to zero. Render passes now carry the same barrier pair the compute path uses. Both atlases read back with zero NaN; 900 frames cost 4m34s against 4m31s. |
+| 2026-08-04 | 5 | **Two Phase 5 pre-decisions settled (§12).** CI gains one `ubuntu-24.04` Vulkan job for lavapipe ray-query coverage rather than moving the matrix -- 24.04 carries Mesa 25.x so no PPA is needed, but noble has neither gcc-10/11 nor clang-11/12, so the eight 22.04 jobs stay and `dxc-linux` stays pinned to v1.8 against the other platforms' v1.9. Direct lighting at the secondary hit will be plain NEE behind a `shadeSecondaryHit()` seam, not ReSTIR DI first: the scene has one directional light, and many-light resampling is the whole point of DI, so building it now would be building it blind. |
