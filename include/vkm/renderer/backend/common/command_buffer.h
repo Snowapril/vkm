@@ -166,6 +166,26 @@ namespace vkm
         void barrierTextureForShaderRead(VkmResourceHandle texture);
 
         /*
+        * @brief Rebuilds `accelerationStructure` in place, from the descriptions it was created
+        * with and whatever `updateInstances` last wrote.
+        *
+        * @details This is the entry point dynamic objects need. A structure created without
+        * `_allowUpdate` is built once, synchronously, when it is created -- fine for geometry that
+        * never moves, useless for anything that does. An updatable one keeps its scratch buffer and
+        * can be rebuilt from a render graph pass every frame.
+        *
+        * **Rebuild, not refit.** A top-level structure over N instances is cheap to rebuild
+        * outright and stays optimal, whereas a refit degrades traversal quality as instances drift
+        * from where they were when it was built. Refit belongs to *deforming* bottom-level
+        * geometry, which nothing here produces yet -- a rigid body that falls only changes its
+        * instance transform, so its bottom-level structure never needs touching.
+        *
+        * Must be recorded outside a render pass. The build reads the instance buffer, so a
+        * `updateInstances` for this frame has to have happened before the submit that runs this.
+        */
+        void buildAccelerationStructure(VkmResourceHandle accelerationStructure);
+
+        /*
         * @brief Binds `table` at whichever set it was built for -- set 2 (per-pass) or set 3
         * (per-draw) -- for subsequent draws or dispatches. The table carries its own set kind, so
         * there is nothing to pass alongside it.
@@ -299,6 +319,7 @@ namespace vkm
                                          uint32_t maxDrawCount) = 0;
         virtual void onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
         virtual void onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer) = 0;
+        virtual void onBuildAccelerationStructure(VkmResourceHandle accelerationStructure) = 0;
         virtual void onBarrierTextureForShaderRead(VkmResourceHandle texture) = 0;
         virtual void onBindResourceTable(VkmResourceTableBase* table) = 0;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) = 0;

@@ -34,6 +34,14 @@ namespace vkm
             {
                 return true;
             }
+            // A build input must be committed. The pooled path returns before
+            // VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT is added below and inherits the pool
+            // block's usage instead, so a pooled build input would fail the build with a
+            // validation error naming the *block*, nowhere near the buffer that asked for it.
+            if ((info._flags & VkmResourceCreateInfo::AllowAccelerationStructureInput) != 0)
+            {
+                return true;
+            }
             if (info._placementHint == VkmMemoryPlacementHint::ForcePooled)
             {
                 return false;

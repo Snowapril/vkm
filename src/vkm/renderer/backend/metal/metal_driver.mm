@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_staging_buffer.h>
 #include <vkm/renderer/backend/metal/metal_sampler.h>
+#include <vkm/renderer/backend/metal/metal_acceleration_structure.h>
 #include <vkm/renderer/backend/metal/metal_texture_view.h>
 #include <vkm/renderer/backend/metal/metal_buffer_view.h>
 #include <vkm/renderer/backend/metal/metal_gpu_heap_pool.h>
@@ -451,6 +452,11 @@ namespace vkm
     VkmPipelineStateBase* VkmDriverMetal::newPipelineStateInner()
     {
         return new VkmPipelineStateMetal(this);
+    }
+
+    VkmAccelerationStructure* VkmDriverMetal::newAccelerationStructureInner()
+    {
+        return new VkmAccelerationStructureMetal(this);
     }
 
     VkmResourceTableBase* VkmDriverMetal::newResourceTableInner()

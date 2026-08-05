@@ -20,6 +20,7 @@ namespace vkm
 
         virtual VkmSwapChainBase* newSwapChainInner() override final;
         virtual VkmResourceTableBase* newResourceTableInner() override final;
+        virtual VkmAccelerationStructure* newAccelerationStructureInner() override final;
 
         inline WGPUInstance getInstance() const { return _instance; }
         inline WGPUAdapter getAdapter() const { return _adapter; }

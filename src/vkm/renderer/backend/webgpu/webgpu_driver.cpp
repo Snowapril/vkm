@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/webgpu/webgpu_swapchain.h>
 #include <vkm/renderer/backend/webgpu/webgpu_texture.h>
 #include <vkm/renderer/backend/webgpu/webgpu_buffer.h>
+#include <vkm/renderer/backend/common/acceleration_structure.h>
 #include <vkm/renderer/backend/webgpu/webgpu_staging_buffer.h>
 #include <vkm/renderer/backend/webgpu/webgpu_sampler.h>
 #include <vkm/renderer/backend/webgpu/webgpu_texture_view.h>
@@ -381,6 +382,16 @@ namespace vkm
     VkmResourceTableBase* VkmDriverWebGPU::newResourceTableInner()
     {
         return new VkmResourceTableWebGPU(this);
+    }
+
+    VkmAccelerationStructure* VkmDriverWebGPU::newAccelerationStructureInner()
+    {
+        // WebGPU has no acceleration structure or ray query in the API, so this is unreachable in
+        // practice -- VkmDriverBase::newAccelerationStructure rejects the call on the capability
+        // flag first, and this backend never sets it. Kept as a real override rather than an
+        // #ifdef, per the copyTexture/registerTexture precedent in backend/common/AGENTS.md.
+        VKM_DEBUG_ERROR("Acceleration structures are not supported on the WebGPU backend");
+        return nullptr;
     }
 
     VkmSwapChainBase* VkmDriverWebGPU::newSwapChainInner()

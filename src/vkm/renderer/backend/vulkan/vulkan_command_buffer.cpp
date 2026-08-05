@@ -7,6 +7,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_staging_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_pipeline_state.h>
 #include <vkm/renderer/backend/vulkan/vulkan_resource_table.h>
+#include <vkm/renderer/backend/vulkan/vulkan_acceleration_structure.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
 #include <vkm/renderer/backend/vulkan/vulkan_frame_constant_manager.h>
@@ -410,6 +411,18 @@ namespace vkm
     void VkmCommandBufferVulkan::onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
     {
         vkCmdDispatch(_vkCommandBuffer, groupCountX, groupCountY, groupCountZ);
+    }
+
+    void VkmCommandBufferVulkan::onBuildAccelerationStructure(VkmResourceHandle accelerationStructure)
+    {
+        VkmAccelerationStructure* structure =
+            _driver->getRenderResourcePool()->getResource<VkmAccelerationStructure>(accelerationStructure);
+        if (structure == nullptr)
+        {
+            VKM_DEBUG_ERROR("buildAccelerationStructure: invalid acceleration structure handle");
+            return;
+        }
+        static_cast<VkmAccelerationStructureVulkan*>(structure)->recordBuild(_vkCommandBuffer);
     }
 
     void VkmCommandBufferVulkan::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)

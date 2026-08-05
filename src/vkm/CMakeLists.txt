@@ -99,6 +99,7 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/backend/common/sampler.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/texture_view.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/buffer_view.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/acceleration_structure.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/gpu_offset_allocator.cpp
     ${LIBRARY_DIR}/offsetAllocator/offsetAllocator.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/deferred_resource_reclaimer.cpp
@@ -200,6 +201,7 @@ if (VKM_USE_VULKAN_API)
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_resource_table.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_staging_buffer.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_sampler.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_acceleration_structure.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_texture_view.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_buffer_view.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_buffer_pool.cpp
@@ -253,6 +255,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_resource_table.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_staging_buffer.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_sampler.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_acceleration_structure.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_texture_view.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_buffer_view.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.mm

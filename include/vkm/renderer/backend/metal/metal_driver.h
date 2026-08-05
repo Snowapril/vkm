@@ -81,6 +81,7 @@ namespace vkm
         virtual void destroyInner() override final;
         virtual VkmSwapChainBase* newSwapChainInner() override final;
         virtual VkmResourceTableBase* newResourceTableInner() override final;
+        virtual VkmAccelerationStructure* newAccelerationStructureInner() override final;
         virtual VkmTexture* newTextureInner() override final;
         virtual VkmBuffer* newBufferInner() override final;
         virtual VkmStagingBuffer* newStagingBufferInner() override final;

@@ -200,6 +200,8 @@ VkBufferUsageFlags toVkBufferUsageFlags(VkmResourceCreateInfo flags)
     if ((flags & VkmResourceCreateInfo::AllowShaderRead) != 0)   usage |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
     if ((flags & VkmResourceCreateInfo::AllowShaderWrite) != 0)  usage |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     if ((flags & VkmResourceCreateInfo::AllowIndirectBuffer) != 0) usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+    if ((flags & VkmResourceCreateInfo::AllowAccelerationStructureInput) != 0)
+        usage |= VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
     return usage;
 }
 

@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/metal/metal_pipeline_state.h>
+#include <vkm/renderer/backend/metal/metal_acceleration_structure.h>
 #include <vkm/renderer/backend/metal/metal_resource_table.h>
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_staging_buffer.h>
@@ -541,6 +542,34 @@ namespace vkm
         [_commandEncoder.getActiveComputeCommandEncoder()
             dispatchThreadgroups:MTLSizeMake(groupCountX, groupCountY, groupCountZ)
            threadsPerThreadgroup:MTLSizeMake(threadGroupSize[0], threadGroupSize[1], threadGroupSize[2])];
+    }
+
+    void VkmCommandBufferMetal::onBuildAccelerationStructure(VkmResourceHandle accelerationStructure)
+    {
+        VkmAccelerationStructure* structure =
+            _driver->getRenderResourcePool()->getResource<VkmAccelerationStructure>(accelerationStructure);
+        if (structure == nullptr)
+        {
+            VKM_DEBUG_ERROR("buildAccelerationStructure: invalid acceleration structure handle");
+            return;
+        }
+
+        // Opened here rather than reusing an active encoder: a build is recorded outside a render
+        // pass, and the encoder is closed immediately so the barrier pair onUnbindPipeline emits
+        // for compute passes also publishes this build to whatever traverses it afterwards.
+        if (_commandEncoder.getActiveComputeCommandEncoder() == nullptr)
+        {
+            _commandEncoder.beginComputePass();
+        }
+        id<MTL4ComputeCommandEncoder> encoder = _commandEncoder.getActiveComputeCommandEncoder();
+        [encoder barrierAfterQueueStages:MTLStageAll
+                            beforeStages:MTLStageDispatch
+                       visibilityOptions:MTL4VisibilityOptionDevice];
+        static_cast<VkmAccelerationStructureMetal*>(structure)->recordBuild(encoder);
+        [encoder barrierAfterStages:MTLStageDispatch
+                  beforeQueueStages:MTLStageAll
+                  visibilityOptions:MTL4VisibilityOptionDevice];
+        _commandEncoder.commit();
     }
 
     void VkmCommandBufferMetal::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)

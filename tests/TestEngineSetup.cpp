@@ -220,6 +220,8 @@ protected:
     vkm::VkmBufferView* newBufferViewInner() override { return nullptr; }
     vkm::VkmSwapChainBase* newSwapChainInner() override { return nullptr; }
     vkm::VkmResourceTableBase* newResourceTableInner() override { return nullptr; }
+    // The mock never reports RayTracing, so VkmDriverBase rejects the call before this runs.
+    vkm::VkmAccelerationStructure* newAccelerationStructureInner() override { return nullptr; }
     vkm::VkmCommandQueueBase* newCommandQueueInner() override { return new FakeCommandQueue(this); }
     vkm::VkmPipelineStateBase* newPipelineStateInner() override { return nullptr; }
     vkm::VkmRenderResourcePool* newRenderResourcePoolInner() override { return new vkm::VkmRenderResourcePool(this); }
