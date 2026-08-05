@@ -631,6 +631,32 @@ namespace vkm
             pNextChainPushFront(&_features11, &_deviceFaultFeatures);
             deviceExtensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
         }
+        /*
+        * Ray query, for Phase 5's acceleration structures. Requested as a set of three because
+        * they only mean anything together -- VK_KHR_acceleration_structure depends on
+        * VK_KHR_deferred_host_operations, and VK_KHR_ray_query needs a structure to traverse --
+        * so a partial set would leave the capability flag ambiguous.
+        *
+        * VK_KHR_ray_tracing_pipeline is deliberately absent: the engine casts rays from compute
+        * shaders, so it needs neither RT pipelines nor shader binding tables (restir.md section 4).
+        *
+        * Opportunistic. MoltenVK exposes none of these, and lavapipe only does from Mesa 24.1, so
+        * a device without them is the common case rather than an error -- it simply reports no
+        * RayTracing capability and the high tier stays unavailable there.
+        */
+        const bool requestRayTracing =
+            isExtensionSupported(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, availableDeviceExtensions) &&
+            isExtensionSupported(VK_KHR_RAY_QUERY_EXTENSION_NAME, availableDeviceExtensions) &&
+            isExtensionSupported(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, availableDeviceExtensions);
+        if (requestRayTracing)
+        {
+            pNextChainPushFront(&_features11, &_accelerationStructureFeatures);
+            pNextChainPushFront(&_features11, &_rayQueryFeatures);
+            deviceExtensions.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+            deviceExtensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+            deviceExtensions.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+        }
+
         // Required by the Vulkan spec (VUID-VkDeviceCreateInfo-pProperties-04451) whenever the
         // physical device exposes it, e.g. MoltenVK on macOS.
         if(isExtensionSupported("VK_KHR_portability_subset", availableDeviceExtensions))
@@ -647,6 +673,13 @@ namespace vkm
         // drivers expose VK_EXT_device_fault without the base deviceFault feature) --
         // vkGetDeviceFaultInfoEXT is only valid to call once this feature is actually enabled.
         _deviceFaultExtensionEnabled = requestDeviceFaultExtension && _deviceFaultFeatures.deviceFault == VK_TRUE;
+
+        // Same caveat as device fault: the extension name can be present while the feature bit is
+        // not, and both bits have to be on -- an acceleration structure nothing can traverse is
+        // not a ray-tracing capability.
+        _rayTracingEnabled = requestRayTracing &&
+                             _accelerationStructureFeatures.accelerationStructure == VK_TRUE &&
+                             _rayQueryFeatures.rayQuery == VK_TRUE;
 
         // Same "name present but feature bit off" caveat as device fault above. When it is
         // on, ask which layouts vkCopyMemoryToImage accepts as a destination: copying
@@ -860,6 +893,10 @@ namespace vkm
         if (_bufferDeviceAddressEnabled)
         {
             _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::BufferDeviceAddress;
+        }
+        if (_rayTracingEnabled)
+        {
+            _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::RayTracing;
         }
 
         // Both must exist before VkmEngine::initializeBackendDriver() loads engine PSOs, since

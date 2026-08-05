@@ -162,6 +162,12 @@ first, where the approximation is exact.
 
 ### Missing — must be built
 
+**This is the baseline as of 2026-07-30, kept as written so later entries can be read against it.**
+Items 3-7 and 10 have since been built, and item 2 by half -- sets 2 and 3 exist on all three
+backends, but the Vulkan bindless manager still registers only `SAMPLED_IMAGE`, so a compute shader
+still cannot write a texture through set 0. Items 1, 8 and 9 are untouched. §8's checkboxes and
+§13's log are the current state.
+
 1. **All ray tracing.** Zero acceleration structures, ray query, RT pipelines, or shader binding
    tables. Vulkan enables no RT extensions (`vulkan_driver.cpp:466-544`).
 2. **Per-pass resource binding.** Sets 2/3 reserved but unimplemented (`frame_constants.h:34`,
@@ -819,14 +825,33 @@ None of the three is a surprise from implementation; they are the parts that nee
 phase supplies.
 
 ### Phase 5 — Acceleration structures in the RHI
-Where the high tier starts.
-- [ ] New resource type + `VkmDriverCapabilityFlags::RayTracing` (pattern at `driver.h:34-59`)
-- [ ] Vulkan: enable `VK_KHR_acceleration_structure`, `VK_KHR_ray_query`,
-      `VK_KHR_deferred_host_operations`; BLAS per mesh, TLAS per scene
+Where the high tier starts. Split into three PRs: **5a** the capability seam, **5b** BLAS/TLAS
+built from `VkmSceneGeometryPool`, **5c** the TLAS as a bindless singleton plus the ray-query gate.
+- [x] **5a: `VkmDriverCapabilityFlags::RayTracing`.** Vulkan requests
+      `VK_KHR_acceleration_structure`, `VK_KHR_ray_query` and `VK_KHR_deferred_host_operations` as
+      a set (they are useless apart) and checks both feature bits; Metal asks
+      `MTLDevice.supportsRaytracing` rather than assuming Metal 4 implies it, since Metal 4 runs on
+      hardware that predates hardware RT; WebGPU never reports it. Measured on this machine:
+      **Metal yes, Vulkan-on-MoltenVK no** — which is why this is a runtime capability and not an
+      `#ifdef`. `VK_KHR_ray_tracing_pipeline` is deliberately not requested: the engine casts rays
+      from compute shaders, so it needs no shader binding tables (§4).
+- [ ] New AS resource type in the render resource pool, with WebGPU error-logging stubs
+- [ ] Vulkan: BLAS per mesh, TLAS per scene
 - [ ] Metal: `MTL4PrimitiveAccelerationStructureDescriptor` / instance descriptors via
       `MTL4ComputeCommandEncoder` (Metal 4 folded the AS encoder into the compute encoder)
 - [ ] Build BLAS from the existing `VkmSceneGeometryPool` so no vertex data is duplicated.
-      **Triangles only** — document why at the declaration site (§4.2)
+      **Triangles only** — document why at the declaration site (§4.2). The pool's shape already
+      fits: one vertex buffer, one index buffer, and a `MeshRange` per mesh carrying
+      `(vertexWordOffset, vertexCount, indexOffset, indexCount)`, which is exactly a BLAS geometry
+      descriptor's inputs. **Found before starting, and it is a trap:** on Vulkan a buffer only
+      picks up `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` on the *committed* path
+      (`vulkan_buffer.cpp:123-130`); a buffer small enough to be sub-allocated by
+      `allocateFromBufferPool` returns before that and inherits the pool block's usage instead. A
+      BLAS build input needs both that bit and
+      `VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR` on the underlying
+      `VkBuffer`, so 5b has to either add both to the pool blocks or keep geometry-pool buffers off
+      the pooled path. Deciding that quietly either way would produce a validation error far from
+      its cause.
 - [ ] Refit on transform change; full rebuild only on topology change
 - [ ] Bind one TLAS as a bindless singleton — extend `VkmBindlessSingletonBuffer`, all three
       backends' managers, and `vkm_bindless.hlsli`. **On Metal it must also get an
@@ -1129,8 +1154,22 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 - [ ] **Test scene.** No Cornell-box-style scene exists; `scripts/download_scenes.py` offers only
       `DamagedHelmet` and `Sponza`. Hand-author a small `.gltf` in `resources/tests/` (following
       `gltf_triangle.gltf`) for analytic validation.
-- [ ] **CI runner bump** to get lavapipe ≥ Mesa 24.1 for Vulkan ray-query coverage; also allows
-      un-pinning `dxc-linux`.
+- [x] ~~**CI runner bump**~~ **Decided 2026-08-04: add, do not replace.** `ubuntu.yml` gains one
+      `ubuntu-24.04` Vulkan job whose only purpose is ray-query coverage — 24.04 carries Mesa 25.x
+      through updates, well past the 24.1 that gave lavapipe `VK_KHR_ray_query`, so no PPA is
+      needed. The eight 22.04 jobs stay: noble ships neither gcc-10/11 nor clang-11/12, and those
+      are the compiler floor. **The job's first run passed without executing a single Vulkan
+      test**: it looked for lavapipe's ICD manifest at one hardcoded path, Mesa 25.x on noble does
+      not put it there, and an empty `VK_DRIVER_FILES` makes every device test skip through
+      `VKM_REQUIRE_DEVICE` while the run still reports success. The directory was right and the
+      *filename* had changed: Mesa 25.x ships `lvp_icd.json`, without the `.x86_64` suffix the
+      glob required. The lookup now searches the standard locations by prefix and **fails the job**
+      when it finds none, so this cannot recur silently. With that fixed the job skips nothing and
+      **lavapipe reports `RayTracing: yes`** — so Phase 5's gate can be exercised in CI on Vulkan,
+      which is what the runner was added for. The cost of keeping them is that **`dxc-linux` stays pinned** to
+      v1.8.2505.1 (GLIBC 2.34) while Windows and macOS use v1.9.2602.24, so Linux CI still
+      validates shaders with a different compiler than the other two platforms. Un-pinning it
+      requires dropping 22.04 outright, which is a compiler-support decision, not a CI one.
 - [ ] **Confirm `MTL4ArgumentTable` AS binding** empirically — no documented
       `setAccelerationStructure`; binding is inferred to go through `gpuResourceID`.
 - [x] ~~**Low-spec technique choice.**~~ **Decided 2026-07-30:** fully dynamic (no bake), so the
@@ -1157,11 +1196,24 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
       a **GI sample** with a runtime technique switcher — mirroring how `VkmScene` owns cull/emit
       while `model_viewer` owns presentation. The sample must build on WebGPU (unlike `skybox`,
       which is excluded at `CMakeLists.txt:489`), since the low-spec tier targets it.
-- [ ] **glTF textures.** Importer reads material factors only (`TODO.md:34`). Not needed early;
-      needed for the production bar. The texture upload/bindless path already exists.
-- [ ] **Direct lighting strategy.** ReSTIR GI needs `L_o` shaded at the secondary hit. Decide
-      whether that is plain NEE or a full ReSTIR DI implementation — DI usually lands before GI,
-      and ReSTIR PT Enhanced argues for unifying them into one reservoir set.
+- [x] ~~**glTF textures.**~~ **Done 2026-08-04.** Base colour and metallic-roughness are imported,
+      uploaded with a full mip chain, and sampled by `gbuffer.hlsl` and `probe_capture.hlsl` on all
+      three backends -- so the probe volume now captures textured radiance rather than a
+      per-material average. Vulkan and Metal index a sized bindless array; WebGPU cannot (WGSL has
+      no array-of-handles type) and goes through descriptor set 3, one immutable table per material,
+      which is what forced per-material draw batches. `vkm_material.hlsli` hides the split, so no
+      shader tests `VKM_BACKEND_*`. Still open, each with its own prerequisite: **normal maps**
+      (needs tangent generation -- the importer leaves a zeroed `TANGENT` when the asset omits one)
+      and **emissive** (the G-buffer has no channel to carry it).
+- [x] ~~**Direct lighting strategy.**~~ **Decided 2026-08-04: plain NEE, behind a seam.** Phase 7
+      shades `L_o` at the secondary hit with ordinary next-event estimation, and every call site
+      goes through one `shadeSecondaryHit()` function so the implementation can be swapped without
+      touching the path code. ReSTIR DI is *not* built first, despite that being the usual ordering
+      and despite ReSTIR PT Enhanced arguing for one unified reservoir set — because the scene has
+      exactly one directional light today (`scene.h:63`; area/emissive representation is still open
+      under Phase 6), and many-light resampling is the entire value of DI. Building it now would be
+      building it against a light set that cannot exercise it. Revisit once Phase 6 supplies area
+      lights *and* a reference to measure a unified reservoir set against.
 - [ ] Decide whether to pursue ReSTIR PT later for unbiased specular, or accept the documented
       ReSTIR GI bias plus final-shading MIS.
 
@@ -1190,3 +1242,10 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-08-02 | 4 | **WebGPU can compile and run shaders.** The blocker recorded since Phase 2 -- that `VKM_COMPILER_ENABLE_WGSL` needs a Dawn build no configuration provides -- was simply untrue: Dawn is vendored and pinned, the CMake wiring existed, and `run_sample.py` already built a WGSL host compiler. `run_tests.py` now does the same, so every engine PSO ships as WGSL in MEMFS and the set-2 path executes there. The gap was hiding **four** real bugs, all invisible to a compile: implicit-LOD sampling in non-uniform control flow; staging buffers left mapped at creation (WebGPU forbids the GPU or queue touching a mapped buffer, which broke `readbackTexture` and every `writeDirect` upload); the compute path never binding group 1, which the graphics path already did *and explained in a comment*; and every unpublished bindless singleton sharing one placeholder buffer, rejected both for overlapping writable-storage bindings and for mixing read-write with read-only use of one buffer -- that alone invalidated any WebGPU pass without a scene. Metal 193/193, Vulkan 191/191, both Release, WebGPU green. One test stays skipped with the cause unknown (`TODO.md`). |
 | 2026-08-01 | 4 | **4.2c: the probe volume runs as a frame loop.** `VkmProbeVolumeUpdater` refreshes a round-robin budget of probes per frame (scene update -> probe-aimed cull -> one capture pass for every budgeted probe's six faces -> barrier -> two atlas blends). Making a *partial* update correct forced three changes: hysteresis moved to the blend hardware and the atlas lost its second copy (a swapped pair leaves un-refreshed probes alternating between stale values, and the old previous-atlas fetch used cell-relative UV — correct only for the one-cell atlas the test used); both passes turned out to need no per-probe constant buffer at all, since the face matrices are `P·R·T(−p)` and the position cancels, leaving only a position/tile/hysteresis small enough to push from the vertex stage; and the budget is clamped rather than wrapped so a round covers every probe exactly once. **Propagation latency measured** and asserted against the analytic model: geometric decay at `hysteresis` per refresh, so the defaults (2048 probes, budget 32, h = 0.97) need **4864 frames / ~81 s at 60 Hz** to shed 90% of a light change. Unusable as shipped; the levers are hysteresis, budget and grid size, all recorded in §12. Also reconciled §8's Phase 3 checkboxes with the code and noted that Phase 3's gate is unmet until 4.5 gives those passes an owning application. Metal 193/193 and Vulkan 191/191 in Debug, 192/192 and 191/191 in Release, validation clean throughout; both new tests were checked to fail when the blend factors and the round-robin clamp are sabotaged. Two things only Vulkan caught: releasing at destroy through the deferred reclaimer leaks past the allocator's teardown (it frees on a GPU timeline that will never advance again), and `~VkmScene()` is defaulted so both the new fixture and the pre-existing `runProbeCaptureTest` leaked a scene — Metal has no allocator assert, so both had been passing there. |
 | 2026-07-30 | 4 | Low-spec tier must be **fully dynamic** (no bake) → technique decided: raster-updated dynamic probe volume (DDGI-style octahedral irradiance + distance moments, Chebyshev visibility) plus an additive SSGI contact term. Storage/sampling are update-mechanism-agnostic, so Phase 5's rays can later refresh the same volume, and ReSTIR GI can query it for multi-bounce `L_o`. |
+| 2026-08-02 | 4 | **The push-constant ring gets a per-frame reset.** Metal and WebGPU emulate push constants with a ring the caller advanced but nobody reset, so entries a still-executing frame referenced were overwritten; callers worked around it by budgeting against `1024 / FRAME_BUFFER_COUNT`. The ring is now `FRAME_BUFFER_COUNT` regions with the cursor rewound per frame slot, which is safe by construction because `VkmRenderGraph` already calls `ensureCompleted()` on a slot before recording into it again. Lifts the probe budget from 32 to 128 on a one-batch scene. |
+| 2026-08-02 | — | **Descriptor set 3 (per-draw)** on all three backends, by generalizing the set-2 machinery rather than duplicating it: the two sets differ only by index and by which declaration they validate against, so `VkmResourceSetKind` threads through and `VkmPerPassResourceTable` became `VkmResourceTableBase`. A table is now validated against the pipeline's **declaration**, not its pointer, so one table serves every vertex-layout permutation of a PSO. Sets 0-3 exactly exhaust WebGPU's default `maxBindGroups = 4` -- there is no room for a fifth. Metal's `MTL4ArgumentTable` caps buffer binds at 31 and sampler binds at 16, which is what bounds each set to 13 buffers / 8 samplers / 16 textures; exceeding it aborted device creation *as a hang*, only under `MTL_DEBUG_LAYER=1`. |
+| 2026-08-03 | — | **glTF material textures, Vulkan and Metal.** `VkmMaterialData` grew to 64 B with four texture slots; `VkmScene` decodes, uploads and registers them at `build()`, keyed on `(path, colourSpace)` so an image used as both sRGB and linear gets two textures. `vkm_material.hlsli` is the only place that branches on the backend. Two findings a unit test could not have produced: the engine sampler was clamp-to-edge while glTF's default wrap is repeat, which made every pixel of DamagedHelmet sample the texture's bottom row (the fixture is UV-invariant, so only a real asset showed it); and PR 1's claimed headroom was wrong -- measured on Sponza the ring gives 128 at 1 batch but only 6 at 25. |
+| 2026-08-03 | — | **Material textures on WebGPU**, through set 3 and per-material draw batches, plus the four validation bugs that had kept the gi sample from ever producing a WebGPU frame: bindless singleton bindings numbered 5-8 instead of 4-7 on the stated but false reasoning that this backend "shifts by one for the ring"; the argument buffer being writable-storage and indirect in one render pass, which WebGPU forbids at *bind group* scope rather than shader scope (set 0 now exists in a compute shape and a graphics shape); and a `git checkout` that had silently reverted the sample's material-table wiring in an earlier commit. Validation errors went **1812 to 0**, and a WebGPU frame was looked at for the first time. |
+| 2026-08-04 | — | **Mipmaps for material textures.** Built on the CPU and uploaded level by level -- no new GPU path, since `uploadToTexture` always took a mip index. The load-bearing detail is sRGB: averaging gamma-encoded bytes averages the wrong quantity (half black + half white gives 128 where the answer is ~188), and it is invisible on any solid-colour fixture. `vkm_material.hlsli`'s WebGPU branch had to move from `SampleLevel(..., 0)` to `Sample()` or the chain would have been uploaded and never read; the comment justifying the pinned LOD was factually wrong about its callers. Sponza's roof: mean gradient over the minified region **30.5 to 11.1**. |
+| 2026-08-04 | 4 | **The GI was green because Metal 4 render passes had no barriers.** Metal 4 does no automatic hazard tracking and the backend only emitted barriers around compute dispatches and blits -- nothing around render passes. The handoff was meant to come from a compute subgraph calling `barrierTextureForShaderRead`, which records nothing on Metal and binds no pipeline, so no encoder opened and no barrier ever issued. The probe blend read the capture atlas mid-write; because hysteresis *is* the blend hardware, `NaN * 0 + src * 1` is still NaN, so a poisoned cell never recovered. The irradiance atlas held 273k NaN in R and B against 21k in G -- which tone-maps to exactly (0,255,0) -- and the distance atlas negative means, so the Chebyshev test rejected every probe and the indirect term collapsed to zero. Render passes now carry the same barrier pair the compute path uses. Both atlases read back with zero NaN; 900 frames cost 4m34s against 4m31s. |
+| 2026-08-04 | 5 | **Two Phase 5 pre-decisions settled (§12).** CI gains one `ubuntu-24.04` Vulkan job for lavapipe ray-query coverage rather than moving the matrix -- 24.04 carries Mesa 25.x so no PPA is needed, but noble has neither gcc-10/11 nor clang-11/12, so the eight 22.04 jobs stay and `dxc-linux` stays pinned to v1.8 against the other platforms' v1.9. Direct lighting at the secondary hit will be plain NEE behind a `shadeSecondaryHit()` seam, not ReSTIR DI first: the scene has one directional light, and many-light resampling is the whole point of DI, so building it now would be building it blind. |

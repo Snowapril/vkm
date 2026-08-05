@@ -104,6 +104,7 @@
 - Metal's MTL4ArgumentTable caps buffer binds at 31 and sampler binds at 16, which is what bounds sets 2 and 3 to 13 buffers / 8 samplers / 16 textures each.
 - Metal brackets every render pass with an `MTLStageAll` encoder barrier pair, which serializes render passes against each other; a finer mask (or a real per-resource barrier in `barrierTextureForShaderRead`) would let independent passes overlap.
 - `barrierTextureForShaderRead` and `barrierIndirectArgumentBuffer` still record nothing on Metal: the ordering they name comes from the encoder-opening barriers instead, so a call sitting in a subgraph that binds no pipeline has no effect of its own.
+- A CI job whose Vulkan driver is missing still reports success: `VKM_REQUIRE_DEVICE` skips every device test and doctest counts the run as passing, so only the ICD-lookup guard in `ubuntu.yml` distinguishes real coverage from none.
 - Vulkan/Metal validation errors at ImGui teardown (`VUID-vkDestroyBuffer-buffer-00922` and three others) fire on every unit-test run: `ImGui_ImplVulkan_Shutdown` destroys its frame buffers without waiting for the last submission.
 - Normal maps are unsampled because tangents may be zero (no MikkTSpace generator), and emissive because the G-buffer has no channel to carry it.
 - Material textures have no automated coverage on Vulkan: the offscreen scene-render harness is Metal-only, since the Vulkan fixture renders black on this machine's MoltenVK/lavapipe.

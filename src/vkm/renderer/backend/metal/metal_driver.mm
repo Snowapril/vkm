@@ -86,6 +86,13 @@ namespace vkm
         {
             _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::TextureHostCopy;
         }
+        // Asked of the device rather than assumed from the Metal version: Metal 4 runs on
+        // hardware that predates hardware ray tracing (Apple 5 and earlier), where the API
+        // exists but supportsRaytracing is false.
+        if ([_mtlDevice supportsRaytracing])
+        {
+            _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::RayTracing;
+        }
         return VkmInitResult{VkmInitResultCode::Success, ""};
     }
 

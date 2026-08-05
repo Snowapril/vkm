@@ -160,6 +160,23 @@ namespace vkm
         bool _drawIndirectCountSupported{false};
         bool _bufferDeviceAddressEnabled{false};
 
+        /*
+        * Ray query, not ray tracing pipelines. The engine's GI work casts rays from compute
+        * shaders (see restir.md section 4), so VK_KHR_ray_tracing_pipeline and its shader binding
+        * tables are deliberately not requested -- ray query alone is a much smaller surface and is
+        * what both the low and high tiers need.
+        *
+        * All three come together: an acceleration structure cannot be built without
+        * VK_KHR_deferred_host_operations (VK_KHR_acceleration_structure lists it as a dependency),
+        * and a ray query is useless without one to traverse. Requesting them as a set means the
+        * capability flag has a single meaning rather than three partial ones.
+        */
+        VkPhysicalDeviceAccelerationStructureFeaturesKHR _accelerationStructureFeatures{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+        VkPhysicalDeviceRayQueryFeaturesKHR _rayQueryFeatures{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+        bool _rayTracingEnabled{false};
+
         VkPhysicalDeviceHostImageCopyFeatures _hostImageCopyFeatures{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES};
         bool _hostImageCopyEnabled{false};

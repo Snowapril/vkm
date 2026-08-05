@@ -63,6 +63,18 @@ jobs:
             compiler: clang
             version: "12"
             backend: webgpu
+          # Ray-query coverage, not compiler coverage. 22.04's mesa-vulkan-drivers is Mesa
+          # 23.2.x, whose lavapipe predates VK_KHR_ray_query; that arrived in Mesa 24.1, and
+          # 24.04 now carries 25.x through updates. This is the only job where Vulkan ray
+          # tracing can run at all, so it exists for Phase 5's gate rather than to widen the
+          # compiler matrix. It is *added* to the 22.04 entries rather than replacing them:
+          # noble ships neither gcc-10/11 nor clang-11/12, and those are the compiler floor
+          # this project supports.
+          - name: "Ubuntu 24.04 + GCC-13 (lavapipe ray query)"
+            os: ubuntu-24.04
+            compiler: gcc
+            version: "13"
+            backend: vulkan
 
     runs-on: ${{matrix.os}}
     name: ${{matrix.name}} (${{ matrix.backend }})
@@ -73,7 +85,11 @@ jobs:
           submodules: true
       - name: Install Dependency
         run: |
-          sudo add-apt-repository ppa:ubuntu-toolchain-r/test
+          # Only 22.04 needs it, and it has no noble series -- adding it there makes every
+          # later apt-get warn about a missing release file.
+          if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
+            sudo add-apt-repository ppa:ubuntu-toolchain-r/test
+          fi
           sudo apt-get update && sudo apt-get upgrade && sudo apt-get dist-upgrade
           sudo apt-get install xorg-dev build-essential libgl-dev libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev libxkbcommon-dev libwayland-dev libwayland-bin wayland-protocols python3-setuptools xvfb
           if [ "${{ matrix.backend }}" = "vulkan" ]; then
@@ -126,8 +142,22 @@ jobs:
         # the Vulkan loader at its ICD manifest so it's picked up regardless of loader version.
         run: |
           if [ "${{ matrix.backend }}" = "vulkan" ]; then
-            export VK_DRIVER_FILES="$(ls /usr/share/vulkan/icd.d/lvp_icd.*.json | tr '\n' ':')"
-            export VK_ICD_FILENAMES="${VK_DRIVER_FILES}"
+            # Searched rather than hardcoded, and fatal when empty. `ls` on one fixed path
+            # printed an error to stderr and exported an empty VK_DRIVER_FILES, which makes
+            # every device test skip through VKM_REQUIRE_DEVICE while the job still reports
+            # success -- that is exactly how the 24.04 runner passed 208 tests without running
+            # a single Vulkan one. A job that cannot find a driver must fail, not pass quietly.
+            icd="$(find /usr/share/vulkan/icd.d /usr/lib/*/vulkan/icd.d /usr/local/share/vulkan/icd.d \
+                   -name 'lvp_icd*.json' 2>/dev/null | tr '\n' ':')"
+            if [ -z "$icd" ]; then
+              echo "ERROR: no lavapipe ICD manifest found; every Vulkan test would skip."
+              echo "mesa-vulkan-drivers installed these instead:"
+              dpkg -L mesa-vulkan-drivers | grep -iE 'icd|\.json' || true
+              exit 1
+            fi
+            echo "Using lavapipe ICD: $icd"
+            export VK_DRIVER_FILES="$icd"
+            export VK_ICD_FILENAMES="$icd"
             xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}
           else
             python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}

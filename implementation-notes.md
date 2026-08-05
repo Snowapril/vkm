@@ -2265,3 +2265,72 @@ measurable here.
 - The indirect term is dim and needs ~900 frames to converge on Sponza. That is the probe budget
   (6 per frame at 25 draw batches) and the 0.97 hysteresis, both already recorded; it was not
   touched here.
+
+## 2026-08-04 — Phase 5a: the ray-tracing capability seam
+
+The smallest piece of Phase 5 that is useful on its own: a runtime answer to "can this device
+trace rays at all", so the rest of the phase can be gated on something real rather than on a
+platform guess.
+
+**Requested as a set, checked as a pair.** Vulkan asks for `VK_KHR_acceleration_structure`,
+`VK_KHR_ray_query` and `VK_KHR_deferred_host_operations` together and only reports the capability
+when `accelerationStructure` *and* `rayQuery` both come back true. Any partial answer would make
+the flag ambiguous -- an acceleration structure nothing can traverse is not a ray-tracing
+capability, and the structure extension lists deferred host operations as a hard dependency.
+`VK_KHR_ray_tracing_pipeline` is absent on purpose: the engine casts rays from compute shaders, so
+shader binding tables buy nothing.
+
+**Metal asks the device, not the API version.** Metal 4 runs on Apple 5 and earlier, where the
+acceleration-structure API exists but `supportsRaytracing` is false, so assuming Metal 4 implies
+ray tracing would report a capability the hardware does not have.
+
+**The measurement is the point.** On this machine Metal reports **yes** and Vulkan-on-MoltenVK
+reports **no** -- the same physical GPU, two backends, opposite answers. That is the argument for
+a runtime flag over an `#ifdef`, and it is now asserted rather than assumed.
+
+**Verification.** The new subcase asserts an implication rather than a value, because the value is
+per-device: `RayTracing` must imply `BufferDeviceAddress`, since an acceleration structure is built
+from geometry addressed by device address and Vulkan requires that feature outright. Sabotaged by
+removing `BufferDeviceAddress` from the Metal capability set while leaving `RayTracing`, which
+fails the check at `TestMetalDriver.mm:70`. WebGPU's absence is asserted explicitly rather than
+left to the existing exact-equality check, so a later flag change cannot make it true by accident.
+Metal Debug 212/212 and Release 211/211, Vulkan 208/208.
+
+### Deviations
+
+- The implication is a weak assertion on any device where `BufferDeviceAddress` is unconditionally
+  on, which is both of the ones available here. It is worth having anyway -- it is the invariant a
+  future backend would break -- but it is not evidence that the detection itself is right. The
+  Metal-yes/Vulkan-no split is that evidence, and it is logged by the test rather than asserted,
+  because it is a property of the runner.
+
+## 2026-08-05 — A CI job that passed 208 tests without running one of them
+
+The `ubuntu-24.04` job added for lavapipe ray-query coverage went green on its first run and
+proved nothing. Its Vulkan step resolved the driver with
+`ls /usr/share/vulkan/icd.d/lvp_icd.*.json`; Mesa 25.x on noble ships that file as `lvp_icd.json`,
+without the `.x86_64` suffix, so the glob matched nothing, `ls` wrote its error to stderr where
+nothing was watching, and `VK_DRIVER_FILES` came out empty. Every device test then skipped through
+`VKM_REQUIRE_DEVICE`, and doctest reported **208 passed, 0 skipped** — because a skipped subcase is
+not a skipped test case. The check list showed a green tick.
+
+The 22.04 jobs were unaffected and skip nothing, so there was no contrast to notice. The only way
+to see it was to read a passing job's log.
+
+**The fix is the guard, not the path.** The step now searches the standard ICD locations by prefix
+and exits non-zero when it finds none, printing what `mesa-vulkan-drivers` actually installed. A
+job that cannot find a driver has to fail; correcting the glob alone would have left the next
+packaging change free to do this again.
+
+**What it answered.** With a real driver, the job skips nothing and reports
+`RayTracing capability on this device: yes` — lavapipe on Mesa 25.2.8 exposes ray query, so Phase
+5's gate can run in CI on Vulkan rather than being Metal-only. That was the whole reason for adding
+the runner, and until this it was unverified.
+
+### Deviations
+
+- The underlying property is broader than one job and is recorded in `TODO.md` rather than fixed
+  here: anywhere `VKM_REQUIRE_DEVICE` is used, a missing driver is indistinguishable from a passing
+  run. Making the suite fail when every device test skips is a real change to the test harness's
+  contract -- it would break local runs on machines without a given backend -- so it was not taken
+  as a side effect of a CI fix.
