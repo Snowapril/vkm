@@ -31,6 +31,7 @@ namespace vkm
         */
         virtual VkmSwapChainBase* newSwapChainInner() override final;
         virtual VkmResourceTableBase* newResourceTableInner() override final;
+        virtual VkmAccelerationStructure* newAccelerationStructureInner() override final;
 
         inline VkDevice getDevice() const { return _device; }
         inline VkPhysicalDevice getPhysicalDevice() const { return _physicalDevice; }

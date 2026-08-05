@@ -24,7 +24,8 @@ namespace vkm
         Sampler = 3,
         TextureView = 4,
         BufferView = 5,
-        Count = 6,
+        AccelerationStructure = 6,
+        Count = 7,
         Undefined = Count,
     };
 
@@ -121,6 +122,18 @@ namespace vkm
         // Draw/dispatch argument buffer: the GPU-driven scene path has a compute pass write
         // VkmDrawIndirectArguments records that the draw then fetches from this same buffer.
         AllowIndirectBuffer = 0x00000200,
+        /*
+        * Read in place by an acceleration structure build -- vertex and index data a BLAS is
+        * built from, so tracing a scene duplicates none of its geometry.
+        *
+        * On Vulkan this also forces the *committed* allocation path. A sub-allocated buffer
+        * returns before `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` is added and inherits the
+        * pool block's usage instead, and a build input needs both that bit and
+        * `VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR` on the VkBuffer
+        * it is actually reading. Without the forcing, whether a build worked would depend on
+        * whether the buffer happened to be small enough to pool.
+        */
+        AllowAccelerationStructureInput = 0x00000400,
 
         AllowShaderReadWrite = AllowShaderRead | AllowShaderWrite,
     };

@@ -20,6 +20,7 @@ namespace vkm
     class VkmSampler;
     class VkmTextureView;
     class VkmBufferView;
+    class VkmAccelerationStructure;
 
     class VkmRenderResourcePool
     {
@@ -36,6 +37,7 @@ namespace vkm
         VkmResourceHandle allocateSampler(VkmSampler* sampler, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
         VkmResourceHandle allocateTextureView(VkmTextureView* textureView, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
         VkmResourceHandle allocateBufferView(VkmBufferView* bufferView, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
+        VkmResourceHandle allocateAccelerationStructure(VkmAccelerationStructure* accelerationStructure, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
         /*
         * @brief Backend setup that must not run before the driver's own device validation
         * (initializeInner) has succeeded -- called from VkmDriverBase::initialize() right

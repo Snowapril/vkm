@@ -835,8 +835,20 @@ built from `VkmSceneGeometryPool`, **5c** the TLAS as a bindless singleton plus 
       **Metal yes, Vulkan-on-MoltenVK no** — which is why this is a runtime capability and not an
       `#ifdef`. `VK_KHR_ray_tracing_pipeline` is deliberately not requested: the engine casts rays
       from compute shaders, so it needs no shader binding tables (§4).
-- [ ] New AS resource type in the render resource pool, with WebGPU error-logging stubs
-- [ ] Vulkan: BLAS per mesh, TLAS per scene
+- [x] **5b (part): the AS resource type and the Vulkan build.** `VkmResourceType::AccelerationStructure`
+      with a `VkmAccelerationStructure` base, a Vulkan implementation that builds both levels, and
+      error-logging stubs on Metal and WebGPU. `VkmResourceCreateInfo::AllowAccelerationStructureInput`
+      both adds `VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR` and forces
+      the committed allocation path, which is the trap recorded below. The build is synchronous, in
+      the shape `uploadToBuffer` already has.
+- [ ] **5b (rest): Metal.** Metal 4 rebuilt the API rather than renaming it —
+      `MTL4PrimitiveAccelerationStructureDescriptor` takes `MTL4BufferRange` (GPU address + length)
+      instead of `id<MTLBuffer>`, and an instance references its bottom-level structure by address
+      in the descriptor buffer rather than by index into an `instancedAccelerationStructures`
+      array. Not a rename of the pre-Metal-4 shape.
+- [ ] **5b (rest): BLAS per mesh, TLAS per scene** driven from `VkmSceneGeometryPool`, and a test.
+      Neither backend available here can run one: MoltenVK reports no ray tracing, and Metal's
+      implementation is the item above — so the first execution will be CI's lavapipe job.
 - [ ] Metal: `MTL4PrimitiveAccelerationStructureDescriptor` / instance descriptors via
       `MTL4ComputeCommandEncoder` (Metal 4 folded the AS encoder into the compute encoder)
 - [ ] Build BLAS from the existing `VkmSceneGeometryPool` so no vertex data is duplicated.

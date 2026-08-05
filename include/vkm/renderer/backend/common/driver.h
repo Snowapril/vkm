@@ -22,6 +22,8 @@ namespace vkm
     class VkmSampler;
     class VkmTextureView;
     class VkmBufferView;
+    class VkmAccelerationStructure;
+    struct VkmAccelerationStructureInfo;
     class VkmSwapChainBase;
     class VkmCommandQueueBase;
     class VkmCommandDispatcher;
@@ -427,6 +429,21 @@ namespace vkm
          * and friended to VkmTexture only -- views must be created via
          * VkmTexture::createView() so ownership is tracked; nothing else may call this.
          */
+        /*
+        * @brief Creates and builds an acceleration structure, or returns null.
+        *
+        * @details Builds synchronously -- a one-off command buffer, submitted and waited on, the
+        * same shape uploadToBuffer has. That fits how structures are used today (built once when a
+        * scene loads) and keeps the command-buffer API out of this. A per-frame rebuild or refit
+        * needs a *recorded* build instead; see TODO.md.
+        *
+        * Returns null, with an error logged, on a backend whose capability flags lack
+        * VkmDriverCapabilityFlags::RayTracing. Callers must check the flag rather than the result
+        * when the absence is expected -- WebGPU has no such API at all, and Vulkan-on-MoltenVK
+        * exposes no RT extensions.
+        */
+        VkmAccelerationStructure* newAccelerationStructure(const VkmAccelerationStructureInfo& info);
+
         VkmTextureView* newTextureView(const VkmTextureViewInfo& info);
 
         /*
@@ -456,6 +473,10 @@ namespace vkm
         virtual VkmBufferView* newBufferViewInner() = 0;
         virtual VkmSwapChainBase* newSwapChainInner() = 0;
         virtual VkmResourceTableBase* newResourceTableInner() = 0;
+        // Every backend implements this, including those without ray tracing: the WebGPU one logs
+        // and returns null, matching the copyTexture/registerTexture precedent rather than
+        // splitting the base class behind an #ifdef (backend/common/AGENTS.md).
+        virtual VkmAccelerationStructure* newAccelerationStructureInner() = 0;
         virtual VkmCommandQueueBase* newCommandQueueInner() = 0;
         virtual VkmPipelineStateBase* newPipelineStateInner() = 0;
         virtual VkmRenderResourcePool* newRenderResourcePoolInner() = 0;

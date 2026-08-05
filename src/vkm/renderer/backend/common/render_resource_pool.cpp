@@ -7,6 +7,7 @@
 #include <vkm/renderer/backend/common/sampler.h>
 #include <vkm/renderer/backend/common/texture_view.h>
 #include <vkm/renderer/backend/common/buffer_view.h>
+#include <vkm/renderer/backend/common/acceleration_structure.h>
 
 namespace vkm
 {
@@ -211,6 +212,14 @@ namespace vkm
         std::lock_guard<std::mutex> lock(_mutex);
         VkmResourceHandle handle = allocateResourceLocked(VkmResourceType::BufferView, poolType);
         _subPools[(uint8_t)poolType]._resources[(uint8_t)VkmResourceType::BufferView][handle.id].reset(bufferView);
+        return handle;
+    }
+
+    VkmResourceHandle VkmRenderResourcePool::allocateAccelerationStructure(VkmAccelerationStructure* accelerationStructure, VkmResourcePoolType poolType)
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        VkmResourceHandle handle = allocateResourceLocked(VkmResourceType::AccelerationStructure, poolType);
+        _subPools[(uint8_t)poolType]._resources[(uint8_t)VkmResourceType::AccelerationStructure][handle.id].reset(accelerationStructure);
         return handle;
     }
 

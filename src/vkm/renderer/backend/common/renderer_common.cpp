@@ -24,6 +24,7 @@ namespace vkm
             case VkmResourceType::Sampler:       return "Sampler";
             case VkmResourceType::TextureView:   return "TextureView";
             case VkmResourceType::BufferView:    return "BufferView";
+            case VkmResourceType::AccelerationStructure: return "AccelerationStructure";
             default:                             return "Undefined";
         }
     }

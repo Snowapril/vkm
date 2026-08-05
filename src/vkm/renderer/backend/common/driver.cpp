@@ -7,6 +7,7 @@
 #include <vkm/renderer/backend/common/sampler.h>
 #include <vkm/renderer/backend/common/texture_view.h>
 #include <vkm/renderer/backend/common/buffer_view.h>
+#include <vkm/renderer/backend/common/acceleration_structure.h>
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/command_queue.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
@@ -425,6 +426,49 @@ namespace vkm
 
         _renderResourcePool->releaseResource(stagingBuffer->getHandle());
         return result;
+    }
+
+    VkmAccelerationStructure* VkmDriverBase::newAccelerationStructure(const VkmAccelerationStructureInfo& info)
+    {
+        // Checked here rather than in each backend so the message is the same everywhere and a
+        // backend's Inner() never has to guess why it was called.
+        if ((_driverCapabilityFlags & VkmDriverCapabilityFlags::RayTracing) == 0)
+        {
+            VKM_DEBUG_ERROR("newAccelerationStructure requires VkmDriverCapabilityFlags::RayTracing");
+            return nullptr;
+        }
+
+        VkmAccelerationStructure* accelerationStructure = newAccelerationStructureInner();
+        if (accelerationStructure == nullptr)
+        {
+            return nullptr;
+        }
+        VkmResourceHandle handle =
+            _renderResourcePool->allocateAccelerationStructure(accelerationStructure, VkmResourcePoolType::Default);
+        if (accelerationStructure->initialize(handle, info) == false)
+        {
+            VKM_DEBUG_ERROR("Failed to initialize acceleration structure");
+            if (handle.isValid())
+                _renderResourcePool->releaseResource(handle);
+            else
+                delete accelerationStructure;
+            return nullptr;
+        }
+
+        VkmResourceMemoryTag tag{};
+        tag.requestedSize = 0;
+        tag.allocatedSize = accelerationStructure->getAllocatedSize();
+        tag.alignment = accelerationStructure->getMemoryAlignment();
+        tag.name = info._debugName != nullptr ? info._debugName : "";
+        tag.type = accelerationStructure->getResourceType();
+        _renderResourcePool->tagResource(handle, tag);
+        _renderResourcePool->onResourceInitialized(handle);
+
+        if (_debugNamingEnabled && info._debugName != nullptr)
+        {
+            accelerationStructure->setDebugName(info._debugName);
+        }
+        return accelerationStructure;
     }
 
     VkmSampler* VkmDriverBase::newSampler(const VkmSamplerInfo& info)

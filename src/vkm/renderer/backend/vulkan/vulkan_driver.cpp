@@ -72,6 +72,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_staging_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_sampler.h>
+#include <vkm/renderer/backend/vulkan/vulkan_acceleration_structure.h>
 #include <vkm/renderer/backend/vulkan/vulkan_texture_view.h>
 #include <vkm/renderer/backend/vulkan/vulkan_buffer_view.h>
 #include <vkm/renderer/backend/vulkan/vulkan_gpu_buffer_pool.h>
@@ -237,6 +238,11 @@ namespace vkm
         // matches selectSwapSurfaceFormat()'s BGRA8_UNORM/SRGB_NONLINEAR preference.
         (void)enableHdr;
         return VkmFormat::BGRA8_UNORM;
+    }
+
+    VkmAccelerationStructure* VkmDriverVulkan::newAccelerationStructureInner()
+    {
+        return new VkmAccelerationStructureVulkan(this);
     }
 
     VkmResourceTableBase* VkmDriverVulkan::newResourceTableInner()
