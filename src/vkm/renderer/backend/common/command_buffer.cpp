@@ -215,6 +215,16 @@ namespace vkm
         onBarrierIndirectArgumentBuffer(buffer);
     }
 
+    void VkmCommandBufferBase::buildAccelerationStructure(VkmResourceHandle accelerationStructure)
+    {
+        if (!_isRecording || _isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("buildAccelerationStructure must be recorded while recording and outside a render pass");
+            return;
+        }
+        onBuildAccelerationStructure(accelerationStructure);
+    }
+
     void VkmCommandBufferBase::barrierTextureForShaderRead(VkmResourceHandle texture)
     {
         if (!_isRecording || _isInRenderPass)

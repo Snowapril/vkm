@@ -543,6 +543,13 @@ namespace vkm
            threadsPerThreadgroup:MTLSizeMake(threadGroupSize[0], threadGroupSize[1], threadGroupSize[2])];
     }
 
+    void VkmCommandBufferMetal::onBuildAccelerationStructure(VkmResourceHandle accelerationStructure)
+    {
+        (void)accelerationStructure;
+        // Unreachable in practice: nothing can create a structure to rebuild, because newAccelerationStructureInner is an error stub here too. Both go away together when the MTL4 build lands.
+        VKM_DEBUG_ERROR("buildAccelerationStructure is not supported on the Metal backend");
+    }
+
     void VkmCommandBufferMetal::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)
     {
         (void)buffer;

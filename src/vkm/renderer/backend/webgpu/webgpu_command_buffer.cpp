@@ -311,6 +311,13 @@ namespace vkm
         wgpuComputePassEncoderDispatchWorkgroups(_computePassEncoder, groupCountX, groupCountY, groupCountZ);
     }
 
+    void VkmCommandBufferWebGPU::onBuildAccelerationStructure(VkmResourceHandle accelerationStructure)
+    {
+        (void)accelerationStructure;
+        // WebGPU has no acceleration structure in the API, so there is nothing to rebuild and nothing that could have created one.
+        VKM_DEBUG_ERROR("buildAccelerationStructure is not supported on the WebGPU backend");
+    }
+
     void VkmCommandBufferWebGPU::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)
     {
         (void)buffer;

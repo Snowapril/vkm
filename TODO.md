@@ -106,7 +106,9 @@
 - `barrierTextureForShaderRead` and `barrierIndirectArgumentBuffer` still record nothing on Metal: the ordering they name comes from the encoder-opening barriers instead, so a call sitting in a subgraph that binds no pipeline has no effect of its own.
 - A CI job whose Vulkan driver is missing still reports success: `VKM_REQUIRE_DEVICE` skips every device test and doctest counts the run as passing, so only the ICD-lookup guard in `ubuntu.yml` distinguishes real coverage from none.
 - Acceleration structures are Vulkan-only: `newAccelerationStructureInner` is an error stub on Metal (the MTL4 descriptors take `MTL4BufferRange` addresses and reference bottom-level structures by address, not the pre-Metal-4 shape) and on WebGPU (no such API).
-- An acceleration structure is built synchronously by `newAccelerationStructure`, so a scene whose transforms change per frame has no way to refit or rebuild one; that needs a recorded build on `VkmCommandBufferBase`.
+- A rebuilt top-level structure cannot grow: `updateInstances` refuses a list longer than the one it was created with, because the structure was sized against that count, so a scene that spawns objects has to recreate its structure.
+- Deforming geometry has no path: `recordBuild` always does a full BUILD, never an UPDATE refit, so a skinned or morphed mesh would rebuild its bottom-level structure from scratch every frame.
+- Nothing synchronizes a recorded acceleration structure build against the ray queries that read it; a caller has to place its own barrier until an `barrierAccelerationStructure` exists.
 - Vulkan/Metal validation errors at ImGui teardown (`VUID-vkDestroyBuffer-buffer-00922` and three others) fire on every unit-test run: `ImGui_ImplVulkan_Shutdown` destroys its frame buffers without waiting for the last submission.
 - Normal maps are unsampled because tangents may be zero (no MikkTSpace generator), and emissive because the G-buffer has no channel to carry it.
 - Material textures have no automated coverage on Vulkan: the offscreen scene-render harness is Metal-only, since the Vulkan fixture renders black on this machine's MoltenVK/lavapipe.

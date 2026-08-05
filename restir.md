@@ -839,8 +839,16 @@ built from `VkmSceneGeometryPool`, **5c** the TLAS as a bindless singleton plus 
       with a `VkmAccelerationStructure` base, a Vulkan implementation that builds both levels, and
       error-logging stubs on Metal and WebGPU. `VkmResourceCreateInfo::AllowAccelerationStructureInput`
       both adds `VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR` and forces
-      the committed allocation path, which is the trap recorded below. The build is synchronous, in
-      the shape `uploadToBuffer` already has.
+      the committed allocation path, which is the trap recorded below.
+- [x] **5b (part): dynamic objects.** The first shape built here could not express a moving object
+      -- it built once, synchronously, at creation. A structure created with `_allowUpdate` now
+      keeps its scratch buffer and can be rebuilt: `updateInstances` rewrites the transforms and
+      `VkmCommandBufferBase::buildAccelerationStructure` records the rebuild into a render graph
+      pass. **Rebuild, not refit**: a top-level structure over its instances is cheap to rebuild
+      and stays optimal, while an update degrades traversal as instances drift from where it was
+      built -- and a falling rigid body moves a long way. A refit is for *deforming* geometry,
+      which nothing produces yet. A bottom-level structure still builds once: a sphere's geometry
+      does not change in object space, only its instance transform does.
 - [ ] **5b (rest): Metal.** Metal 4 rebuilt the API rather than renaming it —
       `MTL4PrimitiveAccelerationStructureDescriptor` takes `MTL4BufferRange` (GPU address + length)
       instead of `id<MTLBuffer>`, and an instance references its bottom-level structure by address

@@ -79,16 +79,30 @@ namespace vkm
         // builds an empty one -- a scene with no geometry still needs something to bind.
         std::vector<VkmAccelerationStructureGeometry> _geometries;
         std::vector<VkmAccelerationStructureInstance> _instances;
+        /*
+        * Whether this structure can be rebuilt after creation. Off by default, because keeping a
+        * structure rebuildable costs a scratch buffer for its whole lifetime, and most geometry
+        * never moves.
+        *
+        * On for the top-level structure of any scene with a dynamic object: a falling rigid body
+        * changes its instance transform every frame, which is a top-level rebuild and nothing else
+        * -- its own geometry is unchanged in object space, so its bottom-level structure stays
+        * built once.
+        */
+        bool _allowUpdate = false;
     };
 
     /*
     * @brief A built acceleration structure.
     *
-    * @details Built synchronously by `VkmDriverBase::newAccelerationStructure`, in the same way
-    * `uploadToBuffer` uploads: a one-off command buffer submitted and waited on. That suits how it
-    * is used today -- a scene builds its structures once at load -- and keeps this slice free of
-    * command-buffer API changes. Rebuilding a moved scene per frame needs a recorded build instead,
-    * which is a later slice and is recorded in `TODO.md`.
+    * @details Built once by `VkmDriverBase::newAccelerationStructure`, synchronously, in the same
+    * way `uploadToBuffer` uploads: a one-off command buffer submitted and waited on. That is the
+    * whole lifetime of a structure whose geometry never moves.
+    *
+    * A structure created with `_allowUpdate` can also be rebuilt afterwards, which is what dynamic
+    * objects need: call `updateInstances` with the new transforms, then record
+    * `VkmCommandBufferBase::buildAccelerationStructure` in a render graph pass. It keeps its
+    * scratch buffer for that, so an updatable structure costs more memory than a static one.
     *
     * A structure is addressed by a shader through the bindless set, not by handle; see
     * `VkmBindlessResourceManagerBase`.
@@ -105,9 +119,23 @@ namespace vkm
         inline VkmAccelerationStructureType getType() const { return _info._type; }
         VkmResourceType getResourceType() const override { return VkmResourceType::AccelerationStructure; }
 
+        /*
+        * @brief Replaces the instance list a later `buildAccelerationStructure` will read.
+        *
+        * @details Top-level structures only, and only those created with `_allowUpdate`. Writes
+        * the backend's instance descriptors into the buffer the build reads; the rebuild itself is
+        * recorded separately, so a caller can update every structure and then record every build.
+        *
+        * `instances` must be no longer than the list the structure was created with: the buffer is
+        * sized once, and growing it would invalidate the descriptor the build was sized against.
+        * A shorter list is fine and leaves the extra instances out of the rebuilt structure.
+        */
+        virtual bool updateInstances(const std::vector<VkmAccelerationStructureInstance>& instances) = 0;
+
     protected:
-        // Stores `info` and the handle. The vectors are kept because a later refit needs the
-        // instance list to rewrite, and because the memory report wants the geometry count.
+        // Stores `info` and the handle. The vectors are kept because a rebuild is described by the
+        // same geometry list, and because updateInstances validates its argument against the
+        // instance count the structure was sized for.
         bool initializeAccelerationStructureCommon(VkmResourceHandle handle,
                                                    const VkmAccelerationStructureInfo& info);
 

@@ -176,6 +176,8 @@ namespace vkm
             return false;
         }
         std::memcpy(allocationInfo.pMappedData, instances.data(), static_cast<size_t>(size));
+        _instanceMapped = allocationInfo.pMappedData;
+        _instanceCapacity = static_cast<uint32_t>(instances.size());
         return true;
     }
 
@@ -205,9 +207,8 @@ namespace vkm
             return false;
         }
 
-        std::vector<VkAccelerationStructureGeometryKHR> geometries;
-        std::vector<uint32_t> primitiveCounts;
-        if (!buildGeometryDescriptions(info, &geometries, &primitiveCounts))
+        _allowUpdate = info._allowUpdate;
+        if (!buildGeometryDescriptions(info, &_geometries, &_primitiveCounts))
         {
             return false;
         }
@@ -220,10 +221,15 @@ namespace vkm
         VkAccelerationStructureBuildGeometryInfoKHR buildInfo{
             .sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
             .type          = type,
-            .flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR,
+            // PREFER_FAST_TRACE always: traversal cost dominates, and a top-level rebuild over a
+            // few thousand instances is cheap even at the highest build quality. ALLOW_UPDATE only
+            // when asked, because it constrains how the driver may lay the structure out.
+            .flags         = static_cast<VkBuildAccelerationStructureFlagsKHR>(
+                                 VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                                 (info._allowUpdate ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR : 0)),
             .mode          = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR,
-            .geometryCount = static_cast<uint32_t>(geometries.size()),
-            .pGeometries   = geometries.data(),
+            .geometryCount = static_cast<uint32_t>(_geometries.size()),
+            .pGeometries   = _geometries.data(),
         };
 
         VkAccelerationStructureBuildSizesInfoKHR sizes{
@@ -231,7 +237,7 @@ namespace vkm
         };
         vkGetAccelerationStructureBuildSizesKHR(_driverVulkan->getDevice(),
                                                 VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo,
-                                                primitiveCounts.data(), &sizes);
+                                                _primitiveCounts.data(), &sizes);
 
         if (!createStorage(sizes.accelerationStructureSize))
         {
@@ -264,8 +270,6 @@ namespace vkm
         };
         vkGetPhysicalDeviceProperties2(_driverVulkan->getPhysicalDevice(), &properties2);
 
-        VkBuffer scratchBuffer = VK_NULL_HANDLE;
-        VmaAllocation scratchAllocation = nullptr;
         {
             const VkBufferCreateInfo scratchCreateInfo{
                 .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -278,8 +282,8 @@ namespace vkm
             scratchAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
             scratchAllocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
             if (!VKM_VK_CHECK_RESULT_MSG(vmaCreateBuffer(_driverVulkan->getVmaAllocator(), &scratchCreateInfo,
-                                                         &scratchAllocInfo, &scratchBuffer,
-                                                         &scratchAllocation, nullptr),
+                                                         &scratchAllocInfo, &_scratchBuffer,
+                                                         &_scratchAllocation, nullptr),
                                          "Failed to create the acceleration structure scratch buffer"))
             {
                 return false;
@@ -288,25 +292,14 @@ namespace vkm
 
         const VkBufferDeviceAddressInfo scratchAddressInfo{
             .sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
-            .buffer = scratchBuffer,
+            .buffer = _scratchBuffer,
         };
-        VkDeviceAddress scratchAddress = vkGetBufferDeviceAddress(_driverVulkan->getDevice(), &scratchAddressInfo);
+        _scratchAddress = vkGetBufferDeviceAddress(_driverVulkan->getDevice(), &scratchAddressInfo);
         const VkDeviceSize scratchAlignment = accelerationProperties.minAccelerationStructureScratchOffsetAlignment;
         if (scratchAlignment > 0)
         {
-            scratchAddress = (scratchAddress + scratchAlignment - 1) & ~(scratchAlignment - 1);
+            _scratchAddress = (_scratchAddress + scratchAlignment - 1) & ~(scratchAlignment - 1);
         }
-
-        buildInfo.dstAccelerationStructure = _accelerationStructure;
-        buildInfo.scratchData.deviceAddress = scratchAddress;
-
-        std::vector<VkAccelerationStructureBuildRangeInfoKHR> ranges;
-        ranges.reserve(primitiveCounts.size());
-        for (uint32_t count : primitiveCounts)
-        {
-            ranges.push_back(VkAccelerationStructureBuildRangeInfoKHR{ .primitiveCount = count });
-        }
-        const VkAccelerationStructureBuildRangeInfoKHR* rangePointer = ranges.data();
 
         /*
         * Recorded into a command buffer from the engine's own pool and submitted through the
@@ -317,9 +310,7 @@ namespace vkm
         VkmCommandQueueBase* commandQueue = _driverVulkan->getCommandQueue(VkmCommandQueueType::Graphics, 0);
         VkmCommandBufferBase* commandBuffer = commandQueue->getCommandBufferPool()->allocate();
         commandBuffer->beginCommandBuffer();
-        vkCmdBuildAccelerationStructuresKHR(
-            static_cast<VkmCommandBufferVulkan*>(commandBuffer)->getVkCommandBuffer(), 1, &buildInfo,
-            &rangePointer);
+        recordBuild(static_cast<VkmCommandBufferVulkan*>(commandBuffer)->getVkCommandBuffer());
         commandBuffer->endCommandBuffer();
 
         CommandSubmitInfo submitInfo;
@@ -331,7 +322,15 @@ namespace vkm
             submitResult._gpuEventTimeline->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
         }
         commandQueue->getCommandBufferPool()->release(commandBuffer);
-        vmaDestroyBuffer(_driverVulkan->getVmaAllocator(), scratchBuffer, scratchAllocation);
+        if (!_allowUpdate)
+        {
+            // A structure that will never be rebuilt has no further use for its scratch, and it is
+            // the largest allocation here on a big scene.
+            vmaDestroyBuffer(_driverVulkan->getVmaAllocator(), _scratchBuffer, _scratchAllocation);
+            _scratchBuffer = VK_NULL_HANDLE;
+            _scratchAllocation = nullptr;
+            _scratchAddress = 0;
+        }
 
         const VkAccelerationStructureDeviceAddressInfoKHR deviceAddressInfo{
             .sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR,
@@ -339,6 +338,106 @@ namespace vkm
         };
         _deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(_driverVulkan->getDevice(), &deviceAddressInfo);
         _structureSize = sizes.accelerationStructureSize;
+        return true;
+    }
+
+    void VkmAccelerationStructureVulkan::recordBuild(VkCommandBuffer commandBuffer)
+    {
+        if (_accelerationStructure == VK_NULL_HANDLE || _scratchBuffer == VK_NULL_HANDLE)
+        {
+            // The scratch is gone on a static structure, which is exactly the case this must
+            // refuse: rebuilding one would read whatever now occupies that memory.
+            VKM_DEBUG_ERROR("recordBuild on an acceleration structure that was not created with _allowUpdate");
+            return;
+        }
+
+        VkAccelerationStructureBuildGeometryInfoKHR buildInfo{
+            .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
+            .type  = _info._type == VkmAccelerationStructureType::TopLevel
+                         ? VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR
+                         : VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+            .flags = static_cast<VkBuildAccelerationStructureFlagsKHR>(
+                         VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                         (_allowUpdate ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR : 0)),
+            // BUILD rather than UPDATE. A top-level rebuild over its instances is cheap and stays
+            // optimal; an update is faster still but degrades traversal as instances drift from
+            // where the structure was built, and the dynamic case here is a rigid body moving a
+            // long way. Refit belongs to deforming geometry, which nothing produces yet.
+            .mode                      = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR,
+            .dstAccelerationStructure  = _accelerationStructure,
+            .geometryCount             = static_cast<uint32_t>(_geometries.size()),
+            .pGeometries               = _geometries.data(),
+        };
+        buildInfo.scratchData.deviceAddress = _scratchAddress;
+
+        std::vector<VkAccelerationStructureBuildRangeInfoKHR> ranges;
+        ranges.reserve(_primitiveCounts.size());
+        for (uint32_t count : _primitiveCounts)
+        {
+            ranges.push_back(VkAccelerationStructureBuildRangeInfoKHR{ .primitiveCount = count });
+        }
+        const VkAccelerationStructureBuildRangeInfoKHR* rangePointer = ranges.data();
+        vkCmdBuildAccelerationStructuresKHR(commandBuffer, 1, &buildInfo, &rangePointer);
+    }
+
+    bool VkmAccelerationStructureVulkan::updateInstances(
+        const std::vector<VkmAccelerationStructureInstance>& instances)
+    {
+        if (_info._type != VkmAccelerationStructureType::TopLevel)
+        {
+            VKM_DEBUG_ERROR("updateInstances is only valid on a top-level acceleration structure");
+            return false;
+        }
+        if (_instanceMapped == nullptr)
+        {
+            VKM_DEBUG_ERROR("updateInstances on a structure created with no instances");
+            return false;
+        }
+        if (instances.size() > _instanceCapacity)
+        {
+            // Growing would need a bigger buffer, and the structure was *sized* against the
+            // original count -- a longer list would overrun what the build was told to expect.
+            VKM_DEBUG_ERROR("updateInstances was given more instances than the structure was created with");
+            return false;
+        }
+
+        VkmRenderResourcePool* pool = _driverVulkan->getRenderResourcePool();
+        VkAccelerationStructureInstanceKHR* destination =
+            static_cast<VkAccelerationStructureInstanceKHR*>(_instanceMapped);
+        for (size_t i = 0; i < instances.size(); ++i)
+        {
+            const VkmAccelerationStructureInstance& source = instances[i];
+            VkmAccelerationStructure* blas = pool->getResource<VkmAccelerationStructure>(source._blas);
+            if (blas == nullptr)
+            {
+                VKM_DEBUG_ERROR("updateInstances references an invalid bottom-level handle");
+                return false;
+            }
+
+            VkAccelerationStructureInstanceKHR instance{};
+            // Same transpose as createInstanceBuffer: glm is column-major, VkTransformMatrixKHR is
+            // row-major 3x4.
+            for (uint32_t row = 0; row < 3; ++row)
+            {
+                for (uint32_t column = 0; column < 4; ++column)
+                {
+                    instance.transform.matrix[row][column] = source._transform[column][row];
+                }
+            }
+            instance.instanceCustomIndex = source._instanceId & 0x00FFFFFFu;
+            instance.mask = 0xFF;
+            instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+            instance.accelerationStructureReference =
+                static_cast<VkmAccelerationStructureVulkan*>(blas)->getDeviceAddress();
+            destination[i] = instance;
+        }
+
+        // The primitive count is the instance count, so a shorter list has to shrink the build's
+        // range too -- otherwise the build reads stale descriptors past the end of what was written.
+        if (!_primitiveCounts.empty())
+        {
+            _primitiveCounts[0] = static_cast<uint32_t>(instances.size());
+        }
         return true;
     }
 
@@ -364,6 +463,8 @@ namespace vkm
             vmaDestroyBuffer(_driverVulkan->getVmaAllocator(), _instanceBuffer, _instanceAllocation);
             _instanceBuffer = VK_NULL_HANDLE;
             _instanceAllocation = nullptr;
+            _instanceMapped = nullptr;
+            _instanceCapacity = 0;
         }
     }
 
@@ -381,6 +482,13 @@ namespace vkm
             _storageAllocation = nullptr;
         }
         releaseInstanceBuffer();
+        if (_scratchBuffer != VK_NULL_HANDLE)
+        {
+            vmaDestroyBuffer(_driverVulkan->getVmaAllocator(), _scratchBuffer, _scratchAllocation);
+            _scratchBuffer = VK_NULL_HANDLE;
+            _scratchAllocation = nullptr;
+        }
+        _scratchAddress = 0;
         _deviceAddress = 0;
     }
 } // namespace vkm

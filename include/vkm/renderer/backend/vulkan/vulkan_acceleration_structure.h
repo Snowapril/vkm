@@ -27,6 +27,17 @@ namespace vkm
         ~VkmAccelerationStructureVulkan() override;
 
         bool initialize(VkmResourceHandle handle, const VkmAccelerationStructureInfo& info) override final;
+        bool updateInstances(const std::vector<VkmAccelerationStructureInstance>& instances) override final;
+
+        /*
+        * @brief Records a rebuild into `commandBuffer`. Only valid on a structure created with
+        * `_allowUpdate`, which is what kept its scratch buffer alive.
+        *
+        * Called by VkmCommandBufferVulkan::onBuildAccelerationStructure rather than directly, so
+        * the recording rules (outside a render pass, while recording) are checked once in the base
+        * class rather than per backend.
+        */
+        void recordBuild(VkCommandBuffer commandBuffer);
 
         inline VkAccelerationStructureKHR getAccelerationStructure() const { return _accelerationStructure; }
         // The value an instance descriptor or a shader-side ray query needs. Zero if the build
@@ -63,9 +74,27 @@ namespace vkm
         VmaAllocation _storageAllocation = nullptr;
 
         // Top-level only: the VkAccelerationStructureInstanceKHR array the build reads. Kept for
-        // the structure's lifetime rather than freed after the build, because a later refit
-        // rewrites it in place.
+        // the structure's lifetime rather than freed after the build, because updateInstances
+        // rewrites it in place for the next rebuild.
         VkBuffer _instanceBuffer = VK_NULL_HANDLE;
         VmaAllocation _instanceAllocation = nullptr;
+        void* _instanceMapped = nullptr;
+        uint32_t _instanceCapacity = 0;
+
+        /*
+        * Build-time working memory. Destroyed right after the initial build for a static
+        * structure; kept for the lifetime of an updatable one, because every rebuild needs it
+        * again and reallocating per frame would be the expensive part of a cheap operation.
+        */
+        VkBuffer _scratchBuffer = VK_NULL_HANDLE;
+        VmaAllocation _scratchAllocation = nullptr;
+        VkDeviceAddress _scratchAddress = 0;
+
+        // Retained so a rebuild can be described without the caller passing anything: a rebuild
+        // reads the same geometry the structure was created with, only the instance buffer's
+        // contents differ.
+        std::vector<VkAccelerationStructureGeometryKHR> _geometries;
+        std::vector<uint32_t> _primitiveCounts;
+        bool _allowUpdate = false;
     };
 } // namespace vkm
