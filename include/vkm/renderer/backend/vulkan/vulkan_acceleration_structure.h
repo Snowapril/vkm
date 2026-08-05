@@ -4,7 +4,12 @@
 
 #include <vkm/renderer/backend/common/acceleration_structure.h>
 #include <volk.h>
-#include <vk_mem_alloc.h>
+
+// Forward-declared rather than including <vk_mem_alloc.h>, matching vulkan_buffer.h. That header
+// pulls in <vulkan/vulkan.h> with the platform defines, which on Linux drags in X11 -- whose
+// `#define None 0L` then collides with VkmCullMode::None the moment this header is included ahead
+// of pipeline_state.h. It compiled fine on macOS and Windows and broke every Linux job.
+typedef struct VmaAllocation_T* VmaAllocation;
 
 namespace vkm
 {

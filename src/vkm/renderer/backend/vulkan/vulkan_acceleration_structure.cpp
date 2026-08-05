@@ -9,6 +9,11 @@
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 
+// Last, deliberately. It pulls in <vulkan/vulkan.h> with the platform defines, which on Linux
+// brings X11's `#define None 0L` with it -- so any engine header enumerating a `None` that follows
+// it stops compiling. Every engine include above is therefore already resolved by this point.
+#include <vk_mem_alloc.h>
+
 #include <cstring>
 
 namespace vkm
