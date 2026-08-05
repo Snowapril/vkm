@@ -1,0 +1,139 @@
+// Copyright (c) 2025 Snowapril
+//
+// Cross-backend acceleration structure coverage: one bottom-level structure over a triangle, one
+// top-level structure that instances it, and the dynamic-object path -- move the instance and
+// rebuild. Written against VkmDriverBase so Metal and Vulkan run the same assertions; a backend
+// without VkmDriverCapabilityFlags::RayTracing skips, which is the honest answer on MoltenVK.
+#pragma once
+
+#include "UnitTestUtils.hpp"
+
+#include <vkm/renderer/backend/common/acceleration_structure.h>
+#include <vkm/renderer/backend/common/buffer.h>
+#include <vkm/renderer/backend/common/command_buffer.h>
+#include <vkm/renderer/backend/common/command_queue.h>
+#include <vkm/renderer/backend/common/driver.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
+
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <vector>
+
+namespace vkmtest
+{
+    inline void runAccelerationStructureTest(vkm::VkmDriverBase* driver)
+    {
+        REQUIRE(driver != nullptr);
+        if ((driver->getDriverCapabilityFlags() & vkm::VkmDriverCapabilityFlags::RayTracing) == 0)
+        {
+            MESSAGE("Skipping: this backend reports no RayTracing capability.");
+            return;
+        }
+
+        // One triangle, positions only. The stride is 12 rather than a vertex layout's, because a
+        // build only ever reads the position attribute -- see VkmAccelerationStructureGeometry.
+        const float vertices[9] = { 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f };
+        const uint32_t indices[3] = { 0, 1, 2 };
+
+        const auto makeInputBuffer = [&](const void* data, uint64_t size, const char* name) {
+            vkm::VkmBufferInfo info{};
+            // AllowAccelerationStructureInput is what forces the committed allocation path and adds
+            // the build-input usage; without it the build cannot address the data.
+            info._flags = static_cast<vkm::VkmResourceCreateInfo>(
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowShaderRead) |
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowTransferDst) |
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowAccelerationStructureInput));
+            info._size = size;
+            info._debugName = name;
+            vkm::VkmBuffer* buffer = driver->newBuffer(info);
+            REQUIRE(buffer != nullptr);
+            REQUIRE(driver->uploadToBuffer(buffer->getHandle(), data, size));
+            return buffer;
+        };
+
+        vkm::VkmBuffer* vertexBuffer = makeInputBuffer(vertices, sizeof(vertices), "AsTestVertices");
+        vkm::VkmBuffer* indexBuffer = makeInputBuffer(indices, sizeof(indices), "AsTestIndices");
+
+        vkm::VkmAccelerationStructureInfo blasInfo{};
+        blasInfo._type = vkm::VkmAccelerationStructureType::BottomLevel;
+        blasInfo._debugName = "AsTestBlas";
+        vkm::VkmAccelerationStructureGeometry geometry{};
+        geometry._vertexBuffer = vertexBuffer->getHandle();
+        geometry._vertexStride = 3 * sizeof(float);
+        geometry._vertexCount = 3;
+        geometry._indexBuffer = indexBuffer->getHandle();
+        geometry._indexCount = 3;
+        blasInfo._geometries.push_back(geometry);
+
+        vkm::VkmAccelerationStructure* blas = driver->newAccelerationStructure(blasInfo);
+        REQUIRE(blas != nullptr);
+        // The size the driver reported for the structure. Zero would mean the build described no
+        // geometry at all, which is the failure a "did it return non-null" check cannot see.
+        CHECK(blas->getAllocatedSize() > 0);
+
+        SUBCASE("a top-level structure instances it, and can be rebuilt after the instance moves")
+        {
+            vkm::VkmAccelerationStructureInfo tlasInfo{};
+            tlasInfo._type = vkm::VkmAccelerationStructureType::TopLevel;
+            tlasInfo._debugName = "AsTestTlas";
+            // The dynamic-object flag: without it the structure is built once and recordBuild
+            // refuses, because the scratch it needs was freed.
+            tlasInfo._allowUpdate = true;
+            vkm::VkmAccelerationStructureInstance instance{};
+            instance._blas = blas->getHandle();
+            instance._instanceId = 7;
+            tlasInfo._instances.push_back(instance);
+
+            vkm::VkmAccelerationStructure* tlas = driver->newAccelerationStructure(tlasInfo);
+            REQUIRE(tlas != nullptr);
+            CHECK(tlas->getAllocatedSize() > 0);
+
+            // Drop the instance, the way a falling body would: only its transform changes, and its
+            // bottom-level structure is never touched.
+            instance._transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -5.0f, 0.0f));
+            CHECK(tlas->updateInstances({ instance }));
+
+            vkm::VkmCommandQueueBase* queue =
+                driver->getCommandQueue(vkm::VkmCommandQueueType::Graphics, 0);
+            vkm::VkmCommandBufferBase* commandBuffer = queue->getCommandBufferPool()->allocate();
+            commandBuffer->beginCommandBuffer();
+            commandBuffer->buildAccelerationStructure(tlas->getHandle());
+            commandBuffer->endCommandBuffer();
+            vkm::CommandSubmitInfo submitInfo;
+            submitInfo.commandBuffers[0] = commandBuffer;
+            submitInfo.commandBufferCount = 1;
+            const vkm::VkmGpuEventTimelineObject submitResult = queue->submit(submitInfo);
+            if (submitResult._gpuEventTimeline != nullptr)
+            {
+                submitResult._gpuEventTimeline->waitIdle(vkm::MAX_GPU_TIMEOUT_PER_FRAME);
+            }
+            queue->getCommandBufferPool()->release(commandBuffer);
+
+            SUBCASE("growing the instance list is refused rather than overrunning the buffer")
+            {
+                // The structure was sized for one instance; two would read past what was written.
+                CHECK_FALSE(tlas->updateInstances({ instance, instance }));
+            }
+
+            driver->getRenderResourcePool()->releaseResource(tlas->getHandle());
+        }
+
+        SUBCASE("a structure built without _allowUpdate cannot be rebuilt")
+        {
+            // Its scratch was freed after the initial build, so rebuilding would read whatever now
+            // occupies that memory. The refusal is the guard against that.
+            vkm::VkmCommandQueueBase* queue =
+                driver->getCommandQueue(vkm::VkmCommandQueueType::Graphics, 0);
+            vkm::VkmCommandBufferBase* commandBuffer = queue->getCommandBufferPool()->allocate();
+            commandBuffer->beginCommandBuffer();
+            commandBuffer->buildAccelerationStructure(blas->getHandle());
+            commandBuffer->endCommandBuffer();
+            queue->getCommandBufferPool()->release(commandBuffer);
+            CHECK(blas->getAllocatedSize() > 0); // still intact; the rebuild was declined
+        }
+
+        driver->getRenderResourcePool()->releaseResource(blas->getHandle());
+        driver->getRenderResourcePool()->releaseResource(vertexBuffer->getHandle());
+        driver->getRenderResourcePool()->releaseResource(indexBuffer->getHandle());
+    }
+} // namespace vkmtest

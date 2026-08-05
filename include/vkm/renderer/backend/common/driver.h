@@ -216,6 +216,22 @@ namespace vkm
         VkmSampler* newSampler(const VkmSamplerInfo& info);
 
         /*
+        * @brief Creates and builds an acceleration structure, or returns null.
+        *
+        * @details Builds synchronously -- a one-off command buffer, submitted and waited on, the
+        * same shape uploadToBuffer has. That fits how structures are used today (built once when a
+        * scene loads) and keeps the command-buffer API out of this. A per-frame rebuild or refit
+        * needs a *recorded* build instead; see TODO.md.
+        *
+        * Returns null, with an error logged, on a backend whose capability flags lack
+        * VkmDriverCapabilityFlags::RayTracing. Callers must check the flag rather than the result
+        * when the absence is expected -- WebGPU has no such API at all, and Vulkan-on-MoltenVK
+        * exposes no RT extensions.
+        */
+        VkmAccelerationStructure* newAccelerationStructure(const VkmAccelerationStructureInfo& info);
+
+
+        /*
         * @brief Create swapchain with window info
         */
         VkmSwapChainBase* newSwapChain();
@@ -429,21 +445,6 @@ namespace vkm
          * and friended to VkmTexture only -- views must be created via
          * VkmTexture::createView() so ownership is tracked; nothing else may call this.
          */
-        /*
-        * @brief Creates and builds an acceleration structure, or returns null.
-        *
-        * @details Builds synchronously -- a one-off command buffer, submitted and waited on, the
-        * same shape uploadToBuffer has. That fits how structures are used today (built once when a
-        * scene loads) and keeps the command-buffer API out of this. A per-frame rebuild or refit
-        * needs a *recorded* build instead; see TODO.md.
-        *
-        * Returns null, with an error logged, on a backend whose capability flags lack
-        * VkmDriverCapabilityFlags::RayTracing. Callers must check the flag rather than the result
-        * when the absence is expected -- WebGPU has no such API at all, and Vulkan-on-MoltenVK
-        * exposes no RT extensions.
-        */
-        VkmAccelerationStructure* newAccelerationStructure(const VkmAccelerationStructureInfo& info);
-
         VkmTextureView* newTextureView(const VkmTextureViewInfo& info);
 
         /*

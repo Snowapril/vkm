@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_staging_buffer.h>
 #include <vkm/renderer/backend/metal/metal_sampler.h>
+#include <vkm/renderer/backend/metal/metal_acceleration_structure.h>
 #include <vkm/renderer/backend/metal/metal_texture_view.h>
 #include <vkm/renderer/backend/metal/metal_buffer_view.h>
 #include <vkm/renderer/backend/metal/metal_gpu_heap_pool.h>
@@ -455,21 +456,7 @@ namespace vkm
 
     VkmAccelerationStructure* VkmDriverMetal::newAccelerationStructureInner()
     {
-        /*
-        * Not yet implemented. The device reports RayTracing (supportsRaytracing is true on this
-        * hardware), so unlike WebGPU this is a gap rather than an impossibility -- and the
-        * capability check in VkmDriverBase::newAccelerationStructure will *not* stop a caller
-        * here, which is why this returns null loudly.
-        *
-        * Metal 4 rebuilt the API rather than renaming it: MTL4PrimitiveAccelerationStructureDescriptor
-        * and MTL4InstanceAccelerationStructureDescriptor take MTL4BufferRange (a GPU address plus a
-        * length) instead of id<MTLBuffer>, and an instance references its bottom-level structure by
-        * address in the descriptor buffer rather than by index into an
-        * `instancedAccelerationStructures` array. The pre-Metal-4 shape does not port across by
-        * renaming, so it is being written against the MTL4 headers rather than guessed at.
-        */
-        VKM_DEBUG_ERROR("Acceleration structures are not implemented on the Metal backend yet");
-        return nullptr;
+        return new VkmAccelerationStructureMetal(this);
     }
 
     VkmResourceTableBase* VkmDriverMetal::newResourceTableInner()

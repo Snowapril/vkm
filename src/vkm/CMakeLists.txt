@@ -255,6 +255,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_resource_table.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_staging_buffer.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_sampler.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_acceleration_structure.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_texture_view.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_buffer_view.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.mm

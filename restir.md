@@ -849,11 +849,15 @@ built from `VkmSceneGeometryPool`, **5c** the TLAS as a bindless singleton plus 
       built -- and a falling rigid body moves a long way. A refit is for *deforming* geometry,
       which nothing produces yet. A bottom-level structure still builds once: a sphere's geometry
       does not change in object space, only its instance transform does.
-- [ ] **5b (rest): Metal.** Metal 4 rebuilt the API rather than renaming it —
+- [x] **5b (part): Metal.** Metal 4 rebuilt the API rather than renaming it —
       `MTL4PrimitiveAccelerationStructureDescriptor` takes `MTL4BufferRange` (GPU address + length)
-      instead of `id<MTLBuffer>`, and an instance references its bottom-level structure by address
-      in the descriptor buffer rather than by index into an `instancedAccelerationStructures`
-      array. Not a rename of the pre-Metal-4 shape.
+      instead of `id<MTLBuffer>`, and an instance names its bottom-level structure by `MTLResourceID`
+      through the `Indirect` descriptor layout rather than indexing an
+      `instancedAccelerationStructures` array. That second difference is what lets `updateInstances`
+      rewrite a buffer instead of rebuilding the descriptor. **This is the first code in Phase 5
+      that has actually run**: on Metal the test builds a bottom-level structure, instances it,
+      moves the instance and rebuilds — 21 assertions, passing. It is not in the suite yet, though;
+      see the `TODO.md` entry.
 - [ ] **5b (rest): BLAS per mesh, TLAS per scene** driven from `VkmSceneGeometryPool`, and a test.
       Neither backend available here can run one: MoltenVK reports no ray tracing, and Metal's
       implementation is the item above — so the first execution will be CI's lavapipe job.
