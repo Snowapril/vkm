@@ -162,9 +162,9 @@ namespace vkm
         const VkResult result = vkWaitSemaphores(driverVulkan->getDevice(), &waitInfo, timeoutNs);
         if (result != VK_SUCCESS)
         {
-            VKM_DEBUG_ERROR("Timed out waiting for timeline value %llu (last completed %llu)",
-                            static_cast<unsigned long long>(_lastSubmittedTimeline),
-                            static_cast<unsigned long long>(queryLastCompletedTimeline()));
+            VKM_DEBUG_ERROR(fmt::format("Timed out waiting for timeline value {} (last completed {})",
+                                        _lastSubmittedTimeline, queryLastCompletedTimeline())
+                                .c_str());
         }
     }
 
