@@ -11,6 +11,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 
 #include "TestAccelerationStructureShared.hpp"
+#include "TestSceneAccelerationStructureShared.hpp"
 
 #include <memory>
 
@@ -47,6 +48,13 @@ TEST_CASE("VkmAccelerationStructure - build, instance and rebuild on Vulkan")
     VulkanAccelerationStructureFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
     vkmtest::runAccelerationStructureTest(fixture.driver.get());
+}
+
+TEST_CASE("VkmScene - acceleration structures out of the geometry pool on Vulkan")
+{
+    VulkanAccelerationStructureFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runSceneAccelerationStructureTest(fixture.driver.get());
 }
 
 #endif // VKM_USE_VULKAN_API

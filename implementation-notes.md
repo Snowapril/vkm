@@ -2384,3 +2384,60 @@ Verified: Metal Debug **213/213 (20452 assertions)** and Release, both with Meta
 enabled and no validation output; Vulkan Debug 209/209 with `VK_LAYER_KHRONOS_validation`, reported
 as SKIP for the reason above. The four pre-existing `ImGui_ImplVulkan_Shutdown` teardown validation
 errors are unchanged.
+
+## 2026-08-06 — Acceleration structures out of the scene's own geometry pool
+
+`VkmScene::buildAccelerationStructures()` builds one bottom-level structure per pooled mesh and one
+top-level structure over the placed objects. Nothing about the pool had to change shape for it:
+`MeshRange` already carries `(vertexWordOffset, vertexCount, indexOffset, indexCount)`, which is
+exactly a triangle geometry descriptor's inputs, and position is attribute 0 of every
+`VkmVertexLayoutPreset`, so the pool's stride is the whole description a build needs. No vertex
+data is duplicated to trace it.
+
+- **Separate from `build()`, not part of it.** A scene that is only rasterized should not pay for
+  structures nothing traverses, and the call fails loudly on a driver without
+  `VkmDriverCapabilityFlags::RayTracing` rather than quietly doing nothing.
+- **The pool's buffers gain `AllowAccelerationStructureInput` only where the device reports ray
+  tracing.** On Vulkan that flag becomes
+  `VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR`, which is not a legal
+  usage on a device where `VK_KHR_acceleration_structure` was never enabled -- so adding it
+  unconditionally would have produced validation errors on MoltenVK, where nothing wants it. Where
+  it is added it costs nothing else: it also forces the committed allocation path, and these
+  buffers already ask for that, so the trap recorded in `restir.md` §8 (a pooled build input
+  inheriting the block's usage and failing with an error naming the block) never arises here.
+- **An instance's id is its object index**, which is also its `VkmObjectData` index, because
+  `_objects` is the sorted array the records were filled from. A hit therefore recovers the object
+  it belongs to with no side table.
+- **The top-level structure is rebuildable, bottom-level ones are not.** A mesh's geometry is
+  unchanged in object space no matter where its object goes; only the instance transform moves.
+  `recordAccelerationStructureUpdate()` republishes the transforms and records the rebuild.
+- `_topLevelStructurePointer` is resolved once, for the reason `_stagingPointers` already is:
+  `VkmCommandBufferBase` exposes no driver, so the per-frame update cannot look a handle up.
+
+### What the test proves, and what it does not
+
+`TestSceneAccelerationStructureShared.hpp` adds the model twice, so the pool holds two meshes and
+the second one's ranges start at non-zero offsets. **Zeroing both offsets was measured to leave the
+test passing.** A wrong-but-in-range address builds a structure over the wrong triangles, and
+nothing in this phase traverses the result -- so the offsets are unverified until Phase 5's
+ray-query gate exists. That is recorded in `TODO.md` rather than papered over with an assertion
+that would not have caught it.
+
+What it does catch, verified by sabotage: a mesh range that reaches the build empty. Forcing
+`_indexCount` to 0 makes the bottom-level build refuse and the test fails with
+`Failed to build SceneBlas[0]`. It also covers the refusal to build twice, the release path, and --
+under a validation layer, which is where a bad rebuild is reported rather than in a return value --
+the recorded rebuild after an object moves.
+
+### Deviations
+
+- **No refit.** `restir.md` §8 lists "refit on transform change; full rebuild only on topology
+  change". The rebuild-only decision made for `VkmAccelerationStructure` stands here: a top-level
+  rebuild over its instances is cheap and stays optimal, while an update degrades traversal as
+  instances drift from where the structure was built, and a falling rigid body moves a long way.
+  Refit belongs to deforming geometry, which nothing produces yet.
+- **The instance buffer is not ringed.** `recordAccelerationStructureUpdate()` writes the instance
+  descriptors from the CPU into the single buffer the recorded rebuild reads, with no per-frame
+  region and no fence, so a frame still executing its rebuild can have that buffer rewritten under
+  it. Ringing it is a change to `VkmAccelerationStructure`'s shape on both backends, well outside
+  this task; the hazard is recorded in `TODO.md` instead, next to the barrier one it sits beside.

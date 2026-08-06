@@ -861,25 +861,31 @@ built from `VkmSceneGeometryPool`, **5c** the TLAS as a bindless singleton plus 
       body for Vulkan, so the never-executed Vulkan implementation gets its first run in CI's
       lavapipe job. It skips on MoltenVK, which turns the whole Vulkan suite's local result into
       SKIP (`TODO.md`).
-- [ ] **5b (rest): BLAS per mesh, TLAS per scene** driven from `VkmSceneGeometryPool`, and a test.
-      Neither backend available here can run one: MoltenVK reports no ray tracing, and Metal's
-      implementation is the item above — so the first execution will be CI's lavapipe job.
-- [ ] Metal: `MTL4PrimitiveAccelerationStructureDescriptor` / instance descriptors via
+- [x] **5b (rest): BLAS per mesh, TLAS per scene.** `VkmScene::buildAccelerationStructures()`
+      builds one bottom-level structure per pooled mesh and one rebuildable top-level structure
+      over the placed objects; `recordAccelerationStructureUpdate()` republishes the transforms and
+      records the rebuild. Separate from `build()` so a scene that is only rasterized pays nothing.
+      An instance's id is its object index, which is also its `VkmObjectData` index, so a hit
+      recovers its object with no side table. **The test cannot verify the geometry offsets** --
+      zeroing them leaves it passing, because nothing traverses the result until the ray-query gate
+      below; recorded in `TODO.md`.
+- [x] Metal: `MTL4PrimitiveAccelerationStructureDescriptor` / instance descriptors via
       `MTL4ComputeCommandEncoder` (Metal 4 folded the AS encoder into the compute encoder)
-- [ ] Build BLAS from the existing `VkmSceneGeometryPool` so no vertex data is duplicated.
-      **Triangles only** — document why at the declaration site (§4.2). The pool's shape already
-      fits: one vertex buffer, one index buffer, and a `MeshRange` per mesh carrying
+- [x] Build BLAS from the existing `VkmSceneGeometryPool` so no vertex data is duplicated.
+      **Triangles only** — documented at the declaration site (§4.2). The pool's shape already
+      fitted: one vertex buffer, one index buffer, and a `MeshRange` per mesh carrying
       `(vertexWordOffset, vertexCount, indexOffset, indexCount)`, which is exactly a BLAS geometry
-      descriptor's inputs. **Found before starting, and it is a trap:** on Vulkan a buffer only
-      picks up `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` on the *committed* path
-      (`vulkan_buffer.cpp:123-130`); a buffer small enough to be sub-allocated by
-      `allocateFromBufferPool` returns before that and inherits the pool block's usage instead. A
-      BLAS build input needs both that bit and
-      `VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR` on the underlying
-      `VkBuffer`, so 5b has to either add both to the pool blocks or keep geometry-pool buffers off
-      the pooled path. Deciding that quietly either way would produce a validation error far from
-      its cause.
-- [ ] Refit on transform change; full rebuild only on topology change
+      descriptor's inputs. **The trap found before starting did not fire**, and here is why: on
+      Vulkan a buffer only picks up `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` on the *committed*
+      path (`vulkan_buffer.cpp:123-130`), and the geometry pool already asks for
+      `VkmMemoryPlacementHint::ForceCommitted` for an unrelated reason (a bindless registration
+      must see offset 0). Adding `AllowAccelerationStructureInput` therefore only adds the
+      build-input usage bit — and it is added **only where the device reports ray tracing**, since
+      that usage is illegal on a device where `VK_KHR_acceleration_structure` was never enabled.
+- [ ] ~~Refit on transform change~~ **Decided: rebuild only.** A top-level rebuild over its
+      instances is cheap and stays optimal, while an update degrades traversal as instances drift
+      from where the structure was built. Refit belongs to deforming geometry, which nothing
+      produces yet.
 - [ ] Bind one TLAS as a bindless singleton — extend `VkmBindlessSingletonBuffer`, all three
       backends' managers, and `vkm_bindless.hlsli`. **On Metal it must also get an
       `add_msl_resource_binding` entry** (`basetype = SPIRType::AccelerationStructure`, `count = 1`,
@@ -1277,3 +1283,4 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-08-04 | 4 | **The GI was green because Metal 4 render passes had no barriers.** Metal 4 does no automatic hazard tracking and the backend only emitted barriers around compute dispatches and blits -- nothing around render passes. The handoff was meant to come from a compute subgraph calling `barrierTextureForShaderRead`, which records nothing on Metal and binds no pipeline, so no encoder opened and no barrier ever issued. The probe blend read the capture atlas mid-write; because hysteresis *is* the blend hardware, `NaN * 0 + src * 1` is still NaN, so a poisoned cell never recovered. The irradiance atlas held 273k NaN in R and B against 21k in G -- which tone-maps to exactly (0,255,0) -- and the distance atlas negative means, so the Chebyshev test rejected every probe and the indirect term collapsed to zero. Render passes now carry the same barrier pair the compute path uses. Both atlases read back with zero NaN; 900 frames cost 4m34s against 4m31s. |
 | 2026-08-04 | 5 | **Two Phase 5 pre-decisions settled (§12).** CI gains one `ubuntu-24.04` Vulkan job for lavapipe ray-query coverage rather than moving the matrix -- 24.04 carries Mesa 25.x so no PPA is needed, but noble has neither gcc-10/11 nor clang-11/12, so the eight 22.04 jobs stay and `dxc-linux` stays pinned to v1.8 against the other platforms' v1.9. Direct lighting at the secondary hit will be plain NEE behind a `shadeSecondaryHit()` seam, not ReSTIR DI first: the scene has one directional light, and many-light resampling is the whole point of DI, so building it now would be building it blind. |
 | 2026-08-06 | 5 | **The Metal acceleration structure test is in the suite.** Registering it had been killing the whole Metal run with mimalloc heap assertions, which were entirely the backward-cpp signal-handler recursion already in `TODO.md`. The real abort was Metal's debug layer on `buildAccelerationStructure:` with a nil scratch buffer: `recordBuild` passed an empty `MTL4BufferRange` where the Vulkan side has always refused outright, because a static structure's scratch is freed after its initial build. It passed standalone only because `MTL_DEBUG_LAYER=1` comes from `run_tests.py` and not from the fixture. A Vulkan fixture over the same shared body was added at the same time, so the Vulkan implementation -- which has never executed anywhere -- runs for the first time in CI's lavapipe job. Metal 213/213 (20452 assertions) Debug and Release, validation clean; Vulkan 209/209, reported SKIP because the shared body honestly skips without ray tracing. |
+| 2026-08-06 | 5 | **A scene builds its own acceleration structures.** `VkmScene::buildAccelerationStructures()` makes one bottom-level structure per pooled mesh and one rebuildable top-level structure over the objects, described as ranges into the geometry pool's existing buffers -- no vertex data duplicated. The pooled-buffer trap §8 warned about never fired: the pool already forces the committed allocation path for a bindless reason, so `AllowAccelerationStructureInput` only adds the build-input usage bit, and it is added only where the device reports ray tracing (that usage is illegal without `VK_KHR_acceleration_structure` enabled, which is every MoltenVK device here). The honest limit is that **the test cannot see whether the geometry offsets are right**: zeroing both leaves it passing, because a wrong-but-in-range address builds over the wrong triangles and nothing traverses the result until 5c's ray-query gate. What it does catch, by sabotage, is a mesh range reaching the build empty. Metal 214/214 (20489 assertions) Debug and Release, validation clean. |

@@ -22,6 +22,10 @@ namespace vkm
     class VkmPipelineStateBase;
     class VkmPipelineStateManager;
     class VkmStagingBuffer;
+    // Forward-declared rather than included: only a pointer and a vector-of-them appear here, so
+    // the acceleration structure header stays out of everything that draws a scene.
+    class VkmAccelerationStructure;
+    struct VkmAccelerationStructureInstance;
 
     /*
     * @brief Per-object GPU record.
@@ -199,6 +203,37 @@ namespace vkm
         // Safe to call without idling the GPU: releases go through the deferred reclaimer.
         void destroy(VkmDriverBase* driver);
 
+        /*
+        * @brief Builds one bottom-level structure per pooled mesh and one top-level structure over
+        * the placed objects. Must follow build(); blocking, like it.
+        *
+        * @details No vertex data is duplicated to trace it: a bottom-level structure is described
+        * as a range into the geometry pool's own buffers, which is what
+        * `VkmSceneGeometryPool::MeshRange` already carries. Position is the first attribute of
+        * every vertex layout preset, so the pool's stride is all a triangle geometry needs.
+        *
+        * Separate from build() rather than part of it, because a scene that is only rasterized
+        * should not pay for structures nothing traverses. Fails on a driver without
+        * `VkmDriverCapabilityFlags::RayTracing` rather than silently doing nothing -- a caller
+        * that asks for this has to be told it did not happen.
+        *
+        * The top-level structure is created rebuildable: an object that moves changes its instance
+        * transform, and nothing else. Bottom-level structures are built once, since a mesh's
+        * geometry is unchanged in object space no matter where the object goes.
+        */
+        bool buildAccelerationStructures(VkmDriverBase* driver, std::string* outError);
+
+        /*
+        * @brief Republishes the object transforms and records the top-level rebuild.
+        *
+        * Must be recorded outside a render pass. Rebuilds unconditionally: which frames need one
+        * is the caller's decision, and a top-level rebuild over the instance list is cheap.
+        */
+        void recordAccelerationStructureUpdate(VkmCommandBufferBase* commandBuffer);
+
+        // Invalid until buildAccelerationStructures() succeeds. This is what a ray query traverses.
+        inline VkmResourceHandle getTopLevelAccelerationStructure() const { return _topLevelStructure; }
+
         // Widens the dirty range recordUpdate() uploads on the next frame.
         void setObjectTransform(uint32_t objectIndex, const glm::mat4& worldTransform);
 
@@ -319,6 +354,11 @@ namespace vkm
         // Assigns each batch its word regions and returns the two buffers' sizes in bytes.
         void assignBatchRegions(uint64_t* outVisibleListSize, uint64_t* outArgumentSize);
 
+        // One instance per placed object whose mesh has a bottom-level structure, in object order.
+        void collectInstances(std::vector<VkmAccelerationStructureInstance>* outInstances) const;
+        // No-op when nothing was built, so destroy() and the build's own rollback share it.
+        void releaseAccelerationStructures(VkmDriverBase* driver);
+
         std::array<std::unique_ptr<VkmSceneGeometryPool>, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _pools;
         std::vector<MeshEntry> _meshEntries;
         std::vector<VkmSceneObject> _objects;
@@ -363,6 +403,16 @@ namespace vkm
 
         VkmPipelineStateBase* _cullPipeline = nullptr;
         VkmPipelineStateBase* _emitPipeline = nullptr;
+
+        // Ray tracing, and empty unless buildAccelerationStructures() was called. One bottom-level
+        // structure per mesh entry (1:1 with _meshEntries), instanced by the top-level one; an
+        // instance's id is its object index, which is also its VkmObjectData index, so a hit
+        // recovers the object it belongs to without a side table.
+        std::vector<VkmResourceHandle> _meshStructures;
+        VkmResourceHandle _topLevelStructure{ VKM_INVALID_RESOURCE_HANDLE };
+        // Resolved once, for the same reason _stagingPointers is: the per-frame update runs from a
+        // VkmCommandBufferBase, which exposes no driver to look the handle up through.
+        VkmAccelerationStructure* _topLevelStructurePointer = nullptr;
 
         /*
         * The device-side ObjectData buffer is a single buffer at a fixed bindless binding, so an

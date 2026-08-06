@@ -10,6 +10,7 @@
 #include <vkm/renderer/backend/metal/metal_driver.h>
 
 #include "TestAccelerationStructureShared.hpp"
+#include "TestSceneAccelerationStructureShared.hpp"
 
 #include <memory>
 
@@ -42,6 +43,13 @@ TEST_CASE("VkmAccelerationStructure - build, instance and rebuild on Metal")
     MetalAccelerationStructureFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
     vkmtest::runAccelerationStructureTest(fixture.driver.get());
+}
+
+TEST_CASE("VkmScene - acceleration structures out of the geometry pool on Metal")
+{
+    MetalAccelerationStructureFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runSceneAccelerationStructureTest(fixture.driver.get());
 }
 
 #endif // VKM_USE_METAL_API
