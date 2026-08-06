@@ -58,6 +58,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/gbuffer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/path_tracer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/indirect_pass.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/restir.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/gi_composite.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/probe_volume.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/screenshot.h
@@ -116,6 +117,7 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/gbuffer.cpp
     ${SRC_DIR}/vkm/renderer/path_tracer.cpp
     ${SRC_DIR}/vkm/renderer/indirect_pass.cpp
+    ${SRC_DIR}/vkm/renderer/restir.cpp
     ${SRC_DIR}/vkm/renderer/gi_composite.cpp
     ${SRC_DIR}/vkm/renderer/probe_volume.cpp
     ${SRC_DIR}/vkm/renderer/probe_volume_updater.cpp

@@ -989,19 +989,27 @@ structure now registers itself before recording its build.
 ### Phase 8 — ReSTIR GI core
 Incremental, with measured RelMSE against Phase 6 at every sub-step.
 
-- [ ] **8.1 Reservoir buffer.** RTXDI-style packing is worth copying:
-      `position` fp32 (feeds a `1/d²` Jacobian — fp16 is not viable), `normal` as octahedral
-      `snorm2x16`, `radiance` as **LogLuv or RGB9E5** (not fp16×3 — HDR indirect clips and
-      quantizes badly), `weight` fp32, and `M`/`age` as 8-bit fields (so `M ≤ 255`, `age ≤ 255`).
-      ~32 B/reservoir; ~16 MB per slice at half-res 1080p.
-      Use **one buffer with multiple array slices** and per-pass input/output slice indices rather
-      than separate buffers — it makes bypass/validation modes trivial.
-      **Triple-buffering hazard:** `FRAME_COUNT = 3` (`base/common.h:21`), so frames N-1/N-2 may
-      still be executing when N is recorded. Either allocate `FRAME_COUNT` slices or rely on the
-      per-slot `ensureCompleted()` deliberately — decide and document before writing the passes.
+- [x] **8.1 Reservoir buffer.** Packed as planned: `position` fp32x3, `normal` octahedral
+      snorm16x2, `radiance` RGB9E5, `weight` fp32, `M`/`age` 8 bits each — 32 B in eight u32
+      words, with one reserved for 8.4 to cache a target pdf in. One buffer, `kVkmReservoirSliceCount`
+      slices, per-pass input/output slice indices in the push constants.
+      **The triple-buffering question is answered, not deferred:** two slices, not `FRAME_COUNT`,
+      because `VkmRenderGraph` already calls `ensureCompleted()` on a frame slot before recording
+      into it again — the same guarantee set 1's per-slot region and the push-constant ring rely
+      on. So the count is set by what resampling needs (a read slice and a write slice), not by
+      how many frames are in flight. Recorded at `kVkmReservoirSliceCount`.
+      **RGB9E5 earned its own lesson:** the exponent bias is 15, and writing 16 does *not* look
+      like a bug — pack and unpack share the scale, so small values round-trip perfectly and every
+      channel whose mantissa lands above 511 silently clamps. It cost 7.4% of the image and read
+      exactly like plausible quantization loss.
+- [x] **8.3 Sample generation pass** — one traced ray, one fresh reservoir (`M = 1`, `age = 0`),
+      `W = 1/p_source`. Plus the resolve half of 8.6 (`f_s · cos · L · W`, no final visibility ray
+      — the sample was traced from this pixel, so it is visible by construction until spatial reuse
+      starts handing pixels a neighbour's).
 - [ ] **8.2 Neighbour offset LUT** — a small buffer of precomputed low-discrepancy disk offsets,
-      indexed with a mask. Cheap, avoids per-pixel disk sampling, gives a stable pattern
-- [ ] **8.3 Sample generation pass** — trace one ray, fill a fresh reservoir (`c = 1`, `age = 0`)
+      indexed with a mask. Cheap, avoids per-pixel disk sampling, gives a stable pattern.
+      Deliberately not built yet: nothing reads it until 8.4, and a buffer with no consumer is the
+      speculative kind of code this repo keeps out. It lands with the pass that indexes it.
 - [ ] **8.4 Spatial resampling first** (easier to validate than temporal — no scene change between
       samples): merge `k` neighbours (start 3–5, radius ~30 px) with normal/depth/material
       rejection (relative depth ~10%), the reconnection Jacobian, Jacobian validation, and a
@@ -1350,3 +1358,4 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-08-06 | 6 | **The reference path tracer, and a furnace gate that is exact rather than convergent.** Brute-force accumulating path tracer over Phase 5's ray query, reading the scene entirely through sets 0 and 1. The furnace fixture's answer is analytic: a convex diffuse body in a uniform environment reflects exactly `albedo * L`, and cosine-weighted Lambertian sampling cancels the cosine against the pdf so the throughput multiplier is the albedo with no pdf division anywhere -- which makes the estimator **zero-variance** on this scene and lets the tolerance be 1e-3. An albedo-1 body is invisible, so the white furnace assertion needs no knowledge of where it projects. Two things had to move: ray-tracing PSOs cannot sit in `resources/Pipelines/Engine/` (loaded wholesale at startup on every backend, and compiled for every backend -- MoltenVK cannot create one and WebGPU cannot compile one), and **Metal never bound descriptor set 1 for compute** -- the graphics branch did and said in a comment that it did so for every pipeline, but the scene's cull and emit passes read no camera so nothing had noticed. Same gap WebGPU had on 2026-08-02. Sabotage-verified at 5% energy created per bounce. Metal 217/217, validation clean. |
 | 2026-08-06 | 7 | **1-spp indirect, and the two bugs its convergence gate found.** A deferred GI pass taking its primary hit from the G-buffer and continuing through the same `vkmTracePath` the reference uses, so accumulating it must converge to the reference. The shared seam is `vkm_path_tracing.hlsli`: `VkmSurfaceHit` (the LoD-forward hit encoding), `vkmVertexMapping()` and `vkmShadeSecondaryHit()`. The gate's first honest run scored MSE 0.030 -- **the G-buffer's geometric normal pointed away from the camera**, so every secondary ray started inside its own wall; nothing had ever consumed that channel, and the first pass to offset a ray along it is what found it (0.030 to 6.2e-4). Before that it scored a *perfect* MSE 0 while the reference was empty: both passes loaded the same PSO directory, and `loadPipelineState` **replaces** an entry rather than skipping it, destroying the pipeline the other held. The test now proves both images non-empty before comparing, because a metric that returns 0 for no-data makes a missing estimator look perfect. Sample count chosen so the noise floor (2.4e-4) sits below a one-bounce error (7.3e-4). Metal 218/218; the gate itself is Vulkan-registered pending an unresolved Metal validation-layer issue. |
 | 2026-08-06 | 7 | **The third bug the convergence gate found: an acceleration structure built before it was resident.** `VkmDriverBase::newAccelerationStructure` calls `onResourceInitialized()` -- which is what adds a resource to Metal's residency set -- *after* `initialize()` returns, and `initialize()` is where the synchronous build happens. Every structure was therefore built while unmapped: a bottom-level build wrote into memory that was not resident, and a top-level build read bottom-level structures that were not either. It worked whenever that memory happened to be resident anyway, so it depended on what the process had allocated first and Metal reported nothing either way -- the gate saw it as zero ray hits under `MTL_DEBUG_LAYER=1` only after another test case had run. What cracked it: rebuilding the freshly built structure once made it work every time, while a full `waitIdle` did not and the instance ids were byte-identical at build and rebuild, so it was neither synchronization nor contents. The structure now registers itself before recording its build, its scratch and instance buffers too, and the synchronous build records through the same `buildAccelerationStructure` entry point the per-frame rebuild uses. Gate registered on both backends; Metal 218/218 under validation. |
+| 2026-08-06 | 8 | **8.1 + 8.3, and the packing bug the sub-step gate caught.** A 32-byte reservoir (fp32 position, octahedral snorm16 normal, RGB9E5 radiance, fp32 W, 8-bit M and age), one buffer with slices and per-pass slice indices, one traced sample per pixel written into it, and a resolve that shades `f_s * cos * L * W` from it. Two slices rather than `FRAME_COUNT`, because `VkmRenderGraph`'s per-slot `ensureCompleted()` already answers the frames-in-flight question -- the count is set by what resampling needs. **The gate is 'is it the same estimator', not 'does it converge':** with one candidate RIS reduces to `W = 1/p_source`, and the pass shares gi_indirect's random stream on purpose, so the two see the same direction at every pixel and may differ only by the reservoir round trip. It scored MSE 5.5e-4 -- 7.4% dark -- because RGB9E5's exponent bias was written 16 instead of 15. That is not a visible off-by-one: pack and unpack share the scale, so small values round-trip perfectly and every channel whose mantissa lands above 511 silently clamps. Fixed: **9.7e-7**, two orders under the convergence gate. Slice index sabotage-verified. |

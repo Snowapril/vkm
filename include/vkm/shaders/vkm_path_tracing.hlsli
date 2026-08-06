@@ -161,9 +161,20 @@ float3 vkmOffsetRayOrigin(float3 position, float3 normal, float rayT)
     /*                                                                                            */ \
     /* A path still alive after `maxBounces` is dropped, and its energy with it: there is no      */ \
     /* Russian roulette, so that count is a bias knob and not only a cost one (TODO.md).          */ \
-    float3 vkmTracePath(float3 origin, float3 direction, uint maxBounces,                            \
-                        float3 environment, uint materialPoolSlot, inout uint rng)                   \
+    /*                                                                                            */ \
+    /* Reports the first hit alongside the radiance, which is what a reservoir needs: the sample  */ \
+    /* it carries IS that hit, and the radiance is what leaves it towards the shading point.      */ \
+    /* Sharing the loop rather than tracing the first ray twice is the point -- two copies would  */ \
+    /* be two chances to disagree about the offset, the two-sidedness or the bounce count.        */ \
+    /*                                                                                            */ \
+    /* `outHit` is false when the first ray escaped; `outFirst` is then untouched and the caller  */ \
+    /* decides what an environment sample means to it.                                           */ \
+    float3 vkmTracePathFirstHit(float3 origin, float3 direction, uint maxBounces,                    \
+                                float3 environment, uint materialPoolSlot, inout uint rng,           \
+                                out bool outHit, out VkmSurfacePoint outFirst)                       \
     {                                                                                                \
+        outHit = false;                                                                              \
+        outFirst = (VkmSurfacePoint)0;                                                                \
         float3 radiance = float3(0.0, 0.0, 0.0);                                                     \
         float3 throughput = float3(1.0, 1.0, 1.0);                                                   \
                                                                                                      \
@@ -183,6 +194,14 @@ float3 vkmOffsetRayOrigin(float3 position, float3 normal, float rayT)
             {                                                                                         \
                 surface.geometricNormal = -surface.geometricNormal;                                        \
             }                                                                                          \
+            /* Reported AFTER the flip, so a reservoir's sample normal faces the shading point   */    \
+            /* it will be resampled towards -- which is the orientation a neighbour rejection    */    \
+            /* test and a cosine both want.                                                      */    \
+            if (bounce == 0)                                                                          \
+            {                                                                                          \
+                outHit = true;                                                                         \
+                outFirst = surface;                                                                    \
+            }                                                                                          \
                                                                                                        \
             const VkmMaterial material = vkmLoadMaterial(materialPoolSlot, surface.materialIndex);       \
             radiance += throughput * vkmShadeSecondaryHit(surface, material, -direction);                \
@@ -192,6 +211,16 @@ float3 vkmOffsetRayOrigin(float3 position, float3 normal, float rayT)
             direction = vkmCosineHemisphere(surface.geometricNormal, vkmRandomFloat2(rng));              \
         }                                                                                              \
         return radiance;                                                                               \
+    }                                                                                                  \
+                                                                                                       \
+    /* The same estimator without the first-hit report, for callers that only want the radiance. */    \
+    float3 vkmTracePath(float3 origin, float3 direction, uint maxBounces,                              \
+                        float3 environment, uint materialPoolSlot, inout uint rng)                     \
+    {                                                                                                  \
+        bool ignoredHit;                                                                               \
+        VkmSurfacePoint ignoredSurface;                                                                \
+        return vkmTracePathFirstHit(origin, direction, maxBounces, environment, materialPoolSlot,      \
+                                    rng, ignoredHit, ignoredSurface);                                  \
     }
 
 #endif // VKM_PATH_TRACING_HLSLI

@@ -2750,3 +2750,63 @@ With that, the gate is registered on both backends and the Metal suite is green 
   reconnection-ray `t_max = (1 - eps) * distance` is documented at `vkmOffsetRayOrigin` but
   unimplemented, because nothing casts a shadow or reconnection ray until Phase 8. Recorded in
   `TODO.md` rather than written blind and left untested.
+
+## 2026-08-06 — Phase 8.1 and 8.3: the reservoir, and the packing bug its own gate caught
+
+`vkm_reservoir.hlsli` plus `VkmRestirPass`: a 32-byte reservoir, one buffer of screen-sized slices
+with per-pass slice indices, a generation pass that writes one traced sample per pixel into it, and
+a resolve that shades `f_s · cos · L · W` from it. No resampling yet -- 8.2, 8.4 and 8.5 are the
+next steps -- and that is precisely what makes this step checkable.
+
+### The gate is "is it the same estimator", not "does it converge"
+
+With a single candidate, RIS reduces to the estimator it resamples: `w = p̂/p_source`,
+`w_sum = w`, `W = w_sum / (M · p̂) = 1/p_source`. So `f_s · cos · L · W` is `albedo · L`, which is
+Phase 7's 1-spp pass exactly. The generation pass also draws from **gi_indirect's random stream on
+purpose** -- the two never run in the same frame, one replaces the other, so the usual
+distinct-pass-id rule does not apply -- and therefore sees the same direction at every pixel of
+every sample.
+
+The two images can then differ only by what the reservoir round trip loses. That turns a
+convergence test into an equality test, checked two orders of magnitude tighter: MSE 9.7e-7 against
+the 6e-4 the convergence gate allows.
+
+### RGB9E5's exponent bias is 15, and writing 16 does not look like a bug
+
+The first run scored **MSE 5.5e-4 and a 7.4% dark image**. The cause was one constant: the shared
+exponent's bias is 15, and the pack/unpack pair had 16.
+
+What makes it worth writing down is *why it was invisible*. Pack and unpack use the same scale, so
+a wrong bias round-trips **perfectly** for any value whose mantissa fits -- and only clamps the ones
+above 511, which is the top half of every exponent range. The failure is therefore silent, purely
+energy-losing, proportional to brightness, and looks exactly like plausible quantization loss from
+a 9-bit mantissa. Nothing but a numeric comparison against a known-equal estimator would have
+separated it from "well, it is a lossy format".
+
+Fixed to the OpenGL spec's formulation (`exponent = floor(log2(max)) + 1 + bias`, scale
+`2^(exponent - bias - 9)`), with the carry check widened from `== 512` to `>= 512`. 5.5e-4 → 9.7e-7,
+and the mean radiances now agree to 0.09%.
+
+### The triple-buffering question, answered rather than deferred
+
+`restir.md` §8.1 asked for a decision before the passes were written. Two slices, not
+`FRAME_COUNT`: a pass reads one slice and writes another, which is what 8.4 needs, and the
+frames-in-flight hazard is already answered by `VkmRenderGraph` calling `ensureCompleted()` on a
+frame slot before recording into it again -- the same guarantee descriptor set 1's per-slot region
+and the push-constant ring rely on. So the slice count is set by what resampling needs, not by how
+many frames are in flight.
+
+The test uses **slice 1, not slice 0**, for both input and output. With only slice 0 exercised, a
+pass that ignored the slice index entirely would still pass; sabotaging generation to write slice 0
+while resolve reads slice 1 leaves the resolve reading zeros and fails, which is what shows the
+index is really the mechanism.
+
+### Deviations
+
+- **8.2 (the neighbour offset LUT) is deliberately not built.** It has no consumer until 8.4, and a
+  buffer nothing reads is the speculative code `CLAUDE.md` §2 forbids. Noted in `restir.md` §8 so
+  it lands with the pass that indexes it rather than being forgotten.
+- **`vkmTracePath` gained a first-hit-reporting variant** rather than the reservoir pass tracing
+  the first ray itself. Two copies of that loop would be two chances to disagree about the ray
+  offset, the two-sidedness or the bounce count -- and the whole value of this sub-step's gate
+  rests on the two estimators being identical apart from the reservoir.

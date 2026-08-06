@@ -30,6 +30,7 @@
 #include <vkm/renderer/gbuffer.h>
 #include <vkm/renderer/indirect_pass.h>
 #include <vkm/renderer/path_tracer.h>
+#include <vkm/renderer/restir.h>
 #include <vkm/renderer/scene/gltf_importer.h>
 #include <vkm/renderer/scene/scene.h>
 
@@ -155,6 +156,10 @@ namespace vkmtest
         REQUIRE_MESSAGE(indirect.initialize(driver, &manager, gbuffer, detail::kCornellSize,
                                             detail::kCornellSize, &error),
                         error);
+        vkm::VkmRestirPass restir;
+        REQUIRE_MESSAGE(restir.initialize(driver, &manager, gbuffer, detail::kCornellSize,
+                                          detail::kCornellSize, &error),
+                        error);
 
         const vkm::VkmPathTraceOptions referenceOptions{
             /*_maxBounces=*/detail::kIndirectBounces + 1,
@@ -166,6 +171,18 @@ namespace vkmtest
         const vkm::VkmIndirectOptions indirectOptions{
             detail::kIndirectBounces,
             glm::vec3(detail::kEnvironmentRadiance)
+        };
+        /*
+        * Phase 8.1/8.3: the same estimator again, but routed through a reservoir. Slice 1 rather
+        * than slice 0 on purpose -- with only one slice exercised, a pass that ignored the slice
+        * index entirely would still pass, and the index is the mechanism 8.4 will read one slice
+        * and write another through.
+        */
+        const vkm::VkmRestirOptions restirOptions{
+            detail::kIndirectBounces,
+            glm::vec3(detail::kEnvironmentRadiance),
+            /*_outputSlice=*/1,
+            /*_inputSlice=*/1
         };
 
         // One G-buffer fill: the camera and the scene are static, so the indirect pass reads the
@@ -210,9 +227,12 @@ namespace vkmtest
             for (vkm::VkmResourceHandle handle : referenced) { subGraph->addReferencedResource(handle); }
             subGraph->addReferencedResource(reference.getAccumulationBuffer());
             subGraph->addReferencedResource(indirect.getAccumulationBuffer());
+            subGraph->addReferencedResource(restir.getAccumulationBuffer());
+            subGraph->addReferencedResource(restir.getReservoirBuffer());
             subGraph->setComputeCallback([&](vkm::VkmCommandBufferBase* commandBuffer) {
                 reference.recordAccumulate(commandBuffer, referenceOptions);
                 indirect.recordAccumulate(commandBuffer, indirectOptions);
+                restir.recordAccumulate(commandBuffer, restirOptions);
             });
             renderGraph.compile();
             renderGraph.execute();
@@ -220,11 +240,14 @@ namespace vkmtest
         }
         CHECK(reference.getSampleCount() == detail::kCornellSamples);
         CHECK(indirect.getSampleCount() == detail::kCornellSamples);
+        CHECK(restir.getSampleCount() == detail::kCornellSamples);
 
         const std::vector<float> referenceImage = detail::readAccumulationBuffer(
             driver, reference.getAccumulationBuffer(), detail::kCornellSize, detail::kCornellSize);
         const std::vector<float> indirectImage = detail::readAccumulationBuffer(
             driver, indirect.getAccumulationBuffer(), detail::kCornellSize, detail::kCornellSize);
+        const std::vector<float> restirImage = detail::readAccumulationBuffer(
+            driver, restir.getAccumulationBuffer(), detail::kCornellSize, detail::kCornellSize);
         const uint32_t pixelCount = detail::kCornellSize * detail::kCornellSize;
 
         /*
@@ -290,6 +313,41 @@ namespace vkmtest
         CHECK(mse < 6.0e-4f);
         CHECK(relativeMse < 4.0e-3f);
 
+        /*
+        * Phase 8.1/8.3's own gate, and it is much sharper than the one above.
+        *
+        * With a single candidate, RIS reduces to the estimator it resamples: W = 1/p_source, and
+        * `f_s * cos * L * W` is `albedo * L`. The reservoir pass also draws from gi_indirect's
+        * random stream on purpose, so the two see the *same* direction at every pixel of every
+        * sample. Everything about the two images therefore has to agree except what the reservoir
+        * round trip loses -- RGB9E5 radiance, an octahedral snorm16 normal, and a direction
+        * recovered from a stored position rather than carried.
+        *
+        * So this is not "does it converge to the same thing" but "is it the same estimator", and
+        * it is checked two orders of magnitude tighter than the convergence gate above. A wrong
+        * W, a dropped pi, a mis-packed exponent or a slice index nobody read all move it well
+        * past this.
+        */
+        uint32_t restirCovered = 0;
+        const double restirBrightness = summarize(restirImage, &restirCovered);
+        CHECK(restirCovered == covered);
+        CHECK(restirBrightness > 0.05);
+
+        const float packingMse =
+            vkm::vkmComputeImageMse(indirectImage.data(), restirImage.data(), pixelCount);
+        const float packingRelativeMse =
+            vkm::vkmComputeImageRelativeMse(indirectImage.data(), restirImage.data(), pixelCount);
+        MESSAGE("reservoir vs 1-spp: MSE " << packingMse << ", RelMSE " << packingRelativeMse
+                                           << ", mean red " << restirBrightness);
+        // Measured at 9.7e-7 / 1.8e-5, with the mean radiances 0.09% apart -- the whole of which
+        // is RGB9E5's nine mantissa bits. Three times that, so quantization noise cannot trip it,
+        // and still two orders of magnitude under the convergence gate above. An RGB9E5 exponent
+        // bias off by one -- which is what this caught on its first run -- scored 5.5e-4, and a
+        // slice index nobody read leaves the resolve reading zeros.
+        CHECK(packingMse < 3.0e-6f);
+        CHECK(packingRelativeMse < 6.0e-5f);
+
+        restir.destroy(driver);
         indirect.destroy(driver);
         reference.destroy(driver);
         gbuffer.destroy();

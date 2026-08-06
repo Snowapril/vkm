@@ -43,6 +43,7 @@ set(SRCS
     ${SRC_DIR}/TestBufferHostWrite.cpp
     ${SRC_DIR}/TestAccelerationStructure.cpp
     ${SRC_DIR}/TestPathTracerMetrics.cpp
+    ${SRC_DIR}/TestReservoirLayout.cpp
 )
 
 if (VKM_USE_METAL_API)

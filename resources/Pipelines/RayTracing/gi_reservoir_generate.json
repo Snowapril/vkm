@@ -1,0 +1,12 @@
+{
+    "name": "gi_reservoir_generate_pso",
+    "shaders": {
+        "compute": { "filepath": "gi_reservoir_generate.hlsl", "entry_point": "CSMain", "ray_query": true }
+    },
+    "per_pass_resources": [
+        { "binding": 0, "type": "sampled_texture" },
+        { "binding": 1, "type": "sampled_texture" },
+        { "binding": 2, "type": "storage_buffer" }
+    ],
+    "options": { "default": {} }
+}
