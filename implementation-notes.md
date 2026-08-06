@@ -2903,3 +2903,24 @@ goes on to destroy resources on the assumption that the wait meant something.
 Covered by `TestEngineSetup.cpp`'s "the submitted timeline trails the allocated one", which is
 device-free and fails on the pre-fix semantics (verified by sabotage: two of its six assertions
 fail when `getLastSubmittedTimeline()` returns the allocated value).
+
+### The reclaimer had nothing to defer on
+
+The timeline fix above did not clear the lavapipe failure: the same two VUIDs and the same SIGSEGV
+came back, now with 12 assertions run -- exactly the pass-1/pass-2 boundary of
+`runAccelerationStructureTest`, i.e. the moment its `requestRelease` calls land.
+
+`VkmRenderResource::recordUsage` was called from one place, `VkmRenderGraph::execute()`, for
+resources a pass declared with `addReferencedResource`. An acceleration structure built through a
+bare queue submit -- which is how `initialize()` builds and how the test rebuilds -- therefore
+reached the reclaimer with an empty `_waitsOn`, and `isEntryReady` returns true for an entry with
+no usages. The "deferred" release was not deferred by anything; the worker destroyed the structure
+on its next 4 ms poll.
+
+`buildAccelerationStructure` now records usage on the structure and on the inputs the build reads
+(the instanced bottom-level structures, or the vertex and index buffers). Beyond making the
+reclaimer wait for something real, this puts a `vkGetSemaphoreCounterValue` -- `isEntryReady`'s
+`queryLastCompletedTimeline()` -- in front of the destroy, which is what gives the validation
+layer an opportunity to retire the submission. Nothing on the previous path ever queried the
+semaphore, which is the most likely reason the structures were still reported in use even though
+every submit had been waited on by then.
