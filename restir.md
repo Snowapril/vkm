@@ -924,13 +924,32 @@ change.
 
 ### Phase 6 — Reference path tracer
 **Do not skip.** Without ground truth you cannot distinguish a Jacobian bug from noise.
-- [ ] Accumulating brute-force path tracer in compute using Phase 5's ray query
-- [ ] Area/emissive light representation — one `_lightDirection` (`scene.h:63`) is not enough
-- [ ] MSE/RelMSE comparison utility, so later phases produce a *number*
-- [ ] Split-screen accumulation mode: ground truth vs live pipeline
+- [x] **Accumulating brute-force path tracer in compute** using Phase 5's ray query
+      (`resources/Shaders/path_trace.hlsl` + `VkmPathTracer`). Reads the scene entirely through
+      set 0 and set 1, so it takes no scene pointer. Cosine-weighted Lambertian sampling, so a
+      bounce's throughput multiplier is the albedo exactly and no pdf division appears anywhere.
+      Needed one word of `VkmObjectData` (`_vertexStrideWords`, in an existing padding word): a
+      draw knows its vertex layout from its PSO permutation, a ray cannot.
+- [x] **Area/emissive light representation** — emissive geometry *is* the light, hit rather than
+      sampled. `_lightDirection` is deliberately ignored: a directional light has no area, and a
+      reference that special-cased one would not be measuring the same integral the techniques are
+      (`TODO.md`).
+- [x] **MSE/RelMSE comparison utility** (`vkmComputeImageMse`, `vkmComputeImageRelativeMse`),
+      normalizing each image by its own sample count so a longer run is not penalised for being
+      brighter, and skipping pixels nothing was accumulated into.
+- [ ] Split-screen accumulation mode: ground truth vs live pipeline. **Not built** — presentation
+      work in the gi sample rather than part of the gate; the reference is reachable only from a
+      test today (`TODO.md`).
 
-**Gate:** white furnace test passes (uniform environment, albedo 1 → output equals input); energy
-conservation holds on a small diffuse test scene.
+**Gate: MET on Metal** (`tests/TestPathTracerShared.hpp`, `resources/tests/gltf_furnace.gltf`).
+Two unit cubes of albedo 1.0 and 0.5 in a uniform environment. The answer is **analytic, not
+convergent**: a convex diffuse body in a uniform environment reflects exactly `albedo * L`, and
+cosine-weighted Lambertian sampling makes the estimator zero-variance on it — one sample per pixel
+already gives the exact value, so the tolerance is 1e-3 rather than a noise budget. The white
+furnace assertion is therefore that the albedo-1 cube is *invisible*: the whole left half of the
+image is one value. Energy conservation is asserted directly (no pixel exceeds the environment) and
+analytically (the grey cube's darkest ratio is exactly 0.5). Sabotage-verified: 5% energy created
+per bounce fails it. Vulkan runs the same body in CI's lavapipe job.
 
 ### Phase 7 — 1-spp indirect, no resampling (baseline to beat)
 - [ ] Single indirect bounce, one ray per pixel, no reservoirs. Deliberately noisy
@@ -1202,9 +1221,12 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 
 ## 12. Remaining TODOs / open questions
 
-- [ ] **Test scene.** No Cornell-box-style scene exists; `scripts/download_scenes.py` offers only
-      `DamagedHelmet` and `Sponza`. Hand-author a small `.gltf` in `resources/tests/` (following
-      `gltf_triangle.gltf`) for analytic validation.
+- [ ] **Test scene.** **Partly answered 2026-08-06:** `resources/tests/gltf_furnace.gltf` (two
+      unit cubes, albedo 1.0 and 0.5) is the analytic-validation fixture, and it is *more* analytic
+      than a Cornell box would be — a convex body in a uniform environment has a closed-form
+      answer, an enclosed room does not. What is still missing is a Cornell-box-style scene for
+      **visual** comparison from Phase 7 onwards, where the interesting quantity is colour bleeding
+      rather than a number.
 - [x] ~~**CI runner bump**~~ **Decided 2026-08-04: add, do not replace.** `ubuntu.yml` gains one
       `ubuntu-24.04` Vulkan job whose only purpose is ray-query coverage — 24.04 carries Mesa 25.x
       through updates, well past the 24.1 that gave lavapipe `VK_KHR_ray_query`, so no PPA is
@@ -1303,3 +1325,4 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-08-06 | 5 | **The Metal acceleration structure test is in the suite.** Registering it had been killing the whole Metal run with mimalloc heap assertions, which were entirely the backward-cpp signal-handler recursion already in `TODO.md`. The real abort was Metal's debug layer on `buildAccelerationStructure:` with a nil scratch buffer: `recordBuild` passed an empty `MTL4BufferRange` where the Vulkan side has always refused outright, because a static structure's scratch is freed after its initial build. It passed standalone only because `MTL_DEBUG_LAYER=1` comes from `run_tests.py` and not from the fixture. A Vulkan fixture over the same shared body was added at the same time, so the Vulkan implementation -- which has never executed anywhere -- runs for the first time in CI's lavapipe job. Metal 213/213 (20452 assertions) Debug and Release, validation clean; Vulkan 209/209, reported SKIP because the shared body honestly skips without ray tracing. |
 | 2026-08-06 | 5 | **A scene builds its own acceleration structures.** `VkmScene::buildAccelerationStructures()` makes one bottom-level structure per pooled mesh and one rebuildable top-level structure over the objects, described as ranges into the geometry pool's existing buffers -- no vertex data duplicated. The pooled-buffer trap §8 warned about never fired: the pool already forces the committed allocation path for a bindless reason, so `AllowAccelerationStructureInput` only adds the build-input usage bit, and it is added only where the device reports ray tracing (that usage is illegal without `VK_KHR_acceleration_structure` enabled, which is every MoltenVK device here). The honest limit is that **the test cannot see whether the geometry offsets are right**: zeroing both leaves it passing, because a wrong-but-in-range address builds over the wrong triangles and nothing traverses the result until 5c's ray-query gate. What it does catch, by sabotage, is a mesh range reaching the build empty. Metal 214/214 (20489 assertions) Debug and Release, validation clean. |
 | 2026-08-06 | 5 | **Phase 5c: the gate runs.** The scene's top-level structure is bound in set 0 at its own binding (not a `VkmBindlessSingletonBuffer` entry -- its descriptor type is an acceleration structure on Vulkan and an `MTLResourceID` on Metal), and a compute shader ray-casts a loaded glTF scene through it. The §4.4 Metal blocker fell to the predicted `add_msl_resource_binding` entry, but **not** with the basetype §8 specified: `SPIRType::AccelerationStructure` throws "Unexpected argument buffer resource base type" for every shader in the tree, because that registration only selects an index category and a padding width, and the accepted list is scalars/Image/Sampler/SampledImage. A scalar is correct -- an acceleration structure is emitted as `[[buffer(index)]]`. Confirmed in the MSL: `acceleration_structure<instancing> g_Scene [[id(12293)]]`, query lowered to `intersection_query<instancing, triangle_data>`. Vulkan drops the binding on a non-RT device, where it is not a legal descriptor type. Metal residency comes from the pool's `MTLResidencySet` rather than per-encoder `useResource:`. **The gate closes the offset hole recorded two days ago**: the traced mesh is the second in the pool and its object sits at (10, 20, -1), so zeroing the pool offsets and forcing the instance transform to identity each fail it -- both verified by sabotage, both silent before. |
+| 2026-08-06 | 6 | **The reference path tracer, and a furnace gate that is exact rather than convergent.** Brute-force accumulating path tracer over Phase 5's ray query, reading the scene entirely through sets 0 and 1. The furnace fixture's answer is analytic: a convex diffuse body in a uniform environment reflects exactly `albedo * L`, and cosine-weighted Lambertian sampling cancels the cosine against the pdf so the throughput multiplier is the albedo with no pdf division anywhere -- which makes the estimator **zero-variance** on this scene and lets the tolerance be 1e-3. An albedo-1 body is invisible, so the white furnace assertion needs no knowledge of where it projects. Two things had to move: ray-tracing PSOs cannot sit in `resources/Pipelines/Engine/` (loaded wholesale at startup on every backend, and compiled for every backend -- MoltenVK cannot create one and WebGPU cannot compile one), and **Metal never bound descriptor set 1 for compute** -- the graphics branch did and said in a comment that it did so for every pipeline, but the scene's cull and emit passes read no camera so nothing had noticed. Same gap WebGPU had on 2026-08-02. Sabotage-verified at 5% energy created per bounce. Metal 217/217, validation clean. |

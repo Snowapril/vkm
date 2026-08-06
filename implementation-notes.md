@@ -2544,3 +2544,81 @@ crash was in `__llvm_gcov_writeout` during `exit`, preceded by ~150k
 `cannot merge previous GCDA file: corrupt arc tag` lines. Aborting an instrumented binary leaves
 corrupt `.gcda` files that poison every later run in that tree. `find build -name '*.gcda' -delete`
 is the fix, and Release was unaffected throughout because it carries no coverage instrumentation.
+
+## 2026-08-06 — Phase 6: the reference path tracer, and a furnace that is exact rather than convergent
+
+`resources/Shaders/path_trace.hlsl` plus `VkmPathTracer` (`renderer/path_tracer.{h,cpp}`): a
+brute-force accumulating path tracer over Phase 5's ray query, reading the scene entirely through
+set 0 and set 1 -- objects, materials, geometry pools, the acceleration structure and the camera --
+so it takes no scene pointer and binds nothing per frame but its own output.
+
+### The gate is analytic, not statistical
+
+`resources/tests/gltf_furnace.gltf` is two unit cubes in a uniform environment, albedo 1.0 and 0.5.
+Three facts make the expected answer exact:
+
+- A **convex** diffuse body in a **uniform** environment reflects exactly `albedo * L`. Convex means
+  a scattered ray never re-hits the same cube; uniform means where it goes does not matter.
+- **Cosine-weighted sampling of a Lambertian BRDF** makes a bounce's throughput multiplier exactly
+  the albedo. The `cos(theta)` and the pdf cancel, so no pdf division appears anywhere.
+- Together those give the estimator **zero variance on this scene**: one sample per pixel already
+  produces the analytic answer, and the tolerance can be 1e-3 rather than a noise budget.
+
+So the white furnace assertion is not "close to the environment" but "the whole left half of the
+image is one value" -- an albedo-1 body is *invisible*, which needs no knowledge of where it
+projects to. The grey cube is asserted as a ratio, because a silhouette pixel is a genuine average
+of cube and background: with the primary ray jittered inside its pixel, a half-covered pixel reads
+0.75 of the environment and is right to. The assertion is therefore "every ratio lies in
+[albedo, 1], every channel agrees on it, and the darkest is exactly the albedo".
+
+Inter-reflection between the two cubes changes nothing, which is why they can sit six units apart
+rather than at some distance chosen to make the error small: a ray leaving the grey cube that hits
+the white one still ends at `1.0 * L`.
+
+Sabotage-verified: multiplying the throughput by 1.05 per bounce fails the white furnace subcase at
+(0.41, 0.615, 0.82) against (0.4, 0.6, 0.8).
+
+### One word of ObjectData, and what it buys
+
+`VkmObjectData` gained `_vertexStrideWords` in the first of its two padding words -- so its size
+and every other offset are unchanged, and no draw path was touched. A rasterizing shader does not
+need it: a draw knows its layout at compile time, from the PSO permutation it was built as. A ray
+does not. One kernel hits objects from pools of different strides, and position is attribute 0 of
+every `VkmVertexLayoutPreset`, so the stride is the whole of what a layout-agnostic position fetch
+needs. Without it the tracer would have been silently wrong on any Compact or PositionOnly mesh --
+the failure mode this project keeps running into.
+
+### Two things that had to move
+
+- **Ray-tracing PSOs cannot live in `resources/Pipelines/Engine/`.** `VkmEngine` loads that
+  directory wholesale at startup on *every* backend, and the build compiles it for every backend
+  too. A ray-query PSO fails both: MoltenVK cannot create the pipeline, and the WebGPU branch of
+  `vkm_bindless.hlsli` declares no acceleration structure, so its HLSL does not even compile there.
+  They now live in `resources/Pipelines/RayTracing/`, built only for native backends and loaded on
+  demand by `VkmPathTracer::initialize`.
+- **Metal never bound descriptor set 1 for compute.** The graphics branch of
+  `VkmCommandBufferMetal::onBindPipeline` binds the frame constants and says in a comment that it
+  does so for every pipeline including those that never declare them; the compute branch bound only
+  set 0. Nothing had noticed because the scene's cull and emit passes read no camera. The path
+  tracer builds its primary rays from `inverseViewProjection`, and the debug layer answered
+  immediately: `Buffer binding at index 4 for g_VkmFrame was never set`. This is the same gap
+  WebGPU had and that was fixed on 2026-08-02; Vulkan never had it, since it binds sets 0 and 1 in
+  one call at whichever bind point the pipeline is.
+
+### What is deliberately absent
+
+Recorded in `TODO.md` rather than half-built: no next-event estimation (emissive geometry *is* the
+area-light representation, and NEE belongs to Phase 7's `shadeSecondaryHit()` seam); no Russian
+roulette, so `_maxBounces` is a bias knob; Lambertian only, so `metallic`/`roughness` are loaded
+and ignored; factor-only materials, because `VKM_MATERIAL_DECLARE()`'s samplers call `Sample()` and
+a compute shader has no derivatives.
+
+### Deviations
+
+- **Phase 6's split-screen accumulation mode is not built.** It is presentation work in the gi
+  sample rather than part of the gate, and the reference is currently reachable only from a test.
+  Left unchecked in `restir.md` §8 and recorded in `TODO.md` rather than quietly dropped.
+- **No Cornell-box fixture.** §12 asks for one for analytic validation; the furnace fixture is that
+  validation, and it is *more* analytic than a Cornell box would be. The Cornell box's value is
+  visual comparison for Phase 7 onwards, so the §12 item stays open rather than being ticked by
+  this.

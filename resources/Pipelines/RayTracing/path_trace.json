@@ -1,0 +1,12 @@
+{
+    "name": "path_trace_pso",
+    "shaders": {
+        "compute": { "filepath": "path_trace.hlsl", "entry_point": "CSMain", "ray_query": true }
+    },
+    "per_pass_resources": [
+        { "binding": 0, "type": "storage_buffer" }
+    ],
+    "options": {
+        "default": {}
+    }
+}

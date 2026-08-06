@@ -304,6 +304,13 @@ namespace vkm
             [computeEncoder setArgumentTable:argumentTable];
             [argumentTable setAddress:bindlessManager->getArgumentBuffer().gpuAddress
                               atIndex:kVkmMetalBindlessArgumentBufferIndex];
+            // Set 1, on the same terms as the graphics branch below. It was missing here until a
+            // compute shader first wanted the camera (the path tracer builds its primary rays from
+            // inverseViewProjection), which is the same gap WebGPU had and for the same reason:
+            // the scene's cull and emit passes read only set 0, so nothing noticed. Vulkan never
+            // had it -- it binds sets 0 and 1 in one call at whichever bind point the pipeline is.
+            [argumentTable setAddress:static_cast<VkmDriverMetal*>(_driver)->getFrameConstantManager()->getActiveGpuAddress()
+                              atIndex:kVkmMetalFrameConstantBufferIndex];
         }
         else
         {

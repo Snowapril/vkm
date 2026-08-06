@@ -45,7 +45,17 @@ namespace vkm
         uint32_t _materialIndex = 0;        // offset 140
         uint32_t _indexOffset = 0;          // offset 144, element base of this mesh's indices
         uint32_t _indexCount = 0;           // offset 148, becomes the indirect draw's vertexCount
-        uint32_t _pad0[2]{ 0, 0 };          // offset 152, aligns the following float4 to 16
+        /*
+        * offset 152, u32 words per vertex in this object's pool.
+        *
+        * The rasterizing shaders do not read it -- a draw knows its layout at compile time, from
+        * the PSO permutation it was built as. A ray-tracing shader cannot: one ray hits whatever
+        * is there, and the objects it hits may sit in pools of different strides. Carrying the
+        * stride is what lets a single path-tracing kernel fetch positions out of any layout,
+        * since position is attribute 0 of every VkmVertexLayoutPreset.
+        */
+        uint32_t _vertexStrideWords = 0;
+        uint32_t _pad0 = 0;                 // offset 156, aligns the following float4 to 16
         glm::vec4 _boundsCenterRadius{ 0.0f, 0.0f, 0.0f, 0.0f }; // offset 160, object space
     };
     static_assert(sizeof(VkmObjectData) == 176, "VkmObjectData must match the shader-side ObjectData layout");

@@ -12,6 +12,7 @@
 #include "TestAccelerationStructureShared.hpp"
 #include "TestSceneAccelerationStructureShared.hpp"
 #include "TestRayQueryShared.hpp"
+#include "TestPathTracerShared.hpp"
 
 #include <memory>
 
@@ -58,6 +59,13 @@ TEST_CASE("Ray query - a compute shader traces a loaded scene on Metal")
     MetalAccelerationStructureFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
     vkmtest::runRayQueryTest(fixture.driver.get());
+}
+
+TEST_CASE("Path tracer - white furnace and energy conservation on Metal" * doctest::timeout(30.0))
+{
+    MetalAccelerationStructureFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runPathTracerFurnaceTest(fixture.driver.get());
 }
 
 #endif // VKM_USE_METAL_API

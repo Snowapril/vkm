@@ -33,7 +33,8 @@ struct ObjectData
     uint     materialIndex;
     uint     indexOffset;
     uint     indexCount;
-    uint2    _pad0;
+    uint     vertexStrideWords; // read only by the ray-tracing kernels; a draw knows its own layout
+    uint     _pad0;
     float4   boundsCenterRadius;
 };
 

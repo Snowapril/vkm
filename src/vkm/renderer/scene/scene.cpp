@@ -265,6 +265,9 @@ namespace vkm
             data._materialIndex = entry._materialIndex == INVALID_VALUE32 ? 0u : entry._materialIndex;
             data._indexOffset = entry._range._indexOffset;
             data._indexCount = entry._range._indexCount;
+            // Every preset's stride is a whole number of words (16, 64 and 32 bytes), which is
+            // what lets the pools be untyped word arrays in the first place.
+            data._vertexStrideWords = pool.getLayout()._stride / 4;
 
             const glm::vec3 center = entry._bounds._valid ? entry._bounds.getCenter() : glm::vec3(0.0f);
             const float radius = entry._bounds._valid ? glm::length(entry._bounds.getExtent()) * 0.5f : 0.0f;

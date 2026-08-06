@@ -42,6 +42,7 @@ set(SRCS
     ${SRC_DIR}/TestCubemapTexture.cpp
     ${SRC_DIR}/TestBufferHostWrite.cpp
     ${SRC_DIR}/TestAccelerationStructure.cpp
+    ${SRC_DIR}/TestPathTracerMetrics.cpp
 )
 
 if (VKM_USE_METAL_API)
@@ -257,6 +258,13 @@ endif()
 # dependency must not be scoped to one backend.
 if (TARGET vkm_engine_shaders)
     add_dependencies(${target} vkm_engine_shaders)
+endif()
+
+# The path tracer's PSO, which VkmPathTracer::initialize loads from its own directory rather than
+# the one VkmEngine loads at startup -- so unlike the above this target exists on native backends
+# only, and the dependency is scoped the same way.
+if (TARGET vkm_ray_tracing_shaders)
+    add_dependencies(${target} vkm_ray_tracing_shaders)
 endif()
 
 # TestSceneModelRenderMetal (Metal-only) needs the model_viewer PSO cache and its paths.
