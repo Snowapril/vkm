@@ -2810,3 +2810,62 @@ index is really the mechanism.
   the first ray itself. Two copies of that loop would be two chances to disagree about the ray
   offset, the two-sidedness or the bounce count -- and the whole value of this sub-step's gate
   rests on the two estimators being identical apart from the reservoir.
+
+## 2026-08-06 — Phase 8.2 and 8.4: the neighbour LUT, and a spatial pass left unverified on purpose
+
+`vkmBuildNeighbourOffsets` plus `gi_reservoir_spatial.hlsl`: 256 precomputed disk offsets, and a
+pass that merges k neighbours' reservoirs into each pixel's own.
+
+### 8.2, and why R2 rather than a spiral
+
+The spatial pass reads a **run** of consecutive entries starting at a per-pixel random base. That
+is what decides the sequence: a golden-angle spiral's consecutive points share almost the same
+radius, so a run of four would sample a *ring*, not a disk. The R2 sequence's consecutive points
+are well separated in both dimensions at every scale, so a run of any length spreads. Mapped to the
+disk with Shirley-Chiu concentric rather than the polar `r = sqrt(u)` map, which bunches points
+toward the centre -- where a neighbour carries the least new information.
+
+Free-standing and driver-free, so `TestReservoirLayout` checks the properties that matter without a
+GPU: inside the disk, reaching the rim, centred, and -- the one that pins the sequence choice --
+every run of four spreads rather than clusters.
+
+### 8.4 is written, dispatched, and **not verified**
+
+The estimator arithmetic is measured correct. With the per-neighbour visibility ray bypassed, the
+accumulated mean lands within **0.015%** of the un-resampled estimator. That is a strong statement:
+it says the reconnection Jacobian, the receiver-side target function and the bias-correction
+denominator are all right, because every one of them shifts the mean if it is not.
+
+With the visibility ray in place the image is **13.8% bright**, and that is where it stopped.
+
+What was ruled out, each by measurement:
+
+| Change | Result |
+| --- | --- |
+| `_neighbourCount = 0` | Mean exact to six digits -- the canonical path, Z and the centre's own visibility ray are correct |
+| Visibility ray bypassed entirely | Mean within 0.015% -- the merge arithmetic is correct |
+| Ray origin from the surface vs the offset point | bit-identical |
+| Target lifted off the sample's own surface or not | bit-identical |
+| Neighbour surface from an on-stack array vs recomputed | bit-identical |
+| Bias-correction loop rolled vs `[unroll]`ed | bit-identical |
+| `ACCEPT_FIRST_HIT` vs closest-hit | bit-identical |
+
+Six structurally different changes to the ray produced a bit-identical image while removing the ray
+did not, and the *same function* returns "visible" for the call outside the loop. So the ray's
+verdict at the in-loop call site is fixed and does not depend on its arguments -- which is not a
+shape any of the obvious causes has.
+
+**So it ships off by default and unchecked in the plan.** The test still dispatches it and asserts
+what is true -- it runs, covers the same pixels, produces a lit image, validation-clean -- so the
+pass stays compiled and exercised rather than rotting, without the test pretending the estimator is
+verified. Tuning the Jacobian clamp until the mean looked right was available and is exactly what
+`restir.md`'s own gate exists to prevent.
+
+### Deviations
+
+- **8.4 is left unchecked in `restir.md` §8 rather than marked done.** The plan's gate for every
+  sub-step is that the mean matches on a diffuse-only scene; it does not, so the box stays open and
+  `TODO.md` carries the full reproduction.
+- **RTXDI's Jacobian magnitude clamp (reject outside [0.1, 10]) is deliberately not applied.** It
+  bounds variance at the cost of the mean this sub-step exists to measure, and applying it here
+  would have hidden the very thing being looked for. It belongs to 8.7 and a profiler.

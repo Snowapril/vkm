@@ -1,0 +1,13 @@
+{
+    "name": "gi_reservoir_spatial_pso",
+    "shaders": {
+        "compute": { "filepath": "gi_reservoir_spatial.hlsl", "entry_point": "CSMain", "ray_query": true }
+    },
+    "per_pass_resources": [
+        { "binding": 0, "type": "sampled_texture" },
+        { "binding": 1, "type": "sampled_texture" },
+        { "binding": 2, "type": "storage_buffer" },
+        { "binding": 3, "type": "storage_buffer" }
+    ],
+    "options": { "default": {} }
+}

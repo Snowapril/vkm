@@ -52,9 +52,37 @@ namespace vkm
         float    _environmentB = 0.0f;
         uint32_t _outputSlice = 0;
         uint32_t _inputSlice = 0;
+        uint32_t _neighbourCount = 0;
+        float    _neighbourRadius = 0.0f;
+        // Cosine of the largest angle between two surfaces still considered the same one.
+        float    _normalThreshold = 0.0f;
+        // Relative camera-distance difference still considered the same surface.
+        float    _depthThreshold = 0.0f;
         uint32_t _pad0 = 0;
     };
-    static_assert(sizeof(VkmRestirConstants) == 40, "VkmRestirConstants must match the shader-side struct");
+    static_assert(sizeof(VkmRestirConstants) == 56, "VkmRestirConstants must match the shader-side struct");
+
+    /*
+    * @brief Phase 8.2: how many precomputed neighbour offsets the lookup table holds.
+    *
+    * A power of two, because the spatial pass indexes it with a mask rather than a modulo -- which
+    * is the whole reason it is a table and not a per-pixel disk sample.
+    */
+    inline constexpr uint32_t kVkmNeighbourOffsetCount = 256;
+
+    /*
+    * @brief Fills `outOffsets` with `kVkmNeighbourOffsetCount` low-discrepancy points in the unit
+    * disk.
+    *
+    * @details The R2 sequence mapped through Shirley-Chiu's concentric square-to-disk map. R2
+    * rather than a golden-angle spiral because the spatial pass takes a *run* of consecutive
+    * entries: a spiral's consecutive points share almost the same radius, so a run of them would
+    * sample a ring rather than a disk. Concentric rather than the polar map because the latter
+    * bunches points towards the centre, which is where a neighbour is least useful.
+    *
+    * Free-standing and driver-free, so the distribution is testable without a GPU.
+    */
+    void vkmBuildNeighbourOffsets(float* outOffsets, uint32_t offsetCount);
 
     struct VkmRestirOptions
     {
@@ -62,10 +90,28 @@ namespace vkm
         // one more, because its first bounce is the primary ray neither pass casts.
         uint32_t _maxBounces = 3;
         glm::vec3 _environmentRadiance{ 0.0f, 0.0f, 0.0f };
-        // Which slice generation writes and resolve reads. Equal today; 8.4's spatial pass is what
-        // makes them differ.
-        uint32_t _outputSlice = 0;
+        /*
+        * Whether the spatial pass runs between generation and resolve. Off reproduces Phase 7's
+        * 1-spp estimator exactly, which is what makes 8.3's gate an equality test; on is 8.4.
+        * Kept switchable because "does turning resampling on move the mean" is the question every
+        * later sub-step is measured by.
+        */
+        bool _spatialResampling = false;
+        // Neighbours merged per pixel, and how far away they are looked for, in pixels. The plan
+        // suggests 3-5 at roughly 30 px for a 1080p frame; scale the radius with the resolution.
+        uint32_t _neighbourCount = 4;
+        float _neighbourRadius = 8.0f;
+        // Rejection thresholds, both G-buffer only. 25 degrees and 10% relative depth.
+        float _normalThreshold = 0.906f;
+        float _depthThreshold = 0.1f;
+        /*
+        * Which slice holds the freshly generated reservoirs and which holds the resampled ones.
+        * They must differ when `_spatialResampling` is set: spatial reuse reads its neighbours
+        * from the slice it is not writing, and aliasing them would resample results the same pass
+        * had already produced.
+        */
         uint32_t _inputSlice = 0;
+        uint32_t _outputSlice = 1;
     };
 
     /*
@@ -124,10 +170,13 @@ namespace vkm
         uint32_t _sampleIndex = 0;
 
         VkmResourceHandle _reservoirBuffer{ VKM_INVALID_RESOURCE_HANDLE };
+        VkmResourceHandle _neighbourOffsetBuffer{ VKM_INVALID_RESOURCE_HANDLE };
         VkmResourceHandle _accumulationBuffer{ VKM_INVALID_RESOURCE_HANDLE };
         VkmPipelineStateBase* _generatePipeline = nullptr;
+        VkmPipelineStateBase* _spatialPipeline = nullptr;
         VkmPipelineStateBase* _resolvePipeline = nullptr;
         VkmResourceTableBase* _generateTable = nullptr;
+        VkmResourceTableBase* _spatialTable = nullptr;
         VkmResourceTableBase* _resolveTable = nullptr;
     };
 } // namespace vkm

@@ -1006,15 +1006,26 @@ Incremental, with measured RelMSE against Phase 6 at every sub-step.
       `W = 1/p_source`. Plus the resolve half of 8.6 (`f_s · cos · L · W`, no final visibility ray
       — the sample was traced from this pixel, so it is visible by construction until spatial reuse
       starts handing pixels a neighbour's).
-- [ ] **8.2 Neighbour offset LUT** — a small buffer of precomputed low-discrepancy disk offsets,
-      indexed with a mask. Cheap, avoids per-pixel disk sampling, gives a stable pattern.
-      Deliberately not built yet: nothing reads it until 8.4, and a buffer with no consumer is the
-      speculative kind of code this repo keeps out. It lands with the pass that indexes it.
-- [ ] **8.4 Spatial resampling first** (easier to validate than temporal — no scene change between
-      samples): merge `k` neighbours (start 3–5, radius ~30 px) with normal/depth/material
-      rejection (relative depth ~10%), the reconnection Jacobian, Jacobian validation, and a
-      visibility ray per accepted neighbour. Then the second loop over accepted neighbours for the
-      bias-correction denominator
+- [x] **8.2 Neighbour offset LUT** — 256 R2-sequence points through Shirley-Chiu's concentric
+      square-to-disk map, uploaded once and indexed with a mask. R2 rather than a golden-angle
+      spiral because the spatial pass reads a *run* of consecutive entries, and a spiral's
+      consecutive points share almost the same radius — a run of them would sample a ring rather
+      than a disk. `vkmBuildNeighbourOffsets` is free-standing, so the distribution is testable
+      without a GPU.
+- [~] **8.4 Spatial resampling** — written, dispatched, **not verified, not on by default.**
+      `gi_reservoir_spatial.hlsl` merges k neighbours chosen from the G-buffer alone (normal within
+      25°, camera distance within 10%), applies the reconnection Jacobian, and runs the second loop
+      over the same neighbours for the bias-correction denominator with a visibility ray each.
+      RTXDI's Jacobian magnitude clamp is deliberately left out: it buys variance at the cost of a
+      mean this sub-step exists to measure.
+      **What is measured.** With the per-neighbour visibility ray bypassed the mean lands within
+      **0.015%** of the un-resampled estimator — so the Jacobian, the receiver-side target function
+      and the denominator arithmetic are right. With it in place the image is **13.8% bright**, and
+      that verdict does not respond to the ray's inputs: six structurally different changes all
+      produced a bit-identical result while bypassing the ray did not, and the same function
+      returns "visible" for the call outside the loop (`_neighbourCount = 0` reproduces the
+      un-resampled mean exactly). Recorded in `TODO.md`; this stays unchecked until it is
+      understood rather than tuned away.
 - [ ] **8.5 Temporal resampling** — camera and scene **static first**, then moving. Reproject via
       motion vectors, ring of jittered fallback taps, optional zero-motion fallback, confidence
       cap (start 20), separate **age cap**
@@ -1359,3 +1370,4 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-08-06 | 7 | **1-spp indirect, and the two bugs its convergence gate found.** A deferred GI pass taking its primary hit from the G-buffer and continuing through the same `vkmTracePath` the reference uses, so accumulating it must converge to the reference. The shared seam is `vkm_path_tracing.hlsli`: `VkmSurfaceHit` (the LoD-forward hit encoding), `vkmVertexMapping()` and `vkmShadeSecondaryHit()`. The gate's first honest run scored MSE 0.030 -- **the G-buffer's geometric normal pointed away from the camera**, so every secondary ray started inside its own wall; nothing had ever consumed that channel, and the first pass to offset a ray along it is what found it (0.030 to 6.2e-4). Before that it scored a *perfect* MSE 0 while the reference was empty: both passes loaded the same PSO directory, and `loadPipelineState` **replaces** an entry rather than skipping it, destroying the pipeline the other held. The test now proves both images non-empty before comparing, because a metric that returns 0 for no-data makes a missing estimator look perfect. Sample count chosen so the noise floor (2.4e-4) sits below a one-bounce error (7.3e-4). Metal 218/218; the gate itself is Vulkan-registered pending an unresolved Metal validation-layer issue. |
 | 2026-08-06 | 7 | **The third bug the convergence gate found: an acceleration structure built before it was resident.** `VkmDriverBase::newAccelerationStructure` calls `onResourceInitialized()` -- which is what adds a resource to Metal's residency set -- *after* `initialize()` returns, and `initialize()` is where the synchronous build happens. Every structure was therefore built while unmapped: a bottom-level build wrote into memory that was not resident, and a top-level build read bottom-level structures that were not either. It worked whenever that memory happened to be resident anyway, so it depended on what the process had allocated first and Metal reported nothing either way -- the gate saw it as zero ray hits under `MTL_DEBUG_LAYER=1` only after another test case had run. What cracked it: rebuilding the freshly built structure once made it work every time, while a full `waitIdle` did not and the instance ids were byte-identical at build and rebuild, so it was neither synchronization nor contents. The structure now registers itself before recording its build, its scratch and instance buffers too, and the synchronous build records through the same `buildAccelerationStructure` entry point the per-frame rebuild uses. Gate registered on both backends; Metal 218/218 under validation. |
 | 2026-08-06 | 8 | **8.1 + 8.3, and the packing bug the sub-step gate caught.** A 32-byte reservoir (fp32 position, octahedral snorm16 normal, RGB9E5 radiance, fp32 W, 8-bit M and age), one buffer with slices and per-pass slice indices, one traced sample per pixel written into it, and a resolve that shades `f_s * cos * L * W` from it. Two slices rather than `FRAME_COUNT`, because `VkmRenderGraph`'s per-slot `ensureCompleted()` already answers the frames-in-flight question -- the count is set by what resampling needs. **The gate is 'is it the same estimator', not 'does it converge':** with one candidate RIS reduces to `W = 1/p_source`, and the pass shares gi_indirect's random stream on purpose, so the two see the same direction at every pixel and may differ only by the reservoir round trip. It scored MSE 5.5e-4 -- 7.4% dark -- because RGB9E5's exponent bias was written 16 instead of 15. That is not a visible off-by-one: pack and unpack share the scale, so small values round-trip perfectly and every channel whose mantissa lands above 511 silently clamps. Fixed: **9.7e-7**, two orders under the convergence gate. Slice index sabotage-verified. |
+| 2026-08-06 | 8 | **8.2 and 8.4: the neighbour LUT, and a spatial pass that is honest about not being verified.** 256 R2 points through a concentric disk map, and a spatial resampling pass that picks neighbours from the G-buffer alone, applies the reconnection Jacobian, and runs the second loop for the bias-correction denominator with a visibility ray each. The estimator arithmetic is **measured** correct: with that ray bypassed the mean is within 0.015% of the un-resampled one, which is what says the Jacobian, the receiver-side target function and the denominator are right. With the ray in place the image is 13.8% bright and the verdict is insensitive to the ray's own inputs -- origin, target offset, surface from an array vs recomputed, rolled vs unrolled, `ACCEPT_FIRST_HIT` vs closest-hit all give a bit-identical result, while bypassing it does not, and the same function returns visible for the call outside the loop. Landed off by default and left unchecked in the plan rather than tuned until the number looked right. |

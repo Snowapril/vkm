@@ -160,6 +160,10 @@ namespace vkmtest
         REQUIRE_MESSAGE(restir.initialize(driver, &manager, gbuffer, detail::kCornellSize,
                                           detail::kCornellSize, &error),
                         error);
+        vkm::VkmRestirPass spatial;
+        REQUIRE_MESSAGE(spatial.initialize(driver, &manager, gbuffer, detail::kCornellSize,
+                                           detail::kCornellSize, &error),
+                        error);
 
         const vkm::VkmPathTraceOptions referenceOptions{
             /*_maxBounces=*/detail::kIndirectBounces + 1,
@@ -178,12 +182,19 @@ namespace vkmtest
         * index entirely would still pass, and the index is the mechanism 8.4 will read one slice
         * and write another through.
         */
-        const vkm::VkmRestirOptions restirOptions{
-            detail::kIndirectBounces,
-            glm::vec3(detail::kEnvironmentRadiance),
-            /*_outputSlice=*/1,
-            /*_inputSlice=*/1
-        };
+        vkm::VkmRestirOptions restirOptions{};
+        restirOptions._maxBounces = detail::kIndirectBounces;
+        restirOptions._environmentRadiance = glm::vec3(detail::kEnvironmentRadiance);
+        // Slice 1 in, slice 0 out -- deliberately not the default pair. With only slice 0
+        // exercised, a pass that ignored the slice index entirely would still pass, and the index
+        // is the mechanism spatial reuse reads one slice and writes another through.
+        restirOptions._inputSlice = 1;
+        restirOptions._outputSlice = 0;
+
+        // Phase 8.4 runs alongside 8.3 rather than replacing it: the whole question this sub-step
+        // is measured by is whether turning resampling on moves the mean, which needs both.
+        vkm::VkmRestirOptions spatialOptions = restirOptions;
+        spatialOptions._spatialResampling = true;
 
         // One G-buffer fill: the camera and the scene are static, so the indirect pass reads the
         // same surfaces every sample and only its rays change.
@@ -229,10 +240,13 @@ namespace vkmtest
             subGraph->addReferencedResource(indirect.getAccumulationBuffer());
             subGraph->addReferencedResource(restir.getAccumulationBuffer());
             subGraph->addReferencedResource(restir.getReservoirBuffer());
+            subGraph->addReferencedResource(spatial.getAccumulationBuffer());
+            subGraph->addReferencedResource(spatial.getReservoirBuffer());
             subGraph->setComputeCallback([&](vkm::VkmCommandBufferBase* commandBuffer) {
                 reference.recordAccumulate(commandBuffer, referenceOptions);
                 indirect.recordAccumulate(commandBuffer, indirectOptions);
                 restir.recordAccumulate(commandBuffer, restirOptions);
+                spatial.recordAccumulate(commandBuffer, spatialOptions);
             });
             renderGraph.compile();
             renderGraph.execute();
@@ -241,6 +255,7 @@ namespace vkmtest
         CHECK(reference.getSampleCount() == detail::kCornellSamples);
         CHECK(indirect.getSampleCount() == detail::kCornellSamples);
         CHECK(restir.getSampleCount() == detail::kCornellSamples);
+        CHECK(spatial.getSampleCount() == detail::kCornellSamples);
 
         const std::vector<float> referenceImage = detail::readAccumulationBuffer(
             driver, reference.getAccumulationBuffer(), detail::kCornellSize, detail::kCornellSize);
@@ -248,6 +263,8 @@ namespace vkmtest
             driver, indirect.getAccumulationBuffer(), detail::kCornellSize, detail::kCornellSize);
         const std::vector<float> restirImage = detail::readAccumulationBuffer(
             driver, restir.getAccumulationBuffer(), detail::kCornellSize, detail::kCornellSize);
+        const std::vector<float> spatialImage = detail::readAccumulationBuffer(
+            driver, spatial.getAccumulationBuffer(), detail::kCornellSize, detail::kCornellSize);
         const uint32_t pixelCount = detail::kCornellSize * detail::kCornellSize;
 
         /*
@@ -347,6 +364,30 @@ namespace vkmtest
         CHECK(packingMse < 3.0e-6f);
         CHECK(packingRelativeMse < 6.0e-5f);
 
+        /*
+        * Phase 8.4 is dispatched but NOT yet asserted against ground truth, and saying so here is
+        * the point: its per-neighbour visibility ray makes the image 13.8% bright, and until that
+        * is understood the pass is not something to hold the engine to (see TODO.md and the header
+        * of gi_reservoir_spatial.hlsl for what was measured).
+        *
+        * What is checked is what is true: the pass runs, covers the same pixels the others do, and
+        * produces a lit image under a validation layer. That keeps it compiled, dispatched and
+        * exercised rather than rotting, without pretending the estimator is verified.
+        */
+        uint32_t spatialCovered = 0;
+        const double spatialBrightness = summarize(spatialImage, &spatialCovered);
+        const float spatialMse =
+            vkm::vkmComputeImageMse(referenceImage.data(), spatialImage.data(), pixelCount);
+        const float spatialRelativeMse =
+            vkm::vkmComputeImageRelativeMse(referenceImage.data(), spatialImage.data(), pixelCount);
+        MESSAGE("spatial (UNVERIFIED) vs reference: MSE " << spatialMse << ", RelMSE "
+                                                          << spatialRelativeMse << ", mean red "
+                                                          << spatialBrightness << " (1-spp "
+                                                          << indirectBrightness << ")");
+        CHECK(spatialCovered == covered);
+        CHECK(spatialBrightness > 0.05);
+
+        spatial.destroy(driver);
         restir.destroy(driver);
         indirect.destroy(driver);
         reference.destroy(driver);

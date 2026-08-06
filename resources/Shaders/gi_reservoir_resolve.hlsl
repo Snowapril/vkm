@@ -28,6 +28,10 @@ struct RestirConstants
     float environmentB;
     uint  outputSlice;
     uint  inputSlice;
+    uint  neighbourCount;
+    float neighbourRadius;
+    float normalThreshold;
+    float depthThreshold;
     uint  _pad0;
 };
 

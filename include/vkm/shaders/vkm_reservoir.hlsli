@@ -78,6 +78,73 @@ float vkmReservoirTargetPdf(float3 radiance)
     return dot(radiance, float3(0.2126, 0.7152, 0.0722));
 }
 
+/*
+* @brief The target function of a sample as seen from a particular shading point.
+*
+* @details Luminance times the cosine at the receiver. The cosine is what makes p_hat depend on
+* who is asking, and that dependence is the entire reason resampling helps: without it a
+* neighbour's sample would be weighted the same wherever it went, and reuse would only add
+* correlation.
+*
+* The receiver's BRDF is deliberately left out. For a Lambertian surface `f_s = albedo/pi` is
+* constant across the pixel, and p_hat appears in both the resampling weight and the denominator
+* that divides it, so a per-receiver constant cancels exactly. Leaving it out also keeps p_hat
+* non-zero on a surface with a black channel, which the bias-correction denominator tests against.
+*
+* Returns 0 for a sample at the shading point itself or below its horizon -- both are cases the
+* reconnection shift does not define.
+*/
+float vkmReservoirTargetPdfAt(float3 radiance, float3 shadingPosition, float3 shadingNormal,
+                              float3 samplePosition)
+{
+    const float3 toSample = samplePosition - shadingPosition;
+    const float distanceSquared = dot(toSample, toSample);
+    if (distanceSquared <= 0.0)
+    {
+        return 0.0;
+    }
+    const float cosTheta = saturate(dot(shadingNormal, toSample * rsqrt(distanceSquared)));
+    return vkmReservoirTargetPdf(radiance) * cosTheta;
+}
+
+/*
+* @brief The reconnection shift's Jacobian, moving a sample from `fromPosition` to `toPosition`.
+*
+* @details A sample is stored as a direction from the pixel that generated it, but it names a
+* POINT. Handing that point to another pixel changes the solid angle it subtends, and the estimator
+* has to be told by exactly how much or it is biased -- brighter where neighbours are closer to the
+* sample than the receiver is, darker where they are further.
+*
+*   J = (cos(phi_to) * d_from^2) / (cos(phi_from) * d_to^2)
+*
+* with phi measured at the SAMPLE, between its normal and the direction back to the pixel in
+* question. Returns 0 when either end is at or behind the sample's horizon, which is where the
+* shift is undefined rather than merely unlikely.
+*
+* An environment sample needs no special case: it sits far enough away that both distances and both
+* angles are equal to within a rounding error, so this returns 1 on its own -- which is the right
+* answer for a sample with no position to speak of.
+*/
+float vkmReservoirJacobian(float3 samplePosition, float3 sampleNormal,
+                           float3 fromPosition, float3 toPosition)
+{
+    const float3 fromOffset = samplePosition - fromPosition;
+    const float3 toOffset = samplePosition - toPosition;
+    const float fromDistanceSquared = dot(fromOffset, fromOffset);
+    const float toDistanceSquared = dot(toOffset, toOffset);
+    if (fromDistanceSquared <= 0.0 || toDistanceSquared <= 0.0)
+    {
+        return 0.0;
+    }
+    const float cosFrom = -dot(fromOffset * rsqrt(fromDistanceSquared), sampleNormal);
+    const float cosTo = -dot(toOffset * rsqrt(toDistanceSquared), sampleNormal);
+    if (cosFrom <= 0.0 || cosTo <= 0.0)
+    {
+        return 0.0;
+    }
+    return (cosTo * fromDistanceSquared) / (cosFrom * toDistanceSquared);
+}
+
 // RGB9E5: three 9-bit mantissas and a shared 5-bit exponent, unsigned. The largest representable
 // value is (511/512) * 2^15; the encode clamps to it rather than wrapping the exponent.
 #define VKM_RGB9E5_MAX 65408.0
