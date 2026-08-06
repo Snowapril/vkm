@@ -31,6 +31,22 @@ namespace vkm
         }
     } // namespace
 
+    bool vkmLoadRayTracingPipelineStates(VkmPipelineStateManager* pipelineStateManager, std::string* outError)
+    {
+        VKM_ASSERT(pipelineStateManager != nullptr,
+                   "vkmLoadRayTracingPipelineStates requires a pipeline state manager");
+
+        std::string psoError;
+        if (!pipelineStateManager->loadPipelineStatesFromDirectory(
+                std::string(RESOURCES_DIR) + "Pipelines/RayTracing/",
+                std::string(RESOURCES_DIR) + "Shaders/ShaderCache/",
+                VkmPipelineStateOrigin::Engine, &psoError))
+        {
+            return fail(outError, "Failed to load the ray-tracing pipeline states: " + psoError);
+        }
+        return true;
+    }
+
     bool VkmPathTracer::initialize(VkmDriverBase* driver, VkmPipelineStateManager* pipelineStateManager,
                                    uint32_t width, uint32_t height, std::string* outError)
     {
@@ -46,20 +62,11 @@ namespace vkm
             return fail(outError, "VkmPathTracer needs a non-empty output extent");
         }
 
-        // Its own directory, not the engine one: see the note in src/vkm/CMakeLists.txt for why a
-        // ray-tracing PSO must not be in the set every backend loads at startup.
         std::string psoError;
-        if (!pipelineStateManager->loadPipelineStatesFromDirectory(
-                std::string(RESOURCES_DIR) + "Pipelines/RayTracing/",
-                std::string(RESOURCES_DIR) + "Shaders/ShaderCache/",
-                VkmPipelineStateOrigin::Engine, &psoError))
-        {
-            return fail(outError, "Failed to load the ray-tracing pipeline states: " + psoError);
-        }
         _pipeline = pipelineStateManager->getPipelineState("path_trace_pso[default]", VkmPipelineStateOrigin::Engine);
         if (_pipeline == nullptr)
         {
-            return fail(outError, "path_trace_pso[default] is missing from the ray-tracing pipeline states");
+            return fail(outError, "path_trace_pso[default] is not loaded; call vkmLoadRayTracingPipelineStates first");
         }
 
         _width = width;
@@ -137,6 +144,7 @@ namespace vkm
         constants._environmentR = options._environmentRadiance.x;
         constants._environmentG = options._environmentRadiance.y;
         constants._environmentB = options._environmentRadiance.z;
+        constants._jitterPrimaryRay = options._jitterPrimaryRay ? 1u : 0u;
 
         commandBuffer->bindPipeline(_pipeline);
         commandBuffer->bindResourceTable(_resourceTable);

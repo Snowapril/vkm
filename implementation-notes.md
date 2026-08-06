@@ -2622,3 +2622,126 @@ a compute shader has no derivatives.
   validation, and it is *more* analytic than a Cornell box would be. The Cornell box's value is
   visual comparison for Phase 7 onwards, so the §12 item stays open rather than being ticked by
   this.
+
+## 2026-08-06 — Phase 7: 1-spp indirect, and the two bugs the convergence gate found
+
+`resources/Shaders/gi_indirect.hlsl` plus `VkmIndirectPass`: one indirect ray per pixel, no
+reservoirs, taking its primary hit from the rasterized G-buffer and continuing through the same
+`vkmTracePath` the reference uses. The gate accumulates both and requires them to agree.
+
+### The seam, which is the point of doing this before reservoirs
+
+`include/vkm/shaders/vkm_path_tracing.hlsli` now holds what the two estimators share, as named
+things rather than inlined arithmetic, because §8 is right that retrofitting them is expensive:
+
+- `VkmSurfaceHit` — how a hit is *encoded*: `(instanceId, primitiveIndex, barycentrics)` plus a
+  reserved `uv`, since the LoD paper locates a surface point by `(instanceId, uv)` instead and a
+  reservoir's payload becomes an ABI the moment Phase 8 stores millions of them. The uv is
+  reserved but not filled: doing so needs a vertex-layout id in `VkmObjectData`, because uv0 sits
+  at a different offset and format in each preset and PositionOnly has none (`TODO.md`).
+- `vkmVertexMapping` — one function that turns an encoded hit into a world-space surface point, so
+  a future encoding changes one body and no call site.
+- `vkmShadeSecondaryHit` — the seam §12 named. Emission only today; next-event estimation replaces
+  exactly this body.
+- `vkmOffsetRayOrigin` — scale-relative, with the `t_max = (1 - eps) * d` shortening a reconnection
+  ray will need documented next to it.
+
+### The G-buffer's geometric normal pointed away from the camera
+
+The gate's first honest run reported **MSE 0.030, RelMSE 0.25** — the deferred pass came out 14%
+darker than the reference. Enlarging the ray offset 32x did not fix it; it overshot to *twice* the
+reference. Those two facts together say the ray was starting on the wrong side of the surface: a
+small offset left it inside the wall (immediate self-hit, dark), a large one put it outside the
+room entirely (nothing to hit, bright).
+
+`gbuffer.hlsl` derived the geometric normal as
+`normalize(cross(ddx(worldPosition), ddy(worldPosition)))`, whose sign follows the screen-space
+derivative order — and on this engine's conventions it came out pointing *into* the surface. It now
+orients towards the camera, which is well defined for a rasterized pixel and is what the channel
+exists for. **Nothing had ever consumed it**: SSGI marches in screen space, deferred lighting uses
+the shading normal, and `gi_composite` only visualizes it. The first pass to actually offset a ray
+along it is what found it. Fixing it took MSE from 0.030 to **6.2e-4**, a factor of 49.
+
+### Two passes loading the same PSO directory destroyed one of them
+
+Before that, the gate reported MSE 0 — a perfect match — while the image was plainly not black.
+`vkmComputeImageMse` returns 0 when *nothing is comparable*, and the reference's accumulation
+buffer was empty: `VkmPathTracer::initialize` and `VkmIndirectPass::initialize` each called
+`loadPipelineStatesFromDirectory` on `Pipelines/RayTracing/`, and that function does
+`target[name] = unique_ptr(...)` — it **replaces** an existing entry and destroys the old pipeline,
+leaving the tracer holding a dangling pointer and a resource table built against it. The engine
+loads its directory exactly once at startup, so this had never been reachable.
+
+Loading is now a free function, `vkmLoadRayTracingPipelineStates`, called once by whoever owns the
+manager; both passes only resolve a name, which is how `VkmScene` has always treated
+`scene_cull_pso`. The underlying manager hazard is recorded in `TODO.md` rather than fixed here.
+
+**The test could not have caught this and now can.** It asserts both images are non-empty and lit
+*before* comparing them, because a metric that returns 0 for "no data" makes a missing estimator
+look like a perfect one.
+
+### Choosing the threshold rather than guessing it
+
+At 384 samples the two agreed at MSE 6.2e-4 — pure Monte Carlo noise, their mean radiances 0.24%
+apart. But a deliberately mis-specified reference (one bounce short) scored 1.1e-3, under the
+threshold: the gate would not have caught a missing bounce. Noise falls as 1/N and a bias does not,
+so the sample count went to 1536, putting the floor at 2.4e-4 while the same sabotage now scores
+7.3e-4. The threshold sits between them with roughly 2.5x margin either way, and the whole test
+costs 0.8 s on Metal. Both streams are seeded deterministically, so the floor is reproducible
+rather than something a CI run can be unlucky with.
+
+### The fixture
+
+`resources/tests/gltf_cornell.gltf` is an open-top, open-front Cornell-style box with red and green
+side walls, lit by the uniform environment through its missing ceiling. Open-topped on purpose: the
+G-buffer has no emissive channel, so a deferred pass cannot reproduce a camera-visible emitter, and
+lighting from the environment removes that question instead of papering over it. Its walls are
+wound to face inward, checked programmatically in the generator against the intended normal rather
+than by hand -- a wall wound the wrong way would simply not rasterize under the G-buffer PSO's
+back-face culling, while the ray path, which disables triangle culling, would not notice.
+
+### The one that is not solved
+
+The gate is registered on **Vulkan only**. On Metal it passes on its own, and passes with the
+validation layer off, but returns **zero ray hits** under `MTL_DEBUG_LAYER=1` once any earlier test
+case has run in the same process -- with a fresh driver, an identically built acceleration
+structure and a correctly written argument-buffer entry.
+
+What was ruled out, each by measurement rather than by reasoning:
+
+| Suspect | How it was excluded |
+| --- | --- |
+| The driver carrying state | Each test case constructs and destroys its own `VkmDriverMetal` |
+| Descriptor set 1 | A shader made to report `cameraPositionWorld` reads 0.85 in both cases |
+| The bottom-level structures | Identical sizes, byte offsets, stride and triangle counts |
+| The top-level structure | Same handle, same generation, same allocated size |
+| The argument-buffer entry | Written once, with the live structure's `gpuResourceID` |
+| Residency | Every structure's insert succeeds; the scratch and instance buffers are now registered too |
+| `requestResidency` | Added; no effect |
+| A missing build barrier | Added; no effect |
+| The G-buffer and the graphics submit | The failure reproduces with neither present |
+
+The only measured difference is that `MTLResourceID` values and object addresses shift when another
+test case has allocated first (the structures get ids 4-7 instead of 1-4). Two of the changes that
+investigation produced are kept because they are correct regardless of whether they fix this: the
+acceleration structure's scratch and instance buffers now join the residency set (they are
+raw-allocated, so nothing else ever made them resident, and a build reads both on the GPU), and the
+synchronous build now carries the same barrier pair the recorded path emits.
+
+Leaving the gate registered would mean landing a red suite; leaving it out of the tree would mean
+losing it. It is in the tree, running on Vulkan -- where CI's lavapipe job reports ray tracing, so
+it does execute somewhere -- and the Metal registration site carries a comment pointing at the
+`TODO.md` entry rather than silently omitting it.
+
+### Deviations
+
+- **The reference gained a `_jitterPrimaryRay` option**, defaulting to on, turned off for this
+  comparison. Not a fudge to make a test pass: a deferred pass's primary hit is the G-buffer's
+  single centre sample, so two estimators can only be compared pixel by pixel if they start from
+  the same point. With jitter on, every silhouette pixel differs for a reason that has nothing to
+  do with the estimator.
+- **§8's fourth Phase 7 bullet is only half done.** The geometric-normal offset with a
+  scale-relative epsilon is implemented and is what the normal bug was found through; the
+  reconnection-ray `t_max = (1 - eps) * distance` is documented at `vkmOffsetRayOrigin` but
+  unimplemented, because nothing casts a shadow or reconnection ray until Phase 8. Recorded in
+  `TODO.md` rather than written blind and left untested.

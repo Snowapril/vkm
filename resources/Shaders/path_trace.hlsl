@@ -19,11 +19,16 @@
 //     dropped, which loses energy. RR would make it unbiased at the cost of variance; the fixed
 //     count is honest and visible, and the furnace fixture escapes in one bounce.
 //
-// Triangles only, and factor-only materials: see the notes at the fetches below.
+// The estimator itself -- the path loop, the hit encoding, the vertex mapping and the
+// secondary-hit seam -- lives in vkm_path_tracing.hlsli, shared with the 1-spp indirect pass this
+// is the reference for. What is left here is the camera: primary rays and accumulation.
+//
+// Triangles only, and factor-only materials: see vkm_path_tracing.hlsli.
 
 #include "vkm_bindless.hlsli"
 #include "vkm_frame_constants.hlsli"
 #include "vkm_material.hlsli"
+#include "vkm_path_tracing.hlsli"
 #include "vkm_random.hlsli"
 
 // Mirrors vkm::VkmObjectData (include/vkm/renderer/scene/scene.h), restated here for the same
@@ -65,7 +70,7 @@ struct PathTraceConstants
     float environmentR; // uniform environment radiance, the only light besides emissive geometry
     float environmentG;
     float environmentB;
-    uint  _pad0;
+    uint  jitterPrimaryRay; // 0 samples the pixel centre, for comparison against a deferred pass
 };
 
 VKM_PUSH_CONSTANTS(PathTraceConstants, g_PathTrace);
@@ -80,39 +85,14 @@ VKM_BINDLESS_ACCELERATION_STRUCTURE(g_Scene);
 // screen-space derivatives a compute shader does not have, and it would declare a texture array
 // this pass never indexes. Materials are therefore factor-only here; see TODO.md.
 VKM_MATERIAL_LOADER()
+// The path loop, the hit encoding and the vertex mapping are shared with gi_indirect.hlsl -- two
+// estimators of the same integral must not each have their own copy of what they have in common.
+VKM_PATH_TRACING_DECLARE()
 
 // rgb = summed radiance, a = how many samples are in that sum. One buffer rather than a storage
 // texture because VkmTableResourceType has no storage-texture kind (see pipeline_state.h), and a
 // buffer is also what a readback test wants.
 [[vk::binding(0, 2)]] RWStructuredBuffer<float4> g_Accumulation : register(u0, space2);
-
-float3 loadPosition(uint slot, uint wordBase)
-{
-    return float3(asfloat(VKM_LOAD_VERTEX(slot, wordBase + 0)),
-                  asfloat(VKM_LOAD_VERTEX(slot, wordBase + 1)),
-                  asfloat(VKM_LOAD_VERTEX(slot, wordBase + 2)));
-}
-
-// The three world-space corners of one triangle of `obj`.
-//
-// Position is attribute 0 of every VkmVertexLayoutPreset, so only the stride differs between
-// layouts -- and that travels in ObjectData rather than in a permutation define, because one ray
-// hits whatever is there and cannot know the layout at compile time.
-void loadTriangle(ObjectData obj, uint primitiveIndex, out float3 p0, out float3 p1, out float3 p2)
-{
-    const uint firstIndex = obj.indexOffset + primitiveIndex * 3;
-    const uint i0 = VKM_LOAD_INDEX(obj.indexPoolSlot, firstIndex + 0);
-    const uint i1 = VKM_LOAD_INDEX(obj.indexPoolSlot, firstIndex + 1);
-    const uint i2 = VKM_LOAD_INDEX(obj.indexPoolSlot, firstIndex + 2);
-
-    const float3 local0 = loadPosition(obj.vertexPoolSlot, obj.vertexWordOffset + i0 * obj.vertexStrideWords);
-    const float3 local1 = loadPosition(obj.vertexPoolSlot, obj.vertexWordOffset + i1 * obj.vertexStrideWords);
-    const float3 local2 = loadPosition(obj.vertexPoolSlot, obj.vertexWordOffset + i2 * obj.vertexStrideWords);
-
-    p0 = mul(obj.worldTransform, float4(local0, 1.0)).xyz;
-    p1 = mul(obj.worldTransform, float4(local1, 1.0)).xyz;
-    p2 = mul(obj.worldTransform, float4(local2, 1.0)).xyz;
-}
 
 // Reconstructs the primary ray for a pixel from set 1's camera, by unprojecting the near and far
 // points of its NDC column. Derived from inverseViewProjection rather than from a hand-built basis
@@ -150,71 +130,14 @@ void CSMain(uint3 threadId : SV_DispatchThreadID)
     float3 direction;
     // Jittered inside the pixel, so accumulating samples anti-aliases rather than resampling one
     // point. On the furnace fixture every point of a face gives the same answer, which is why that
-    // test stays exact regardless.
-    primaryRay(pixel, vkmRandomFloat2(rng), origin, direction);
+    // test stays exact regardless. The rng is advanced either way, so turning the jitter off does
+    // not also change which paths are sampled.
+    const float2 jitter = vkmRandomFloat2(rng);
+    primaryRay(pixel, g_PathTrace.jitterPrimaryRay != 0 ? jitter : float2(0.5, 0.5),
+               origin, direction);
 
-    float3 radiance = float3(0.0, 0.0, 0.0);
-    float3 throughput = float3(1.0, 1.0, 1.0);
-
-    for (uint bounce = 0; bounce < g_PathTrace.maxBounces; ++bounce)
-    {
-        RayDesc rayDesc;
-        rayDesc.Origin = origin;
-        rayDesc.Direction = direction;
-        rayDesc.TMin = 0.0;
-        rayDesc.TMax = 1.0e30;
-
-        RayQuery<RAY_FLAG_NONE> query;
-        query.TraceRayInline(g_Scene, RAY_FLAG_NONE, 0xFF, rayDesc);
-        query.Proceed();
-
-        if (query.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
-        {
-            radiance += throughput * environment;
-            break;
-        }
-
-        // The instance id is the object index, which is also the ObjectData index -- VkmScene
-        // gives every instance its object's index for exactly this lookup.
-        const ObjectData obj = g_ObjectData[query.CommittedInstanceID()];
-
-        float3 p0, p1, p2;
-        loadTriangle(obj, query.CommittedPrimitiveIndex(), p0, p1, p2);
-
-        const float2 bary = query.CommittedTriangleBarycentrics();
-        // From the barycentrics rather than origin + t * direction: the latter accumulates the
-        // ray parameter's error across bounces, and this is the surface point by definition.
-        const float3 hitPosition = p0 * (1.0 - bary.x - bary.y) + p1 * bary.x + p2 * bary.y;
-
-        // The GEOMETRIC normal, from the triangle itself. A reference tracer must not use an
-        // interpolated or normal-mapped vector here: those do not agree with the surface a ray
-        // can leave from, and the disagreement shows up as energy that is neither conserved nor
-        // attributable.
-        float3 normal = normalize(cross(p1 - p0, p2 - p0));
-        // Two-sided, matching the instances, which both backends build with triangle culling
-        // disabled. A one-sided normal would make a back-face hit scatter into the surface.
-        if (dot(normal, direction) > 0.0)
-        {
-            normal = -normal;
-        }
-
-        const VkmMaterial material = vkmLoadMaterial(materialPoolSlot, obj.materialIndex);
-
-        // Emissive geometry IS the area light. Added on arrival rather than sampled, since there
-        // is no next-event estimation here.
-        radiance += throughput * material.emissiveFactor;
-
-        // Lambert with cosine-weighted sampling: BRDF * cos / pdf == albedo, exactly. No pdf
-        // division appears anywhere, which is the point.
-        throughput *= material.baseColorFactor.rgb;
-
-        // Scale-relative, because a world-space constant is an assumption about scene scale --
-        // the same assumption that put the probe volume's far plane at 100 in a 3721-unit Sponza.
-        const float offset = max(1.0e-4, query.CommittedRayT() * 1.0e-4);
-        origin = hitPosition + normal * offset;
-        direction = vkmCosineHemisphere(normal, vkmRandomFloat2(rng));
-    }
-    // A path still alive here is dropped, and its energy with it. See the header note.
+    const float3 radiance = vkmTracePath(origin, direction, g_PathTrace.maxBounces,
+                                        environment, materialPoolSlot, rng);
 
     const uint pixelIndex = pixel.y * g_PathTrace.width + pixel.x;
     const float4 previous = (g_PathTrace.sampleIndex == 0) ? float4(0.0, 0.0, 0.0, 0.0)

@@ -1,0 +1,15 @@
+{
+    "name": "gi_indirect_pso",
+    "shaders": {
+        "compute": { "filepath": "gi_indirect.hlsl", "entry_point": "CSMain", "ray_query": true }
+    },
+    "per_pass_resources": [
+        { "binding": 0, "type": "sampled_texture" },
+        { "binding": 1, "type": "sampled_texture" },
+        { "binding": 2, "type": "sampled_texture" },
+        { "binding": 3, "type": "storage_buffer" }
+    ],
+    "options": {
+        "default": {}
+    }
+}

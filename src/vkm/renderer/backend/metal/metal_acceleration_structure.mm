@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
 #include <vkm/renderer/backend/common/command_queue.h>
+#include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 
@@ -101,6 +102,13 @@ namespace vkm
             return false;
         }
         _instanceCapacity = static_cast<uint32_t>(descriptors.size());
+        // Registered explicitly, for the reason the bindless manager registers its own two
+        // buffers: this does not go through newBuffer(), so nothing else ever makes it resident.
+        // A build reads it on the GPU, so without this the top-level structure is built over
+        // whatever memory happens to be mapped -- which is why the failure depended on what the
+        // process had allocated earlier rather than on anything about the scene.
+        static_cast<VkmRenderResourcePoolMetal*>(_driverMetal->getRenderResourcePool())
+            ->registerExternalAllocation(_instanceBuffer);
         return true;
     }
 
@@ -230,6 +238,9 @@ namespace vkm
                 VKM_DEBUG_ERROR("Failed to create the acceleration structure scratch buffer");
                 return false;
             }
+            // Private storage and raw-allocated, so nothing else makes it resident either.
+            static_cast<VkmRenderResourcePoolMetal*>(_driverMetal->getRenderResourcePool())
+                ->registerExternalAllocation(_scratchBuffer);
         }
 
         /*
@@ -245,7 +256,20 @@ namespace vkm
             id<MTL4CommandBuffer> mtlCommandBuffer =
                 static_cast<VkmCommandBufferMetal*>(commandBuffer)->getMTLCommandBuffer();
             id<MTL4ComputeCommandEncoder> encoder = [mtlCommandBuffer computeCommandEncoder];
+            // The same barrier pair VkmCommandBufferMetal::onBuildAccelerationStructure emits, and
+            // for the same reason: Metal 4 does no automatic hazard tracking, so without the
+            // trailing one this build's writes are not ordered against anything recorded later on
+            // the queue -- including the ray queries that traverse the result. Whether that showed
+            // up depended entirely on what else the process had submitted, which is exactly how it
+            // was found: a scene traced correctly in a run of its own and returned zero hits when
+            // any earlier test case had run first.
+            [encoder barrierAfterQueueStages:MTLStageAll
+                                beforeStages:MTLStageDispatch
+                           visibilityOptions:MTL4VisibilityOptionDevice];
             recordBuild(encoder);
+            [encoder barrierAfterStages:MTLStageDispatch
+                      beforeQueueStages:MTLStageAll
+                      visibilityOptions:MTL4VisibilityOptionDevice];
             [encoder endEncoding];
         }
         commandBuffer->endCommandBuffer();
@@ -322,6 +346,13 @@ namespace vkm
 
     void VkmAccelerationStructureMetal::releaseAll()
     {
+        VkmRenderResourcePoolMetal* pool =
+            static_cast<VkmRenderResourcePoolMetal*>(_driverMetal->getRenderResourcePool());
+        if (pool != nullptr)
+        {
+            pool->unregisterExternalAllocation(_instanceBuffer);
+            pool->unregisterExternalAllocation(_scratchBuffer);
+        }
         [_accelerationStructure release];
         _accelerationStructure = nil;
         [_instanceBuffer release];

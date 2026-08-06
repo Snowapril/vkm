@@ -155,6 +155,8 @@ namespace vkmtest
         REQUIRE(scene.getObjects().size() == 2);
         REQUIRE_MESSAGE(scene.buildAccelerationStructures(driver, &error), error);
 
+        REQUIRE_MESSAGE(vkm::vkmLoadRayTracingPipelineStates(&manager, &error), error);
+
         vkm::VkmPathTracer tracer;
         REQUIRE_MESSAGE(tracer.initialize(driver, &manager, detail::kFurnaceWidth,
                                           detail::kFurnaceHeight, &error),
@@ -199,6 +201,7 @@ namespace vkmtest
 
         const vkm::VkmPathTraceOptions options{
             /*_maxBounces=*/4,
+            /*_jitterPrimaryRay=*/true,
             glm::vec3(detail::kEnvironmentR, detail::kEnvironmentG, detail::kEnvironmentB)
         };
 

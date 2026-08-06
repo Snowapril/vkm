@@ -32,7 +32,7 @@ namespace vkm
         float    _environmentR = 0.0f;
         float    _environmentG = 0.0f;
         float    _environmentB = 0.0f;
-        uint32_t _pad0 = 0;
+        uint32_t _jitterPrimaryRay = 1;
     };
     static_assert(sizeof(VkmPathTraceConstants) == 32, "VkmPathTraceConstants must match the shader-side struct");
 
@@ -45,6 +45,13 @@ namespace vkm
         */
         uint32_t _maxBounces = 4;
         /*
+        * Whether the primary ray is jittered inside its pixel. On by default, because that is what
+        * anti-aliases an accumulated image. Turned off to compare against a deferred pass, whose
+        * primary hit is the G-buffer's single centre sample: two estimators can only be compared
+        * pixel by pixel if they start from the same point.
+        */
+        bool _jitterPrimaryRay = true;
+        /*
         * Uniform environment radiance returned by a ray that hits nothing. Together with emissive
         * materials it is the whole of this tracer's lighting: `VkmFrameData::_lightDirection` is
         * deliberately ignored, because a directional light has no area and a reference tracer that
@@ -52,6 +59,22 @@ namespace vkm
         */
         glm::vec3 _environmentRadiance{ 0.0f, 0.0f, 0.0f };
     };
+
+    /*
+    * @brief Loads the ray-tracing PSO directory into `pipelineStateManager`.
+    *
+    * @details Call once, before initializing any pass that needs one. Separate from those passes
+    * on purpose: `loadPipelineStatesFromDirectory` *replaces* an already-registered pipeline
+    * object rather than skipping it, so two passes each loading the same directory would leave the
+    * first holding a raw pointer to a destroyed pipeline (`TODO.md`). Every other pass in the
+    * engine already works this way -- `VkmScene` resolves `scene_cull_pso` from a manager someone
+    * else loaded.
+    *
+    * These pipelines are deliberately not part of the set `VkmEngine` loads at startup: that one
+    * has to be creatable on every backend, and a ray-query pipeline is not.
+    */
+    bool vkmLoadRayTracingPipelineStates(VkmPipelineStateManager* pipelineStateManager,
+                                         std::string* outError);
 
     /*
     * @brief Phase 6's brute-force reference path tracer.
@@ -81,10 +104,8 @@ namespace vkm
 
         /*
         * @brief Creates the accumulation buffer and resolves the pipeline. Fails on a driver
-        * without ray tracing rather than degrading, since there is no meaningful fallback.
-        *
-        * Loads its own PSO directory: ray-tracing pipelines are deliberately not part of the set
-        * `VkmEngine` loads at startup, which every backend has to be able to create.
+        * without ray tracing rather than degrading, since there is no meaningful fallback, and on
+        * a manager `vkmLoadRayTracingPipelineStates` has not been called on.
         */
         bool initialize(VkmDriverBase* driver, VkmPipelineStateManager* pipelineStateManager,
                         uint32_t width, uint32_t height, std::string* outError);

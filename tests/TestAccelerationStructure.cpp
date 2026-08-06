@@ -14,6 +14,7 @@
 #include "TestSceneAccelerationStructureShared.hpp"
 #include "TestRayQueryShared.hpp"
 #include "TestPathTracerShared.hpp"
+#include "TestIndirectPassShared.hpp"
 
 #include <memory>
 
@@ -71,6 +72,13 @@ TEST_CASE("Path tracer - white furnace and energy conservation on Vulkan" * doct
     VulkanAccelerationStructureFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
     vkmtest::runPathTracerFurnaceTest(fixture.driver.get());
+}
+
+TEST_CASE("Indirect pass - 1 spp converges to the reference path tracer on Vulkan" * doctest::timeout(120.0))
+{
+    VulkanAccelerationStructureFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runIndirectConvergenceTest(fixture.driver.get());
 }
 
 #endif // VKM_USE_VULKAN_API

@@ -1,0 +1,298 @@
+// Copyright (c) 2025 Snowapril
+//
+// Phase 7's gate: the 1-spp indirect pass converges to the Phase 6 reference when accumulated.
+//
+// This is what proves the sampling and the BRDF are right *before* reservoirs exist, when a bias
+// is still attributable. The two estimators differ in exactly one thing -- where the primary hit
+// comes from -- and everything downstream of it is the shared `vkmTracePath`. So what the
+// comparison actually pins is the seam between a rasterizer and a ray query: clip-space
+// convention, camera-distance reconstruction, octahedral normal packing, the winding a wall was
+// authored with, and the offset a secondary ray leaves along. Every one of those is a silent
+// failure if it is wrong, and every one of them moves this number.
+//
+// The scene is `gltf_cornell.gltf`: an open-top, open-front Cornell-style box with red and green
+// side walls, lit by the uniform environment through its missing ceiling. Open-top rather than
+// emissive-ceiling on purpose -- the G-buffer carries no emissive channel, so a deferred pass
+// cannot reproduce a camera-visible emitter, and lighting the box from the environment removes the
+// question rather than papering over it.
+#pragma once
+
+#include "UnitTestUtils.hpp"
+
+#include <vkm/renderer/backend/common/command_buffer.h>
+#include <vkm/renderer/backend/common/driver.h>
+#include <vkm/renderer/backend/common/frame_constants.h>
+#include <vkm/renderer/backend/common/pipeline_state_manager.h>
+#include <vkm/renderer/backend/common/pipeline_state_object.h>
+#include <vkm/renderer/backend/common/render_graph.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
+#include <vkm/renderer/backend/common/staging_buffer.h>
+#include <vkm/renderer/gbuffer.h>
+#include <vkm/renderer/indirect_pass.h>
+#include <vkm/renderer/path_tracer.h>
+#include <vkm/renderer/scene/gltf_importer.h>
+#include <vkm/renderer/scene/scene.h>
+
+#include <glm/ext/matrix_clip_space.hpp>
+#include <glm/ext/matrix_transform.hpp>
+
+#include <cstring>
+#include <string>
+#include <vector>
+
+namespace vkmtest
+{
+    namespace detail
+    {
+        // Square, so the comparison is not dominated by whichever axis the box is longer on, and
+        // small: both estimators run at one ray per pixel per sample, and the Vulkan half of this
+        // runs on a software rasterizer in CI.
+        inline constexpr uint32_t kCornellSize = 48;
+        // Enough that the estimator's own noise is well under the threshold below. Both sides get
+        // the same count, so neither is advantaged.
+        inline constexpr uint32_t kCornellSamples = 1536;
+        // Scatters the indirect pass takes from the G-buffer surface. The reference needs one more
+        // to compute the same quantity: its first bounce is the primary ray this pass does not
+        // cast.
+        inline constexpr uint32_t kIndirectBounces = 3;
+        inline constexpr float kEnvironmentRadiance = 1.0f;
+
+        inline std::vector<float> readAccumulationBuffer(vkm::VkmDriverBase* driver,
+                                                         vkm::VkmResourceHandle source,
+                                                         uint32_t width, uint32_t height)
+        {
+            const uint64_t byteSize = static_cast<uint64_t>(width) * height * 4 * sizeof(float);
+
+            vkm::VkmStagingBufferInfo stagingInfo{};
+            stagingInfo._flags = vkm::VkmResourceCreateInfo::AllowTransferDst;
+            stagingInfo._size = byteSize;
+            stagingInfo._debugName = "IndirectComparisonReadback";
+            vkm::VkmStagingBuffer* staging = driver->newStagingBuffer(stagingInfo);
+            REQUIRE(staging != nullptr);
+
+            const vkm::VkmResourceHandle destination = staging->getHandle();
+            vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+            auto* subGraph = renderGraph.beginTransferSubGraph("IndirectComparisonReadback");
+            subGraph->setTransferCallback([=](vkm::VkmCommandBufferBase* commandBuffer) {
+                commandBuffer->copyBuffer(source, destination, 0, 0, byteSize);
+            });
+            renderGraph.compile();
+            renderGraph.execute();
+            renderGraph.ensureCompleted();
+
+            std::vector<float> rgba(static_cast<size_t>(width) * height * 4);
+            staging->invalidate(0, byteSize);
+            std::memcpy(rgba.data(), staging->map(), byteSize);
+            driver->getRenderResourcePool()->releaseResource(destination);
+            return rgba;
+        }
+    } // namespace detail
+
+    inline void runIndirectConvergenceTest(vkm::VkmDriverBase* driver)
+    {
+        REQUIRE(driver != nullptr);
+        if ((driver->getDriverCapabilityFlags() & vkm::VkmDriverCapabilityFlags::RayTracing) == 0)
+        {
+            MESSAGE("Skipping: this backend reports no RayTracing capability.");
+            return;
+        }
+
+        vkm::VkmGltfImportOptions importOptions;
+        importOptions._optimizeMeshes = false;
+
+        vkm::VkmSceneModel model;
+        std::string error;
+        REQUIRE_MESSAGE(vkm::importGltfModel(std::string(RESOURCES_DIR) + "tests/gltf_cornell.gltf",
+                                             &model, &error, importOptions),
+                        error);
+
+        vkm::VkmPipelineStateManager manager(driver);
+        REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(TEST_ENGINE_PIPELINE_DIR,
+                                                                TEST_ENGINE_SHADER_CACHE_DIR,
+                                                                vkm::VkmPipelineStateOrigin::Engine, &error),
+                        error);
+
+        vkm::VkmScene scene;
+        REQUIRE(scene.addModel(model, &error));
+        REQUIRE_MESSAGE(scene.build(driver, &manager, &error), error);
+        REQUIRE(scene.getObjects().size() == 4); // floor, back, and the two coloured side walls
+        REQUIRE_MESSAGE(scene.buildAccelerationStructures(driver, &error), error);
+
+        // Inside the box near its open front, looking at the back wall. The ceiling is missing, so
+        // there is nothing above to be seen directly -- rays that leave through the opening return
+        // the environment, which is what lights the box.
+        const glm::mat4 view = glm::lookAtRH(glm::vec3(0.0f, 0.0f, 0.85f), glm::vec3(0.0f, 0.0f, -1.0f),
+                                             glm::vec3(0.0f, 1.0f, 0.0f));
+        const glm::mat4 projection = glm::perspectiveRH_ZO(glm::radians(60.0f), 1.0f, 0.05f, 20.0f);
+        const glm::mat4 viewProjection = projection * view;
+
+        vkm::VkmFrameConstants frameConstants{};
+        frameConstants._view = view;
+        frameConstants._projection = projection;
+        frameConstants._viewProjection = viewProjection;
+        frameConstants._inverseViewProjection = glm::inverse(viewProjection);
+        frameConstants._prevViewProjection = viewProjection;
+        frameConstants._cameraPositionWorld = glm::vec4(0.0f, 0.0f, 0.85f, 1.0f);
+        driver->getFrameConstantManager()->update(/*frameIndex=*/0, frameConstants);
+
+        vkm::VkmFrameData frameData;
+        vkm::vkmExtractFrustumPlanes(viewProjection, frameData._frustumPlanes);
+
+        std::vector<vkm::VkmResourceHandle> referenced;
+        scene.collectReferencedResources(&referenced);
+        referenced.push_back(scene.getTopLevelAccelerationStructure());
+
+        vkm::VkmGBuffer gbuffer;
+        REQUIRE(gbuffer.initialize(driver, glm::uvec2(detail::kCornellSize, detail::kCornellSize)));
+
+        REQUIRE_MESSAGE(vkm::vkmLoadRayTracingPipelineStates(&manager, &error), error);
+
+        vkm::VkmPathTracer reference;
+        REQUIRE_MESSAGE(reference.initialize(driver, &manager, detail::kCornellSize,
+                                             detail::kCornellSize, &error),
+                        error);
+        vkm::VkmIndirectPass indirect;
+        REQUIRE_MESSAGE(indirect.initialize(driver, &manager, gbuffer, detail::kCornellSize,
+                                            detail::kCornellSize, &error),
+                        error);
+
+        const vkm::VkmPathTraceOptions referenceOptions{
+            /*_maxBounces=*/detail::kIndirectBounces + 1,
+            // Pixel centres, so both estimators start from the same primary point; otherwise every
+            // silhouette pixel differs for a reason that has nothing to do with the estimator.
+            /*_jitterPrimaryRay=*/false,
+            glm::vec3(detail::kEnvironmentRadiance)
+        };
+        const vkm::VkmIndirectOptions indirectOptions{
+            detail::kIndirectBounces,
+            glm::vec3(detail::kEnvironmentRadiance)
+        };
+
+        // One G-buffer fill: the camera and the scene are static, so the indirect pass reads the
+        // same surfaces every sample and only its rays change.
+        {
+            const vkm::VkmFrameBufferDescriptor fbDesc = gbuffer.makeFrameBufferDescriptor();
+
+            vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+            auto* updateSubGraph = renderGraph.beginTransferSubGraph("CornellSceneUpdate");
+            for (vkm::VkmResourceHandle handle : referenced) { updateSubGraph->addReferencedResource(handle); }
+            updateSubGraph->setTransferCallback([&scene, frameData](vkm::VkmCommandBufferBase* commandBuffer) {
+                scene.recordUpdate(commandBuffer, /*frameIndex=*/0, frameData, /*viewIndex=*/0);
+            });
+
+            auto* cullSubGraph = renderGraph.beginComputeSubGraph("CornellSceneCull");
+            for (vkm::VkmResourceHandle handle : referenced) { cullSubGraph->addReferencedResource(handle); }
+            cullSubGraph->setComputeCallback([&scene](vkm::VkmCommandBufferBase* commandBuffer) {
+                scene.recordCull(commandBuffer, /*viewIndex=*/0);
+            });
+
+            auto* gbufferSubGraph = renderGraph.beginGraphicsSubGraph(fbDesc, "CornellGBuffer");
+            for (vkm::VkmResourceHandle handle : referenced) { gbufferSubGraph->addReferencedResource(handle); }
+            gbufferSubGraph->setRenderCallback([&scene, &manager](vkm::VkmCommandBufferBase* commandBuffer) {
+                scene.recordDrawBatches(commandBuffer, [&manager](const vkm::VkmScene::DrawBatch& batch) {
+                    return manager.getPipelineState(
+                        std::string("gbuffer_pso[") + vkm::vkmVertexLayoutPresetName(batch._layout) + "]",
+                        vkm::VkmPipelineStateOrigin::Engine);
+                });
+            });
+
+            renderGraph.compile();
+            renderGraph.execute();
+            renderGraph.ensureCompleted();
+        }
+
+        // Both estimators, sample for sample, in one graph per sample so neither can be advantaged
+        // by a different number of submissions.
+        for (uint32_t sample = 0; sample < detail::kCornellSamples; ++sample)
+        {
+            vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+            auto* subGraph = renderGraph.beginComputeSubGraph("CornellEstimators");
+            for (vkm::VkmResourceHandle handle : referenced) { subGraph->addReferencedResource(handle); }
+            subGraph->addReferencedResource(reference.getAccumulationBuffer());
+            subGraph->addReferencedResource(indirect.getAccumulationBuffer());
+            subGraph->setComputeCallback([&](vkm::VkmCommandBufferBase* commandBuffer) {
+                reference.recordAccumulate(commandBuffer, referenceOptions);
+                indirect.recordAccumulate(commandBuffer, indirectOptions);
+            });
+            renderGraph.compile();
+            renderGraph.execute();
+            renderGraph.ensureCompleted();
+        }
+        CHECK(reference.getSampleCount() == detail::kCornellSamples);
+        CHECK(indirect.getSampleCount() == detail::kCornellSamples);
+
+        const std::vector<float> referenceImage = detail::readAccumulationBuffer(
+            driver, reference.getAccumulationBuffer(), detail::kCornellSize, detail::kCornellSize);
+        const std::vector<float> indirectImage = detail::readAccumulationBuffer(
+            driver, indirect.getAccumulationBuffer(), detail::kCornellSize, detail::kCornellSize);
+        const uint32_t pixelCount = detail::kCornellSize * detail::kCornellSize;
+
+        /*
+        * Both sides have to be shown non-empty BEFORE the comparison, because
+        * vkmComputeImageMse returns 0 when nothing is comparable -- a reference that never ran
+        * scores a perfect match. That is not hypothetical: it is exactly what this test reported
+        * while VkmIndirectPass::initialize was still loading the PSO directory a second time and
+        * destroying the pipeline VkmPathTracer held.
+        */
+        const auto summarize = [&](const std::vector<float>& image, uint32_t* outCovered) {
+            double brightness = 0.0;
+            uint32_t covered = 0;
+            for (uint32_t pixel = 0; pixel < pixelCount; ++pixel)
+            {
+                const float samples = image[pixel * 4 + 3];
+                if (samples > 0.0f)
+                {
+                    brightness += image[pixel * 4 + 0] / samples;
+                    ++covered;
+                }
+            }
+            *outCovered = covered;
+            return covered == 0 ? 0.0 : brightness / covered;
+        };
+
+        uint32_t referenceCovered = 0;
+        const double referenceBrightness = summarize(referenceImage, &referenceCovered);
+        uint32_t covered = 0;
+        const double indirectBrightness = summarize(indirectImage, &covered);
+
+        // The reference traces every pixel; the deferred pass only those the G-buffer covered.
+        REQUIRE(referenceCovered == pixelCount);
+        REQUIRE(covered > pixelCount / 2);
+        // Lit, so "they agree" is not a statement about two black images.
+        CHECK(referenceBrightness > 0.05);
+        CHECK(indirectBrightness > 0.05);
+
+        const float mse = vkm::vkmComputeImageMse(referenceImage.data(), indirectImage.data(), pixelCount);
+        const float relativeMse =
+            vkm::vkmComputeImageRelativeMse(referenceImage.data(), indirectImage.data(), pixelCount);
+        MESSAGE("indirect vs reference over " << covered << " covered pixels: MSE " << mse
+                                              << ", RelMSE " << relativeMse
+                                              << ", mean red ref " << referenceBrightness
+                                              << " vs indirect " << indirectBrightness);
+
+        /*
+        * Measured, with margin, not guessed. At 1536 samples the two land at MSE 2.4e-4 and
+        * RelMSE 1.6e-3 -- the Monte Carlo noise of two independent runs rather than any
+        * disagreement, with their mean radiances 0.15% apart. Both streams are seeded
+        * deterministically, so that floor is reproducible rather than something a run can be
+        * unlucky with.
+        *
+        * The sample count is chosen to put that floor *below* the smallest systematic error worth
+        * catching, since noise falls as 1/N while a bias does not. It was 384 first, and at that
+        * count a reference run one bounce short scored 1.1e-3 against a noise floor of 6.2e-4 --
+        * too close to separate. At 1536 the same sabotage is roughly 3x the floor and the
+        * threshold sits between them. Cheap insurance: the whole test is 0.8 s on Metal.
+        *
+        * A gross error is not subtle at this scale. The geometric normal pointing away from the
+        * camera -- which is what this gate found on its first real run -- scored MSE 0.030, over a
+        * hundred times the floor.
+        */
+        CHECK(mse < 6.0e-4f);
+        CHECK(relativeMse < 4.0e-3f);
+
+        indirect.destroy(driver);
+        reference.destroy(driver);
+        gbuffer.destroy();
+        scene.destroy(driver);
+    }
+} // namespace vkmtest

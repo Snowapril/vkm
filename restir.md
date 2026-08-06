@@ -952,17 +952,35 @@ analytically (the grey cube's darkest ratio is exactly 0.5). Sabotage-verified: 
 per bounce fails it. Vulkan runs the same body in CI's lavapipe job.
 
 ### Phase 7 — 1-spp indirect, no resampling (baseline to beat)
-- [ ] Single indirect bounce, one ray per pixel, no reservoirs. Deliberately noisy
-- [ ] Direct lighting at the secondary hit (`L_o` = emission + NEE + optional continued path)
-- [ ] Hit-point encoding, **forward-compatible with the LoD paper**: reserve
-      `(instanceID, float2 uv)` alongside `(primitiveID, barycentrics)`, and put "locate this
-      surface point" behind one `vertexMapping()` function rather than inlining it. Free now,
-      expensive to retrofit
-- [ ] Ray origin offset along the **geometric** normal, scale-relative epsilon; reconnection
-      visibility rays use `t_max = (1-ε)·distance`
+- [x] **Single indirect bounce, one ray per pixel, no reservoirs** (`gi_indirect.hlsl` +
+      `VkmIndirectPass`). Differs from the reference in its primary hit and nothing else: the
+      rasterized G-buffer rather than a traced ray, then the same `vkmTracePath`.
+- [x] **Direct lighting at the secondary hit** — behind `vkmShadeSecondaryHit()`, currently
+      emission plus the continued path. NEE replaces exactly that body; it is not written yet
+      because the scene still has no area-light representation to sample (§12).
+- [x] **Hit-point encoding, forward-compatible with the LoD paper.** `VkmSurfaceHit` carries
+      `(instanceId, primitiveIndex, barycentrics)` and reserves the `uv`; `vkmVertexMapping()` is
+      the one place a hit becomes a surface point. The uv is reserved but not filled — that needs
+      a vertex-layout id in `VkmObjectData` (`TODO.md`).
+- [~] **Ray origin offset along the geometric normal, scale-relative epsilon** — done, and it is
+      what surfaced the G-buffer normal bug below. The reconnection ray's
+      `t_max = (1-ε)·distance` is documented at `vkmOffsetRayOrigin` but unimplemented: nothing
+      casts a shadow or reconnection ray until Phase 8, so writing it now would ship untested.
 
-**Gate:** converges to the Phase 6 reference when accumulated. Proves sampling and BRDF are right
-*before* reservoirs — if this is biased, ReSTIR will be, and far harder to see.
+**Gate: MET, and it earned its keep.** Accumulating both estimators over a Cornell box
+(`resources/tests/gltf_cornell.gltf`, open-topped and environment-lit so no camera-visible surface
+emits) and comparing with the Phase 6 MSE utility. Its first honest run scored **MSE 0.030**: the
+G-buffer's geometric normal pointed *away* from the camera, so every secondary ray started inside
+its own wall. Nothing had ever consumed that channel — SSGI marches in screen space, deferred
+lighting uses the shading normal — so the first pass to offset a ray along it is what found it.
+Fixing it took the number to **6.2e-4**. The sample count was then raised until the floor fell
+below the smallest systematic error worth catching: a reference run one bounce short scores 7.3e-4
+against a 2.4e-4 floor.
+
+**Registered on Vulkan only.** On Metal the gate passes alone and passes with validation off, but
+returns zero ray hits under `MTL_DEBUG_LAYER=1` once another test case has run first — with a fresh
+driver, an identical structure and a correct argument-buffer entry. `TODO.md` records the nine
+things that investigation ruled out.
 
 ### Phase 8 — ReSTIR GI core
 Incremental, with measured RelMSE against Phase 6 at every sub-step.
@@ -1326,3 +1344,4 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-08-06 | 5 | **A scene builds its own acceleration structures.** `VkmScene::buildAccelerationStructures()` makes one bottom-level structure per pooled mesh and one rebuildable top-level structure over the objects, described as ranges into the geometry pool's existing buffers -- no vertex data duplicated. The pooled-buffer trap §8 warned about never fired: the pool already forces the committed allocation path for a bindless reason, so `AllowAccelerationStructureInput` only adds the build-input usage bit, and it is added only where the device reports ray tracing (that usage is illegal without `VK_KHR_acceleration_structure` enabled, which is every MoltenVK device here). The honest limit is that **the test cannot see whether the geometry offsets are right**: zeroing both leaves it passing, because a wrong-but-in-range address builds over the wrong triangles and nothing traverses the result until 5c's ray-query gate. What it does catch, by sabotage, is a mesh range reaching the build empty. Metal 214/214 (20489 assertions) Debug and Release, validation clean. |
 | 2026-08-06 | 5 | **Phase 5c: the gate runs.** The scene's top-level structure is bound in set 0 at its own binding (not a `VkmBindlessSingletonBuffer` entry -- its descriptor type is an acceleration structure on Vulkan and an `MTLResourceID` on Metal), and a compute shader ray-casts a loaded glTF scene through it. The §4.4 Metal blocker fell to the predicted `add_msl_resource_binding` entry, but **not** with the basetype §8 specified: `SPIRType::AccelerationStructure` throws "Unexpected argument buffer resource base type" for every shader in the tree, because that registration only selects an index category and a padding width, and the accepted list is scalars/Image/Sampler/SampledImage. A scalar is correct -- an acceleration structure is emitted as `[[buffer(index)]]`. Confirmed in the MSL: `acceleration_structure<instancing> g_Scene [[id(12293)]]`, query lowered to `intersection_query<instancing, triangle_data>`. Vulkan drops the binding on a non-RT device, where it is not a legal descriptor type. Metal residency comes from the pool's `MTLResidencySet` rather than per-encoder `useResource:`. **The gate closes the offset hole recorded two days ago**: the traced mesh is the second in the pool and its object sits at (10, 20, -1), so zeroing the pool offsets and forcing the instance transform to identity each fail it -- both verified by sabotage, both silent before. |
 | 2026-08-06 | 6 | **The reference path tracer, and a furnace gate that is exact rather than convergent.** Brute-force accumulating path tracer over Phase 5's ray query, reading the scene entirely through sets 0 and 1. The furnace fixture's answer is analytic: a convex diffuse body in a uniform environment reflects exactly `albedo * L`, and cosine-weighted Lambertian sampling cancels the cosine against the pdf so the throughput multiplier is the albedo with no pdf division anywhere -- which makes the estimator **zero-variance** on this scene and lets the tolerance be 1e-3. An albedo-1 body is invisible, so the white furnace assertion needs no knowledge of where it projects. Two things had to move: ray-tracing PSOs cannot sit in `resources/Pipelines/Engine/` (loaded wholesale at startup on every backend, and compiled for every backend -- MoltenVK cannot create one and WebGPU cannot compile one), and **Metal never bound descriptor set 1 for compute** -- the graphics branch did and said in a comment that it did so for every pipeline, but the scene's cull and emit passes read no camera so nothing had noticed. Same gap WebGPU had on 2026-08-02. Sabotage-verified at 5% energy created per bounce. Metal 217/217, validation clean. |
+| 2026-08-06 | 7 | **1-spp indirect, and the two bugs its convergence gate found.** A deferred GI pass taking its primary hit from the G-buffer and continuing through the same `vkmTracePath` the reference uses, so accumulating it must converge to the reference. The shared seam is `vkm_path_tracing.hlsli`: `VkmSurfaceHit` (the LoD-forward hit encoding), `vkmVertexMapping()` and `vkmShadeSecondaryHit()`. The gate's first honest run scored MSE 0.030 -- **the G-buffer's geometric normal pointed away from the camera**, so every secondary ray started inside its own wall; nothing had ever consumed that channel, and the first pass to offset a ray along it is what found it (0.030 to 6.2e-4). Before that it scored a *perfect* MSE 0 while the reference was empty: both passes loaded the same PSO directory, and `loadPipelineState` **replaces** an entry rather than skipping it, destroying the pipeline the other held. The test now proves both images non-empty before comparing, because a metric that returns 0 for no-data makes a missing estimator look perfect. Sample count chosen so the noise floor (2.4e-4) sits below a one-bounce error (7.3e-4). Metal 218/218; the gate itself is Vulkan-registered pending an unresolved Metal validation-layer issue. |
