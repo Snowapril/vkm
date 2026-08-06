@@ -2700,38 +2700,43 @@ wound to face inward, checked programmatically in the generator against the inte
 than by hand -- a wall wound the wrong way would simply not rasterize under the G-buffer PSO's
 back-face culling, while the ray path, which disables triangle culling, would not notice.
 
-### The one that is not solved
+### The one that took longest: an acceleration structure built before it was resident
 
-The gate is registered on **Vulkan only**. On Metal it passes on its own, and passes with the
-validation layer off, but returns **zero ray hits** under `MTL_DEBUG_LAYER=1` once any earlier test
-case has run in the same process -- with a fresh driver, an identically built acceleration
-structure and a correctly written argument-buffer entry.
+The gate initially could not be registered on Metal. It passed on its own, and passed with the
+validation layer off, but returned **zero ray hits** under `MTL_DEBUG_LAYER=1` once any earlier
+test case had run in the same process -- with a fresh driver, an identically built structure and a
+correctly written argument-buffer entry.
 
-What was ruled out, each by measurement rather than by reasoning:
+Everything obvious was ruled out by measurement rather than by reasoning: the driver (each test
+case builds its own), descriptor set 1 (a shader made to report `cameraPositionWorld` read 0.85 in
+both cases), the bottom-level structures (identical sizes, offsets, stride and triangle counts),
+the top-level structure's size, the argument-buffer entry, residency *registration* of the
+structures, `requestResidency`, barriers around the build, and the G-buffer and its graphics submit
+(the failure reproduced with neither present).
 
-| Suspect | How it was excluded |
-| --- | --- |
-| The driver carrying state | Each test case constructs and destroys its own `VkmDriverMetal` |
-| Descriptor set 1 | A shader made to report `cameraPositionWorld` reads 0.85 in both cases |
-| The bottom-level structures | Identical sizes, byte offsets, stride and triangle counts |
-| The top-level structure | Same handle, same generation, same allocated size |
-| The argument-buffer entry | Written once, with the live structure's `gpuResourceID` |
-| Residency | Every structure's insert succeeds; the scratch and instance buffers are now registered too |
-| `requestResidency` | Added; no effect |
-| A missing build barrier | Added; no effect |
-| The G-buffer and the graphics submit | The failure reproduces with neither present |
+The clue that cracked it: **rebuilding the freshly built structure once, through the ordinary
+recorded path, made it work every time** -- while a full `waitIdle` did not, and while the ids
+written into the instance descriptors were byte-identical at build and at rebuild. So it was not
+synchronization and not the contents; the initial build was simply ineffective and a later one was
+not.
 
-The only measured difference is that `MTLResourceID` values and object addresses shift when another
-test case has allocated first (the structures get ids 4-7 instead of 1-4). Two of the changes that
-investigation produced are kept because they are correct regardless of whether they fix this: the
-acceleration structure's scratch and instance buffers now join the residency set (they are
-raw-allocated, so nothing else ever made them resident, and a build reads both on the GPU), and the
-synchronous build now carries the same barrier pair the recorded path emits.
+`VkmDriverBase::newAccelerationStructure` calls `onResourceInitialized(handle)` -- which is what
+adds a resource to the pool's `MTLResidencySet` -- **after** `initialize()` returns. But
+`initialize()` is where the synchronous build happens. So every structure was built while not
+resident: a bottom-level build wrote into unmapped memory, and the top-level build read
+bottom-level structures that were not mapped either. Whether that happened to work depended on
+whether the memory was resident anyway, which depends on what the process had allocated before --
+and Metal reported nothing in either case.
 
-Leaving the gate registered would mean landing a red suite; leaving it out of the tree would mean
-losing it. It is in the tree, running on Vulkan -- where CI's lavapipe job reports ray tracing, so
-it does execute somewhere -- and the Metal registration site carries a comment pointing at the
-`TODO.md` entry rather than silently omitting it.
+`VkmAccelerationStructureMetal::initialize` now registers the structure itself, before recording
+the build, which is the same thing the bindless manager does for its own raw-allocated buffers. It
+is idempotent with the later `onResourceInitialized`. The scratch and instance buffers are
+registered for the same reason (they never go through `newBuffer`, and a build reads both on the
+GPU), and the synchronous build now records through `VkmCommandBufferBase::buildAccelerationStructure`
+rather than a hand-rolled encoder block, so the initial build and the per-frame rebuild are
+literally the same path.
+
+With that, the gate is registered on both backends and the Metal suite is green under validation.
 
 ### Deviations
 

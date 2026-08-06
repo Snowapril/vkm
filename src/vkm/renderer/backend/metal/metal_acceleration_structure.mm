@@ -228,6 +228,21 @@ namespace vkm
             return false;
         }
         _structureSize = sizes.accelerationStructureSize;
+        /*
+        * Made resident BEFORE the build, not after. VkmDriverBase::newAccelerationStructure calls
+        * onResourceInitialized() -- which is what normally adds a resource to the pool's residency
+        * set -- only once this initialize() has returned, so the build below would otherwise write
+        * into a structure that is not resident, and a top-level build would read bottom-level ones
+        * that are not either.
+        *
+        * That is not a theoretical hazard: it is why a scene traced correctly in a run of its own
+        * and returned ZERO hits once anything else in the process had allocated first. Whether the
+        * memory happened to be resident anyway is exactly the sort of thing that changes with
+        * allocation history, and Metal reported nothing either way. Registering here is idempotent
+        * with the later onResourceInitialized(), which finds it already present and does nothing.
+        */
+        static_cast<VkmRenderResourcePoolMetal*>(_driverMetal->getRenderResourcePool())
+            ->registerExternalAllocation(_accelerationStructure);
 
         if (sizes.buildScratchBufferSize > 0)
         {
@@ -244,34 +259,22 @@ namespace vkm
         }
 
         /*
-        * Recorded into a command buffer from the engine's own pool and submitted through the
-        * engine's queue, the shape VkmDriverBase::uploadToBuffer uses, with only the encoder
-        * reaching for the raw handle. Metal 4 has no dedicated acceleration-structure encoder --
-        * the build is encoded on a compute encoder.
+        * Recorded through the ordinary command-buffer entry point rather than by reaching for the
+        * encoder here, and submitted through the engine's queue -- the shape
+        * VkmDriverBase::uploadToBuffer uses.
+        *
+        * `buildAccelerationStructure` rather than a hand-rolled encoder block, because a hand-
+        * rolled one is what this was and it was wrong in a way nothing reported: the build
+        * appeared to succeed (the structure had the right size, the right bottom-level ids and a
+        * correctly written argument-buffer entry) and then traversed to zero hits, but only under
+        * Metal API Validation and only once another part of the process had allocated first. The
+        * per-frame rebuild path always worked, and rebuilding a freshly built structure once made
+        * the difference disappear -- so the two paths are now literally the same path.
         */
         VkmCommandQueueBase* commandQueue = _driverMetal->getCommandQueue(VkmCommandQueueType::Graphics, 0);
         VkmCommandBufferBase* commandBuffer = commandQueue->getCommandBufferPool()->allocate();
         commandBuffer->beginCommandBuffer();
-        {
-            id<MTL4CommandBuffer> mtlCommandBuffer =
-                static_cast<VkmCommandBufferMetal*>(commandBuffer)->getMTLCommandBuffer();
-            id<MTL4ComputeCommandEncoder> encoder = [mtlCommandBuffer computeCommandEncoder];
-            // The same barrier pair VkmCommandBufferMetal::onBuildAccelerationStructure emits, and
-            // for the same reason: Metal 4 does no automatic hazard tracking, so without the
-            // trailing one this build's writes are not ordered against anything recorded later on
-            // the queue -- including the ray queries that traverse the result. Whether that showed
-            // up depended entirely on what else the process had submitted, which is exactly how it
-            // was found: a scene traced correctly in a run of its own and returned zero hits when
-            // any earlier test case had run first.
-            [encoder barrierAfterQueueStages:MTLStageAll
-                                beforeStages:MTLStageDispatch
-                           visibilityOptions:MTL4VisibilityOptionDevice];
-            recordBuild(encoder);
-            [encoder barrierAfterStages:MTLStageDispatch
-                      beforeQueueStages:MTLStageAll
-                      visibilityOptions:MTL4VisibilityOptionDevice];
-            [encoder endEncoding];
-        }
+        commandBuffer->buildAccelerationStructure(handle);
         commandBuffer->endCommandBuffer();
 
         CommandSubmitInfo submitInfo;
@@ -352,6 +355,9 @@ namespace vkm
         {
             pool->unregisterExternalAllocation(_instanceBuffer);
             pool->unregisterExternalAllocation(_scratchBuffer);
+            // Idempotent with VkmRenderResourcePoolMetal::releaseResource, which removes the
+            // structure again on its way out; the second erase finds nothing and does nothing.
+            pool->unregisterExternalAllocation(_accelerationStructure);
         }
         [_accelerationStructure release];
         _accelerationStructure = nil;

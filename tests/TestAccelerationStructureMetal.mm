@@ -69,11 +69,11 @@ TEST_CASE("Path tracer - white furnace and energy conservation on Metal" * docte
     vkmtest::runPathTracerFurnaceTest(fixture.driver.get());
 }
 
-// The convergence gate is deliberately NOT registered here. It passes on Metal on its own and
-// with the validation layer off, but returns zero ray hits under MTL_DEBUG_LAYER=1 once any
-// earlier test case has run in the same process -- with a fresh driver, an identically built
-// acceleration structure and a correctly written argument-buffer entry. See TODO.md for what that
-// investigation ruled out. It runs on Vulkan (tests/TestAccelerationStructure.cpp), where CI's
-// lavapipe job reports ray tracing.
+TEST_CASE("Indirect pass - 1 spp converges to the reference path tracer on Metal" * doctest::timeout(200.0))
+{
+    MetalAccelerationStructureFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runIndirectConvergenceTest(fixture.driver.get());
+}
 
 #endif // VKM_USE_METAL_API
