@@ -117,18 +117,12 @@ namespace vkmtest
             }
 
             /*
-             * Released through the deferred reclaimer, not destroyed outright.
+             * Released through the deferred reclaimer, not destroyed outright, which is what the
+             * engine already does for exactly this -- see VkmScene::destroy.
              * `vkDestroyAccelerationStructureKHR` requires every submitted command referring to the
-             * structure to have COMPLETED, and waiting on this submission's own timeline value does
-             * not retire it as far as the validation layer is concerned -- the first run that ever
-             * executed this on a real ray-tracing driver reported the structure still in use, three
-             * times, and took the next test down with a segmentation fault.
-             *
-             * `driver->waitIdle()` is NOT the fix and was tried: the refusal subcase below leaves a
-             * command buffer allocated and deliberately never submitted, and Metal's queue wait
-             * waits on the last ALLOCATED timeline value, so draining hangs on a value nothing will
-             * ever signal. The reclaimer is what the engine already uses for exactly this -- see
-             * VkmScene::destroy -- and it releases on a timeline that has actually advanced.
+             * structure to have COMPLETED; the first run that ever executed this on a real
+             * ray-tracing driver reported the structure still in use and took the next test down
+             * with a segmentation fault.
              */
             driver->getDeferredReclaimer()->requestRelease(tlas->getHandle());
         }
@@ -137,6 +131,11 @@ namespace vkmtest
         {
             // Its scratch was freed after the initial build, so rebuilding would read whatever now
             // occupies that memory. The refusal is the guard against that.
+            //
+            // This command buffer is begun and deliberately never submitted, which also covers the
+            // stranded-timeline case: beginCommandBuffer() takes a timeline value, and until
+            // VkmGpuEventTimelineBase::markTimelineSubmitted existed, abandoning it left every
+            // later waitIdle on this queue waiting on a value nothing would signal.
             vkm::VkmCommandQueueBase* queue =
                 driver->getCommandQueue(vkm::VkmCommandQueueType::Graphics, 0);
             vkm::VkmCommandBufferBase* commandBuffer = queue->getCommandBufferPool()->allocate();

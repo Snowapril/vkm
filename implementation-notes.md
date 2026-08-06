@@ -2869,3 +2869,37 @@ verified. Tuning the Jacobian clamp until the mean looked right was available an
 - **RTXDI's Jacobian magnitude clamp (reject outside [0.1, 10]) is deliberately not applied.** It
   bounds variance at the cost of the mean this sub-step exists to measure, and applying it here
   would have hidden the very thing being looked for. It belongs to 8.7 and a profiler.
+
+## The stranded timeline value (CI lavapipe SIGSEGV)
+
+The first CI run with a real ray-tracing driver reported
+`VUID-vkDestroyAccelerationStructureKHR-accelerationStructure-02442` on `AsTestTlas` and
+`AsTestBlas` and then died with SIGSEGV inside the acceleration structure test. Releasing through
+the deferred reclaimer instead of destroying outright did not fix it -- it only moved the crash
+earlier, from the second test case into the first.
+
+The cause is one counter used for two purposes. `VkmCommandBufferBase::beginCommandBuffer()`
+allocates a timeline value (it needs one to tag resource usages recorded during recording), and
+`submit()` allocates another and asks the GPU to signal it. `waitIdle()` waited on
+`_lastAllocatedTimeline`, which is correct only as long as the last allocation was a submit.
+
+`runAccelerationStructureTest`'s "cannot be rebuilt" subcase begins a command buffer and, by
+design, never submits it -- the point of the subcase is that `recordBuild` refuses. From that
+point on the queue's last allocated value is one nothing will ever signal:
+
+- Metal blocks for the full timeout, which is the hang seen when `driver->waitIdle()` was tried.
+- Vulkan's `vkWaitSemaphores` returns `VK_TIMEOUT`, and the return value was discarded, so the
+  wait was indistinguishable from success. The reclaimer's shutdown drain then released every
+  pending entry anyway, the validation layer never retired the submissions, and lavapipe walked
+  into freed memory.
+
+The fix is `VkmGpuEventTimelineBase::markTimelineSubmitted`, called by all three backends' submit,
+with `waitIdle` waiting on `_lastSubmittedTimeline`. In the normal path the two values are
+identical -- Vulkan's submit allocates last, and Metal signals the highest submitted command
+buffer's own value -- so the only behaviour that changes is the stranded case. `waitIdle` on
+Vulkan now also reports a non-`VK_SUCCESS` result rather than swallowing it, because every caller
+goes on to destroy resources on the assumption that the wait meant something.
+
+Covered by `TestEngineSetup.cpp`'s "the submitted timeline trails the allocated one", which is
+device-free and fails on the pre-fix semantics (verified by sabotage: two of its six assertions
+fail when `getLastSubmittedTimeline()` returns the allocated value).

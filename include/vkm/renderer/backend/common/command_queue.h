@@ -5,6 +5,7 @@
 #include <vkm/base/common.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/driver_resource.h>
+#include <algorithm>
 #include <memory>
 #include <array>
 
@@ -83,8 +84,9 @@ namespace vkm
         virtual ~VkmGpuEventTimelineBase() = default;
 
         inline uint64_t getLastAllocatedTimeline() const { return _lastAllocatedTimeline; }
+        inline uint64_t getLastSubmittedTimeline() const { return _lastSubmittedTimeline; }
         inline uint64_t getLastCompletedCachedTimeline() const { return _lastCompletedCachedTimeline; }
-        
+
         virtual uint64_t queryLastCompletedTimeline() = 0;
         virtual void waitIdle( const uint64_t timeoutMs ) = 0;
 
@@ -96,9 +98,24 @@ namespace vkm
             return gpuEventTimelineObject;
         }
 
+        // Records the highest value a submission has asked the GPU to signal. Every backend's
+        // submit() must call this; waitIdle() waits on it rather than on the last ALLOCATED value,
+        // and the difference is not cosmetic. beginCommandBuffer() takes a timeline value too, so
+        // a command buffer that is begun and then never submitted leaves _lastAllocatedTimeline
+        // sitting on a value nothing will ever signal -- after which waiting for the queue to
+        // drain either hangs (Metal) or times out and reports nothing (Vulkan ignores
+        // vkWaitSemaphores' result), and the caller goes on to destroy resources the GPU is still
+        // reading. That is not hypothetical: it presented as VUID-vkDestroy...-02442 followed by a
+        // segmentation fault on the first CI run that had a real ray-tracing driver.
+        inline void markTimelineSubmitted(const uint64_t timelineValue)
+        {
+            _lastSubmittedTimeline = std::max(_lastSubmittedTimeline, timelineValue);
+        }
+
     protected:
         VkmDriverBase* _driver;
         uint64_t _lastAllocatedTimeline = 0; // This value is incremented each time a new timeline is allocated for command buffer submission
+        uint64_t _lastSubmittedTimeline = 0; // The highest value actually handed to the GPU to signal; see markTimelineSubmitted
         uint64_t _lastCompletedCachedTimeline = 0; // This value may not be updated immediately, it is used to cache the last completed timeline for performance reasons
     };
 

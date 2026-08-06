@@ -59,10 +59,11 @@ namespace vkm
 
     void VkmGpuEventTimelineMetal::waitIdle(const uint64_t timeoutMs)
     {
-        // Wait until the last ALLOCATED (submitted) value signals, mirroring
-        // VkmGpuEventTimelineVulkan::waitIdle -- waiting on the cached completed value
-        // returns immediately without waiting for in-flight work.
-        [_mtlSharedEvent waitUntilSignaledValue:_lastAllocatedTimeline timeoutMS:timeoutMs];
+        // Wait until the last SUBMITTED value signals, mirroring VkmGpuEventTimelineVulkan::
+        // waitIdle -- waiting on the cached completed value returns immediately without waiting
+        // for in-flight work, and waiting on the last ALLOCATED value hangs for the full timeout
+        // whenever a command buffer was begun and never submitted (see markTimelineSubmitted).
+        [_mtlSharedEvent waitUntilSignaledValue:_lastSubmittedTimeline timeoutMS:timeoutMs];
         _lastCompletedCachedTimeline = [_mtlSharedEvent signaledValue];
     }
 
@@ -139,6 +140,7 @@ namespace vkm
 
         [_mtlCommandQueue commit:mtlCommandBuffers count:count options:commitOptions];
         [_mtlCommandQueue signalEvent:mtlSharedEvent value:lastSubmittedTimelineValue];
+        gpuEventTimelineMetal->markTimelineSubmitted(lastSubmittedTimelineValue);
 
         // commit: has taken what it needs from the options (including a copy of the feedback
         // block), so drop our reference -- these sources are compiled without ARC and this

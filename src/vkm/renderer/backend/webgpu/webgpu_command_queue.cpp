@@ -77,7 +77,7 @@ namespace vkm
     {
         // WebGPU has no synchronous fence-wait primitive on Web; this is a bounded best-effort
         // poll driven by the browser event loop via emscripten_sleep (-sASYNCIFY), not a true block.
-        const uint64_t target = _lastAllocatedTimeline;
+        const uint64_t target = _lastSubmittedTimeline;
         const double startTime = emscripten_get_now();
         while (_lastCompletedTimeline.load() < target)
         {
@@ -153,6 +153,7 @@ namespace vkm
         };
         wgpuQueueOnSubmittedWorkDone(_wgpuQueue, workDoneCallbackInfo);
 
+        timeline->markTimelineSubmitted(timelineObject._timelineValue);
         return timelineObject;
     }
 

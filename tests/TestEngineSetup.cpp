@@ -138,6 +138,33 @@ TEST_CASE("VkmGpuEventTimelineBase - allocateGpuEventTimelineObject increments m
     CHECK(tl.getLastAllocatedTimeline() == 2);
 }
 
+TEST_CASE("VkmGpuEventTimelineBase - the submitted timeline trails the allocated one") {
+    // beginCommandBuffer() allocates a timeline value and only submit() hands one to the GPU, so
+    // the two counters are not interchangeable: waiting on the ALLOCATED value waits for something
+    // nothing will ever signal as soon as one command buffer is begun and dropped. That is what
+    // took a CI run down with VUID-vkDestroyAccelerationStructureKHR-...-02442 and a segmentation
+    // fault -- the drain silently timed out and the resources were destroyed in flight anyway.
+    MockGpuEventTimeline tl;
+    CHECK(tl.getLastSubmittedTimeline() == 0);
+
+    const auto begun = tl.allocateGpuEventTimelineObject();       // beginCommandBuffer()
+    const auto submitted = tl.allocateGpuEventTimelineObject();   // submit()
+    tl.markTimelineSubmitted(submitted._timelineValue);
+    CHECK(tl.getLastSubmittedTimeline() == submitted._timelineValue);
+    CHECK(tl.getLastSubmittedTimeline() > begun._timelineValue);
+
+    // A command buffer begun after the last submit and then never submitted -- the stranded case.
+    // The submitted value must not follow it, or draining waits forever.
+    const auto stranded = tl.allocateGpuEventTimelineObject();
+    CHECK(tl.getLastAllocatedTimeline() == stranded._timelineValue);
+    CHECK(tl.getLastSubmittedTimeline() < stranded._timelineValue);
+
+    // Monotonic: Metal signals the highest value among the command buffers in one submit, so an
+    // out-of-order mark must not walk the value backwards.
+    tl.markTimelineSubmitted(1);
+    CHECK(tl.getLastSubmittedTimeline() == submitted._timelineValue);
+}
+
 TEST_CASE("VkmRenderResource - recordUsage/getLastUsage/hasAnyPendingUsage tracks per-queue timelines") {
     MockRenderResource resource;
     CHECK_FALSE(resource.hasAnyPendingUsage());

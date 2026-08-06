@@ -110,6 +110,8 @@
 - A rebuilt top-level structure cannot grow: `updateInstances` refuses a list longer than the one it was created with, because the structure was sized against that count, so a scene that spawns objects has to recreate its structure.
 - Deforming geometry has no path: `recordBuild` always does a full BUILD, never an UPDATE refit, so a skinned or morphed mesh would rebuild its bottom-level structure from scratch every frame.
 - Nothing synchronizes a recorded acceleration structure build against the ray queries that read it; a caller has to place its own barrier until an `barrierAccelerationStructure` exists.
+- A command buffer that is begun and never submitted still consumes a timeline value forever, so a resource used only by it never becomes reclaimable and is destroyed by the shutdown drain instead.
+- `VkmDeferredResourceReclaimer::stop()` releases every remaining entry whether or not its `waitIdle` succeeded, so a genuine GPU timeout at shutdown destroys resources that are still in flight.
 - Vulkan/Metal validation errors at ImGui teardown (`VUID-vkDestroyBuffer-buffer-00922` and three others) fire on every unit-test run: `ImGui_ImplVulkan_Shutdown` destroys its frame buffers without waiting for the last submission.
 - Normal maps are unsampled because tangents may be zero (no MikkTSpace generator), and emissive because the G-buffer has no channel to carry it.
 - Material textures have no automated coverage on Vulkan: the offscreen scene-render harness is Metal-only, since the Vulkan fixture renders black on this machine's MoltenVK/lavapipe.
