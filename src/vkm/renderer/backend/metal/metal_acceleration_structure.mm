@@ -176,12 +176,19 @@ namespace vkm
             VKM_DEBUG_ERROR("recordBuild on an acceleration structure that failed to initialize");
             return;
         }
-        const MTL4BufferRange scratchRange =
-            _scratchBuffer != nil ? MTL4BufferRange{ _scratchBuffer.gpuAddress, _scratchBuffer.length }
-                                  : MTL4BufferRange{ 0, 0 };
+        if (_scratchBuffer == nil)
+        {
+            // The scratch is gone on a static structure, which is exactly the case this must
+            // refuse: rebuilding one would read whatever now occupies that memory. Passing an
+            // empty range instead is not a softer failure -- Metal's debug layer aborts the
+            // process on a nil scratch buffer, which is how this guard's absence surfaced.
+            VKM_DEBUG_ERROR("recordBuild on an acceleration structure that was not created with _allowUpdate");
+            return;
+        }
         [encoder buildAccelerationStructure:_accelerationStructure
                                  descriptor:_descriptor
-                              scratchBuffer:scratchRange];
+                              scratchBuffer:MTL4BufferRange{ _scratchBuffer.gpuAddress,
+                                                             _scratchBuffer.length }];
     }
 
     bool VkmAccelerationStructureMetal::initialize(VkmResourceHandle handle,
@@ -194,11 +201,9 @@ namespace vkm
         _allowUpdate = info._allowUpdate;
 
         /*
-        * Owned outright, not autoreleased. These sources are compiled without ARC, and the
-        * destructor runs on the deferred reclaimer's thread long after any pool that was active
-        * when the structure was created has drained -- so an autoreleased descriptor is released
-        * twice, which surfaces as a mimalloc heap assertion during suite teardown rather than at
-        * the site.
+        * Owned outright, not autoreleased: a rebuild is described by this same descriptor, so it
+        * has to outlive initialize() by the structure's whole lifetime. These sources are compiled
+        * without ARC, and releaseAll() is what balances it.
         */
         _descriptor = makeDescriptor(info);
         if (_descriptor == nil)

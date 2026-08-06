@@ -41,6 +41,7 @@ set(SRCS
     ${SRC_DIR}/TestMipChain.cpp
     ${SRC_DIR}/TestCubemapTexture.cpp
     ${SRC_DIR}/TestBufferHostWrite.cpp
+    ${SRC_DIR}/TestAccelerationStructure.cpp
 )
 
 if (VKM_USE_METAL_API)
@@ -60,6 +61,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestGBufferRenderMetal.mm
         ${SRC_DIR}/TestProbeVolumeMetal.mm
         ${SRC_DIR}/TestViewportMetal.mm
+        ${SRC_DIR}/TestAccelerationStructureMetal.mm
     )
 endif()
 
@@ -82,6 +84,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestGBufferRenderMetal.mm
         ${SRC_DIR}/TestProbeVolumeMetal.mm
         ${SRC_DIR}/TestViewportMetal.mm
+        ${SRC_DIR}/TestAccelerationStructureMetal.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++"
     )
 endif()

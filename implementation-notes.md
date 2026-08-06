@@ -2334,3 +2334,53 @@ the runner, and until this it was unverified.
   run. Making the suite fail when every device test skips is a real change to the test harness's
   contract -- it would break local runs on machines without a given backend -- so it was not taken
   as a side effect of a CI fix.
+
+## 2026-08-06 — The Metal acceleration structure suite crash was a validation abort, not mimalloc
+
+Registering `TestAccelerationStructureMetal.mm` in `tests/CMakeLists.txt` killed the whole Metal
+suite with pages of
+
+```
+mimalloc: assertion failed ... "p==NULL || mi_is_in_heap_region(p)"
+```
+
+None of which was the failure. It is the recursion already recorded in `TODO.md`: backward-cpp's
+signal handler allocates while formatting a trace, so an abort re-enters mimalloc and loops there
+forever. The first lines of the run say what actually happened:
+
+```
+-[MTL4DebugComputeCommandEncoder buildAccelerationStructure:descriptor:scratchBuffer:]:2452:
+failed assertion `Scratch buffer must not be nil'
+```
+
+`VkmAccelerationStructureMetal::recordBuild` checked only that the structure and its descriptor
+existed, then passed `MTL4BufferRange{0, 0}` when there was no scratch. Its Vulkan counterpart has
+always refused that case outright (`vulkan_acceleration_structure.cpp:351`) — a static structure's
+scratch is freed after the initial build, so rebuilding one would read whatever now occupies that
+memory. Metal now refuses on the same condition.
+
+**Why it passed standalone and died in the suite.** Nothing about the suite was involved. The
+difference is `MTL_DEBUG_LAYER=1`, which `scripts/run_tests.py` sets and a bare
+`./UnitTests --test-case=...` does not. Without the debug layer Metal accepts the nil scratch and
+the subcase's assertions pass; with it, the process aborts inside the encoder. The earlier attempt
+to fix this by owning the descriptor outright rather than autoreleasing it changed nothing, and the
+comment that change left behind — blaming a double release for the mimalloc output — was wrong; it
+has been rewritten to state the real reason the descriptor is retained (a rebuild is described by
+it).
+
+The test is the regression guard, and it is load-bearing only under validation: its
+`a structure built without _allowUpdate cannot be rebuilt` subcase asserts the structure survives,
+which passes either way, but with the guard removed the debug layer aborts the run. That is the
+sabotage evidence, obtained in reverse — the pre-fix run is the sabotaged one.
+
+`tests/TestAccelerationStructure.cpp` wraps the same shared body in a Vulkan fixture. It cannot run
+here (MoltenVK reports no ray tracing, so the shared body skips) and its first real execution will
+be CI's `Ubuntu 24.04 + GCC-13` lavapipe job. One consequence is recorded in `TODO.md`: the shared
+body's `Skipping: ` message makes `run_tests.py` report the whole Vulkan suite as SKIP on any
+device without ray tracing, which is honest about the missing coverage but hides a second,
+unrelated skip.
+
+Verified: Metal Debug **213/213 (20452 assertions)** and Release, both with Metal API Validation
+enabled and no validation output; Vulkan Debug 209/209 with `VK_LAYER_KHRONOS_validation`, reported
+as SKIP for the reason above. The four pre-existing `ImGui_ImplVulkan_Shutdown` teardown validation
+errors are unchanged.
