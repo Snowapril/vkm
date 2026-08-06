@@ -380,10 +380,16 @@ namespace vkmtest
             vkm::vkmComputeImageMse(referenceImage.data(), spatialImage.data(), pixelCount);
         const float spatialRelativeMse =
             vkm::vkmComputeImageRelativeMse(referenceImage.data(), spatialImage.data(), pixelCount);
+        // Printed rather than asserted, and printed with the ratio because that is the number a
+        // reader wants: 1.0 means resampling did not move the mean. On this machine's Metal it
+        // reads 1.138, and whether it reads the same on a different driver is what says whether
+        // the fault is in the estimator or in one backend's code generation.
         MESSAGE("spatial (UNVERIFIED) vs reference: MSE " << spatialMse << ", RelMSE "
                                                           << spatialRelativeMse << ", mean red "
                                                           << spatialBrightness << " (1-spp "
-                                                          << indirectBrightness << ")");
+                                                          << indirectBrightness << ", ratio "
+                                                          << (spatialBrightness / indirectBrightness)
+                                                          << ")");
         CHECK(spatialCovered == covered);
         CHECK(spatialBrightness > 0.05);
 

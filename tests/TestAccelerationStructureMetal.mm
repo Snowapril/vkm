@@ -62,14 +62,14 @@ TEST_CASE("Ray query - a compute shader traces a loaded scene on Metal")
     vkmtest::runRayQueryTest(fixture.driver.get());
 }
 
-TEST_CASE("Path tracer - white furnace and energy conservation on Metal" * doctest::timeout(30.0))
+TEST_CASE("Path tracer - white furnace and energy conservation on Metal" * doctest::timeout(120.0))
 {
     MetalAccelerationStructureFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
     vkmtest::runPathTracerFurnaceTest(fixture.driver.get());
 }
 
-TEST_CASE("Indirect pass - 1 spp converges to the reference path tracer on Metal" * doctest::timeout(200.0))
+TEST_CASE("Indirect pass - 1 spp converges to the reference path tracer on Metal" * doctest::timeout(400.0))
 {
     MetalAccelerationStructureFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);

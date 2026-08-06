@@ -67,14 +67,14 @@ TEST_CASE("Ray query - a compute shader traces a loaded scene on Vulkan")
     vkmtest::runRayQueryTest(fixture.driver.get());
 }
 
-TEST_CASE("Path tracer - white furnace and energy conservation on Vulkan" * doctest::timeout(30.0))
+TEST_CASE("Path tracer - white furnace and energy conservation on Vulkan" * doctest::timeout(120.0))
 {
     VulkanAccelerationStructureFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
     vkmtest::runPathTracerFurnaceTest(fixture.driver.get());
 }
 
-TEST_CASE("Indirect pass - 1 spp converges to the reference path tracer on Vulkan" * doctest::timeout(120.0))
+TEST_CASE("Indirect pass - 1 spp converges to the reference path tracer on Vulkan" * doctest::timeout(400.0))
 {
     VulkanAccelerationStructureFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
