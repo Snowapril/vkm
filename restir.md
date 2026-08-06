@@ -886,17 +886,35 @@ built from `VkmSceneGeometryPool`, **5c** the TLAS as a bindless singleton plus 
       instances is cheap and stays optimal, while an update degrades traversal as instances drift
       from where the structure was built. Refit belongs to deforming geometry, which nothing
       produces yet.
-- [ ] Bind one TLAS as a bindless singleton — extend `VkmBindlessSingletonBuffer`, all three
-      backends' managers, and `vkm_bindless.hlsli`. **On Metal it must also get an
-      `add_msl_resource_binding` entry** (`basetype = SPIRType::AccelerationStructure`, `count = 1`,
-      using the `msl_buffer` index category): `pad_argument_buffer_resources` walks *every*
-      registered set-0 binding to synthesize padding members, so an unregistered one shifts the whole
-      argument-buffer layout for every shader (`main.cpp:376-420`)
-- [ ] Confirm `MTL4ArgumentTable` AS binding empirically (no documented `setAccelerationStructure`)
-- [ ] Prefer `MTLResidencySet` over per-encoder `useResource:` (fits vkm's existing residency code)
+- [x] **5c: one TLAS bound in set 0**, at `kVkmBindlessAccelerationStructureBinding` (8), through a
+      new `setAccelerationStructure()` on all three backends' managers plus
+      `VKM_BINDLESS_ACCELERATION_STRUCTURE` in `vkm_bindless.hlsli` (native branch only). Given its
+      own binding rather than a `VkmBindlessSingletonBuffer` entry: its descriptor type is an
+      acceleration structure on Vulkan and an `MTLResourceID` on Metal, so nothing about the
+      singleton *buffer* path applies to it. Vulkan drops the binding entirely on a device without
+      ray tracing, since that descriptor type is illegal in a layout there.
+      The `add_msl_resource_binding` entry is what unblocked §4.4 — but **not** with
+      `basetype = SPIRType::AccelerationStructure`, which throws
+      "Unexpected argument buffer resource base type" for *every* shader in the tree: the switch
+      that consumes it accepts scalars, `Image`, `Sampler` and `SampledImage` only. A scalar
+      basetype is correct, because the registration only picks the index category (buffer, which is
+      what an acceleration structure genuinely uses — `[[buffer(index)]]`, `spirv_msl.cpp:15344`)
+      and the padding-member width (8 bytes, which is its entry).
+- [x] Confirm `MTL4ArgumentTable` AS binding empirically — confirmed by the emitted MSL and by the
+      gate running: `raytracing::acceleration_structure<raytracing::instancing> g_Scene [[id(12293)]]`
+      inside `spvDescriptorSetBuffer0`, reached through the same argument buffer as everything else
+      in set 0, with no `setAccelerationStructure` on the argument table needed at all.
+- [x] Prefer `MTLResidencySet` over per-encoder `useResource:` —
+      `VkmRenderResourcePoolMetal::fetchAllocation` now covers `AccelerationStructure`, so a
+      structure joins the pool's residency set like any other allocation and every bottom-level
+      structure the top-level one names is covered for free.
 
-**Gate:** a compute shader ray-casts a loaded glTF scene and writes hit/miss + `t` matching a CPU
-reference for known rays, on Vulkan and Metal.
+**Gate: MET on Metal** (`tests/TestRayQueryShared.hpp`, `resources/tests/ray_query/`) — six rays
+against a loaded glTF scene, hit/miss and `t` against an analytic reference. Vulkan runs the same
+body and first executes it in CI's lavapipe job. The gate is what finally makes Phase 5 observable:
+the traced mesh is deliberately the *second* one in the geometry pool and its object is placed away
+from the origin, so a zeroed pool offset and a dropped instance transform each turn its three
+expected hits into misses — both verified by sabotage, and both silent before this.
 
 **RHI contract note (Phases 2 and 5):** `backend/common/AGENTS.md:556` requires that no new pure
 virtual is added without implementing it in **all** backends — so every RT and barrier entry point
@@ -1284,3 +1302,4 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-08-04 | 5 | **Two Phase 5 pre-decisions settled (§12).** CI gains one `ubuntu-24.04` Vulkan job for lavapipe ray-query coverage rather than moving the matrix -- 24.04 carries Mesa 25.x so no PPA is needed, but noble has neither gcc-10/11 nor clang-11/12, so the eight 22.04 jobs stay and `dxc-linux` stays pinned to v1.8 against the other platforms' v1.9. Direct lighting at the secondary hit will be plain NEE behind a `shadeSecondaryHit()` seam, not ReSTIR DI first: the scene has one directional light, and many-light resampling is the whole point of DI, so building it now would be building it blind. |
 | 2026-08-06 | 5 | **The Metal acceleration structure test is in the suite.** Registering it had been killing the whole Metal run with mimalloc heap assertions, which were entirely the backward-cpp signal-handler recursion already in `TODO.md`. The real abort was Metal's debug layer on `buildAccelerationStructure:` with a nil scratch buffer: `recordBuild` passed an empty `MTL4BufferRange` where the Vulkan side has always refused outright, because a static structure's scratch is freed after its initial build. It passed standalone only because `MTL_DEBUG_LAYER=1` comes from `run_tests.py` and not from the fixture. A Vulkan fixture over the same shared body was added at the same time, so the Vulkan implementation -- which has never executed anywhere -- runs for the first time in CI's lavapipe job. Metal 213/213 (20452 assertions) Debug and Release, validation clean; Vulkan 209/209, reported SKIP because the shared body honestly skips without ray tracing. |
 | 2026-08-06 | 5 | **A scene builds its own acceleration structures.** `VkmScene::buildAccelerationStructures()` makes one bottom-level structure per pooled mesh and one rebuildable top-level structure over the objects, described as ranges into the geometry pool's existing buffers -- no vertex data duplicated. The pooled-buffer trap §8 warned about never fired: the pool already forces the committed allocation path for a bindless reason, so `AllowAccelerationStructureInput` only adds the build-input usage bit, and it is added only where the device reports ray tracing (that usage is illegal without `VK_KHR_acceleration_structure` enabled, which is every MoltenVK device here). The honest limit is that **the test cannot see whether the geometry offsets are right**: zeroing both leaves it passing, because a wrong-but-in-range address builds over the wrong triangles and nothing traverses the result until 5c's ray-query gate. What it does catch, by sabotage, is a mesh range reaching the build empty. Metal 214/214 (20489 assertions) Debug and Release, validation clean. |
+| 2026-08-06 | 5 | **Phase 5c: the gate runs.** The scene's top-level structure is bound in set 0 at its own binding (not a `VkmBindlessSingletonBuffer` entry -- its descriptor type is an acceleration structure on Vulkan and an `MTLResourceID` on Metal), and a compute shader ray-casts a loaded glTF scene through it. The §4.4 Metal blocker fell to the predicted `add_msl_resource_binding` entry, but **not** with the basetype §8 specified: `SPIRType::AccelerationStructure` throws "Unexpected argument buffer resource base type" for every shader in the tree, because that registration only selects an index category and a padding width, and the accepted list is scalars/Image/Sampler/SampledImage. A scalar is correct -- an acceleration structure is emitted as `[[buffer(index)]]`. Confirmed in the MSL: `acceleration_structure<instancing> g_Scene [[id(12293)]]`, query lowered to `intersection_query<instancing, triangle_data>`. Vulkan drops the binding on a non-RT device, where it is not a legal descriptor type. Metal residency comes from the pool's `MTLResidencySet` rather than per-encoder `useResource:`. **The gate closes the offset hole recorded two days ago**: the traced mesh is the second in the pool and its object sits at (10, 20, -1), so zeroing the pool offsets and forcing the instance transform to identity each fail it -- both verified by sabotage, both silent before. |

@@ -140,6 +140,24 @@
 #define VKM_BINDLESS_VISIBLE_LIST(name) \
     [[vk::binding(7, 0)]] RWStructuredBuffer<uint> name : register(u1, space0)
 
+/*
+* The scene's top-level acceleration structure, at kVkmBindlessAccelerationStructureBinding --
+* one structure, not an array. A pointer-style bindless acceleration structure is not available on
+* the Metal path at all: spirv-cross throws on OpConvertUToAccelerationStructureKHR (restir.md
+* section 4.2), so there is nothing to index.
+*
+* **Triangle geometry only.** spirv-cross hardcodes the MSL query tags to
+* intersection_query<instancing, triangle_data> while still emitting
+* commit_bounding_box_intersection(), so a procedural-primitive query compiles all the way to a
+* metallib and is wrong at runtime with no diagnostic. Do not write one.
+*
+* Deliberately absent from the WebGPU branch: that backend has no acceleration structure API and
+* never reports VkmDriverCapabilityFlags::RayTracing, so a shader declaring this cannot build
+* there. A PSO whose stage sets "ray_query": true is what carries the SM 6.5 profile this needs.
+*/
+#define VKM_BINDLESS_ACCELERATION_STRUCTURE(name) \
+    [[vk::binding(8, 0)]] RaytracingAccelerationStructure name : register(t5, space0)
+
 #endif // VKM_BACKEND_WEBGPU
 
 #endif // VKM_BINDLESS_HLSLI

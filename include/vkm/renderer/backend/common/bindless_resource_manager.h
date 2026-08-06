@@ -70,6 +70,27 @@ namespace vkm
     inline constexpr uint32_t kVkmBindlessFirstSingletonBinding = kVkmBindlessSamplerBinding + 1;
 
     /*
+    * @brief set 0, the binding after the singletons -- the one scene acceleration structure.
+    *
+    * @details Not a `VkmBindlessSingletonBuffer` despite sitting beside them: its descriptor type
+    * is an acceleration structure on Vulkan and an `MTLResourceID` on Metal, so nothing about the
+    * singleton buffer path applies to it beyond the binding arithmetic. `setAccelerationStructure`
+    * is its setter.
+    *
+    * **One structure, not an array.** SPIRV-Cross rejects `OpConvertUToAccelerationStructureKHR`,
+    * so there is no pointer-style bindless acceleration structure on the Metal path (restir.md
+    * section 4.2); a shader reaches the scene's top-level structure by name or not at all.
+    *
+    * Present only where the device reports `VkmDriverCapabilityFlags::RayTracing`. On Vulkan the
+    * descriptor type is invalid without `VK_KHR_acceleration_structure` enabled, so the set-0
+    * layout genuinely differs between an RT and a non-RT device -- which costs nothing, since a
+    * shader declaring this binding is a ray-query shader and cannot be created on a non-RT device
+    * anyway. WebGPU has no such API at all.
+    */
+    inline constexpr uint32_t kVkmBindlessAccelerationStructureBinding =
+        kVkmBindlessFirstSingletonBinding + static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count);
+
+    /*
     * @brief Only ONE texture type may be declared at binding 0 per shader.
     * @details Vulkan's VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE carries no dimensionality -- the
     * shader's declaration does -- so different pipelines may legally declare binding 0 as
@@ -238,8 +259,12 @@ namespace vkm
     // The singleton buffers follow the sampler entry, one 8-byte entry each, in
     // VkmBindlessSingletonBuffer order.
     inline constexpr uint32_t kVkmMetalBindlessSingletonIdBase = kVkmMetalBindlessSamplerId + 1;
-    inline constexpr uint32_t kVkmMetalBindlessArgumentEntryCount =
+    // The acceleration structure follows them, in the same 8-byte entry shape -- an argument
+    // buffer holds an MTLResourceID there rather than a GPU address, which is the same width.
+    inline constexpr uint32_t kVkmMetalBindlessAccelerationStructureId =
         kVkmMetalBindlessSingletonIdBase + static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count);
+    inline constexpr uint32_t kVkmMetalBindlessArgumentEntryCount =
+        kVkmMetalBindlessAccelerationStructureId + 1;
 
     /*
     * @brief Hands out push-constant ring entries from the current frame slot's region.
@@ -323,6 +348,19 @@ namespace vkm
         * immutable, so this recreates bind group 0.
         */
         virtual bool setSingletonBuffer(VkmBindlessSingletonBuffer which, VkmResourceHandle bufferHandle) = 0;
+
+        /*
+        * @brief Publishes the scene's top-level acceleration structure at
+        * kVkmBindlessAccelerationStructureBinding, or unbinds it when passed
+        * VKM_INVALID_RESOURCE_HANDLE.
+        *
+        * Called at scene build/teardown time, like setSingletonBuffer -- a rebuilt structure keeps
+        * the same handle, so a per-frame rebuild does not have to republish it.
+        *
+        * Fails on a backend without VkmDriverCapabilityFlags::RayTracing, where the binding does
+        * not exist.
+        */
+        virtual bool setAccelerationStructure(VkmResourceHandle accelerationStructureHandle) = 0;
 
         /*
         * @brief Rewinds this frame slot's push-constant ring region.

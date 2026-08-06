@@ -2441,3 +2441,106 @@ the recorded rebuild after an object moves.
   region and no fence, so a frame still executing its rebuild can have that buffer rewritten under
   it. Ringing it is a change to `VkmAccelerationStructure`'s shape on both backends, well outside
   this task; the hazard is recorded in `TODO.md` instead, next to the barrier one it sits beside.
+
+## 2026-08-06 — Phase 5c: the acceleration structure reaches shaders, and the gate runs
+
+### The set-0 binding
+
+`kVkmBindlessAccelerationStructureBinding` is set 0's binding after the singletons (8), with
+`VkmBindlessResourceManagerBase::setAccelerationStructure()` as its setter, and `VkmScene`
+publishes its top-level structure there once at `buildAccelerationStructures()` -- a rebuild writes
+into the same structure, so a per-frame rebuild never has to republish.
+
+- **Not a `VkmBindlessSingletonBuffer`, which is what `restir.md` §8 planned.** Its descriptor type
+  is `VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR` on Vulkan and an `MTLResourceID` on Metal, so
+  nothing about the singleton *buffer* path applies to it beyond the binding arithmetic; folding it
+  into an enum whose every entry documents an HLSL buffer type would have meant type-branching
+  inside that path anyway. Logged under Deviations.
+- **One structure, not an array.** Forced, not chosen: spirv-cross throws on
+  `OpConvertUToAccelerationStructureKHR`, so there is no pointer-style bindless acceleration
+  structure on the Metal path at all (§4.2).
+- **Vulkan drops the binding entirely on a device without ray tracing.** That descriptor type is
+  not legal in a layout -- nor in a descriptor pool size -- without `VK_KHR_acceleration_structure`
+  enabled, and MoltenVK enables none of the RT extensions. Nothing is lost, since the only shaders
+  that declare it are ray-query shaders, which cannot be created on such a device either way. The
+  consequence is that set 0's layout genuinely differs between the two kinds of device; recorded in
+  `TODO.md`.
+- **Metal residency.** `VkmRenderResourcePoolMetal::fetchAllocation` now handles
+  `VkmResourceType::AccelerationStructure`, so structures join the pool's `MTLResidencySet` like
+  every other allocation. Metal 4 does no implicit residency and the argument buffer carries only
+  an `MTLResourceID`, so without this the traversal reads an unmapped structure. Doing it in the
+  pool rather than with a per-encoder `useResource:` is what keeps the encoders unaware of it, and
+  it covers every bottom-level structure the top-level one names for free.
+
+### The Metal compile blocker §4.4 diagnosed, and the trap inside the fix
+
+Registering the binding with vkm-compiler's `add_msl_resource_binding` is what unblocked the ray
+query path on Metal, exactly as §4.4 predicted. What §4.4 did *not* predict is that the obvious
+basetype is wrong:
+
+- `basetype = SPIRType::AccelerationStructure` replaces the original failure with
+  **"Unexpected argument buffer resource base type"** for *every* shader in the tree, not just ray
+  ones. The switch that consumes this accepts scalars, `Image`, `Sampler` and `SampledImage` only
+  (`spirv_msl.cpp:88-118`, and the padding walk at `20245-20277` has the same list).
+- The registered basetype selects only which **index category** the id belongs to and which padding
+  member is synthesized when a shader steps over it. An acceleration structure genuinely uses the
+  buffer category -- spirv-cross emits it as `[[buffer(index)]]` (`spirv_msl.cpp:15344`) -- and its
+  argument-buffer entry is one 8-byte slot, so a scalar basetype is both correct and sufficient.
+
+Verified in the emitted MSL rather than by inspection:
+`raytracing::acceleration_structure<raytracing::instancing> g_Scene [[id(12293)]]` inside
+`spvDescriptorSetBuffer0`, at exactly `kVkmMetalBindlessAccelerationStructureId`, with the query
+lowered to `raytracing::intersection_query<raytracing::instancing, raytracing::triangle_data>` --
+the triangle-only envelope §4.2 describes.
+
+### The gate
+
+`resources/tests/ray_query/ray_query.hlsl` casts six rays at the scene's structure, reached through
+the bindless set; the only other resource it touches is a set-2 output buffer. The rays are
+generated from the thread id rather than read from a buffer, so a wrong result cannot be blamed on
+an input that failed to bind.
+
+**This is what made everything under Phase 5 observable for the first time.** Until a ray
+traverses, "the build accepted it" is the whole of what any acceleration structure test can say --
+a wrong vertex offset, a wrong index base, a dropped instance transform and a correct build are
+indistinguishable, which is exactly the limit recorded two days ago and now removed from
+`TODO.md`. Two things make the six rays discriminating:
+
+- The scene loads `gltf_two_rooms.gltf` **first** and `gltf_triangle.gltf` second, so the traced
+  mesh sits at non-zero vertex and index offsets inside the geometry pool. A second copy of the
+  same model would not do: identical bytes at a different offset build an identical structure.
+- The traced object is placed at (10, 20, -1), not at the origin, and the distractor a thousand
+  units away. The triangle's own vertices are at the origin in object space, so the instance
+  transform is the only thing that can put geometry where these rays look.
+
+Both were checked by sabotage, and both had been silent before: zeroing the pool's vertex and index
+byte offsets, and forcing the instance transform to identity, each turn the three expected hits
+into misses.
+
+### Deviations
+
+- **A separate binding rather than an extra `VkmBindlessSingletonBuffer` entry**, against
+  `restir.md` §8's wording. Reason above; the binding arithmetic still derives from one constant,
+  so adding another fixed binding still moves one line.
+- **`spirv_cross::SPIRType::Float` rather than `SPIRType::AccelerationStructure`** in the
+  `add_msl_resource_binding` entry, against §8's explicit instruction. The instruction does not
+  compile -- it breaks every shader, not just ray ones -- and the reason it does not is recorded at
+  the call site so the next reader does not try it again.
+
+### Verification (Phase 5c)
+
+Metal Debug **215/215 (20538 assertions)** and Release **215/215 (20528)**, both with Metal API
+Validation enabled and zero validation output; Vulkan Debug 211/211 with
+`VK_LAYER_KHRONOS_validation`, reported SKIP because all three ray-tracing bodies honestly skip on
+MoltenVK. Its VUID counts are byte-identical to the pre-change baseline (140/63/65/67, all
+pre-existing `ImGui_ImplVulkan_Shutdown` teardown errors).
+
+WebGPU is **compile-unverified locally**: no emsdk on this machine, so the `setAccelerationStructure`
+error stub and the `vkm_bindless.hlsli` branch that omits the declaration rest on CI's wasm job.
+
+One detour worth recording, since it costs an hour to re-diagnose: after several deliberately
+aborted sabotage runs, both Debug suites reported **FAIL while doctest reported SUCCESS** -- the
+crash was in `__llvm_gcov_writeout` during `exit`, preceded by ~150k
+`cannot merge previous GCDA file: corrupt arc tag` lines. Aborting an instrumented binary leaves
+corrupt `.gcda` files that poison every later run in that tree. `find build -name '*.gcda' -delete`
+is the fix, and Release was unaffected throughout because it carries no coverage instrumentation.

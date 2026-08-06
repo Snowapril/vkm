@@ -11,6 +11,7 @@
 
 #include "TestAccelerationStructureShared.hpp"
 #include "TestSceneAccelerationStructureShared.hpp"
+#include "TestRayQueryShared.hpp"
 
 #include <memory>
 
@@ -50,6 +51,13 @@ TEST_CASE("VkmScene - acceleration structures out of the geometry pool on Metal"
     MetalAccelerationStructureFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
     vkmtest::runSceneAccelerationStructureTest(fixture.driver.get());
+}
+
+TEST_CASE("Ray query - a compute shader traces a loaded scene on Metal")
+{
+    MetalAccelerationStructureFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runRayQueryTest(fixture.driver.get());
 }
 
 #endif // VKM_USE_METAL_API

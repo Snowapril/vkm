@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
+#include <vkm/renderer/backend/metal/metal_acceleration_structure.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
@@ -14,10 +15,11 @@ namespace vkm
 {
     namespace
     {
-        // Only Buffer/Texture/StagingBuffer own a distinct MTLAllocation-conforming native
-        // object; samplers, texture views and buffer views have no separate allocation.
-        // getResource() returns nullptr for stale/generation-mismatched handles (the base
-        // releaseResource is a safe no-op for those), so null-check before dereferencing.
+        // Only Buffer/Texture/StagingBuffer/AccelerationStructure own a distinct
+        // MTLAllocation-conforming native object; samplers, texture views and buffer views have no
+        // separate allocation. getResource() returns nullptr for stale/generation-mismatched
+        // handles (the base releaseResource is a safe no-op for those), so null-check before
+        // dereferencing.
         id<MTLAllocation> fetchAllocation(VkmRenderResourcePoolMetal* pool, VkmResourceHandle handle)
         {
             switch (handle.type)
@@ -36,6 +38,17 @@ namespace vkm
             {
                 VkmStagingBufferMetal* stagingBuffer = pool->getResource<VkmStagingBufferMetal>(handle);
                 return stagingBuffer != nullptr ? stagingBuffer->getBuffer() : nil;
+            }
+            case VkmResourceType::AccelerationStructure:
+            {
+                // A ray query reaches the structure through the bindless argument buffer, which
+                // carries only its MTLResourceID -- Metal 4 does no implicit residency, so without
+                // this the traversal reads an unmapped structure. Covering it here rather than
+                // with a per-encoder useResource: is what keeps the encoders unaware of it, and it
+                // reaches every bottom-level structure the top-level one names for free.
+                VkmAccelerationStructureMetal* structure =
+                    pool->getResource<VkmAccelerationStructureMetal>(handle);
+                return structure != nullptr ? structure->getAccelerationStructure() : nil;
             }
             default:
                 return nil;

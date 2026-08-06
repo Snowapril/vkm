@@ -138,6 +138,17 @@ if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
         EXTRA_DEPENDS  "${ROOT_DIR}/resources/tests/viewport/viewport_fill.hlsl")
 endif()
 
+# TestRayQuery casts rays at a scene's acceleration structure through the bindless set. Native
+# backends only: WebGPU has no acceleration structure API and never reports the RayTracing
+# capability, so a WGSL cache for this would be a cache nothing can ever load.
+if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
+    vkm_add_shader_cache_target(
+        TARGET_NAME   tests_ray_query_shaders
+        OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
+        PSO_JSON_FILES "${ROOT_DIR}/resources/tests/ray_query/renderpass.json"
+        EXTRA_DEPENDS  "${ROOT_DIR}/resources/tests/ray_query/ray_query.hlsl")
+endif()
+
 # TestSceneModelRenderMetal draws an imported glTF mesh with the model_viewer sample's PSO.
 # It is Metal-only (real-pixel output is only verified on the backend this machine can run,
 # like TestMetalBindlessTriangle), so its shader cache is built only for the Metal backend.
@@ -222,6 +233,12 @@ if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
         PRIVATE
         TEST_RESOURCE_TABLE_PSO_DIR="${ROOT_DIR}/resources/tests/resource_tables/"
         TEST_RESOURCE_TABLE_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
+    )
+    add_dependencies(${target} tests_ray_query_shaders)
+    target_compile_definitions(${target}
+        PRIVATE
+        TEST_RAY_QUERY_PSO_DIR="${ROOT_DIR}/resources/tests/ray_query/"
+        TEST_RAY_QUERY_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
     )
 elseif (EMSCRIPTEN AND VKM_USE_WEBGPU_API AND VKM_HOST_VKM_COMPILER)
     # The bind-group 2/3 paths on WebGPU need a WGSL shader to exercise them, which only a host

@@ -710,6 +710,15 @@ namespace vkm
         // Kept for the same reason the staging buffers are: VkmCommandBufferBase exposes no driver,
         // so the per-frame update cannot look the structure up by handle.
         _topLevelStructurePointer = tlas;
+
+        // Published once, not per frame: a rebuild writes into the same structure, so the
+        // descriptor stays valid across every recordAccelerationStructureUpdate().
+        VkmBindlessResourceManagerBase* bindlessManager = driver->getBindlessResourceManager();
+        if (bindlessManager == nullptr || !bindlessManager->setAccelerationStructure(_topLevelStructure))
+        {
+            releaseAccelerationStructures(driver);
+            return fail(outError, "Failed to publish the scene's acceleration structure into the bindless set");
+        }
         return true;
     }
 
@@ -757,6 +766,14 @@ namespace vkm
 
     void VkmScene::releaseAccelerationStructures(VkmDriverBase* driver)
     {
+        // Unbind before the structure goes away, so the set never names a released resource --
+        // the same ordering destroy() keeps for the singleton buffers.
+        VkmBindlessResourceManagerBase* bindlessManager = driver->getBindlessResourceManager();
+        if (bindlessManager != nullptr && _topLevelStructure != VKM_INVALID_RESOURCE_HANDLE)
+        {
+            bindlessManager->setAccelerationStructure(VKM_INVALID_RESOURCE_HANDLE);
+        }
+
         VkmDeferredResourceReclaimer* reclaimer = driver->getDeferredReclaimer();
         const auto release = [reclaimer](VkmResourceHandle& handle) {
             if (reclaimer != nullptr && handle != VKM_INVALID_RESOURCE_HANDLE)
