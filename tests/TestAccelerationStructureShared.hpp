@@ -12,6 +12,7 @@
 #include <vkm/renderer/backend/common/buffer.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/command_queue.h>
+#include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 
@@ -115,7 +116,21 @@ namespace vkmtest
                 CHECK_FALSE(tlas->updateInstances({ instance, instance }));
             }
 
-            driver->getRenderResourcePool()->releaseResource(tlas->getHandle());
+            /*
+             * Released through the deferred reclaimer, not destroyed outright.
+             * `vkDestroyAccelerationStructureKHR` requires every submitted command referring to the
+             * structure to have COMPLETED, and waiting on this submission's own timeline value does
+             * not retire it as far as the validation layer is concerned -- the first run that ever
+             * executed this on a real ray-tracing driver reported the structure still in use, three
+             * times, and took the next test down with a segmentation fault.
+             *
+             * `driver->waitIdle()` is NOT the fix and was tried: the refusal subcase below leaves a
+             * command buffer allocated and deliberately never submitted, and Metal's queue wait
+             * waits on the last ALLOCATED timeline value, so draining hangs on a value nothing will
+             * ever signal. The reclaimer is what the engine already uses for exactly this -- see
+             * VkmScene::destroy -- and it releases on a timeline that has actually advanced.
+             */
+            driver->getDeferredReclaimer()->requestRelease(tlas->getHandle());
         }
 
         SUBCASE("a structure built without _allowUpdate cannot be rebuilt")
@@ -132,8 +147,10 @@ namespace vkmtest
             CHECK(blas->getAllocatedSize() > 0); // still intact; the rebuild was declined
         }
 
-        driver->getRenderResourcePool()->releaseResource(blas->getHandle());
-        driver->getRenderResourcePool()->releaseResource(vertexBuffer->getHandle());
-        driver->getRenderResourcePool()->releaseResource(indexBuffer->getHandle());
+        // Same reason: the bottom-level structure was referenced by the builds above, and its
+        // vertex and index buffers were read by them.
+        driver->getDeferredReclaimer()->requestRelease(blas->getHandle());
+        driver->getDeferredReclaimer()->requestRelease(vertexBuffer->getHandle());
+        driver->getDeferredReclaimer()->requestRelease(indexBuffer->getHandle());
     }
 } // namespace vkmtest

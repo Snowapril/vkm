@@ -25,6 +25,14 @@ namespace vkmtest
 {
     inline void runSceneAccelerationStructureTest(vkm::VkmDriverBase* driver)
     {
+        /*
+         * Phase markers. doctest prints a test's logged context when it fails OR crashes, and
+         * costs nothing when it does neither -- which is what makes them worth having in a test
+         * that only ever executes on a driver this machine does not have. A segmentation fault
+         * here otherwise reports a line number and a test name and nothing else, and the first CI
+         * run of this test did exactly that.
+         */
+        INFO("phase: entry");
         REQUIRE(driver != nullptr);
         if ((driver->getDriverCapabilityFlags() & vkm::VkmDriverCapabilityFlags::RayTracing) == 0)
         {
@@ -48,6 +56,7 @@ namespace vkmtest
                                                                 vkm::VkmPipelineStateOrigin::Engine, &psoError),
                         psoError);
 
+        INFO("phase: scene setup");
         vkm::VkmScene scene;
         // Twice, so the pool holds two meshes and the second one's ranges start at non-zero
         // offsets -- one mesh would leave every offset at 0 and exercise nothing. **This does not
@@ -62,7 +71,9 @@ namespace vkmtest
         // Nothing is built until asked for: a scene that is only rasterized pays nothing.
         CHECK(scene.getTopLevelAccelerationStructure() == vkm::VKM_INVALID_RESOURCE_HANDLE);
 
+        INFO("phase: buildAccelerationStructures");
         REQUIRE_MESSAGE(scene.buildAccelerationStructures(driver, &error), error);
+        INFO("phase: structures built and published");
 
         const vkm::VkmResourceHandle tlasHandle = scene.getTopLevelAccelerationStructure();
         REQUIRE(tlasHandle != vkm::VKM_INVALID_RESOURCE_HANDLE);
@@ -104,6 +115,9 @@ namespace vkmtest
             CHECK(tlas->getAllocatedSize() > 0);
         }
 
+        INFO("phase: teardown");
+        // scene.destroy releases through the deferred reclaimer already, which is what keeps a
+        // structure the driver still refers to from being destroyed under it.
         scene.destroy(driver);
         CHECK(scene.getTopLevelAccelerationStructure() == vkm::VKM_INVALID_RESOURCE_HANDLE);
     }
