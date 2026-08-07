@@ -38,6 +38,7 @@
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -312,6 +313,25 @@ namespace vkmtest
         const double referenceBrightness = summarize(referenceImage, &referenceCovered);
         uint32_t covered = 0;
         const double indirectBrightness = summarize(indirectImage, &covered);
+
+        /*
+         * Where the covered pixels sit, not just how many. This test is the first thing that ever
+         * ran the engine's G-buffer raster path on Vulkan, and it fails there on coverage alone --
+         * so the question is whether the rasteriser drew nothing or drew the box the other way up.
+         * The Cornell box is open at the top, so a vertically mirrored raster puts the opening
+         * where the floor should be and covers the opposite half. stderr, because a failing REQUIRE
+         * below aborts before doctest prints anything else.
+         */
+        uint32_t coveredTopHalf = 0;
+        for (uint32_t pixel = 0; pixel < pixelCount / 2; ++pixel)
+        {
+            if (indirectImage[pixel * 4 + 3] > 0.0f) { ++coveredTopHalf; }
+        }
+        std::fprintf(stderr,
+                     "[indirect] pixels %u, reference covered %u, indirect covered %u "
+                     "(first half %u, second half %u)\n",
+                     pixelCount, referenceCovered, covered, coveredTopHalf, covered - coveredTopHalf);
+        std::fflush(stderr);
 
         // The reference traces every pixel; the deferred pass only those the G-buffer covered.
         REQUIRE(referenceCovered == pixelCount);
