@@ -158,7 +158,18 @@ jobs:
             echo "Using lavapipe ICD: $icd"
             export VK_DRIVER_FILES="$icd"
             export VK_ICD_FILENAMES="$icd"
-            xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}
+            xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }} || suite_status=$?
+            # Every filtered ordering of the ray-tracing tests passes and only the whole suite
+            # crashes, so the remaining variable is the wrapper itself: run_tests.py runs the
+            # binary as a captured subprocess, and every probe so far invoked it directly. This
+            # runs it directly with no filter at all. --duration also prints each case as it
+            # starts, which is the execution order the crash log has never shown.
+            if [ -x build/vulkan/bin/UnitTests ]; then
+              echo "=== unfiltered, invoked directly"
+              xvfb-run -a ./build/vulkan/bin/UnitTests --duration=true && echo "=== direct exit: 0" \
+                                                                       || echo "=== direct exit: $?"
+            fi
+            exit ${suite_status:-0}
           else
             python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}
           fi
