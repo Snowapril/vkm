@@ -2998,3 +2998,21 @@ vertexCount 3, instanceCount 1), which is what ruled out the cull and emit compu
 destroyed the G-buffer but not the scene, so VMA reported unfreed allocations at allocator
 destruction and the resource pool then ran those destructors against a destroyed allocator. Metal
 tolerated it; Vulkan segfaulted in `~VkmRenderResourcePool`.
+
+### The convergence gate had to be set from lavapipe, not Metal
+
+With the front-face fix in, the first lavapipe run to get through the deferred GI test reported
+coverage of 2212 of 2304 pixels split 1060/1152 -- identical to Metal, which is what says the
+raster is now right. One assertion failed: MSE 7.9e-4 against a 6.0e-4 threshold.
+
+That threshold came from Metal, where the noise floor at 1536 samples is 2.4e-4 and a one-bounce
+sabotage reads 7.3e-4. lavapipe's floor at the same count is 7.9e-4 -- above the sabotage -- so no
+threshold at 1536 could tell the two apart there. The means agreed to five decimals, so the excess
+is variance rather than bias, and variance is what more samples buy down.
+
+Metal at three counts: 2.41e-4 at 1536, 1.465e-4 at 6144, 1.318e-4 at 12288, which fit
+`MSE = 1.17e-4 + 0.18/N`. The constant is real: a 1-spp deferred estimator and a path tracer are
+not the same estimator. Fitting lavapipe's single point to that same floor puts it near 2.0e-4 at
+12288, so the count is 12288 and the threshold 3.5e-4 -- above both measured floors and still well
+under the ~6.2e-4 a one-bounce sabotage reads at that count, since its ~4.9e-4 of bias does not
+fall with N. 5.2 s on Metal, about 92 s on lavapipe against a 400 s budget.

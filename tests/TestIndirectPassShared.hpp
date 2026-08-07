@@ -51,9 +51,11 @@ namespace vkmtest
         // small: both estimators run at one ray per pixel per sample, and the Vulkan half of this
         // runs on a software rasterizer in CI.
         inline constexpr uint32_t kCornellSize = 48;
-        // Enough that the estimator's own noise is well under the threshold below. Both sides get
-        // the same count, so neither is advantaged.
-        inline constexpr uint32_t kCornellSamples = 1536;
+        // Enough that the estimator's own noise is well under the threshold below -- set from
+        // lavapipe, whose noise at the old 1536 was three times Metal's and above the very
+        // sabotage the gate exists to catch. Both sides get the same count, so neither is
+        // advantaged.
+        inline constexpr uint32_t kCornellSamples = 12288;
         // Scatters the indirect pass takes from the G-buffer surface. The reference needs one more
         // to compute the same quantity: its first bounce is the primary ray this pass does not
         // cast.
@@ -358,14 +360,26 @@ namespace vkmtest
         * The sample count is chosen to put that floor *below* the smallest systematic error worth
         * catching, since noise falls as 1/N while a bias does not. It was 384 first, and at that
         * count a reference run one bounce short scored 1.1e-3 against a noise floor of 6.2e-4 --
-        * too close to separate. At 1536 the same sabotage is roughly 3x the floor and the
-        * threshold sits between them. Cheap insurance: the whole test is 0.8 s on Metal.
+        * too close to separate. 1536 separated them on Metal, at a floor of 2.4e-4.
+        *
+        * It did not separate them on lavapipe, which is where the count is now set from. The first
+        * run that ever got this far there measured 7.9e-4 at 1536 -- above the sabotage magnitude,
+        * so no threshold at that count could have told a one-bounce error from the noise. The
+        * means agreed to five decimals, so the excess is variance, not bias.
+        *
+        * Metal, measured at three counts: 2.41e-4 at 1536, 1.465e-4 at 6144, 1.318e-4 at 12288.
+        * Those fit MSE = 1.17e-4 + 0.18/N: a systematic floor, because a 1-spp deferred estimator
+        * and a path tracer are not the same estimator, plus variance. Fitting lavapipe's single
+        * point to the same floor puts it near 2.0e-4 at 12288, so the threshold is 3.5e-4 -- above
+        * both, and still well under the ~6.2e-4 a one-bounce sabotage would read at this count
+        * (the sabotage adds ~4.9e-4 of bias, which more samples do not reduce). 12288 costs 5.2 s
+        * on Metal and about 92 s on lavapipe, against that test's 400 s budget.
         *
         * A gross error is not subtle at this scale. The geometric normal pointing away from the
         * camera -- which is what this gate found on its first real run -- scored MSE 0.030, over a
         * hundred times the floor.
         */
-        CHECK(mse < 6.0e-4f);
+        CHECK(mse < 3.5e-4f);
         CHECK(relativeMse < 4.0e-3f);
 
         /*
