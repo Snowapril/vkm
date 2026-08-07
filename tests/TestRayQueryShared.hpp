@@ -30,6 +30,7 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -220,25 +221,28 @@ namespace vkmtest
         // deferred reclaimer, whose worker then frees on another thread while the next test is
         // already allocating. See TestAccelerationStructureShared.hpp.
         /*
-         * Phase markers, the same device the scene structure test carries. doctest prints a test's
-         * logged context when it crashes and costs nothing when it does not, and this teardown has
-         * now segfaulted on lavapipe twice with every assertion passing -- inside a stripped
-         * driver library, so backward-cpp resolves one bare address and names no statement. These
-         * name the statement.
+         * Phase markers on stderr rather than doctest's INFO. INFO is printed with a test's
+         * context when an assertion FAILS; a SIGSEGV prints none of it, which is why the ones the
+         * scene structure test carries have never appeared in a crash log. stderr is unbuffered,
+         * so a marker written before the faulting statement survives it. This teardown has now
+         * segfaulted on lavapipe three times with every assertion passing, inside a stripped
+         * driver library that resolves to one bare address.
          */
-        INFO("teardown: waitIdle");
+        const auto mark = [](const char* what) { std::fprintf(stderr, "[teardown] %s\n", what); std::fflush(stderr); };
+
+        mark("waitIdle");
         driver->waitIdle();
-        INFO("teardown: passTable->destroy");
+        mark("passTable->destroy");
         passTable->destroy();
         delete passTable;
-        INFO("teardown: release result buffer");
+        mark("release result buffer");
         driver->getRenderResourcePool()->releaseResource(result->getHandle());
-        INFO("teardown: scene.destroy");
+        mark("scene.destroy");
         scene.destroy(driver);
         // scene.destroy defers to the reclaimer's worker thread, which would otherwise still be
         // destroying GPU objects while the next test case allocates. Finish it here instead.
-        INFO("teardown: reclaimer flushBlocking");
+        mark("reclaimer flushBlocking");
         driver->getDeferredReclaimer()->flushBlocking();
-        INFO("teardown: leaving the test body (pipeline managers and scene destruct here)");
+        mark("leaving the test body (pipeline managers and scene destruct here)");
     }
 } // namespace vkmtest
