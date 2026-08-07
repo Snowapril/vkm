@@ -184,6 +184,9 @@ namespace vkmtest
 
             staging->invalidate(0, resultByteSize);
             std::memcpy(words.data(), staging->map(), resultByteSize);
+            // Same reason as the teardown below: the render graph's own completion wait is a
+            // timeline wait, which is not the API considering the copy's resources destroyable.
+            driver->waitIdle();
             driver->getRenderResourcePool()->releaseResource(destination);
         }
 
@@ -210,6 +213,12 @@ namespace vkmtest
             }
         }
 
+        // Wait for the device before tearing any of this down. renderGraph.ensureCompleted() waits
+        // on the graph's timeline, which proves the GPU reached the value but does not retire the
+        // submissions as far as the API is concerned -- and scene.destroy releases through the
+        // deferred reclaimer, whose worker then frees on another thread while the next test is
+        // already allocating. See TestAccelerationStructureShared.hpp.
+        driver->waitIdle();
         passTable->destroy();
         delete passTable;
         driver->getRenderResourcePool()->releaseResource(result->getHandle());

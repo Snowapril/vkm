@@ -120,6 +120,8 @@ namespace vkmtest
             image._rgba.resize(static_cast<size_t>(image._width) * image._height * 4);
             staging->invalidate(0, byteSize);
             std::memcpy(image._rgba.data(), staging->map(), byteSize);
+            // The graph's completion wait is a timeline wait; see TestAccelerationStructureShared.
+            driver->waitIdle();
             driver->getRenderResourcePool()->releaseResource(destination);
             return image;
         }
@@ -315,6 +317,9 @@ namespace vkmtest
             CHECK(brightest <= 1.0f + detail::kFurnaceTolerance);
         }
 
+        // scene.destroy releases through the deferred reclaimer, whose worker frees on another
+        // thread while the next test is already allocating; see TestAccelerationStructureShared.
+        driver->waitIdle();
         tracer.destroy(driver);
         scene.destroy(driver);
     }

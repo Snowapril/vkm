@@ -2945,3 +2945,11 @@ to back. Its worker frees as soon as the recorded usages report complete, concur
 whatever the main thread does next -- here, allocating the next subcase's structures out of the
 same pool. Both acceleration structure tests now wait for the device and release synchronously,
 which is what a caller tearing something down mid-run has to do anyway.
+
+That cleared it: on lavapipe the validation errors are gone and both acceleration structure tests
+pass. The crash moved to the ray query test's teardown, with all 63 of its assertions passing
+first -- the same shape, one test further along. Every ray-tracing test that reads back through a
+staging buffer or tears a scene down now waits for the device first, for the same reason:
+`VkmRenderGraph::ensureCompleted()` is a timeline wait, and `VkmScene::destroy` hands its
+resources to the reclaimer's worker thread, which frees them while the next test is already
+allocating out of the same pool.

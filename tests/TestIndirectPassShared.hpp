@@ -84,6 +84,8 @@ namespace vkmtest
             std::vector<float> rgba(static_cast<size_t>(width) * height * 4);
             staging->invalidate(0, byteSize);
             std::memcpy(rgba.data(), staging->map(), byteSize);
+            // The graph's completion wait is a timeline wait; see TestAccelerationStructureShared.
+            driver->waitIdle();
             driver->getRenderResourcePool()->releaseResource(destination);
             return rgba;
         }
@@ -393,6 +395,9 @@ namespace vkmtest
         CHECK(spatialCovered == covered);
         CHECK(spatialBrightness > 0.05);
 
+        // scene.destroy releases through the deferred reclaimer, whose worker frees on another
+        // thread while the next test is already allocating; see TestAccelerationStructureShared.
+        driver->waitIdle();
         spatial.destroy(driver);
         restir.destroy(driver);
         indirect.destroy(driver);
