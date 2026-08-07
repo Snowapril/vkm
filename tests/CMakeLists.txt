@@ -42,6 +42,7 @@ set(SRCS
     ${SRC_DIR}/TestCubemapTexture.cpp
     ${SRC_DIR}/TestBufferHostWrite.cpp
     ${SRC_DIR}/TestAccelerationStructure.cpp
+    ${SRC_DIR}/TestGBufferRenderVulkan.cpp
     ${SRC_DIR}/TestPathTracerMetrics.cpp
     ${SRC_DIR}/TestReservoirLayout.cpp
 )

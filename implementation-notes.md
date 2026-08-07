@@ -2971,3 +2971,30 @@ next.
 
 The lavapipe job also builds with `-g` now (still `Release`, still `-O3 -DNDEBUG`). Two of these
 crashes printed a single unresolved address, which costs a full CI round trip to learn nothing from.
+
+## Vulkan culled every front face
+
+The deferred GI test reported zero covered pixels on lavapipe while its reference path tracer
+covered all of them, so the ray tracing was fine and the rasteriser was not. Nothing in the Vulkan
+suite could say more, because both tests that draw a scene were Metal-only -- which is also what
+`TODO.md` was describing when it said the Vulkan fixture rendered black.
+
+`TestGBufferRenderVulkan.cpp` instantiates those shared bodies for Vulkan. They need no ray
+tracing, so MoltenVK reproduces the failure locally and the whole thing stopped costing a
+fifteen-minute CI round trip per question.
+
+Two bugs, measured rather than reasoned about:
+
+**Every front face was culled.** `toVkFrontFace` inverted the enum, with a comment saying not to
+"fix" it: vkm-compiler applies `-fvk-invert-y` to Vulkan vertex shaders, which mirrors screen-space
+winding, so the inversion cancelled it. What that misses is that Metal flips too -- its NDC is +Y up
+and its framebuffer origin is top-left, so the flip happens in its viewport transform instead. One
+flip each; nothing left to cancel. The measurement: the same scene through both backends fills 2016
+of 4096 texels, bounding box x[0..62] y[1..63], covered-mask centroid (20.7, 42.3) -- identical, so
+identically wound. The indirect argument buffers were byte-for-byte identical too (count 1, then
+vertexCount 3, instanceCount 1), which is what ruled out the cull and emit compute passes.
+
+**The shared bodies leaked their scene.** `runGBufferRenderTest` and `runDeferredLightingTest`
+destroyed the G-buffer but not the scene, so VMA reported unfreed allocations at allocator
+destruction and the resource pool then ran those destructors against a destroyed allocator. Metal
+tolerated it; Vulkan segfaulted in `~VkmRenderResourcePool`.

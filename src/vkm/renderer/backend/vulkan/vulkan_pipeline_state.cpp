@@ -59,19 +59,29 @@ namespace vkm
             return VK_CULL_MODE_BACK_BIT;
         }
 
-        // The mapping is deliberately INVERTED -- do not "fix" it. vkm-compiler builds Vulkan
-        // SPIR-V with -fvk-invert-y, negating SV_Position.y to put the engine's +Y-up clip
-        // space on Vulkan's +Y-down NDC. That Y-flip also mirrors triangle winding in screen
-        // space. Inverting the enum here cancels that out, so a PSO declaring
-        // "counter_clockwise" culls the same faces on Vulkan as it does on Metal/WebGPU.
+        /*
+        * Mapped straight through, and it used to be inverted. The inversion counted the Y-flip
+        * vkm-compiler applies to Vulkan vertex shaders (-fvk-invert-y, putting the engine's +Y-up
+        * clip space on Vulkan's +Y-down NDC) and concluded that screen-space winding was mirrored
+        * relative to Metal. It is not: Metal flips as well, in its viewport transform, because its
+        * NDC is +Y up and its framebuffer origin is top-left. One flip each, so both backends
+        * rasterise the same triangle with the same winding, and there is nothing left to cancel.
+        *
+        * Measured rather than reasoned, because the reasoning is what got it wrong the first time:
+        * the same scene rendered through both backends fills 2016 of 4096 texels with a covered-
+        * mask centroid of (20.7, 42.3) on each -- pixel-identical, so identically wound. Under the
+        * inversion, Vulkan culled every front face and the G-buffer came back empty, which is what
+        * made the deferred GI test report zero covered pixels on lavapipe while its reference path
+        * tracer covered all of them.
+        */
         VkFrontFace toVkFrontFace(VkmFrontFace frontFace)
         {
             switch (frontFace)
             {
-                case VkmFrontFace::CounterClockwise: return VK_FRONT_FACE_CLOCKWISE;
-                case VkmFrontFace::Clockwise:        return VK_FRONT_FACE_COUNTER_CLOCKWISE;
+                case VkmFrontFace::CounterClockwise: return VK_FRONT_FACE_COUNTER_CLOCKWISE;
+                case VkmFrontFace::Clockwise:        return VK_FRONT_FACE_CLOCKWISE;
             }
-            return VK_FRONT_FACE_CLOCKWISE;
+            return VK_FRONT_FACE_COUNTER_CLOCKWISE;
         }
 
         VkStencilOp toVkStencilOp(VkmStencilOp stencilOp)

@@ -116,7 +116,6 @@
 - `VkmDeferredResourceReclaimer::stop()` releases every remaining entry whether or not its `waitIdle` succeeded, so a genuine GPU timeout at shutdown destroys resources that are still in flight.
 - Vulkan/Metal validation errors at ImGui teardown (`VUID-vkDestroyBuffer-buffer-00922` and three others) fire on every unit-test run: `ImGui_ImplVulkan_Shutdown` destroys its frame buffers without waiting for the last submission.
 - Normal maps are unsampled because tangents may be zero (no MikkTSpace generator), and emissive because the G-buffer has no channel to carry it.
-- Material textures have no automated coverage on Vulkan: the offscreen scene-render harness is Metal-only, since the Vulkan fixture renders black on this machine's MoltenVK/lavapipe.
 - Seeing a WebGPU frame at all needs `-DVKM_WASM_GI_SCENE=<dir> -DVKM_WASM_GI_AUTO_SCREENSHOT=ON`, which bakes a scene into MEMFS and echoes the captured PNG to the console as base64; Chrome's own `--screenshot` fires before the WebGPU device finishes initializing and captures a blank page.
 - A headless WebGPU run rasterizes in software, and the gi sample draws every budgeted probe's six cube faces per frame, so it manages well under 600 frames per day: `VKM_WASM_GI_SCREENSHOT_FRAME` defaults to 4 and the probe volume is nowhere near converged in the captured image.
 - Editing a shader does not relink an Emscripten target: `--preload-file` inputs are not tracked as dependencies, so the MEMFS bundle keeps a stale shader cache until something else forces a relink.
