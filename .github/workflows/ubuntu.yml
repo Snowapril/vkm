@@ -174,11 +174,13 @@ jobs:
             # scene.buildAccelerationStructures when the suite runs it third, so the last two
             # combinations ask which of the two preceding cases is the one it cannot follow.
             if [ -x build/vulkan/bin/UnitTests ]; then
-              for case in "VkmAccelerationStructure - build, instance and rebuild on Vulkan" \
-                          "VkmScene - acceleration structures out of the geometry pool on Vulkan" \
-                          "Ray query - a compute shader traces a loaded scene on Vulkan" \
+              # Patterns are wildcards, never full names: doctest splits a filter on commas, and
+              # two of these test cases have one in their title.
+              for case in "Ray query - a compute*" \
                           "VkmAccelerationStructure - build*,Ray query - a compute*" \
-                          "VkmScene - acceleration structures*,Ray query - a compute*"; do
+                          "VkmScene - acceleration structures*,Ray query - a compute*" \
+                          "VkmAccelerationStructure - build*,VkmScene - acceleration structures*,Ray query - a compute*" \
+                          "Vulkan G-buffer*,Vulkan material*,Vulkan deferred*,Ray query - a compute*"; do
                 echo "=== isolated: $case"
                 xvfb-run -a ./build/vulkan/bin/UnitTests --test-case="$case" && echo "=== isolated exit: 0" \
                                                                              || echo "=== isolated exit: $?"
