@@ -73,6 +73,20 @@ namespace vkmtest
 
     inline void runRayQueryTest(vkm::VkmDriverBase* driver)
     {
+        /*
+         * Phase markers on stderr rather than doctest's INFO. INFO is printed with a test's
+         * context when an assertion FAILS; a SIGSEGV prints none of it, which is why the markers
+         * the scene structure test has carried since its first CI run have never appeared in a
+         * crash log. stderr is unbuffered, so a marker written before the faulting statement
+         * survives it.
+         *
+         * They cover the whole body, not just teardown: the teardown-only round proved the
+         * lavapipe segfault happens BEFORE the first teardown statement, which is not where the
+         * assertion count alone suggested.
+         */
+        const auto mark = [](const char* what) { std::fprintf(stderr, "[rayquery] %s\n", what); std::fflush(stderr); };
+
+        mark("entry");
         REQUIRE(driver != nullptr);
         if ((driver->getDriverCapabilityFlags() & vkm::VkmDriverCapabilityFlags::RayTracing) == 0)
         {
@@ -89,25 +103,30 @@ namespace vkmtest
         // zeroed the triangle's structure is built over the distractor's data instead, and these
         // rays stop agreeing with the reference. A second copy of the same model would not do --
         // identical bytes at a different offset produce an identical structure.
+        mark("import distractor");
         vkm::VkmSceneModel distractor;
         REQUIRE_MESSAGE(vkm::importGltfModel(std::string(RESOURCES_DIR) + "tests/gltf_two_rooms.gltf",
                                              &distractor, &error, importOptions),
                         error);
+        mark("import triangle");
         vkm::VkmSceneModel model;
         REQUIRE_MESSAGE(vkm::importGltfModel(std::string(RESOURCES_DIR) + "tests/gltf_triangle.gltf",
                                              &model, &error, importOptions),
                         error);
 
+        mark("load engine pipeline states");
         vkm::VkmPipelineStateManager engineManager(driver);
         REQUIRE_MESSAGE(engineManager.loadPipelineStatesFromDirectory(TEST_ENGINE_PIPELINE_DIR,
                                                                       TEST_ENGINE_SHADER_CACHE_DIR,
                                                                       vkm::VkmPipelineStateOrigin::Engine, &error),
                         error);
 
+        mark("scene.addModel x2");
         vkm::VkmScene scene;
         REQUIRE(scene.addModel(distractor, &error));
         const uint32_t tracedMeshEntry = static_cast<uint32_t>(distractor._meshes.size());
         REQUIRE(scene.addModel(model, &error));
+        mark("scene.build");
         REQUIRE_MESSAGE(scene.build(driver, &engineManager, &error), error);
 
         // build() sorts the objects into draw batches, so the triangle is not simply the last one.
@@ -124,8 +143,10 @@ namespace vkmtest
         }
         REQUIRE(tracedObject != vkm::INVALID_VALUE32);
 
+        mark("scene.buildAccelerationStructures");
         REQUIRE_MESSAGE(scene.buildAccelerationStructures(driver, &error), error);
 
+        mark("load ray query pipeline states");
         vkm::VkmPipelineStateManager rayQueryManager(driver);
         REQUIRE_MESSAGE(rayQueryManager.loadPipelineStatesFromDirectory(TEST_RAY_QUERY_PSO_DIR,
                                                                         TEST_RAY_QUERY_SHADER_CACHE_DIR,
@@ -140,14 +161,17 @@ namespace vkmtest
         resultInfo._flags = vkm::VkmResourceCreateInfo::AllowShaderWrite | vkm::VkmResourceCreateInfo::AllowTransferSrc;
         resultInfo._size = resultByteSize;
         resultInfo._debugName = "RayQueryResult";
+        mark("create result buffer");
         vkm::VkmBuffer* result = driver->newBuffer(resultInfo);
         REQUIRE(result != nullptr);
 
+        mark("create pass resource table");
         vkm::VkmResourceTableBase* passTable = driver->newResourceTable(
             pso, vkm::VkmResourceSetKind::PerPass, {{ 0, result->getHandle() }}, &error);
         REQUIRE_MESSAGE(passTable != nullptr, error);
 
         {
+            mark("dispatch");
             const vkm::VkmResourceHandle tlas = scene.getTopLevelAccelerationStructure();
             vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
             auto* subGraph = renderGraph.beginComputeSubGraph("RayQueryDispatch");
@@ -164,6 +188,7 @@ namespace vkmtest
             renderGraph.ensureCompleted();
         }
 
+        mark("readback");
         std::vector<uint32_t> words(detail::kRayResultWordCount, 0);
         {
             vkm::VkmStagingBufferInfo stagingInfo{};
@@ -228,21 +253,19 @@ namespace vkmtest
          * segfaulted on lavapipe three times with every assertion passing, inside a stripped
          * driver library that resolves to one bare address.
          */
-        const auto mark = [](const char* what) { std::fprintf(stderr, "[teardown] %s\n", what); std::fflush(stderr); };
-
-        mark("waitIdle");
+        mark("teardown: waitIdle");
         driver->waitIdle();
-        mark("passTable->destroy");
+        mark("teardown: passTable->destroy");
         passTable->destroy();
         delete passTable;
-        mark("release result buffer");
+        mark("teardown: release result buffer");
         driver->getRenderResourcePool()->releaseResource(result->getHandle());
-        mark("scene.destroy");
+        mark("teardown: scene.destroy");
         scene.destroy(driver);
         // scene.destroy defers to the reclaimer's worker thread, which would otherwise still be
         // destroying GPU objects while the next test case allocates. Finish it here instead.
-        mark("reclaimer flushBlocking");
+        mark("teardown: reclaimer flushBlocking");
         driver->getDeferredReclaimer()->flushBlocking();
-        mark("leaving the test body (pipeline managers and scene destruct here)");
+        mark("teardown: leaving the test body (pipeline managers and scene destruct here)");
     }
 } // namespace vkmtest
