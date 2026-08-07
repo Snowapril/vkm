@@ -117,14 +117,18 @@ namespace vkmtest
             }
 
             /*
-             * Released through the deferred reclaimer, not destroyed outright, which is what the
-             * engine already does for exactly this -- see VkmScene::destroy.
+             * Wait for the device before releasing anything, and release synchronously.
+             *
              * `vkDestroyAccelerationStructureKHR` requires every submitted command referring to the
-             * structure to have COMPLETED; the first run that ever executed this on a real
-             * ray-tracing driver reported the structure still in use and took the next test down
-             * with a segmentation fault.
+             * structure to have COMPLETED. Handing the structure to the deferred reclaimer does not
+             * establish that: an entry whose usages have all completed is released on the worker's
+             * next 4 ms poll, concurrently with whatever the main thread does next, and three CI
+             * runs in a row reported the structure still in use and then died with a segmentation
+             * fault. A test that creates and destroys structures back to back is the worst case for
+             * that, and it is not what the reclaimer exists for.
              */
-            driver->getDeferredReclaimer()->requestRelease(tlas->getHandle());
+            driver->waitIdle();
+            driver->getRenderResourcePool()->releaseResource(tlas->getHandle());
         }
 
         SUBCASE("a structure built without _allowUpdate cannot be rebuilt")
@@ -148,8 +152,9 @@ namespace vkmtest
 
         // Same reason: the bottom-level structure was referenced by the builds above, and its
         // vertex and index buffers were read by them.
-        driver->getDeferredReclaimer()->requestRelease(blas->getHandle());
-        driver->getDeferredReclaimer()->requestRelease(vertexBuffer->getHandle());
-        driver->getDeferredReclaimer()->requestRelease(indexBuffer->getHandle());
+        driver->waitIdle();
+        driver->getRenderResourcePool()->releaseResource(blas->getHandle());
+        driver->getRenderResourcePool()->releaseResource(vertexBuffer->getHandle());
+        driver->getRenderResourcePool()->releaseResource(indexBuffer->getHandle());
     }
 } // namespace vkmtest

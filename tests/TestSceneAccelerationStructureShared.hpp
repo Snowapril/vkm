@@ -116,8 +116,11 @@ namespace vkmtest
         }
 
         INFO("phase: teardown");
-        // scene.destroy releases through the deferred reclaimer already, which is what keeps a
-        // structure the driver still refers to from being destroyed under it.
+        // scene.destroy releases through the deferred reclaimer, whose worker frees on its own
+        // thread as soon as the recorded usages report complete. That is not the same as the API
+        // considering the structures destroyable -- see TestAccelerationStructureShared.hpp -- so
+        // wait for the device first, as any caller tearing a scene down mid-run would have to.
+        driver->waitIdle();
         scene.destroy(driver);
         CHECK(scene.getTopLevelAccelerationStructure() == vkm::VKM_INVALID_RESOURCE_HANDLE);
     }

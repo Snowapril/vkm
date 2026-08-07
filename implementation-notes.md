@@ -2924,3 +2924,24 @@ reclaimer wait for something real, this puts a `vkGetSemaphoreCounterValue` -- `
 layer an opportunity to retire the submission. Nothing on the previous path ever queried the
 semaphore, which is the most likely reason the structures were still reported in use even though
 every submit had been waited on by then.
+
+### What actually made the structures destroyable
+
+Recording usages did not clear it either -- the same two VUIDs and the same SIGSEGV came back, this
+time after 18 assertions rather than 12. The varying count is the tell: the reclaimer frees on its
+own worker thread, so where the crash lands depends on timing.
+
+Two things were wrong, and the second is the one that mattered.
+
+`VkmDriverBase::waitIdle` waits on each queue's timeline semaphore and nothing else -- the engine
+never calls `vkDeviceWaitIdle` outside the swapchain. A timeline wait proves the GPU reached the
+value; it is not what makes the validation layer retire the submissions that reached it. The
+previous commit had already put a `vkGetSemaphoreCounterValue` in front of the destroy through
+`isEntryReady`, and the structure was still reported in use by the command buffer that built it.
+`VkmDriverVulkan::waitIdle` now waits on the timelines and then on the device.
+
+And the deferred reclaimer is the wrong tool for a test that creates and destroys structures back
+to back. Its worker frees as soon as the recorded usages report complete, concurrently with
+whatever the main thread does next -- here, allocating the next subcase's structures out of the
+same pool. Both acceleration structure tests now wait for the device and release synchronously,
+which is what a caller tearing something down mid-run has to do anyway.

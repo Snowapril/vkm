@@ -245,6 +245,15 @@ namespace vkm
         return new VkmAccelerationStructureVulkan(this);
     }
 
+    void VkmDriverVulkan::waitIdle(const uint64_t timeoutMs)
+    {
+        VkmDriverBase::waitIdle(timeoutMs);
+        if (_device != VK_NULL_HANDLE)
+        {
+            vkDeviceWaitIdle(_device);
+        }
+    }
+
     VkmResourceTableBase* VkmDriverVulkan::newResourceTableInner()
     {
         return new VkmResourceTableVulkan(this);
