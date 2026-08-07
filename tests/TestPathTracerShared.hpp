@@ -26,6 +26,7 @@
 
 #include <vkm/renderer/backend/common/buffer.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
+#include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/frame_constants.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
@@ -322,6 +323,9 @@ namespace vkmtest
         driver->waitIdle();
         tracer.destroy(driver);
         scene.destroy(driver);
+        // scene.destroy defers to the reclaimer's worker thread, which would otherwise still be
+        // destroying GPU objects while the next test case allocates. Finish it here instead.
+        driver->getDeferredReclaimer()->flushBlocking();
     }
 
 } // namespace vkmtest

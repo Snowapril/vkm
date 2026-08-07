@@ -2960,3 +2960,14 @@ while still in `VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL`, and the coverage `REQ
 because the reads came back empty. The G-buffer test renders its targets in one graph and the
 estimators sample them in the next, with no transition in between -- something Metal does not need
 and the gi sample does do, in its `GiGBufferToShaderRead` subgraph. The test now does the same.
+
+The G-buffer barrier cleared that, and the next run crashed in the ray query test's teardown
+instead -- a test that had passed on the run before, with no validation errors either time. The
+nondeterminism is the point: `VkmScene::destroy` hands its resources to the reclaimer's worker,
+which keeps destroying GPU objects on its own thread after the test returns and doctest has started
+the next one. `VkmDeferredResourceReclaimer::flushBlocking()` is `stop()`'s drain without the stop,
+and every ray-tracing test now calls it, so no test leaves asynchronous teardown running into the
+next.
+
+The lavapipe job also builds with `-g` now (still `Release`, still `-O3 -DNDEBUG`). Two of these
+crashes printed a single unresolved address, which costs a full CI round trip to learn nothing from.

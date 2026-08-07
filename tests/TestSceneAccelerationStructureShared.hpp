@@ -8,6 +8,7 @@
 #include "UnitTestUtils.hpp"
 
 #include <vkm/renderer/backend/common/acceleration_structure.h>
+#include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/render_graph.h>
@@ -122,6 +123,9 @@ namespace vkmtest
         // wait for the device first, as any caller tearing a scene down mid-run would have to.
         driver->waitIdle();
         scene.destroy(driver);
+        // scene.destroy defers to the reclaimer's worker thread, which would otherwise still be
+        // destroying GPU objects while the next test case allocates. Finish it here instead.
+        driver->getDeferredReclaimer()->flushBlocking();
         CHECK(scene.getTopLevelAccelerationStructure() == vkm::VKM_INVALID_RESOURCE_HANDLE);
     }
 } // namespace vkmtest

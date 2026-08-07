@@ -158,6 +158,11 @@ jobs:
             echo "Using lavapipe ICD: $icd"
             export VK_DRIVER_FILES="$icd"
             export VK_ICD_FILENAMES="$icd"
+            # Still an optimised Release build -- this only adds symbols, so that backward-cpp
+            # resolves the frames of a crash instead of printing one bare address. A ray-tracing
+            # crash here is reproducible nowhere else, so an unsymbolised trace costs a whole
+            # CI round trip to learn nothing.
+            export CXXFLAGS="-g"
             xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}
           else
             python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}
