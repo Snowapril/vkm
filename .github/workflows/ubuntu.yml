@@ -158,35 +158,7 @@ jobs:
             echo "Using lavapipe ICD: $icd"
             export VK_DRIVER_FILES="$icd"
             export VK_ICD_FILENAMES="$icd"
-            # Still an optimised Release build -- this only adds symbols, so that backward-cpp
-            # resolves the frames of a crash instead of printing one bare address. A ray-tracing
-            # crash here is reproducible nowhere else, so an unsymbolised trace costs a whole
-            # CI round trip to learn nothing.
-            export CXXFLAGS="-g"
-            xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }} || suite_status=$?
-            # Isolation probe. The ray query test has segfaulted inside scene.buildAccelerationStructures
-            # on four consecutive runs, always at the same assertion count, with no validation error and
-            # a stack trace of one address inside the driver's own library. Running each ray-tracing test
-            # as its own process separates "this test is wrong" from "what ran before it left something
-            # behind" -- the two have completely different fixes and nothing in the combined run
-            # distinguishes them. Never fails the job; the suite's own status above decides that.
-            # The ray query test passes on its own and segfaults inside
-            # scene.buildAccelerationStructures when the suite runs it third, so the last two
-            # combinations ask which of the two preceding cases is the one it cannot follow.
-            if [ -x build/vulkan/bin/UnitTests ]; then
-              # Patterns are wildcards, never full names: doctest splits a filter on commas, and
-              # two of these test cases have one in their title.
-              for case in "Ray query - a compute*" \
-                          "VkmAccelerationStructure - build*,Ray query - a compute*" \
-                          "VkmScene - acceleration structures*,Ray query - a compute*" \
-                          "VkmAccelerationStructure - build*,VkmScene - acceleration structures*,Ray query - a compute*" \
-                          "Vulkan G-buffer*,Vulkan material*,Vulkan deferred*,Ray query - a compute*"; do
-                echo "=== isolated: $case"
-                xvfb-run -a ./build/vulkan/bin/UnitTests --test-case="$case" && echo "=== isolated exit: 0" \
-                                                                             || echo "=== isolated exit: $?"
-              done
-            fi
-            exit ${suite_status:-0}
+            xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}
           else
             python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}
           fi
