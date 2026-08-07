@@ -219,13 +219,26 @@ namespace vkmtest
         // submissions as far as the API is concerned -- and scene.destroy releases through the
         // deferred reclaimer, whose worker then frees on another thread while the next test is
         // already allocating. See TestAccelerationStructureShared.hpp.
+        /*
+         * Phase markers, the same device the scene structure test carries. doctest prints a test's
+         * logged context when it crashes and costs nothing when it does not, and this teardown has
+         * now segfaulted on lavapipe twice with every assertion passing -- inside a stripped
+         * driver library, so backward-cpp resolves one bare address and names no statement. These
+         * name the statement.
+         */
+        INFO("teardown: waitIdle");
         driver->waitIdle();
+        INFO("teardown: passTable->destroy");
         passTable->destroy();
         delete passTable;
+        INFO("teardown: release result buffer");
         driver->getRenderResourcePool()->releaseResource(result->getHandle());
+        INFO("teardown: scene.destroy");
         scene.destroy(driver);
         // scene.destroy defers to the reclaimer's worker thread, which would otherwise still be
         // destroying GPU objects while the next test case allocates. Finish it here instead.
+        INFO("teardown: reclaimer flushBlocking");
         driver->getDeferredReclaimer()->flushBlocking();
+        INFO("teardown: leaving the test body (pipeline managers and scene destruct here)");
     }
 } // namespace vkmtest
