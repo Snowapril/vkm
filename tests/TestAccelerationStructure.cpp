@@ -78,7 +78,11 @@ TEST_CASE("Indirect pass - 1 spp converges to the reference path tracer on Vulka
 {
     VulkanAccelerationStructureFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
-    vkmtest::runIndirectConvergenceTest(fixture.driver.get());
+    // 1.0e-3 rather than the 6.0e-4 Metal runs at. lavapipe's floor here is 7.9e-4 against
+    // Metal's 2.4e-4, and the gap is systematic -- eight times the samples moves it by 14% --
+    // so no shared threshold separates a one-bounce error from the noise on both. This one
+    // still does on lavapipe: that sabotage adds ~4.9e-4, which reads about 1.28e-3 there.
+    vkmtest::runIndirectConvergenceTest(fixture.driver.get(), /*mseThreshold=*/1.0e-3f);
 }
 
 #endif // VKM_USE_VULKAN_API

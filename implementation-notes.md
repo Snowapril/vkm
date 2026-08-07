@@ -2999,20 +2999,23 @@ destroyed the G-buffer but not the scene, so VMA reported unfreed allocations at
 destruction and the resource pool then ran those destructors against a destroyed allocator. Metal
 tolerated it; Vulkan segfaulted in `~VkmRenderResourcePool`.
 
-### The convergence gate had to be set from lavapipe, not Metal
+### The convergence gate is per-backend, because the floors are
 
 With the front-face fix in, the first lavapipe run to get through the deferred GI test reported
 coverage of 2212 of 2304 pixels split 1060/1152 -- identical to Metal, which is what says the
 raster is now right. One assertion failed: MSE 7.9e-4 against a 6.0e-4 threshold.
 
-That threshold came from Metal, where the noise floor at 1536 samples is 2.4e-4 and a one-bounce
-sabotage reads 7.3e-4. lavapipe's floor at the same count is 7.9e-4 -- above the sabotage -- so no
-threshold at 1536 could tell the two apart there. The means agreed to five decimals, so the excess
-is variance rather than bias, and variance is what more samples buy down.
+The first attempt at that was to buy the noise down with samples, on the theory that the excess was
+variance. It is not. Measured: Metal 2.41e-4 at 1536, 1.465e-4 at 6144, 1.318e-4 at 12288; lavapipe
+7.945e-4 at 1536 and 6.816e-4 at 12288. Eight times the samples moved lavapipe by 14%. Both fall by
+the same ~1.1e-4 over that range, so both carry the same variance, and lavapipe carries about
+5.5e-4 of extra systematic difference on top.
 
-Metal at three counts: 2.41e-4 at 1536, 1.465e-4 at 6144, 1.318e-4 at 12288, which fit
-`MSE = 1.17e-4 + 0.18/N`. The constant is real: a 1-spp deferred estimator and a path tracer are
-not the same estimator. Fitting lavapipe's single point to that same floor puts it near 2.0e-4 at
-12288, so the count is 12288 and the threshold 3.5e-4 -- above both measured floors and still well
-under the ~6.2e-4 a one-bounce sabotage reads at that count, since its ~4.9e-4 of bias does not
-fall with N. 5.2 s on Metal, about 92 s on lavapipe against a 400 s budget.
+It is not a difference in the mean: the deferred pass is 6.3% darker than the reference on Metal and
+6.6% darker on lavapipe. So it is per-pixel structure, most plausibly the silhouette pixels where a
+software rasteriser's coverage and a ray's intersection disagree -- at 48x48 those are a large
+fraction of the image. Unexplained beyond that, and recorded in TODO.md.
+
+So the sample count goes back to 1536 (the increase bought 14% for eight times the runtime) and the
+threshold becomes a parameter: 6.0e-4 on Metal, 1.0e-3 on Vulkan. Both still separate the error the
+gate exists for -- a one-bounce sabotage adds ~4.9e-4, which reads ~1.28e-3 on lavapipe.
