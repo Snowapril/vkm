@@ -163,7 +163,23 @@ jobs:
             # crash here is reproducible nowhere else, so an unsymbolised trace costs a whole
             # CI round trip to learn nothing.
             export CXXFLAGS="-g"
-            xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}
+            xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }} || suite_status=$?
+            # Isolation probe. The ray query test has segfaulted inside scene.buildAccelerationStructures
+            # on four consecutive runs, always at the same assertion count, with no validation error and
+            # a stack trace of one address inside the driver's own library. Running each ray-tracing test
+            # as its own process separates "this test is wrong" from "what ran before it left something
+            # behind" -- the two have completely different fixes and nothing in the combined run
+            # distinguishes them. Never fails the job; the suite's own status above decides that.
+            if [ -x build/vulkan/bin/UnitTests ]; then
+              for case in "VkmAccelerationStructure - build, instance and rebuild on Vulkan" \
+                          "VkmScene - acceleration structures out of the geometry pool on Vulkan" \
+                          "Ray query - a compute shader traces a loaded scene on Vulkan"; do
+                echo "=== isolated: $case"
+                xvfb-run -a ./build/vulkan/bin/UnitTests --test-case="$case" && echo "=== isolated exit: 0" \
+                                                                             || echo "=== isolated exit: $?"
+              done
+            fi
+            exit ${suite_status:-0}
           else
             python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}
           fi
