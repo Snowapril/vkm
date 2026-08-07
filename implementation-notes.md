@@ -2953,3 +2953,10 @@ staging buffer or tears a scene down now waits for the device first, for the sam
 `VkmRenderGraph::ensureCompleted()` is a timeline wait, and `VkmScene::destroy` hands its
 resources to the reclaimer's worker thread, which frees them while the next test is already
 allocating out of the same pool.
+
+The next lavapipe run reached four of the five ray-tracing tests passing, and the one that failed
+did so for a different reason: `VUID-vkCmdDraw-None-09600` ten times over, the G-buffer sampled
+while still in `VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL`, and the coverage `REQUIRE` failing
+because the reads came back empty. The G-buffer test renders its targets in one graph and the
+estimators sample them in the next, with no transition in between -- something Metal does not need
+and the gi sample does do, in its `GiGBufferToShaderRead` subgraph. The test now does the same.
