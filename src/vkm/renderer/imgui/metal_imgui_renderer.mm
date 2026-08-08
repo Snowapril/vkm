@@ -247,8 +247,7 @@ namespace vkm
 
         // Filters out ASCII control characters, Delete, and the 0xF700-0xF8FF private-use range
         // macOS uses for arrow/function/page keys before forwarding text to
-        // io.AddInputCharactersUTF8(), mirroring the character filtering historically applied by
-        // Dear ImGui's official imgui_impl_osx backend.
+        // io.AddInputCharactersUTF8(), mirroring Dear ImGui's own imgui_impl_osx backend.
         void addFilteredInputCharacters(ImGuiIO& io, NSString* characters)
         {
             const NSUInteger length = characters.length;
@@ -513,17 +512,16 @@ namespace vkm
         io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
         io.DeltaTime = io.DeltaTime > 0.0f ? io.DeltaTime : (1.0f / 60.0f);
 
-        // Mouse position + buttons are polled from the key window each frame. Keyboard input
-        // and scroll-wheel are event-driven instead, bridged via the NSEvent local monitor
-        // installed in initializeInner() (see keyEventMonitor).
+        // Mouse position and buttons are polled from the key window each frame. Keyboard input and
+        // scroll-wheel are event-driven, bridged via the NSEvent local monitor installed in
+        // initializeInner().
         //
-        // Only this renderer's own window may be polled. mouseLocationOutsideOfEventStream
-        // reports coordinates relative to whichever window it is asked, with no indication of
-        // where the cursor actually is, so polling another window would feed that window's
-        // coordinates into this one's io.DisplaySize space -- and a cursor position over the
-        // scene window would then raise WantCaptureMouse and make the platform layer drop the
-        // scene's own mouse input. isWindowFocused() is the engine's answer to "is the key
-        // window mine", which beats inspecting AppKit's view hierarchy from here.
+        // Only this renderer's own window may be polled. mouseLocationOutsideOfEventStream reports
+        // coordinates relative to whichever window it is asked, with no indication of where the
+        // cursor actually is, so polling another window feeds that window's coordinates into this
+        // one's io.DisplaySize space -- and a cursor over the scene window would then raise
+        // WantCaptureMouse and make the platform layer drop the scene's own mouse input.
+        // isWindowFocused() is the engine's answer to whether the key window is this one.
         NSWindow* keyWindow = [NSApp keyWindow];
         if (isWindowFocused() && keyWindow != nil)
         {

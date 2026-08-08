@@ -46,15 +46,12 @@ namespace vkm
         }
 
         /*
-        * @brief Process-wide cache of symbolized call sites; code addresses never move, so an
-        * entry is good for the life of the process.
-        *
-        * Immortal for the same reason MemoryTracker is (see its singleton()): its strings are
-        * freed through the tracked operator delete, and therefore through mimalloc, whose own
-        * process-exit cleanup runs on a destructor schedule unrelated to C++ statics. Letting
-        * this map destruct at exit is a coin flip on whether mimalloc is still alive to take
-        * the frees -- a crash after the last line of main. Nothing is lost by never tearing it
-        * down; the OS reclaims it either way.
+        * @brief Process-wide cache of symbolized call sites. Code addresses never move, so an entry
+        * is good for the life of the process.
+        * @details Immortal for the same reason MemoryTracker is: its strings are freed through the
+        * tracked operator delete and therefore through mimalloc, whose process-exit cleanup runs on
+        * a schedule unrelated to C++ statics, so letting this map destruct at exit is a coin flip
+        * on whether mimalloc is still alive to take the frees. The OS reclaims it either way.
         */
         struct CallSiteCache
         {
