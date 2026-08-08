@@ -165,6 +165,13 @@ jobs:
             # runs it directly with no filter at all. --duration also prints each case as it
             # starts, which is the execution order the crash log has never shown.
             if [ -x build/vulkan/bin/UnitTests ]; then
+              # The wrapper's run segfaults in the ray query test and a direct run of the same
+              # binary, right after it, passes all 222 cases. Two explanations fit: the wrapper,
+              # or simply being the first execution after the build. A second wrapper run
+              # separates them -- if it passes, the wrapper is not what matters.
+              echo "=== second wrapper run"
+              xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }} \
+                && echo "=== second wrapper exit: 0" || echo "=== second wrapper exit: $?"
               echo "=== unfiltered, invoked directly"
               xvfb-run -a ./build/vulkan/bin/UnitTests --duration=true && echo "=== direct exit: 0" \
                                                                        || echo "=== direct exit: $?"
