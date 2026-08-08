@@ -6,12 +6,14 @@
 #include <vkm/renderer/backend/common/acceleration_structure.h>
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/buffer.h>
+#include <vkm/renderer/backend/common/buffer_view.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
+#include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/staging_buffer.h>
 #include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/scene/image_loader.h>
@@ -642,6 +644,34 @@ namespace vkm
         return true;
     }
 
+    namespace
+    {
+        // A format-less view over a range of a geometry pool buffer. Format-less on purpose: a
+        // build reads raw vertex and index memory, so no VkBufferView is created for it and the
+        // view is metadata the backends resolve to an address.
+        VkmResourceHandle makeGeometryView(VkmDriverBase* driver, VkmResourceHandle buffer,
+                                           uint64_t offset, uint64_t size, const char* debugName)
+        {
+            if (buffer == VKM_INVALID_RESOURCE_HANDLE || size == 0)
+            {
+                return VKM_INVALID_RESOURCE_HANDLE;
+            }
+            VkmBuffer* parent = driver->getRenderResourcePool()->getResource<VkmBuffer>(buffer);
+            if (parent == nullptr)
+            {
+                return VKM_INVALID_RESOURCE_HANDLE;
+            }
+            VkmBufferViewInfo viewInfo{};
+            viewInfo._offset = offset;
+            viewInfo._size = size;
+            viewInfo._debugName = debugName;
+            // createView rather than newBufferView: it records the view as a child of the buffer,
+            // so releasing the geometry pool releases these with it and the scene tracks nothing.
+            VkmBufferView* view = parent->createView(viewInfo);
+            return view != nullptr ? view->getHandle() : VKM_INVALID_RESOURCE_HANDLE;
+        }
+    } // namespace
+
     bool VkmScene::buildAccelerationStructures(VkmDriverBase* driver, std::string* outError)
     {
         VKM_ASSERT(driver != nullptr, "VkmScene::buildAccelerationStructures requires a driver");
@@ -666,20 +696,36 @@ namespace vkm
             const VkmSceneGeometryPool* pool = _pools[static_cast<size_t>(meshEntry._layout)].get();
             VKM_ASSERT(pool != nullptr, "A mesh entry names a vertex layout whose pool was never created");
 
-            VkmAccelerationStructureGeometry geometry{};
-            geometry._vertexBuffer = pool->getVertexBuffer();
+            const std::string debugName = "SceneBlas[" + std::to_string(entry) + "]";
+
             // The pool addresses vertices in u32 words and indices in u32 elements; both are four
             // bytes, which is also the alignment a float3 vertex format and a u32 index type need.
-            geometry._vertexByteOffset = static_cast<uint64_t>(meshEntry._range._vertexWordOffset) * sizeof(uint32_t);
+            const std::string vertexViewName = debugName + ".Vertices";
+            const std::string indexViewName = debugName + ".Indices";
+            const VkmResourceHandle vertexView = makeGeometryView(
+                driver, pool->getVertexBuffer(),
+                static_cast<uint64_t>(meshEntry._range._vertexWordOffset) * sizeof(uint32_t),
+                static_cast<uint64_t>(meshEntry._range._vertexCount) * pool->getLayout()._stride,
+                vertexViewName.c_str());
+            const VkmResourceHandle indexView = makeGeometryView(
+                driver, pool->getIndexBuffer(),
+                static_cast<uint64_t>(meshEntry._range._indexOffset) * sizeof(uint32_t),
+                static_cast<uint64_t>(meshEntry._range._indexCount) * sizeof(uint32_t),
+                indexViewName.c_str());
+            if (vertexView == VKM_INVALID_RESOURCE_HANDLE || indexView == VKM_INVALID_RESOURCE_HANDLE)
+            {
+                releaseAccelerationStructures(driver);
+                return fail(outError, "Failed to view the geometry pool for " + debugName);
+            }
+            VkmAccelerationStructureGeometry geometry{};
+            geometry._vertexView = vertexView;
             // Position is attribute 0 of every VkmVertexLayoutPreset, so the pool's stride is the
             // whole description a triangle geometry needs -- the build reads nothing else.
             geometry._vertexStride = pool->getLayout()._stride;
             geometry._vertexCount = meshEntry._range._vertexCount;
-            geometry._indexBuffer = pool->getIndexBuffer();
-            geometry._indexByteOffset = static_cast<uint64_t>(meshEntry._range._indexOffset) * sizeof(uint32_t);
+            geometry._indexView = indexView;
             geometry._indexCount = meshEntry._range._indexCount;
 
-            const std::string debugName = "SceneBlas[" + std::to_string(entry) + "]";
             VkmAccelerationStructureInfo blasInfo{};
             blasInfo._type = VkmAccelerationStructureType::BottomLevel;
             blasInfo._debugName = debugName.c_str();

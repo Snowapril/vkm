@@ -10,6 +10,7 @@
 
 #include <vkm/renderer/backend/common/acceleration_structure.h>
 #include <vkm/renderer/backend/common/buffer.h>
+#include <vkm/renderer/backend/common/buffer_view.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/command_queue.h>
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
@@ -58,11 +59,25 @@ namespace vkmtest
         vkm::VkmAccelerationStructureInfo blasInfo{};
         blasInfo._type = vkm::VkmAccelerationStructureType::BottomLevel;
         blasInfo._debugName = "AsTestBlas";
+        // Views rather than the buffers themselves: a build reads a *range*, and this is what the
+        // geometry descriptor names. Format-less, so neither backend creates a real view object.
+        const auto makeView = [&](vkm::VkmBuffer* buffer, uint64_t size, const char* name) {
+            vkm::VkmBufferViewInfo info{};
+            info._offset = 0;
+            info._size = size;
+            info._debugName = name;
+            vkm::VkmBufferView* view = buffer->createView(info);
+            REQUIRE(view != nullptr);
+            return view->getHandle();
+        };
+        const vkm::VkmResourceHandle vertexView = makeView(vertexBuffer, sizeof(vertices), "AsTestVertexView");
+        const vkm::VkmResourceHandle indexView = makeView(indexBuffer, sizeof(indices), "AsTestIndexView");
+
         vkm::VkmAccelerationStructureGeometry geometry{};
-        geometry._vertexBuffer = vertexBuffer->getHandle();
+        geometry._vertexView = vertexView;
         geometry._vertexStride = 3 * sizeof(float);
         geometry._vertexCount = 3;
-        geometry._indexBuffer = indexBuffer->getHandle();
+        geometry._indexView = indexView;
         geometry._indexCount = 3;
         blasInfo._geometries.push_back(geometry);
 
@@ -154,6 +169,8 @@ namespace vkmtest
         // vertex and index buffers were read by them.
         driver->waitIdle();
         driver->getRenderResourcePool()->releaseResource(blas->getHandle());
+        driver->getRenderResourcePool()->releaseResource(vertexView);
+        driver->getRenderResourcePool()->releaseResource(indexView);
         driver->getRenderResourcePool()->releaseResource(vertexBuffer->getHandle());
         driver->getRenderResourcePool()->releaseResource(indexBuffer->getHandle());
     }

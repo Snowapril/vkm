@@ -3,6 +3,7 @@
 #include <vkm/renderer/backend/metal/metal_acceleration_structure.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_buffer.h>
+#include <vkm/renderer/backend/common/buffer_view.h>
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
 #include <vkm/renderer/backend/common/command_queue.h>
 #include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
@@ -15,14 +16,22 @@ namespace vkm
     {
         // A geometry range as Metal 4 wants it: an address that already includes the offset, and a
         // length so validation can catch a range running off the end of its buffer.
-        MTL4BufferRange bufferRange(VkmRenderResourcePool* pool, VkmResourceHandle handle, uint64_t offset)
+        // The range a build should read a geometry view from. The view's offset is relative to its
+        // parent, which is what MTLBuffer.gpuAddress already points at.
+        MTL4BufferRange viewRange(VkmRenderResourcePool* pool, VkmResourceHandle viewHandle)
         {
-            VkmBuffer* buffer = pool->getResource<VkmBuffer>(handle);
-            if (buffer == nullptr)
+            VkmBufferView* view = pool->getResource<VkmBufferView>(viewHandle);
+            if (view == nullptr)
             {
                 return MTL4BufferRange{ 0, 0 };
             }
-            id<MTLBuffer> mtlBuffer = static_cast<VkmBufferMetal*>(buffer)->getBuffer();
+            VkmBuffer* parent = view->tryGetParent();
+            if (parent == nullptr)
+            {
+                return MTL4BufferRange{ 0, 0 };
+            }
+            const uint64_t offset = view->getBufferViewInfo()._offset;
+            id<MTLBuffer> mtlBuffer = static_cast<VkmBufferMetal*>(parent)->getBuffer();
             return MTL4BufferRange{ mtlBuffer.gpuAddress + offset, mtlBuffer.length - offset };
         }
 
@@ -149,8 +158,8 @@ namespace vkm
                 [geometries release];
                 return nil;
             }
-            const MTL4BufferRange vertexRange = bufferRange(pool, source._vertexBuffer, source._vertexByteOffset);
-            const MTL4BufferRange indexRange = bufferRange(pool, source._indexBuffer, source._indexByteOffset);
+            const MTL4BufferRange vertexRange = viewRange(pool, source._vertexView);
+            const MTL4BufferRange indexRange = viewRange(pool, source._indexView);
             if (vertexRange.bufferAddress == 0 || indexRange.bufferAddress == 0)
             {
                 VKM_DEBUG_ERROR("Acceleration structure geometry references a buffer that could not be resolved");

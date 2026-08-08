@@ -3,6 +3,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_acceleration_structure.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_buffer.h>
+#include <vkm/renderer/backend/common/buffer_view.h>
 #include <vkm/renderer/backend/vulkan/vulkan_command_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_util.h>
 #include <vkm/renderer/backend/common/command_queue.h>
@@ -28,10 +29,27 @@ namespace vkm
         * sub-allocated from a pool block that carries no device-address usage, and the address
         * would be meaningless rather than absent.
         */
-        VkDeviceAddress bufferAddress(VkmRenderResourcePool* pool, VkmResourceHandle handle)
+        /*
+        * The device address a build should read a geometry view from.
+        *
+        * The parent's own address already carries its sub-allocation offset, so the view's
+        * RELATIVE offset is what gets added -- `VkmBufferViewVulkan::getOffset()` is absolute and
+        * would count a pooled buffer's offset twice.
+        */
+        VkDeviceAddress viewAddress(VkmRenderResourcePool* pool, VkmResourceHandle viewHandle)
         {
-            VkmBuffer* buffer = pool->getResource<VkmBuffer>(handle);
-            return buffer != nullptr ? static_cast<VkDeviceAddress>(buffer->getGPUVirtualAddress()) : 0;
+            VkmBufferView* view = pool->getResource<VkmBufferView>(viewHandle);
+            if (view == nullptr)
+            {
+                return 0;
+            }
+            VkmBuffer* parent = view->tryGetParent();
+            if (parent == nullptr || parent->getGPUVirtualAddress() == 0)
+            {
+                return 0;
+            }
+            return static_cast<VkDeviceAddress>(parent->getGPUVirtualAddress()) +
+                   static_cast<VkDeviceAddress>(view->getBufferViewInfo()._offset);
         }
     } // namespace
 
@@ -89,14 +107,14 @@ namespace vkm
                 VKM_DEBUG_ERROR("Acceleration structure geometry needs a non-zero index count that is a multiple of 3");
                 return false;
             }
-            const VkDeviceAddress vertexAddress = bufferAddress(pool, source._vertexBuffer);
-            const VkDeviceAddress indexAddress = bufferAddress(pool, source._indexBuffer);
+            const VkDeviceAddress vertexAddress = viewAddress(pool, source._vertexView);
+            const VkDeviceAddress indexAddress = viewAddress(pool, source._indexView);
             if (vertexAddress == 0 || indexAddress == 0)
             {
-                // Almost always a missing AllowAccelerationStructureInput on the source buffer, so
-                // the message names that rather than the symptom.
-                VKM_DEBUG_ERROR("Acceleration structure geometry references a buffer with no device "
-                                "address; it needs VkmResourceCreateInfo::AllowAccelerationStructureInput");
+                // Almost always a missing AllowAccelerationStructureInput on the buffer the view
+                // was made over, so the message names that rather than the symptom.
+                VKM_DEBUG_ERROR("Acceleration structure geometry references a buffer view whose buffer has "
+                                "no device address; it needs VkmResourceCreateInfo::AllowAccelerationStructureInput");
                 return false;
             }
 
@@ -110,11 +128,11 @@ namespace vkm
             geometry.geometry.triangles = VkAccelerationStructureGeometryTrianglesDataKHR{
                 .sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR,
                 .vertexFormat  = VK_FORMAT_R32G32B32_SFLOAT,
-                .vertexData    = { .deviceAddress = vertexAddress + source._vertexByteOffset },
+                .vertexData    = { .deviceAddress = vertexAddress },
                 .vertexStride  = source._vertexStride,
                 .maxVertex     = source._vertexCount > 0 ? source._vertexCount - 1 : 0,
                 .indexType     = VK_INDEX_TYPE_UINT32,
-                .indexData     = { .deviceAddress = indexAddress + source._indexByteOffset },
+                .indexData     = { .deviceAddress = indexAddress },
                 .transformData = { .deviceAddress = 0 },
             };
             outGeometries->push_back(geometry);

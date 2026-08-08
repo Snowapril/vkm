@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/common/acceleration_structure.h>
+#include <vkm/renderer/backend/common/buffer.h>
+#include <vkm/renderer/backend/common/buffer_view.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
@@ -251,6 +253,16 @@ namespace vkm
             }
         };
 
+        const auto recordUsageOfViewParent = [&](VkmResourceHandle viewHandle) {
+            if (VkmBufferView* view = pool->getResource<VkmBufferView>(viewHandle))
+            {
+                if (VkmBuffer* parent = view->tryGetParent())
+                {
+                    parent->recordUsage(_gpuEventTimelineObject);
+                }
+            }
+        };
+
         recordUsageOf(accelerationStructure);
         VkmAccelerationStructure* structure = pool->getResource<VkmAccelerationStructure>(accelerationStructure);
         if (structure == nullptr)
@@ -265,8 +277,12 @@ namespace vkm
         }
         for (const VkmAccelerationStructureGeometry& geometry : info._geometries)
         {
-            recordUsageOf(geometry._vertexBuffer);
-            recordUsageOf(geometry._indexBuffer);
+            // Both the view and the buffer behind it: the view is what the descriptor names, the
+            // buffer is what the build actually reads.
+            recordUsageOf(geometry._vertexView);
+            recordUsageOf(geometry._indexView);
+            recordUsageOfViewParent(geometry._vertexView);
+            recordUsageOfViewParent(geometry._indexView);
         }
     }
 
