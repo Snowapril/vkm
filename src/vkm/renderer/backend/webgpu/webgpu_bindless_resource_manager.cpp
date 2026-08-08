@@ -244,6 +244,19 @@ namespace vkm
         return recreateBindGroup();
     }
 
+    bool VkmBindlessResourceManagerWebGPU::setAccelerationStructure(VkmResourceHandle accelerationStructureHandle)
+    {
+        // Unbinding is the one case that succeeds, so a teardown path shared with the other
+        // backends does not log an error on the way out of a scene that never bound one.
+        if (accelerationStructureHandle == VKM_INVALID_RESOURCE_HANDLE)
+        {
+            return true;
+        }
+        VKM_DEBUG_ERROR("WebGPU has no acceleration structure API; this backend never reports "
+                        "VkmDriverCapabilityFlags::RayTracing");
+        return false;
+    }
+
     void VkmBindlessResourceManagerWebGPU::destroy()
     {
         if (_bindGroup != nullptr)

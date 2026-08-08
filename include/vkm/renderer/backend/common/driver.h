@@ -269,8 +269,11 @@ namespace vkm
         * @brief Block until every command queue of this driver has finished all submitted
         * work. Used by the pipeline-state reload path, which destroys backend pipeline
         * objects synchronously (they never go through the deferred reclaimer).
+        *
+        * Virtual because waiting on each queue's timeline is not, on every backend, the same
+        * thing as the API considering the device idle -- see VkmDriverVulkan::waitIdle.
         */
-        void waitIdle(const uint64_t timeoutMs = UINT64_MAX);
+        virtual void waitIdle(const uint64_t timeoutMs = UINT64_MAX);
 
         /*
         * @brief get driver capability flags

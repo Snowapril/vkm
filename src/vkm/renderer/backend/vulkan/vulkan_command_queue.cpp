@@ -155,9 +155,17 @@ namespace vkm
             .sType          = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
             .semaphoreCount = 1,
             .pSemaphores    = &_timelineSemaphore,
-            .pValues        = &_lastAllocatedTimeline,
+            .pValues        = &_lastSubmittedTimeline,
         };
-        vkWaitSemaphores(driverVulkan->getDevice(), &waitInfo, timeoutNs);
+        // The result is checked because VK_TIMEOUT here is silent otherwise, and every caller of
+        // waitIdle() goes on to destroy resources on the assumption the GPU is done with them.
+        const VkResult result = vkWaitSemaphores(driverVulkan->getDevice(), &waitInfo, timeoutNs);
+        if (result != VK_SUCCESS)
+        {
+            VKM_DEBUG_ERROR(fmt::format("Timed out waiting for timeline value {} (last completed {})",
+                                        _lastSubmittedTimeline, queryLastCompletedTimeline())
+                                .c_str());
+        }
     }
 
     // VkmCommandQueueVulkan
@@ -261,6 +269,7 @@ namespace vkm
         };
         VKM_VK_CHECK_RESULT_MSG(vkQueueSubmit2(_vkQueue, 1, &submitInfo2, VK_NULL_HANDLE), "Failed to submit command buffer(s) to graphics queue");
 
+        timeline->markTimelineSubmitted(signalValue);
         return timelineObject;
     }
 

@@ -56,6 +56,9 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/image_loader.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/camera.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/gbuffer.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/path_tracer.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/indirect_pass.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/restir.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/gi_composite.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/probe_volume.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/screenshot.h
@@ -112,6 +115,9 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/scene/image_loader.cpp
     ${SRC_DIR}/vkm/renderer/camera.cpp
     ${SRC_DIR}/vkm/renderer/gbuffer.cpp
+    ${SRC_DIR}/vkm/renderer/path_tracer.cpp
+    ${SRC_DIR}/vkm/renderer/indirect_pass.cpp
+    ${SRC_DIR}/vkm/renderer/restir.cpp
     ${SRC_DIR}/vkm/renderer/gi_composite.cpp
     ${SRC_DIR}/vkm/renderer/probe_volume.cpp
     ${SRC_DIR}/vkm/renderer/probe_volume_updater.cpp
@@ -537,6 +543,23 @@ vkm_add_shader_cache_target(
     SHADER_ROOT "${RESOURCES_DIR}/Shaders"
     PSO_JSON_FILES ${VKM_ENGINE_PSO_JSON_FILES}
     EXTRA_DEPENDS ${VKM_ENGINE_SHADER_SOURCES})
+
+# Ray-tracing PSOs live in their own directory rather than beside the rest, for two reasons that
+# both bite at once if they do not: VkmEngine loads resources/Pipelines/Engine/ wholesale at
+# startup on EVERY backend, so a pipeline the device cannot create would fail initialization on
+# Vulkan-over-MoltenVK; and the WebGPU branch of vkm_bindless.hlsli declares no acceleration
+# structure at all, so their HLSL does not even compile there. Loaded on demand by whoever needs
+# them (see VkmPathTracer), and built only for the backends that can carry ray query.
+if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
+    file(GLOB VKM_RAY_TRACING_PSO_JSON_FILES CONFIGURE_DEPENDS
+        "${RESOURCES_DIR}/Pipelines/RayTracing/*.json")
+    vkm_add_shader_cache_target(
+        TARGET_NAME vkm_ray_tracing_shaders
+        OUTPUT_DIR "${RESOURCES_DIR}/Shaders/ShaderCache"
+        SHADER_ROOT "${RESOURCES_DIR}/Shaders"
+        PSO_JSON_FILES ${VKM_RAY_TRACING_PSO_JSON_FILES}
+        EXTRA_DEPENDS ${VKM_ENGINE_SHADER_SOURCES})
+endif()
 # Deliberately NOT a dependency of vkmcore: vkm-compiler links vkmcore, so making the library
 # wait on its own shader cache is a dependency cycle (vkmcore -> vkm_engine_shaders ->
 # vkm-compiler -> vkmcore). The cache is a runtime resource rather than a build input, so the

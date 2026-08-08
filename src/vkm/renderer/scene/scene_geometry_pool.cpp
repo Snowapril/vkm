@@ -24,10 +24,30 @@ namespace vkm
                 static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst) |
                 static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferSrc));
 
+        /*
+        * @brief The pool's buffer flags for `driver`.
+        *
+        * `AllowAccelerationStructureInput` is added only where the device reports ray tracing: on
+        * Vulkan it becomes `VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR`,
+        * which is not a legal usage on a device where `VK_KHR_acceleration_structure` was never
+        * enabled. Where it is added it costs nothing: it also forces the committed allocation
+        * path, which these buffers already ask for.
+        */
+        VkmResourceCreateInfo poolBufferFlags(VkmDriverBase* driver)
+        {
+            if ((driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::RayTracing) == 0)
+            {
+                return kPoolBufferFlags;
+            }
+            return static_cast<VkmResourceCreateInfo>(
+                static_cast<uint32_t>(kPoolBufferFlags) |
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowAccelerationStructureInput));
+        }
+
         VkmBuffer* createAndUploadBuffer(VkmDriverBase* driver, const void* data, uint64_t size, const std::string& debugName)
         {
             VkmBufferInfo bufferInfo{};
-            bufferInfo._flags = kPoolBufferFlags;
+            bufferInfo._flags = poolBufferFlags(driver);
             bufferInfo._size = size;
             // Dedicated allocation, so the bindless registration always sees offset 0.
             bufferInfo._placementHint = VkmMemoryPlacementHint::ForceCommitted;

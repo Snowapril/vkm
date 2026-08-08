@@ -39,7 +39,8 @@ struct ObjectData
     uint     materialIndex;
     uint     indexOffset;
     uint     indexCount;
-    uint2    _pad0;
+    uint     vertexStrideWords; // read only by the ray-tracing kernels; a draw knows its own layout
+    uint     _pad0;
     float4   boundsCenterRadius;
 };
 
@@ -167,8 +168,22 @@ PSOutput PSMain(VSOutput input)
     // Derived from the world-position derivatives across the triangle, so it is the true face
     // normal regardless of what the vertex normals say. This is the one a secondary ray offsets
     // along; using an interpolated or normal-mapped vector there causes self-intersection.
-    const float3 geometricNormal =
+    //
+    // **Oriented towards the camera**, which the derivative cross product alone does not give:
+    // its sign follows the screen-space derivative order, and on this engine's conventions it
+    // came out pointing INTO the surface. A rasterized pixel is by definition a surface facing
+    // the eye, so this is well defined -- and it is what the channel is for. Nothing had consumed
+    // it before Phase 7's indirect pass (SSGI marches in screen space, deferred lighting uses the
+    // shading normal, gi_composite only visualizes it), so the first consumer to offset a ray
+    // along it is what found this: with a small offset the ray re-hit its own wall and the image
+    // came out 14% dark, and with a large one the origin ended up outside the room entirely.
+    const float3 towardsCamera = g_VkmFrame.cameraPositionWorld.xyz - input.worldPosition;
+    float3 geometricNormal =
         normalize(cross(ddx(input.worldPosition), ddy(input.worldPosition)));
+    if (dot(geometricNormal, towardsCamera) < 0.0)
+    {
+        geometricNormal = -geometricNormal;
+    }
 
     // PositionOnly geometry has no vertex normal, so the two normals coincide there.
     const float3 shadingNormal = (dot(input.worldNormal, input.worldNormal) > 0.0)

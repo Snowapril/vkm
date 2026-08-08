@@ -304,6 +304,13 @@ namespace vkm
             [computeEncoder setArgumentTable:argumentTable];
             [argumentTable setAddress:bindlessManager->getArgumentBuffer().gpuAddress
                               atIndex:kVkmMetalBindlessArgumentBufferIndex];
+            // Set 1, on the same terms as the graphics branch below. It was missing here until a
+            // compute shader first wanted the camera (the path tracer builds its primary rays from
+            // inverseViewProjection), which is the same gap WebGPU had and for the same reason:
+            // the scene's cull and emit passes read only set 0, so nothing noticed. Vulkan never
+            // had it -- it binds sets 0 and 1 in one call at whichever bind point the pipeline is.
+            [argumentTable setAddress:static_cast<VkmDriverMetal*>(_driver)->getFrameConstantManager()->getActiveGpuAddress()
+                              atIndex:kVkmMetalFrameConstantBufferIndex];
         }
         else
         {
@@ -565,7 +572,27 @@ namespace vkm
         [encoder barrierAfterQueueStages:MTLStageAll
                             beforeStages:MTLStageDispatch
                        visibilityOptions:MTL4VisibilityOptionDevice];
-        static_cast<VkmAccelerationStructureMetal*>(structure)->recordBuild(encoder);
+        VkmAccelerationStructureMetal* structureMetal = static_cast<VkmAccelerationStructureMetal*>(structure);
+        if (structureMetal->getAccelerationStructure() == nil || structureMetal->getDescriptor() == nil)
+        {
+            VKM_DEBUG_ERROR("buildAccelerationStructure on a structure that failed to initialize");
+            _commandEncoder.commit();
+            return;
+        }
+        id<MTLBuffer> scratch = structureMetal->getScratchBuffer();
+        if (scratch == nil)
+        {
+            // The scratch is gone on a static structure, which is exactly the case this must
+            // refuse: rebuilding one would read whatever now occupies that memory. Passing an
+            // empty range instead is not a softer failure -- Metal's debug layer aborts the
+            // process on a nil scratch buffer, which is how this guard's absence surfaced.
+            VKM_DEBUG_ERROR("buildAccelerationStructure on a structure that was not created with _allowUpdate");
+            _commandEncoder.commit();
+            return;
+        }
+        [encoder buildAccelerationStructure:structureMetal->getAccelerationStructure()
+                                 descriptor:structureMetal->getDescriptor()
+                              scratchBuffer:MTL4BufferRange{ scratch.gpuAddress, scratch.length }];
         [encoder barrierAfterStages:MTLStageDispatch
                   beforeQueueStages:MTLStageAll
                   visibilityOptions:MTL4VisibilityOptionDevice];

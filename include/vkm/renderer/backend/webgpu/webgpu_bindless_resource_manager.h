@@ -55,6 +55,9 @@ namespace vkm
         uint32_t registerBuffer(VkmResourceHandle bufferHandle, VkmBindlessArrayType arrayType) override final;
         void unregisterBuffer(uint32_t slot, VkmBindlessArrayType arrayType) override final;
         bool setSingletonBuffer(VkmBindlessSingletonBuffer which, VkmResourceHandle bufferHandle) override final;
+        // WebGPU has no acceleration structure API at all, so this logs and fails rather than
+        // being a silent no-op -- the same shape registerTexture() takes here.
+        bool setAccelerationStructure(VkmResourceHandle accelerationStructureHandle) override final;
 
         // Unsupported here: WGSL has no runtime-sized texture arrays, so this backend's
         // bind group models no texture array to publish into. Always returns UINT32_MAX.

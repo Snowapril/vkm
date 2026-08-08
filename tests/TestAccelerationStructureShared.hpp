@@ -10,8 +10,10 @@
 
 #include <vkm/renderer/backend/common/acceleration_structure.h>
 #include <vkm/renderer/backend/common/buffer.h>
+#include <vkm/renderer/backend/common/buffer_view.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/command_queue.h>
+#include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 
@@ -57,11 +59,25 @@ namespace vkmtest
         vkm::VkmAccelerationStructureInfo blasInfo{};
         blasInfo._type = vkm::VkmAccelerationStructureType::BottomLevel;
         blasInfo._debugName = "AsTestBlas";
+        // Views rather than the buffers themselves: a build reads a *range*, and this is what the
+        // geometry descriptor names. Format-less, so neither backend creates a real view object.
+        const auto makeView = [&](vkm::VkmBuffer* buffer, uint64_t size, const char* name) {
+            vkm::VkmBufferViewInfo info{};
+            info._offset = 0;
+            info._size = size;
+            info._debugName = name;
+            vkm::VkmBufferView* view = buffer->createView(info);
+            REQUIRE(view != nullptr);
+            return view->getHandle();
+        };
+        const vkm::VkmResourceHandle vertexView = makeView(vertexBuffer, sizeof(vertices), "AsTestVertexView");
+        const vkm::VkmResourceHandle indexView = makeView(indexBuffer, sizeof(indices), "AsTestIndexView");
+
         vkm::VkmAccelerationStructureGeometry geometry{};
-        geometry._vertexBuffer = vertexBuffer->getHandle();
+        geometry._vertexView = vertexView;
         geometry._vertexStride = 3 * sizeof(float);
         geometry._vertexCount = 3;
-        geometry._indexBuffer = indexBuffer->getHandle();
+        geometry._indexView = indexView;
         geometry._indexCount = 3;
         blasInfo._geometries.push_back(geometry);
 
@@ -76,7 +92,7 @@ namespace vkmtest
             vkm::VkmAccelerationStructureInfo tlasInfo{};
             tlasInfo._type = vkm::VkmAccelerationStructureType::TopLevel;
             tlasInfo._debugName = "AsTestTlas";
-            // The dynamic-object flag: without it the structure is built once and recordBuild
+            // The dynamic-object flag: without it the structure is built once and a later build
             // refuses, because the scratch it needs was freed.
             tlasInfo._allowUpdate = true;
             vkm::VkmAccelerationStructureInstance instance{};
@@ -115,6 +131,18 @@ namespace vkmtest
                 CHECK_FALSE(tlas->updateInstances({ instance, instance }));
             }
 
+            /*
+             * Wait for the device before releasing anything, and release synchronously.
+             *
+             * `vkDestroyAccelerationStructureKHR` requires every submitted command referring to the
+             * structure to have COMPLETED. Handing the structure to the deferred reclaimer does not
+             * establish that: an entry whose usages have all completed is released on the worker's
+             * next 4 ms poll, concurrently with whatever the main thread does next, and three CI
+             * runs in a row reported the structure still in use and then died with a segmentation
+             * fault. A test that creates and destroys structures back to back is the worst case for
+             * that, and it is not what the reclaimer exists for.
+             */
+            driver->waitIdle();
             driver->getRenderResourcePool()->releaseResource(tlas->getHandle());
         }
 
@@ -122,6 +150,11 @@ namespace vkmtest
         {
             // Its scratch was freed after the initial build, so rebuilding would read whatever now
             // occupies that memory. The refusal is the guard against that.
+            //
+            // This command buffer is begun and deliberately never submitted, which also covers the
+            // stranded-timeline case: beginCommandBuffer() takes a timeline value, and until
+            // VkmGpuEventTimelineBase::markTimelineSubmitted existed, abandoning it left every
+            // later waitIdle on this queue waiting on a value nothing would signal.
             vkm::VkmCommandQueueBase* queue =
                 driver->getCommandQueue(vkm::VkmCommandQueueType::Graphics, 0);
             vkm::VkmCommandBufferBase* commandBuffer = queue->getCommandBufferPool()->allocate();
@@ -132,7 +165,12 @@ namespace vkmtest
             CHECK(blas->getAllocatedSize() > 0); // still intact; the rebuild was declined
         }
 
+        // Same reason: the bottom-level structure was referenced by the builds above, and its
+        // vertex and index buffers were read by them.
+        driver->waitIdle();
         driver->getRenderResourcePool()->releaseResource(blas->getHandle());
+        driver->getRenderResourcePool()->releaseResource(vertexView);
+        driver->getRenderResourcePool()->releaseResource(indexView);
         driver->getRenderResourcePool()->releaseResource(vertexBuffer->getHandle());
         driver->getRenderResourcePool()->releaseResource(indexBuffer->getHandle());
     }

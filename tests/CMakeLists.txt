@@ -41,6 +41,10 @@ set(SRCS
     ${SRC_DIR}/TestMipChain.cpp
     ${SRC_DIR}/TestCubemapTexture.cpp
     ${SRC_DIR}/TestBufferHostWrite.cpp
+    ${SRC_DIR}/TestAccelerationStructure.cpp
+    ${SRC_DIR}/TestGBufferRenderVulkan.cpp
+    ${SRC_DIR}/TestPathTracerMetrics.cpp
+    ${SRC_DIR}/TestReservoirLayout.cpp
 )
 
 if (VKM_USE_METAL_API)
@@ -60,6 +64,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestGBufferRenderMetal.mm
         ${SRC_DIR}/TestProbeVolumeMetal.mm
         ${SRC_DIR}/TestViewportMetal.mm
+        ${SRC_DIR}/TestAccelerationStructureMetal.mm
     )
 endif()
 
@@ -82,6 +87,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestGBufferRenderMetal.mm
         ${SRC_DIR}/TestProbeVolumeMetal.mm
         ${SRC_DIR}/TestViewportMetal.mm
+        ${SRC_DIR}/TestAccelerationStructureMetal.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++"
     )
 endif()
@@ -133,6 +139,17 @@ if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
         OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
         PSO_JSON_FILES "${ROOT_DIR}/resources/tests/viewport/renderpass.json"
         EXTRA_DEPENDS  "${ROOT_DIR}/resources/tests/viewport/viewport_fill.hlsl")
+endif()
+
+# TestRayQuery casts rays at a scene's acceleration structure through the bindless set. Native
+# backends only: WebGPU has no acceleration structure API and never reports the RayTracing
+# capability, so a WGSL cache for this would be a cache nothing can ever load.
+if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
+    vkm_add_shader_cache_target(
+        TARGET_NAME   tests_ray_query_shaders
+        OUTPUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
+        PSO_JSON_FILES "${ROOT_DIR}/resources/tests/ray_query/renderpass.json"
+        EXTRA_DEPENDS  "${ROOT_DIR}/resources/tests/ray_query/ray_query.hlsl")
 endif()
 
 # TestSceneModelRenderMetal draws an imported glTF mesh with the model_viewer sample's PSO.
@@ -220,6 +237,12 @@ if (VKM_USE_VULKAN_API OR VKM_USE_METAL_API)
         TEST_RESOURCE_TABLE_PSO_DIR="${ROOT_DIR}/resources/tests/resource_tables/"
         TEST_RESOURCE_TABLE_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
     )
+    add_dependencies(${target} tests_ray_query_shaders)
+    target_compile_definitions(${target}
+        PRIVATE
+        TEST_RAY_QUERY_PSO_DIR="${ROOT_DIR}/resources/tests/ray_query/"
+        TEST_RAY_QUERY_SHADER_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/"
+    )
 elseif (EMSCRIPTEN AND VKM_USE_WEBGPU_API AND VKM_HOST_VKM_COMPILER)
     # The bind-group 2/3 paths on WebGPU need a WGSL shader to exercise them, which only a host
     # vkm-compiler can build.
@@ -237,6 +260,13 @@ endif()
 # dependency must not be scoped to one backend.
 if (TARGET vkm_engine_shaders)
     add_dependencies(${target} vkm_engine_shaders)
+endif()
+
+# The path tracer's PSO, which VkmPathTracer::initialize loads from its own directory rather than
+# the one VkmEngine loads at startup -- so unlike the above this target exists on native backends
+# only, and the dependency is scoped the same way.
+if (TARGET vkm_ray_tracing_shaders)
+    add_dependencies(${target} vkm_ray_tracing_shaders)
 endif()
 
 # TestSceneModelRenderMetal (Metal-only) needs the model_viewer PSO cache and its paths.

@@ -1,8 +1,13 @@
 // Copyright (c) 2025 Snowapril
 
+#include <vkm/renderer/backend/common/acceleration_structure.h>
+#include <vkm/renderer/backend/common/buffer.h>
+#include <vkm/renderer/backend/common/buffer_view.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
+#include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/resource_table.h>
 
 namespace vkm
@@ -223,6 +228,62 @@ namespace vkm
             return;
         }
         onBuildAccelerationStructure(accelerationStructure);
+
+        /*
+         * Record what this build reads, so the deferred reclaimer can actually defer it.
+         * VkmRenderGraph::execute() is otherwise the only thing that calls recordUsage, and it only
+         * knows about resources a pass declared with addReferencedResource -- so a structure built
+         * through a bare queue submit (which is how VkmAccelerationStructure::initialize builds,
+         * and how a caller outside the render graph rebuilds) reached the reclaimer with no usages
+         * at all. An entry with no usages is ready on the worker's very next 4 ms poll, so the
+         * "deferred" release destroyed structures the GPU was still building:
+         * VUID-vkDestroyAccelerationStructureKHR-...-02442 followed by a segmentation fault on
+         * lavapipe.
+         *
+         * The inputs are listed rather than just the structure itself because they are what the
+         * build reads and what the validation layer reports as in use -- a top-level build holds
+         * every bottom-level structure it instances, and a bottom-level build holds the vertex and
+         * index buffers it reads.
+         */
+        VkmRenderResourcePool* pool = _driver->getRenderResourcePool();
+        const auto recordUsageOf = [&](VkmResourceHandle handle) {
+            if (VkmRenderResource* resource = pool->getResource<VkmRenderResource>(handle))
+            {
+                resource->recordUsage(_gpuEventTimelineObject);
+            }
+        };
+
+        const auto recordUsageOfViewParent = [&](VkmResourceHandle viewHandle) {
+            if (VkmBufferView* view = pool->getResource<VkmBufferView>(viewHandle))
+            {
+                if (VkmBuffer* parent = view->tryGetParent())
+                {
+                    parent->recordUsage(_gpuEventTimelineObject);
+                }
+            }
+        };
+
+        recordUsageOf(accelerationStructure);
+        VkmAccelerationStructure* structure = pool->getResource<VkmAccelerationStructure>(accelerationStructure);
+        if (structure == nullptr)
+        {
+            return;
+        }
+
+        const VkmAccelerationStructureInfo& info = structure->getAccelerationStructureInfo();
+        for (const VkmAccelerationStructureInstance& instance : info._instances)
+        {
+            recordUsageOf(instance._blas);
+        }
+        for (const VkmAccelerationStructureGeometry& geometry : info._geometries)
+        {
+            // Both the view and the buffer behind it: the view is what the descriptor names, the
+            // buffer is what the build actually reads.
+            recordUsageOf(geometry._vertexView);
+            recordUsageOf(geometry._indexView);
+            recordUsageOfViewParent(geometry._vertexView);
+            recordUsageOfViewParent(geometry._indexView);
+        }
     }
 
     void VkmCommandBufferBase::barrierTextureForShaderRead(VkmResourceHandle texture)

@@ -50,6 +50,15 @@ namespace vkm
         // without starting the real worker thread.
         void pollOnce();
 
+        // Releases everything currently pending on the CALLING thread, blocking on each
+        // entry's recorded timelines first -- what stop() does, without stopping the worker.
+        //
+        // For callers that must not let the worker keep destroying GPU objects in the
+        // background: a test whose next case starts allocating the moment it returns has no
+        // other way to say "and finish that before I continue", and one that did not left the
+        // ray-query test crashing in teardown on some runs and not others.
+        void flushBlocking();
+
     private:
         struct PendingEntry
         {

@@ -1,0 +1,12 @@
+{
+    "name": "ray_query_pso",
+    "shaders": {
+        "compute": { "filepath": "ray_query.hlsl", "entry_point": "CSMain", "ray_query": true }
+    },
+    "per_pass_resources": [
+        { "binding": 0, "type": "storage_buffer" }
+    ],
+    "options": {
+        "default": {}
+    }
+}

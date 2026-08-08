@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/metal/metal_bindless_resource_manager.h>
+#include <vkm/renderer/backend/metal/metal_acceleration_structure.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
@@ -245,6 +246,31 @@ namespace vkm
         }
 
         entries[entryIndex] = bufferMetal->getBuffer().gpuAddress;
+        return true;
+    }
+
+    bool VkmBindlessResourceManagerMetal::setAccelerationStructure(VkmResourceHandle accelerationStructureHandle)
+    {
+        if (accelerationStructureHandle == VKM_INVALID_RESOURCE_HANDLE)
+        {
+            static_cast<uint64_t*>(_argumentBuffer.contents)[kVkmMetalBindlessAccelerationStructureId] = 0;
+            return true;
+        }
+
+        VkmAccelerationStructureMetal* structureMetal = static_cast<VkmAccelerationStructureMetal*>(
+            _driver->getRenderResourcePool()->getResource<VkmAccelerationStructure>(accelerationStructureHandle));
+        if (structureMetal == nullptr)
+        {
+            VKM_DEBUG_ERROR("setAccelerationStructure was given a handle that is not a live acceleration structure");
+            return false;
+        }
+
+        // An MTLResourceID, not a GPU address -- which is what makes this the same 8-byte entry the
+        // textures and the sampler use rather than the address the singleton buffers hold.
+        // Residency comes from the pool's MTLResidencySet, which VkmRenderResourcePoolMetal now
+        // covers acceleration structures in, so no per-encoder useResource: is needed.
+        writeResourceIdEntry(kVkmMetalBindlessAccelerationStructureId,
+                             [structureMetal->getAccelerationStructure() gpuResourceID]);
         return true;
     }
 

@@ -49,8 +49,13 @@ namespace vkm
             _workerThread.join();
         }
 
+        flushBlocking();
+    }
+
+    void VkmDeferredResourceReclaimer::flushBlocking()
+    {
         // Drain remaining entries with a bounded blocking wait -- the one place blocking is
-        // acceptable here, since this only runs at shutdown.
+        // acceptable here.
         std::deque<PendingEntry> remaining;
         {
             std::lock_guard<std::mutex> lock(_mutex);

@@ -10,6 +10,10 @@
 #include <vkm/renderer/backend/metal/metal_driver.h>
 
 #include "TestAccelerationStructureShared.hpp"
+#include "TestSceneAccelerationStructureShared.hpp"
+#include "TestRayQueryShared.hpp"
+#include "TestPathTracerShared.hpp"
+#include "TestIndirectPassShared.hpp"
 
 #include <memory>
 
@@ -42,6 +46,34 @@ TEST_CASE("VkmAccelerationStructure - build, instance and rebuild on Metal")
     MetalAccelerationStructureFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
     vkmtest::runAccelerationStructureTest(fixture.driver.get());
+}
+
+TEST_CASE("VkmScene - acceleration structures out of the geometry pool on Metal")
+{
+    MetalAccelerationStructureFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runSceneAccelerationStructureTest(fixture.driver.get());
+}
+
+TEST_CASE("Ray query - a compute shader traces a loaded scene on Metal")
+{
+    MetalAccelerationStructureFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runRayQueryTest(fixture.driver.get());
+}
+
+TEST_CASE("Path tracer - white furnace and energy conservation on Metal" * doctest::timeout(120.0))
+{
+    MetalAccelerationStructureFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runPathTracerFurnaceTest(fixture.driver.get());
+}
+
+TEST_CASE("Indirect pass - 1 spp converges to the reference path tracer on Metal" * doctest::timeout(400.0))
+{
+    MetalAccelerationStructureFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runIndirectConvergenceTest(fixture.driver.get());
 }
 
 #endif // VKM_USE_METAL_API

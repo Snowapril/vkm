@@ -2334,3 +2334,707 @@ the runner, and until this it was unverified.
   run. Making the suite fail when every device test skips is a real change to the test harness's
   contract -- it would break local runs on machines without a given backend -- so it was not taken
   as a side effect of a CI fix.
+
+## 2026-08-06 — The Metal acceleration structure suite crash was a validation abort, not mimalloc
+
+Registering `TestAccelerationStructureMetal.mm` in `tests/CMakeLists.txt` killed the whole Metal
+suite with pages of
+
+```
+mimalloc: assertion failed ... "p==NULL || mi_is_in_heap_region(p)"
+```
+
+None of which was the failure. It is the recursion already recorded in `TODO.md`: backward-cpp's
+signal handler allocates while formatting a trace, so an abort re-enters mimalloc and loops there
+forever. The first lines of the run say what actually happened:
+
+```
+-[MTL4DebugComputeCommandEncoder buildAccelerationStructure:descriptor:scratchBuffer:]:2452:
+failed assertion `Scratch buffer must not be nil'
+```
+
+`VkmAccelerationStructureMetal::recordBuild` checked only that the structure and its descriptor
+existed, then passed `MTL4BufferRange{0, 0}` when there was no scratch. Its Vulkan counterpart has
+always refused that case outright (`vulkan_acceleration_structure.cpp:351`) — a static structure's
+scratch is freed after the initial build, so rebuilding one would read whatever now occupies that
+memory. Metal now refuses on the same condition.
+
+**Why it passed standalone and died in the suite.** Nothing about the suite was involved. The
+difference is `MTL_DEBUG_LAYER=1`, which `scripts/run_tests.py` sets and a bare
+`./UnitTests --test-case=...` does not. Without the debug layer Metal accepts the nil scratch and
+the subcase's assertions pass; with it, the process aborts inside the encoder. The earlier attempt
+to fix this by owning the descriptor outright rather than autoreleasing it changed nothing, and the
+comment that change left behind — blaming a double release for the mimalloc output — was wrong; it
+has been rewritten to state the real reason the descriptor is retained (a rebuild is described by
+it).
+
+The test is the regression guard, and it is load-bearing only under validation: its
+`a structure built without _allowUpdate cannot be rebuilt` subcase asserts the structure survives,
+which passes either way, but with the guard removed the debug layer aborts the run. That is the
+sabotage evidence, obtained in reverse — the pre-fix run is the sabotaged one.
+
+`tests/TestAccelerationStructure.cpp` wraps the same shared body in a Vulkan fixture. It cannot run
+here (MoltenVK reports no ray tracing, so the shared body skips) and its first real execution will
+be CI's `Ubuntu 24.04 + GCC-13` lavapipe job. One consequence is recorded in `TODO.md`: the shared
+body's `Skipping: ` message makes `run_tests.py` report the whole Vulkan suite as SKIP on any
+device without ray tracing, which is honest about the missing coverage but hides a second,
+unrelated skip.
+
+Verified: Metal Debug **213/213 (20452 assertions)** and Release, both with Metal API Validation
+enabled and no validation output; Vulkan Debug 209/209 with `VK_LAYER_KHRONOS_validation`, reported
+as SKIP for the reason above. The four pre-existing `ImGui_ImplVulkan_Shutdown` teardown validation
+errors are unchanged.
+
+## 2026-08-06 — Acceleration structures out of the scene's own geometry pool
+
+`VkmScene::buildAccelerationStructures()` builds one bottom-level structure per pooled mesh and one
+top-level structure over the placed objects. Nothing about the pool had to change shape for it:
+`MeshRange` already carries `(vertexWordOffset, vertexCount, indexOffset, indexCount)`, which is
+exactly a triangle geometry descriptor's inputs, and position is attribute 0 of every
+`VkmVertexLayoutPreset`, so the pool's stride is the whole description a build needs. No vertex
+data is duplicated to trace it.
+
+- **Separate from `build()`, not part of it.** A scene that is only rasterized should not pay for
+  structures nothing traverses, and the call fails loudly on a driver without
+  `VkmDriverCapabilityFlags::RayTracing` rather than quietly doing nothing.
+- **The pool's buffers gain `AllowAccelerationStructureInput` only where the device reports ray
+  tracing.** On Vulkan that flag becomes
+  `VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR`, which is not a legal
+  usage on a device where `VK_KHR_acceleration_structure` was never enabled -- so adding it
+  unconditionally would have produced validation errors on MoltenVK, where nothing wants it. Where
+  it is added it costs nothing else: it also forces the committed allocation path, and these
+  buffers already ask for that, so the trap recorded in `restir.md` §8 (a pooled build input
+  inheriting the block's usage and failing with an error naming the block) never arises here.
+- **An instance's id is its object index**, which is also its `VkmObjectData` index, because
+  `_objects` is the sorted array the records were filled from. A hit therefore recovers the object
+  it belongs to with no side table.
+- **The top-level structure is rebuildable, bottom-level ones are not.** A mesh's geometry is
+  unchanged in object space no matter where its object goes; only the instance transform moves.
+  `recordAccelerationStructureUpdate()` republishes the transforms and records the rebuild.
+- `_topLevelStructurePointer` is resolved once, for the reason `_stagingPointers` already is:
+  `VkmCommandBufferBase` exposes no driver, so the per-frame update cannot look a handle up.
+
+### What the test proves, and what it does not
+
+`TestSceneAccelerationStructureShared.hpp` adds the model twice, so the pool holds two meshes and
+the second one's ranges start at non-zero offsets. **Zeroing both offsets was measured to leave the
+test passing.** A wrong-but-in-range address builds a structure over the wrong triangles, and
+nothing in this phase traverses the result -- so the offsets are unverified until Phase 5's
+ray-query gate exists. That is recorded in `TODO.md` rather than papered over with an assertion
+that would not have caught it.
+
+What it does catch, verified by sabotage: a mesh range that reaches the build empty. Forcing
+`_indexCount` to 0 makes the bottom-level build refuse and the test fails with
+`Failed to build SceneBlas[0]`. It also covers the refusal to build twice, the release path, and --
+under a validation layer, which is where a bad rebuild is reported rather than in a return value --
+the recorded rebuild after an object moves.
+
+### Deviations
+
+- **No refit.** `restir.md` §8 lists "refit on transform change; full rebuild only on topology
+  change". The rebuild-only decision made for `VkmAccelerationStructure` stands here: a top-level
+  rebuild over its instances is cheap and stays optimal, while an update degrades traversal as
+  instances drift from where the structure was built, and a falling rigid body moves a long way.
+  Refit belongs to deforming geometry, which nothing produces yet.
+- **The instance buffer is not ringed.** `recordAccelerationStructureUpdate()` writes the instance
+  descriptors from the CPU into the single buffer the recorded rebuild reads, with no per-frame
+  region and no fence, so a frame still executing its rebuild can have that buffer rewritten under
+  it. Ringing it is a change to `VkmAccelerationStructure`'s shape on both backends, well outside
+  this task; the hazard is recorded in `TODO.md` instead, next to the barrier one it sits beside.
+
+## 2026-08-06 — Phase 5c: the acceleration structure reaches shaders, and the gate runs
+
+### The set-0 binding
+
+`kVkmBindlessAccelerationStructureBinding` is set 0's binding after the singletons (8), with
+`VkmBindlessResourceManagerBase::setAccelerationStructure()` as its setter, and `VkmScene`
+publishes its top-level structure there once at `buildAccelerationStructures()` -- a rebuild writes
+into the same structure, so a per-frame rebuild never has to republish.
+
+- **Not a `VkmBindlessSingletonBuffer`, which is what `restir.md` §8 planned.** Its descriptor type
+  is `VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR` on Vulkan and an `MTLResourceID` on Metal, so
+  nothing about the singleton *buffer* path applies to it beyond the binding arithmetic; folding it
+  into an enum whose every entry documents an HLSL buffer type would have meant type-branching
+  inside that path anyway. Logged under Deviations.
+- **One structure, not an array.** Forced, not chosen: spirv-cross throws on
+  `OpConvertUToAccelerationStructureKHR`, so there is no pointer-style bindless acceleration
+  structure on the Metal path at all (§4.2).
+- **Vulkan drops the binding entirely on a device without ray tracing.** That descriptor type is
+  not legal in a layout -- nor in a descriptor pool size -- without `VK_KHR_acceleration_structure`
+  enabled, and MoltenVK enables none of the RT extensions. Nothing is lost, since the only shaders
+  that declare it are ray-query shaders, which cannot be created on such a device either way. The
+  consequence is that set 0's layout genuinely differs between the two kinds of device; recorded in
+  `TODO.md`.
+- **Metal residency.** `VkmRenderResourcePoolMetal::fetchAllocation` now handles
+  `VkmResourceType::AccelerationStructure`, so structures join the pool's `MTLResidencySet` like
+  every other allocation. Metal 4 does no implicit residency and the argument buffer carries only
+  an `MTLResourceID`, so without this the traversal reads an unmapped structure. Doing it in the
+  pool rather than with a per-encoder `useResource:` is what keeps the encoders unaware of it, and
+  it covers every bottom-level structure the top-level one names for free.
+
+### The Metal compile blocker §4.4 diagnosed, and the trap inside the fix
+
+Registering the binding with vkm-compiler's `add_msl_resource_binding` is what unblocked the ray
+query path on Metal, exactly as §4.4 predicted. What §4.4 did *not* predict is that the obvious
+basetype is wrong:
+
+- `basetype = SPIRType::AccelerationStructure` replaces the original failure with
+  **"Unexpected argument buffer resource base type"** for *every* shader in the tree, not just ray
+  ones. The switch that consumes this accepts scalars, `Image`, `Sampler` and `SampledImage` only
+  (`spirv_msl.cpp:88-118`, and the padding walk at `20245-20277` has the same list).
+- The registered basetype selects only which **index category** the id belongs to and which padding
+  member is synthesized when a shader steps over it. An acceleration structure genuinely uses the
+  buffer category -- spirv-cross emits it as `[[buffer(index)]]` (`spirv_msl.cpp:15344`) -- and its
+  argument-buffer entry is one 8-byte slot, so a scalar basetype is both correct and sufficient.
+
+Verified in the emitted MSL rather than by inspection:
+`raytracing::acceleration_structure<raytracing::instancing> g_Scene [[id(12293)]]` inside
+`spvDescriptorSetBuffer0`, at exactly `kVkmMetalBindlessAccelerationStructureId`, with the query
+lowered to `raytracing::intersection_query<raytracing::instancing, raytracing::triangle_data>` --
+the triangle-only envelope §4.2 describes.
+
+### The gate
+
+`resources/tests/ray_query/ray_query.hlsl` casts six rays at the scene's structure, reached through
+the bindless set; the only other resource it touches is a set-2 output buffer. The rays are
+generated from the thread id rather than read from a buffer, so a wrong result cannot be blamed on
+an input that failed to bind.
+
+**This is what made everything under Phase 5 observable for the first time.** Until a ray
+traverses, "the build accepted it" is the whole of what any acceleration structure test can say --
+a wrong vertex offset, a wrong index base, a dropped instance transform and a correct build are
+indistinguishable, which is exactly the limit recorded two days ago and now removed from
+`TODO.md`. Two things make the six rays discriminating:
+
+- The scene loads `gltf_two_rooms.gltf` **first** and `gltf_triangle.gltf` second, so the traced
+  mesh sits at non-zero vertex and index offsets inside the geometry pool. A second copy of the
+  same model would not do: identical bytes at a different offset build an identical structure.
+- The traced object is placed at (10, 20, -1), not at the origin, and the distractor a thousand
+  units away. The triangle's own vertices are at the origin in object space, so the instance
+  transform is the only thing that can put geometry where these rays look.
+
+Both were checked by sabotage, and both had been silent before: zeroing the pool's vertex and index
+byte offsets, and forcing the instance transform to identity, each turn the three expected hits
+into misses.
+
+### Deviations
+
+- **A separate binding rather than an extra `VkmBindlessSingletonBuffer` entry**, against
+  `restir.md` §8's wording. Reason above; the binding arithmetic still derives from one constant,
+  so adding another fixed binding still moves one line.
+- **`spirv_cross::SPIRType::Float` rather than `SPIRType::AccelerationStructure`** in the
+  `add_msl_resource_binding` entry, against §8's explicit instruction. The instruction does not
+  compile -- it breaks every shader, not just ray ones -- and the reason it does not is recorded at
+  the call site so the next reader does not try it again.
+
+### Verification (Phase 5c)
+
+Metal Debug **215/215 (20538 assertions)** and Release **215/215 (20528)**, both with Metal API
+Validation enabled and zero validation output; Vulkan Debug 211/211 with
+`VK_LAYER_KHRONOS_validation`, reported SKIP because all three ray-tracing bodies honestly skip on
+MoltenVK. Its VUID counts are byte-identical to the pre-change baseline (140/63/65/67, all
+pre-existing `ImGui_ImplVulkan_Shutdown` teardown errors).
+
+WebGPU is **compile-unverified locally**: no emsdk on this machine, so the `setAccelerationStructure`
+error stub and the `vkm_bindless.hlsli` branch that omits the declaration rest on CI's wasm job.
+
+One detour worth recording, since it costs an hour to re-diagnose: after several deliberately
+aborted sabotage runs, both Debug suites reported **FAIL while doctest reported SUCCESS** -- the
+crash was in `__llvm_gcov_writeout` during `exit`, preceded by ~150k
+`cannot merge previous GCDA file: corrupt arc tag` lines. Aborting an instrumented binary leaves
+corrupt `.gcda` files that poison every later run in that tree. `find build -name '*.gcda' -delete`
+is the fix, and Release was unaffected throughout because it carries no coverage instrumentation.
+
+## 2026-08-06 — Phase 6: the reference path tracer, and a furnace that is exact rather than convergent
+
+`resources/Shaders/path_trace.hlsl` plus `VkmPathTracer` (`renderer/path_tracer.{h,cpp}`): a
+brute-force accumulating path tracer over Phase 5's ray query, reading the scene entirely through
+set 0 and set 1 -- objects, materials, geometry pools, the acceleration structure and the camera --
+so it takes no scene pointer and binds nothing per frame but its own output.
+
+### The gate is analytic, not statistical
+
+`resources/tests/gltf_furnace.gltf` is two unit cubes in a uniform environment, albedo 1.0 and 0.5.
+Three facts make the expected answer exact:
+
+- A **convex** diffuse body in a **uniform** environment reflects exactly `albedo * L`. Convex means
+  a scattered ray never re-hits the same cube; uniform means where it goes does not matter.
+- **Cosine-weighted sampling of a Lambertian BRDF** makes a bounce's throughput multiplier exactly
+  the albedo. The `cos(theta)` and the pdf cancel, so no pdf division appears anywhere.
+- Together those give the estimator **zero variance on this scene**: one sample per pixel already
+  produces the analytic answer, and the tolerance can be 1e-3 rather than a noise budget.
+
+So the white furnace assertion is not "close to the environment" but "the whole left half of the
+image is one value" -- an albedo-1 body is *invisible*, which needs no knowledge of where it
+projects to. The grey cube is asserted as a ratio, because a silhouette pixel is a genuine average
+of cube and background: with the primary ray jittered inside its pixel, a half-covered pixel reads
+0.75 of the environment and is right to. The assertion is therefore "every ratio lies in
+[albedo, 1], every channel agrees on it, and the darkest is exactly the albedo".
+
+Inter-reflection between the two cubes changes nothing, which is why they can sit six units apart
+rather than at some distance chosen to make the error small: a ray leaving the grey cube that hits
+the white one still ends at `1.0 * L`.
+
+Sabotage-verified: multiplying the throughput by 1.05 per bounce fails the white furnace subcase at
+(0.41, 0.615, 0.82) against (0.4, 0.6, 0.8).
+
+### One word of ObjectData, and what it buys
+
+`VkmObjectData` gained `_vertexStrideWords` in the first of its two padding words -- so its size
+and every other offset are unchanged, and no draw path was touched. A rasterizing shader does not
+need it: a draw knows its layout at compile time, from the PSO permutation it was built as. A ray
+does not. One kernel hits objects from pools of different strides, and position is attribute 0 of
+every `VkmVertexLayoutPreset`, so the stride is the whole of what a layout-agnostic position fetch
+needs. Without it the tracer would have been silently wrong on any Compact or PositionOnly mesh --
+the failure mode this project keeps running into.
+
+### Two things that had to move
+
+- **Ray-tracing PSOs cannot live in `resources/Pipelines/Engine/`.** `VkmEngine` loads that
+  directory wholesale at startup on *every* backend, and the build compiles it for every backend
+  too. A ray-query PSO fails both: MoltenVK cannot create the pipeline, and the WebGPU branch of
+  `vkm_bindless.hlsli` declares no acceleration structure, so its HLSL does not even compile there.
+  They now live in `resources/Pipelines/RayTracing/`, built only for native backends and loaded on
+  demand by `VkmPathTracer::initialize`.
+- **Metal never bound descriptor set 1 for compute.** The graphics branch of
+  `VkmCommandBufferMetal::onBindPipeline` binds the frame constants and says in a comment that it
+  does so for every pipeline including those that never declare them; the compute branch bound only
+  set 0. Nothing had noticed because the scene's cull and emit passes read no camera. The path
+  tracer builds its primary rays from `inverseViewProjection`, and the debug layer answered
+  immediately: `Buffer binding at index 4 for g_VkmFrame was never set`. This is the same gap
+  WebGPU had and that was fixed on 2026-08-02; Vulkan never had it, since it binds sets 0 and 1 in
+  one call at whichever bind point the pipeline is.
+
+### What is deliberately absent
+
+Recorded in `TODO.md` rather than half-built: no next-event estimation (emissive geometry *is* the
+area-light representation, and NEE belongs to Phase 7's `shadeSecondaryHit()` seam); no Russian
+roulette, so `_maxBounces` is a bias knob; Lambertian only, so `metallic`/`roughness` are loaded
+and ignored; factor-only materials, because `VKM_MATERIAL_DECLARE()`'s samplers call `Sample()` and
+a compute shader has no derivatives.
+
+### Deviations
+
+- **Phase 6's split-screen accumulation mode is not built.** It is presentation work in the gi
+  sample rather than part of the gate, and the reference is currently reachable only from a test.
+  Left unchecked in `restir.md` §8 and recorded in `TODO.md` rather than quietly dropped.
+- **No Cornell-box fixture.** §12 asks for one for analytic validation; the furnace fixture is that
+  validation, and it is *more* analytic than a Cornell box would be. The Cornell box's value is
+  visual comparison for Phase 7 onwards, so the §12 item stays open rather than being ticked by
+  this.
+
+## 2026-08-06 — Phase 7: 1-spp indirect, and the two bugs the convergence gate found
+
+`resources/Shaders/gi_indirect.hlsl` plus `VkmIndirectPass`: one indirect ray per pixel, no
+reservoirs, taking its primary hit from the rasterized G-buffer and continuing through the same
+`vkmTracePath` the reference uses. The gate accumulates both and requires them to agree.
+
+### The seam, which is the point of doing this before reservoirs
+
+`include/vkm/shaders/vkm_path_tracing.hlsli` now holds what the two estimators share, as named
+things rather than inlined arithmetic, because §8 is right that retrofitting them is expensive:
+
+- `VkmSurfaceHit` — how a hit is *encoded*: `(instanceId, primitiveIndex, barycentrics)` plus a
+  reserved `uv`, since the LoD paper locates a surface point by `(instanceId, uv)` instead and a
+  reservoir's payload becomes an ABI the moment Phase 8 stores millions of them. The uv is
+  reserved but not filled: doing so needs a vertex-layout id in `VkmObjectData`, because uv0 sits
+  at a different offset and format in each preset and PositionOnly has none (`TODO.md`).
+- `vkmVertexMapping` — one function that turns an encoded hit into a world-space surface point, so
+  a future encoding changes one body and no call site.
+- `vkmShadeSecondaryHit` — the seam §12 named. Emission only today; next-event estimation replaces
+  exactly this body.
+- `vkmOffsetRayOrigin` — scale-relative, with the `t_max = (1 - eps) * d` shortening a reconnection
+  ray will need documented next to it.
+
+### The G-buffer's geometric normal pointed away from the camera
+
+The gate's first honest run reported **MSE 0.030, RelMSE 0.25** — the deferred pass came out 14%
+darker than the reference. Enlarging the ray offset 32x did not fix it; it overshot to *twice* the
+reference. Those two facts together say the ray was starting on the wrong side of the surface: a
+small offset left it inside the wall (immediate self-hit, dark), a large one put it outside the
+room entirely (nothing to hit, bright).
+
+`gbuffer.hlsl` derived the geometric normal as
+`normalize(cross(ddx(worldPosition), ddy(worldPosition)))`, whose sign follows the screen-space
+derivative order — and on this engine's conventions it came out pointing *into* the surface. It now
+orients towards the camera, which is well defined for a rasterized pixel and is what the channel
+exists for. **Nothing had ever consumed it**: SSGI marches in screen space, deferred lighting uses
+the shading normal, and `gi_composite` only visualizes it. The first pass to actually offset a ray
+along it is what found it. Fixing it took MSE from 0.030 to **6.2e-4**, a factor of 49.
+
+### Two passes loading the same PSO directory destroyed one of them
+
+Before that, the gate reported MSE 0 — a perfect match — while the image was plainly not black.
+`vkmComputeImageMse` returns 0 when *nothing is comparable*, and the reference's accumulation
+buffer was empty: `VkmPathTracer::initialize` and `VkmIndirectPass::initialize` each called
+`loadPipelineStatesFromDirectory` on `Pipelines/RayTracing/`, and that function does
+`target[name] = unique_ptr(...)` — it **replaces** an existing entry and destroys the old pipeline,
+leaving the tracer holding a dangling pointer and a resource table built against it. The engine
+loads its directory exactly once at startup, so this had never been reachable.
+
+Loading is now a free function, `vkmLoadRayTracingPipelineStates`, called once by whoever owns the
+manager; both passes only resolve a name, which is how `VkmScene` has always treated
+`scene_cull_pso`. The underlying manager hazard is recorded in `TODO.md` rather than fixed here.
+
+**The test could not have caught this and now can.** It asserts both images are non-empty and lit
+*before* comparing them, because a metric that returns 0 for "no data" makes a missing estimator
+look like a perfect one.
+
+### Choosing the threshold rather than guessing it
+
+At 384 samples the two agreed at MSE 6.2e-4 — pure Monte Carlo noise, their mean radiances 0.24%
+apart. But a deliberately mis-specified reference (one bounce short) scored 1.1e-3, under the
+threshold: the gate would not have caught a missing bounce. Noise falls as 1/N and a bias does not,
+so the sample count went to 1536, putting the floor at 2.4e-4 while the same sabotage now scores
+7.3e-4. The threshold sits between them with roughly 2.5x margin either way, and the whole test
+costs 0.8 s on Metal. Both streams are seeded deterministically, so the floor is reproducible
+rather than something a CI run can be unlucky with.
+
+### The fixture
+
+`resources/tests/gltf_cornell.gltf` is an open-top, open-front Cornell-style box with red and green
+side walls, lit by the uniform environment through its missing ceiling. Open-topped on purpose: the
+G-buffer has no emissive channel, so a deferred pass cannot reproduce a camera-visible emitter, and
+lighting from the environment removes that question instead of papering over it. Its walls are
+wound to face inward, checked programmatically in the generator against the intended normal rather
+than by hand -- a wall wound the wrong way would simply not rasterize under the G-buffer PSO's
+back-face culling, while the ray path, which disables triangle culling, would not notice.
+
+### The one that took longest: an acceleration structure built before it was resident
+
+The gate initially could not be registered on Metal. It passed on its own, and passed with the
+validation layer off, but returned **zero ray hits** under `MTL_DEBUG_LAYER=1` once any earlier
+test case had run in the same process -- with a fresh driver, an identically built structure and a
+correctly written argument-buffer entry.
+
+Everything obvious was ruled out by measurement rather than by reasoning: the driver (each test
+case builds its own), descriptor set 1 (a shader made to report `cameraPositionWorld` read 0.85 in
+both cases), the bottom-level structures (identical sizes, offsets, stride and triangle counts),
+the top-level structure's size, the argument-buffer entry, residency *registration* of the
+structures, `requestResidency`, barriers around the build, and the G-buffer and its graphics submit
+(the failure reproduced with neither present).
+
+The clue that cracked it: **rebuilding the freshly built structure once, through the ordinary
+recorded path, made it work every time** -- while a full `waitIdle` did not, and while the ids
+written into the instance descriptors were byte-identical at build and at rebuild. So it was not
+synchronization and not the contents; the initial build was simply ineffective and a later one was
+not.
+
+`VkmDriverBase::newAccelerationStructure` calls `onResourceInitialized(handle)` -- which is what
+adds a resource to the pool's `MTLResidencySet` -- **after** `initialize()` returns. But
+`initialize()` is where the synchronous build happens. So every structure was built while not
+resident: a bottom-level build wrote into unmapped memory, and the top-level build read
+bottom-level structures that were not mapped either. Whether that happened to work depended on
+whether the memory was resident anyway, which depends on what the process had allocated before --
+and Metal reported nothing in either case.
+
+`VkmAccelerationStructureMetal::initialize` now registers the structure itself, before recording
+the build, which is the same thing the bindless manager does for its own raw-allocated buffers. It
+is idempotent with the later `onResourceInitialized`. The scratch and instance buffers are
+registered for the same reason (they never go through `newBuffer`, and a build reads both on the
+GPU), and the synchronous build now records through `VkmCommandBufferBase::buildAccelerationStructure`
+rather than a hand-rolled encoder block, so the initial build and the per-frame rebuild are
+literally the same path.
+
+With that, the gate is registered on both backends and the Metal suite is green under validation.
+
+### Deviations
+
+- **The reference gained a `_jitterPrimaryRay` option**, defaulting to on, turned off for this
+  comparison. Not a fudge to make a test pass: a deferred pass's primary hit is the G-buffer's
+  single centre sample, so two estimators can only be compared pixel by pixel if they start from
+  the same point. With jitter on, every silhouette pixel differs for a reason that has nothing to
+  do with the estimator.
+- **§8's fourth Phase 7 bullet is only half done.** The geometric-normal offset with a
+  scale-relative epsilon is implemented and is what the normal bug was found through; the
+  reconnection-ray `t_max = (1 - eps) * distance` is documented at `vkmOffsetRayOrigin` but
+  unimplemented, because nothing casts a shadow or reconnection ray until Phase 8. Recorded in
+  `TODO.md` rather than written blind and left untested.
+
+## 2026-08-06 — Phase 8.1 and 8.3: the reservoir, and the packing bug its own gate caught
+
+`vkm_reservoir.hlsli` plus `VkmRestirPass`: a 32-byte reservoir, one buffer of screen-sized slices
+with per-pass slice indices, a generation pass that writes one traced sample per pixel into it, and
+a resolve that shades `f_s · cos · L · W` from it. No resampling yet -- 8.2, 8.4 and 8.5 are the
+next steps -- and that is precisely what makes this step checkable.
+
+### The gate is "is it the same estimator", not "does it converge"
+
+With a single candidate, RIS reduces to the estimator it resamples: `w = p̂/p_source`,
+`w_sum = w`, `W = w_sum / (M · p̂) = 1/p_source`. So `f_s · cos · L · W` is `albedo · L`, which is
+Phase 7's 1-spp pass exactly. The generation pass also draws from **gi_indirect's random stream on
+purpose** -- the two never run in the same frame, one replaces the other, so the usual
+distinct-pass-id rule does not apply -- and therefore sees the same direction at every pixel of
+every sample.
+
+The two images can then differ only by what the reservoir round trip loses. That turns a
+convergence test into an equality test, checked two orders of magnitude tighter: MSE 9.7e-7 against
+the 6e-4 the convergence gate allows.
+
+### RGB9E5's exponent bias is 15, and writing 16 does not look like a bug
+
+The first run scored **MSE 5.5e-4 and a 7.4% dark image**. The cause was one constant: the shared
+exponent's bias is 15, and the pack/unpack pair had 16.
+
+What makes it worth writing down is *why it was invisible*. Pack and unpack use the same scale, so
+a wrong bias round-trips **perfectly** for any value whose mantissa fits -- and only clamps the ones
+above 511, which is the top half of every exponent range. The failure is therefore silent, purely
+energy-losing, proportional to brightness, and looks exactly like plausible quantization loss from
+a 9-bit mantissa. Nothing but a numeric comparison against a known-equal estimator would have
+separated it from "well, it is a lossy format".
+
+Fixed to the OpenGL spec's formulation (`exponent = floor(log2(max)) + 1 + bias`, scale
+`2^(exponent - bias - 9)`), with the carry check widened from `== 512` to `>= 512`. 5.5e-4 → 9.7e-7,
+and the mean radiances now agree to 0.09%.
+
+### The triple-buffering question, answered rather than deferred
+
+`restir.md` §8.1 asked for a decision before the passes were written. Two slices, not
+`FRAME_COUNT`: a pass reads one slice and writes another, which is what 8.4 needs, and the
+frames-in-flight hazard is already answered by `VkmRenderGraph` calling `ensureCompleted()` on a
+frame slot before recording into it again -- the same guarantee descriptor set 1's per-slot region
+and the push-constant ring rely on. So the slice count is set by what resampling needs, not by how
+many frames are in flight.
+
+The test uses **slice 1, not slice 0**, for both input and output. With only slice 0 exercised, a
+pass that ignored the slice index entirely would still pass; sabotaging generation to write slice 0
+while resolve reads slice 1 leaves the resolve reading zeros and fails, which is what shows the
+index is really the mechanism.
+
+### Deviations
+
+- **8.2 (the neighbour offset LUT) is deliberately not built.** It has no consumer until 8.4, and a
+  buffer nothing reads is the speculative code `CLAUDE.md` §2 forbids. Noted in `restir.md` §8 so
+  it lands with the pass that indexes it rather than being forgotten.
+- **`vkmTracePath` gained a first-hit-reporting variant** rather than the reservoir pass tracing
+  the first ray itself. Two copies of that loop would be two chances to disagree about the ray
+  offset, the two-sidedness or the bounce count -- and the whole value of this sub-step's gate
+  rests on the two estimators being identical apart from the reservoir.
+
+## 2026-08-06 — Phase 8.2 and 8.4: the neighbour LUT, and a spatial pass left unverified on purpose
+
+`vkmBuildNeighbourOffsets` plus `gi_reservoir_spatial.hlsl`: 256 precomputed disk offsets, and a
+pass that merges k neighbours' reservoirs into each pixel's own.
+
+### 8.2, and why R2 rather than a spiral
+
+The spatial pass reads a **run** of consecutive entries starting at a per-pixel random base. That
+is what decides the sequence: a golden-angle spiral's consecutive points share almost the same
+radius, so a run of four would sample a *ring*, not a disk. The R2 sequence's consecutive points
+are well separated in both dimensions at every scale, so a run of any length spreads. Mapped to the
+disk with Shirley-Chiu concentric rather than the polar `r = sqrt(u)` map, which bunches points
+toward the centre -- where a neighbour carries the least new information.
+
+Free-standing and driver-free, so `TestReservoirLayout` checks the properties that matter without a
+GPU: inside the disk, reaching the rim, centred, and -- the one that pins the sequence choice --
+every run of four spreads rather than clusters.
+
+### 8.4 is written, dispatched, and **not verified**
+
+The estimator arithmetic is measured correct. With the per-neighbour visibility ray bypassed, the
+accumulated mean lands within **0.015%** of the un-resampled estimator. That is a strong statement:
+it says the reconnection Jacobian, the receiver-side target function and the bias-correction
+denominator are all right, because every one of them shifts the mean if it is not.
+
+With the visibility ray in place the image is **13.8% bright**, and that is where it stopped.
+
+What was ruled out, each by measurement:
+
+| Change | Result |
+| --- | --- |
+| `_neighbourCount = 0` | Mean exact to six digits -- the canonical path, Z and the centre's own visibility ray are correct |
+| Visibility ray bypassed entirely | Mean within 0.015% -- the merge arithmetic is correct |
+| Ray origin from the surface vs the offset point | bit-identical |
+| Target lifted off the sample's own surface or not | bit-identical |
+| Neighbour surface from an on-stack array vs recomputed | bit-identical |
+| Bias-correction loop rolled vs `[unroll]`ed | bit-identical |
+| `ACCEPT_FIRST_HIT` vs closest-hit | bit-identical |
+
+Six structurally different changes to the ray produced a bit-identical image while removing the ray
+did not, and the *same function* returns "visible" for the call outside the loop. So the ray's
+verdict at the in-loop call site is fixed and does not depend on its arguments -- which is not a
+shape any of the obvious causes has.
+
+**So it ships off by default and unchecked in the plan.** The test still dispatches it and asserts
+what is true -- it runs, covers the same pixels, produces a lit image, validation-clean -- so the
+pass stays compiled and exercised rather than rotting, without the test pretending the estimator is
+verified. Tuning the Jacobian clamp until the mean looked right was available and is exactly what
+`restir.md`'s own gate exists to prevent.
+
+### Deviations
+
+- **8.4 is left unchecked in `restir.md` §8 rather than marked done.** The plan's gate for every
+  sub-step is that the mean matches on a diffuse-only scene; it does not, so the box stays open and
+  `TODO.md` carries the full reproduction.
+- **RTXDI's Jacobian magnitude clamp (reject outside [0.1, 10]) is deliberately not applied.** It
+  bounds variance at the cost of the mean this sub-step exists to measure, and applying it here
+  would have hidden the very thing being looked for. It belongs to 8.7 and a profiler.
+
+## The stranded timeline value (CI lavapipe SIGSEGV)
+
+The first CI run with a real ray-tracing driver reported
+`VUID-vkDestroyAccelerationStructureKHR-accelerationStructure-02442` on `AsTestTlas` and
+`AsTestBlas` and then died with SIGSEGV inside the acceleration structure test. Releasing through
+the deferred reclaimer instead of destroying outright did not fix it -- it only moved the crash
+earlier, from the second test case into the first.
+
+The cause is one counter used for two purposes. `VkmCommandBufferBase::beginCommandBuffer()`
+allocates a timeline value (it needs one to tag resource usages recorded during recording), and
+`submit()` allocates another and asks the GPU to signal it. `waitIdle()` waited on
+`_lastAllocatedTimeline`, which is correct only as long as the last allocation was a submit.
+
+`runAccelerationStructureTest`'s "cannot be rebuilt" subcase begins a command buffer and, by
+design, never submits it -- the point of the subcase is that `recordBuild` refuses. From that
+point on the queue's last allocated value is one nothing will ever signal:
+
+- Metal blocks for the full timeout, which is the hang seen when `driver->waitIdle()` was tried.
+- Vulkan's `vkWaitSemaphores` returns `VK_TIMEOUT`, and the return value was discarded, so the
+  wait was indistinguishable from success. The reclaimer's shutdown drain then released every
+  pending entry anyway, the validation layer never retired the submissions, and lavapipe walked
+  into freed memory.
+
+The fix is `VkmGpuEventTimelineBase::markTimelineSubmitted`, called by all three backends' submit,
+with `waitIdle` waiting on `_lastSubmittedTimeline`. In the normal path the two values are
+identical -- Vulkan's submit allocates last, and Metal signals the highest submitted command
+buffer's own value -- so the only behaviour that changes is the stranded case. `waitIdle` on
+Vulkan now also reports a non-`VK_SUCCESS` result rather than swallowing it, because every caller
+goes on to destroy resources on the assumption that the wait meant something.
+
+Covered by `TestEngineSetup.cpp`'s "the submitted timeline trails the allocated one", which is
+device-free and fails on the pre-fix semantics (verified by sabotage: two of its six assertions
+fail when `getLastSubmittedTimeline()` returns the allocated value).
+
+### The reclaimer had nothing to defer on
+
+The timeline fix above did not clear the lavapipe failure: the same two VUIDs and the same SIGSEGV
+came back, now with 12 assertions run -- exactly the pass-1/pass-2 boundary of
+`runAccelerationStructureTest`, i.e. the moment its `requestRelease` calls land.
+
+`VkmRenderResource::recordUsage` was called from one place, `VkmRenderGraph::execute()`, for
+resources a pass declared with `addReferencedResource`. An acceleration structure built through a
+bare queue submit -- which is how `initialize()` builds and how the test rebuilds -- therefore
+reached the reclaimer with an empty `_waitsOn`, and `isEntryReady` returns true for an entry with
+no usages. The "deferred" release was not deferred by anything; the worker destroyed the structure
+on its next 4 ms poll.
+
+`buildAccelerationStructure` now records usage on the structure and on the inputs the build reads
+(the instanced bottom-level structures, or the vertex and index buffers). Beyond making the
+reclaimer wait for something real, this puts a `vkGetSemaphoreCounterValue` -- `isEntryReady`'s
+`queryLastCompletedTimeline()` -- in front of the destroy, which is what gives the validation
+layer an opportunity to retire the submission. Nothing on the previous path ever queried the
+semaphore, which is the most likely reason the structures were still reported in use even though
+every submit had been waited on by then.
+
+### What actually made the structures destroyable
+
+Recording usages did not clear it either -- the same two VUIDs and the same SIGSEGV came back, this
+time after 18 assertions rather than 12. The varying count is the tell: the reclaimer frees on its
+own worker thread, so where the crash lands depends on timing.
+
+Two things were wrong, and the second is the one that mattered.
+
+`VkmDriverBase::waitIdle` waits on each queue's timeline semaphore and nothing else -- the engine
+never calls `vkDeviceWaitIdle` outside the swapchain. A timeline wait proves the GPU reached the
+value; it is not what makes the validation layer retire the submissions that reached it. The
+previous commit had already put a `vkGetSemaphoreCounterValue` in front of the destroy through
+`isEntryReady`, and the structure was still reported in use by the command buffer that built it.
+`VkmDriverVulkan::waitIdle` now waits on the timelines and then on the device.
+
+And the deferred reclaimer is the wrong tool for a test that creates and destroys structures back
+to back. Its worker frees as soon as the recorded usages report complete, concurrently with
+whatever the main thread does next -- here, allocating the next subcase's structures out of the
+same pool. Both acceleration structure tests now wait for the device and release synchronously,
+which is what a caller tearing something down mid-run has to do anyway.
+
+That cleared it: on lavapipe the validation errors are gone and both acceleration structure tests
+pass. The crash moved to the ray query test's teardown, with all 63 of its assertions passing
+first -- the same shape, one test further along. Every ray-tracing test that reads back through a
+staging buffer or tears a scene down now waits for the device first, for the same reason:
+`VkmRenderGraph::ensureCompleted()` is a timeline wait, and `VkmScene::destroy` hands its
+resources to the reclaimer's worker thread, which frees them while the next test is already
+allocating out of the same pool.
+
+The next lavapipe run reached four of the five ray-tracing tests passing, and the one that failed
+did so for a different reason: `VUID-vkCmdDraw-None-09600` ten times over, the G-buffer sampled
+while still in `VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL`, and the coverage `REQUIRE` failing
+because the reads came back empty. The G-buffer test renders its targets in one graph and the
+estimators sample them in the next, with no transition in between -- something Metal does not need
+and the gi sample does do, in its `GiGBufferToShaderRead` subgraph. The test now does the same.
+
+The G-buffer barrier cleared that, and the next run crashed in the ray query test's teardown
+instead -- a test that had passed on the run before, with no validation errors either time. The
+nondeterminism is the point: `VkmScene::destroy` hands its resources to the reclaimer's worker,
+which keeps destroying GPU objects on its own thread after the test returns and doctest has started
+the next one. `VkmDeferredResourceReclaimer::flushBlocking()` is `stop()`'s drain without the stop,
+and every ray-tracing test now calls it, so no test leaves asynchronous teardown running into the
+next.
+
+The lavapipe job also builds with `-g` now (still `Release`, still `-O3 -DNDEBUG`). Two of these
+crashes printed a single unresolved address, which costs a full CI round trip to learn nothing from.
+
+## Vulkan culled every front face
+
+The deferred GI test reported zero covered pixels on lavapipe while its reference path tracer
+covered all of them, so the ray tracing was fine and the rasteriser was not. Nothing in the Vulkan
+suite could say more, because both tests that draw a scene were Metal-only -- which is also what
+`TODO.md` was describing when it said the Vulkan fixture rendered black.
+
+`TestGBufferRenderVulkan.cpp` instantiates those shared bodies for Vulkan. They need no ray
+tracing, so MoltenVK reproduces the failure locally and the whole thing stopped costing a
+fifteen-minute CI round trip per question.
+
+Two bugs, measured rather than reasoned about:
+
+**Every front face was culled.** `toVkFrontFace` inverted the enum, with a comment saying not to
+"fix" it: vkm-compiler applies `-fvk-invert-y` to Vulkan vertex shaders, which mirrors screen-space
+winding, so the inversion cancelled it. What that misses is that Metal flips too -- its NDC is +Y up
+and its framebuffer origin is top-left, so the flip happens in its viewport transform instead. One
+flip each; nothing left to cancel. The measurement: the same scene through both backends fills 2016
+of 4096 texels, bounding box x[0..62] y[1..63], covered-mask centroid (20.7, 42.3) -- identical, so
+identically wound. The indirect argument buffers were byte-for-byte identical too (count 1, then
+vertexCount 3, instanceCount 1), which is what ruled out the cull and emit compute passes.
+
+**The shared bodies leaked their scene.** `runGBufferRenderTest` and `runDeferredLightingTest`
+destroyed the G-buffer but not the scene, so VMA reported unfreed allocations at allocator
+destruction and the resource pool then ran those destructors against a destroyed allocator. Metal
+tolerated it; Vulkan segfaulted in `~VkmRenderResourcePool`.
+
+### The convergence gate is per-backend, because the floors are
+
+With the front-face fix in, the first lavapipe run to get through the deferred GI test reported
+coverage of 2212 of 2304 pixels split 1060/1152 -- identical to Metal, which is what says the
+raster is now right. One assertion failed: MSE 7.9e-4 against a 6.0e-4 threshold.
+
+The first attempt at that was to buy the noise down with samples, on the theory that the excess was
+variance. It is not. Measured: Metal 2.41e-4 at 1536, 1.465e-4 at 6144, 1.318e-4 at 12288; lavapipe
+7.945e-4 at 1536 and 6.816e-4 at 12288. Eight times the samples moved lavapipe by 14%. Both fall by
+the same ~1.1e-4 over that range, so both carry the same variance, and lavapipe carries about
+5.5e-4 of extra systematic difference on top.
+
+It is not a difference in the mean: the deferred pass is 6.3% darker than the reference on Metal and
+6.6% darker on lavapipe. So it is per-pixel structure, most plausibly the silhouette pixels where a
+software rasteriser's coverage and a ray's intersection disagree -- at 48x48 those are a large
+fraction of the image. Unexplained beyond that, and recorded in TODO.md.
+
+So the sample count goes back to 1536 (the increase bought 14% for eight times the runtime) and the
+threshold becomes a parameter: 6.0e-4 on Metal, 1.0e-3 on Vulkan. Both still separate the error the
+gate exists for -- a one-bounce sabotage adds ~4.9e-4, which reads ~1.28e-3 on lavapipe.
+
+### The lavapipe crash is a cold shader cache
+
+Only the first invocation after a build that actually compiled crashed; a second invocation through
+the same wrapper passed 222 of 222, and so did a direct one. Memory, disk and dmesg were clean --
+14.7 GB available, no swap touched, no OOM kill, no recent kernel message at all -- and the first
+run emitted no engine log, no validation message and no vkm-compiler output, so nothing was being
+recompiled at our level either.
+
+What is cold exactly once is Mesa's own on-disk shader cache. lavapipe compiles the internal
+shaders it builds acceleration structures with on first use and reuses them from `~/.cache`
+afterwards. Setting `MESA_SHADER_CACHE_DISABLE=true` makes every run the cold one, and every run
+then crashed -- including a direct invocation, and now in the *first* acceleration structure test
+rather than the third. That is the path.
+
+Nothing in it is ours: no validation error, no unfreed allocation, and every filtered ordering of
+those tests passes. So the CI job runs the suite twice, reports the first as a warm-up and judges
+the second. The judged run executes every test, so a real regression still fails it; what the
+warm-up hides is precisely a failure that needs a cold shader cache, which is the driver defect.

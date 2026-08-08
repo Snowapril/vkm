@@ -3,14 +3,17 @@
 #include <vkm/renderer/scene/scene.h>
 
 #include <vkm/base/common.h>
+#include <vkm/renderer/backend/common/acceleration_structure.h>
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/buffer.h>
+#include <vkm/renderer/backend/common/buffer_view.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
+#include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/staging_buffer.h>
 #include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/scene/image_loader.h>
@@ -264,6 +267,9 @@ namespace vkm
             data._materialIndex = entry._materialIndex == INVALID_VALUE32 ? 0u : entry._materialIndex;
             data._indexOffset = entry._range._indexOffset;
             data._indexCount = entry._range._indexCount;
+            // Every preset's stride is a whole number of words (16, 64 and 32 bytes), which is
+            // what lets the pools be untyped word arrays in the first place.
+            data._vertexStrideWords = pool.getLayout()._stride / 4;
 
             const glm::vec3 center = entry._bounds._valid ? entry._bounds.getCenter() : glm::vec3(0.0f);
             const float radius = entry._bounds._valid ? glm::length(entry._bounds.getExtent()) * 0.5f : 0.0f;
@@ -638,6 +644,205 @@ namespace vkm
         return true;
     }
 
+    namespace
+    {
+        // A format-less view over a range of a geometry pool buffer. Format-less on purpose: a
+        // build reads raw vertex and index memory, so no VkBufferView is created for it and the
+        // view is metadata the backends resolve to an address.
+        VkmResourceHandle makeGeometryView(VkmDriverBase* driver, VkmResourceHandle buffer,
+                                           uint64_t offset, uint64_t size, const char* debugName)
+        {
+            if (buffer == VKM_INVALID_RESOURCE_HANDLE || size == 0)
+            {
+                return VKM_INVALID_RESOURCE_HANDLE;
+            }
+            VkmBuffer* parent = driver->getRenderResourcePool()->getResource<VkmBuffer>(buffer);
+            if (parent == nullptr)
+            {
+                return VKM_INVALID_RESOURCE_HANDLE;
+            }
+            VkmBufferViewInfo viewInfo{};
+            viewInfo._offset = offset;
+            viewInfo._size = size;
+            viewInfo._debugName = debugName;
+            // createView rather than newBufferView: it records the view as a child of the buffer,
+            // so releasing the geometry pool releases these with it and the scene tracks nothing.
+            VkmBufferView* view = parent->createView(viewInfo);
+            return view != nullptr ? view->getHandle() : VKM_INVALID_RESOURCE_HANDLE;
+        }
+    } // namespace
+
+    bool VkmScene::buildAccelerationStructures(VkmDriverBase* driver, std::string* outError)
+    {
+        VKM_ASSERT(driver != nullptr, "VkmScene::buildAccelerationStructures requires a driver");
+
+        if ((driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::RayTracing) == 0)
+        {
+            return fail(outError, "This device reports no ray tracing capability");
+        }
+        if (_objectData.empty())
+        {
+            return fail(outError, "VkmScene::buildAccelerationStructures must follow a successful build()");
+        }
+        if (!_meshStructures.empty())
+        {
+            return fail(outError, "The scene's acceleration structures were already built");
+        }
+
+        _meshStructures.assign(_meshEntries.size(), VKM_INVALID_RESOURCE_HANDLE);
+        for (size_t entry = 0; entry < _meshEntries.size(); ++entry)
+        {
+            const MeshEntry& meshEntry = _meshEntries[entry];
+            const VkmSceneGeometryPool* pool = _pools[static_cast<size_t>(meshEntry._layout)].get();
+            VKM_ASSERT(pool != nullptr, "A mesh entry names a vertex layout whose pool was never created");
+
+            const std::string debugName = "SceneBlas[" + std::to_string(entry) + "]";
+
+            // The pool addresses vertices in u32 words and indices in u32 elements; both are four
+            // bytes, which is also the alignment a float3 vertex format and a u32 index type need.
+            const std::string vertexViewName = debugName + ".Vertices";
+            const std::string indexViewName = debugName + ".Indices";
+            const VkmResourceHandle vertexView = makeGeometryView(
+                driver, pool->getVertexBuffer(),
+                static_cast<uint64_t>(meshEntry._range._vertexWordOffset) * sizeof(uint32_t),
+                static_cast<uint64_t>(meshEntry._range._vertexCount) * pool->getLayout()._stride,
+                vertexViewName.c_str());
+            const VkmResourceHandle indexView = makeGeometryView(
+                driver, pool->getIndexBuffer(),
+                static_cast<uint64_t>(meshEntry._range._indexOffset) * sizeof(uint32_t),
+                static_cast<uint64_t>(meshEntry._range._indexCount) * sizeof(uint32_t),
+                indexViewName.c_str());
+            if (vertexView == VKM_INVALID_RESOURCE_HANDLE || indexView == VKM_INVALID_RESOURCE_HANDLE)
+            {
+                releaseAccelerationStructures(driver);
+                return fail(outError, "Failed to view the geometry pool for " + debugName);
+            }
+            VkmAccelerationStructureGeometry geometry{};
+            geometry._vertexView = vertexView;
+            // Position is attribute 0 of every VkmVertexLayoutPreset, so the pool's stride is the
+            // whole description a triangle geometry needs -- the build reads nothing else.
+            geometry._vertexStride = pool->getLayout()._stride;
+            geometry._vertexCount = meshEntry._range._vertexCount;
+            geometry._indexView = indexView;
+            geometry._indexCount = meshEntry._range._indexCount;
+
+            VkmAccelerationStructureInfo blasInfo{};
+            blasInfo._type = VkmAccelerationStructureType::BottomLevel;
+            blasInfo._debugName = debugName.c_str();
+            blasInfo._geometries.push_back(geometry);
+
+            VkmAccelerationStructure* blas = driver->newAccelerationStructure(blasInfo);
+            if (blas == nullptr)
+            {
+                releaseAccelerationStructures(driver);
+                return fail(outError, "Failed to build " + debugName);
+            }
+            _meshStructures[entry] = blas->getHandle();
+        }
+
+        VkmAccelerationStructureInfo tlasInfo{};
+        tlasInfo._type = VkmAccelerationStructureType::TopLevel;
+        tlasInfo._debugName = "SceneTlas";
+        // Rebuildable, because a scene's objects move. Note the limit this inherits: the structure
+        // is sized against this instance list, so recordAccelerationStructureUpdate() can move the
+        // objects but a scene that *spawns* one has to build its structures again (TODO.md).
+        tlasInfo._allowUpdate = true;
+        collectInstances(&tlasInfo._instances);
+
+        VkmAccelerationStructure* tlas = driver->newAccelerationStructure(tlasInfo);
+        if (tlas == nullptr)
+        {
+            releaseAccelerationStructures(driver);
+            return fail(outError, "Failed to build the scene's top-level acceleration structure");
+        }
+        _topLevelStructure = tlas->getHandle();
+        // Kept for the same reason the staging buffers are: VkmCommandBufferBase exposes no driver,
+        // so the per-frame update cannot look the structure up by handle.
+        _topLevelStructurePointer = tlas;
+
+        // Published once, not per frame: a rebuild writes into the same structure, so the
+        // descriptor stays valid across every recordAccelerationStructureUpdate().
+        VkmBindlessResourceManagerBase* bindlessManager = driver->getBindlessResourceManager();
+        if (bindlessManager == nullptr || !bindlessManager->setAccelerationStructure(_topLevelStructure))
+        {
+            releaseAccelerationStructures(driver);
+            return fail(outError, "Failed to publish the scene's acceleration structure into the bindless set");
+        }
+        return true;
+    }
+
+    void VkmScene::collectInstances(std::vector<VkmAccelerationStructureInstance>* outInstances) const
+    {
+        outInstances->clear();
+        outInstances->reserve(_objects.size());
+        for (size_t object = 0; object < _objects.size(); ++object)
+        {
+            const uint32_t entry = _objects[object]._meshEntryIndex;
+            if (entry >= _meshStructures.size() || _meshStructures[entry] == VKM_INVALID_RESOURCE_HANDLE)
+            {
+                continue;
+            }
+            VkmAccelerationStructureInstance instance{};
+            instance._transform = _objects[object]._worldTransform;
+            instance._blas = _meshStructures[entry];
+            // The object index, which is also the VkmObjectData index -- _objects is the sorted
+            // array the records were filled from, so a hit recovers its object through this alone.
+            instance._instanceId = static_cast<uint32_t>(object);
+            outInstances->push_back(instance);
+        }
+    }
+
+    void VkmScene::recordAccelerationStructureUpdate(VkmCommandBufferBase* commandBuffer)
+    {
+        VKM_ASSERT(commandBuffer != nullptr, "VkmScene::recordAccelerationStructureUpdate requires a command buffer");
+
+        if (_topLevelStructurePointer == nullptr)
+        {
+            VKM_DEBUG_ERROR("recordAccelerationStructureUpdate before buildAccelerationStructures()");
+            return;
+        }
+
+        std::vector<VkmAccelerationStructureInstance> instances;
+        collectInstances(&instances);
+        // A host write into the buffer the recorded build reads, not a recorded command; see the
+        // hazard recorded in TODO.md.
+        if (!_topLevelStructurePointer->updateInstances(instances))
+        {
+            return;
+        }
+        commandBuffer->buildAccelerationStructure(_topLevelStructure);
+    }
+
+    void VkmScene::releaseAccelerationStructures(VkmDriverBase* driver)
+    {
+        // Unbind before the structure goes away, so the set never names a released resource --
+        // the same ordering destroy() keeps for the singleton buffers.
+        VkmBindlessResourceManagerBase* bindlessManager = driver->getBindlessResourceManager();
+        if (bindlessManager != nullptr && _topLevelStructure != VKM_INVALID_RESOURCE_HANDLE)
+        {
+            bindlessManager->setAccelerationStructure(VKM_INVALID_RESOURCE_HANDLE);
+        }
+
+        VkmDeferredResourceReclaimer* reclaimer = driver->getDeferredReclaimer();
+        const auto release = [reclaimer](VkmResourceHandle& handle) {
+            if (reclaimer != nullptr && handle != VKM_INVALID_RESOURCE_HANDLE)
+            {
+                reclaimer->requestRelease(handle);
+            }
+            handle = VKM_INVALID_RESOURCE_HANDLE;
+        };
+
+        // The top-level structure first: it names the bottom-level ones, so releasing it last would
+        // leave the reclaimer free to drop a structure something still instances.
+        release(_topLevelStructure);
+        _topLevelStructurePointer = nullptr;
+        for (VkmResourceHandle& structure : _meshStructures)
+        {
+            release(structure);
+        }
+        _meshStructures.clear();
+    }
+
     void VkmScene::destroy(VkmDriverBase* driver)
     {
         VKM_ASSERT(driver != nullptr, "VkmScene::destroy requires a driver");
@@ -662,6 +867,8 @@ namespace vkm
         _materialPoolSlot = INVALID_VALUE32;
         _cullPipeline = nullptr;
         _emitPipeline = nullptr;
+
+        releaseAccelerationStructures(driver);
 
         VkmDeferredResourceReclaimer* reclaimer = driver->getDeferredReclaimer();
         const auto release = [reclaimer](VkmResourceHandle& handle) {

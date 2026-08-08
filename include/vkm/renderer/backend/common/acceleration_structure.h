@@ -38,19 +38,27 @@ namespace vkm
     * (restir.md section 4.2), so there is no shape for it here rather than a shape that cannot be
     * trusted.
     *
-    * The vertex format is fixed at three consecutive `float`s at `_vertexByteOffset`, strided by
-    * `_vertexStride`. That matches every `VkmVertexLayoutPreset`, whose position is always the
+    * The vertex format is fixed at three consecutive `float`s at the vertex view's offset, strided
+    * by `_vertexStride`. That matches every `VkmVertexLayoutPreset`, whose position is always the
     * first attribute -- see `vkm_vertex_layout.h`.
     */
     struct VkmAccelerationStructureGeometry
     {
-        VkmResourceHandle _vertexBuffer{};
-        uint64_t          _vertexByteOffset = 0;
+        /*
+        * Both ranges are `VkmBufferView` handles rather than (buffer, byte offset) pairs: a range
+        * inside a buffer someone else owns is exactly what a view already names in this engine, and
+        * naming it twice invited the two halves to disagree. A view meant for a build carries no
+        * format, so it costs nothing on either backend -- `VkmBufferViewVulkan` creates no
+        * `VkBufferView` for a format-less view, and Metal's is metadata only.
+        *
+        * A view carries an offset and a size but no stride and no element count, so those stay
+        * here.
+        */
+        VkmResourceHandle _vertexView{};
         uint32_t          _vertexStride = 0;
         uint32_t          _vertexCount = 0;
 
-        VkmResourceHandle _indexBuffer{};
-        uint64_t          _indexByteOffset = 0;
+        VkmResourceHandle _indexView{};
         // Indices are u32, matching VkmSceneGeometryPool's index pool. Must be a multiple of 3.
         uint32_t          _indexCount = 0;
     };

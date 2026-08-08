@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
+#include <vkm/renderer/backend/vulkan/vulkan_acceleration_structure.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_texture.h>
@@ -49,13 +50,24 @@ namespace vkm
             return false;
         }
 
-        // Bindings 0-2 are the runtime-sized arrays, 3 the immutable sampler, and
-        // kVkmBindlessFirstSingletonBinding onwards the single-descriptor singleton buffers, one
-        // per VkmBindlessSingletonBuffer in that enum's order.
-        constexpr uint32_t kSingletonCount = static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count);
-        constexpr uint32_t kBindingCount = kVkmBindlessFirstSingletonBinding + kSingletonCount;
+        // Bindings 0-2 are the runtime-sized arrays, 3 the immutable sampler,
+        // kVkmBindlessFirstSingletonBinding onwards the single-descriptor singleton buffers (one
+        // per VkmBindlessSingletonBuffer in that enum's order), and -- only on a device that
+        // reports ray tracing -- the scene acceleration structure after them.
+        //
+        // Conditional because VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR is not a legal
+        // descriptor type without VK_KHR_acceleration_structure enabled, and MoltenVK enables
+        // none of the RT extensions. Nothing is lost: the only shaders that declare the binding
+        // are ray-query shaders, which cannot be created on such a device either way.
+        _hasAccelerationStructureBinding =
+            (_driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::RayTracing) != 0;
 
-        std::array<VkDescriptorSetLayoutBinding, kBindingCount> bindings{
+        constexpr uint32_t kSingletonCount = static_cast<uint32_t>(VkmBindlessSingletonBuffer::Count);
+        constexpr uint32_t kMaxBindingCount = kVkmBindlessAccelerationStructureBinding + 1;
+        const uint32_t bindingCount =
+            _hasAccelerationStructureBinding ? kMaxBindingCount : kVkmBindlessAccelerationStructureBinding;
+
+        std::array<VkDescriptorSetLayoutBinding, kMaxBindingCount> bindings{
             VkDescriptorSetLayoutBinding{
                 .binding         = 0,
                 .descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
@@ -93,17 +105,26 @@ namespace vkm
                 .stageFlags      = VK_SHADER_STAGE_ALL,
             };
         }
+        if (_hasAccelerationStructureBinding)
+        {
+            bindings[kVkmBindlessAccelerationStructureBinding] = VkDescriptorSetLayoutBinding{
+                .binding         = kVkmBindlessAccelerationStructureBinding,
+                .descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                .descriptorCount = 1,
+                .stageFlags      = VK_SHADER_STAGE_ALL,
+            };
+        }
 
         constexpr VkDescriptorBindingFlags kBindingFlags =
             VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-        std::array<VkDescriptorBindingFlags, kBindingCount> bindingFlags{};
+        std::array<VkDescriptorBindingFlags, kMaxBindingCount> bindingFlags{};
         bindingFlags.fill(kBindingFlags);
         // The immutable sampler needs no update-after-bind: it is never updated at all.
         bindingFlags[kVkmBindlessSamplerBinding] = 0;
 
         const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsCreateInfo{
             .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
-            .bindingCount  = static_cast<uint32_t>(bindingFlags.size()),
+            .bindingCount  = bindingCount,
             .pBindingFlags = bindingFlags.data(),
         };
 
@@ -111,7 +132,7 @@ namespace vkm
             .sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
             .pNext        = &bindingFlagsCreateInfo,
             .flags        = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
-            .bindingCount = static_cast<uint32_t>(bindings.size()),
+            .bindingCount = bindingCount,
             .pBindings    = bindings.data(),
         };
 
@@ -123,18 +144,22 @@ namespace vkm
 
         // The immutable sampler still consumes pool capacity, so it needs a pool size like
         // any other binding.
-        const std::array<VkDescriptorPoolSize, 5> poolSizes{
+        const std::array<VkDescriptorPoolSize, 6> poolSizes{
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, TEXTURE_CAPACITY},
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, BUFFER_CAPACITY},
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, INDEX_BUFFER_CAPACITY},
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kSingletonCount},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
         };
         const VkDescriptorPoolCreateInfo poolCreateInfo{
             .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
             .flags         = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
             .maxSets       = 1,
-            .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+            // The acceleration structure size is dropped along with its binding: a pool sized for
+            // a descriptor type the device does not support is itself invalid.
+            .poolSizeCount = _hasAccelerationStructureBinding ? static_cast<uint32_t>(poolSizes.size())
+                                                              : static_cast<uint32_t>(poolSizes.size()) - 1,
             .pPoolSizes    = poolSizes.data(),
         };
         vkResult = vkCreateDescriptorPool(device, &poolCreateInfo, nullptr, &_descriptorPool);
@@ -325,6 +350,50 @@ namespace vkm
             .descriptorCount = 1,
             .descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .pBufferInfo     = &bufferInfo,
+        };
+        vkUpdateDescriptorSets(_driver->getDevice(), 1, &write, 0, nullptr);
+        return true;
+    }
+
+    bool VkmBindlessResourceManagerVulkan::setAccelerationStructure(VkmResourceHandle accelerationStructureHandle)
+    {
+        if (!_hasAccelerationStructureBinding)
+        {
+            VKM_DEBUG_ERROR("setAccelerationStructure on a device that reports no ray tracing");
+            return false;
+        }
+
+        // PARTIALLY_BOUND, like the singletons: unbinding leaves the descriptor unwritten, which
+        // is legal as long as no shader reads it.
+        if (accelerationStructureHandle == VKM_INVALID_RESOURCE_HANDLE)
+        {
+            return true;
+        }
+
+        VkmAccelerationStructureVulkan* structure = static_cast<VkmAccelerationStructureVulkan*>(
+            _driver->getRenderResourcePool()->getResource<VkmAccelerationStructure>(accelerationStructureHandle));
+        if (structure == nullptr)
+        {
+            VKM_DEBUG_ERROR("setAccelerationStructure was given a handle that is not a live acceleration structure");
+            return false;
+        }
+
+        const VkAccelerationStructureKHR handle = structure->getAccelerationStructure();
+        const VkWriteDescriptorSetAccelerationStructureKHR accelerationWrite{
+            .sType                      = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR,
+            .accelerationStructureCount = 1,
+            .pAccelerationStructures    = &handle,
+        };
+        const VkWriteDescriptorSet write{
+            .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            // The structure travels in the pNext chain, not in pBufferInfo/pImageInfo -- the only
+            // descriptor type in this set that does.
+            .pNext           = &accelerationWrite,
+            .dstSet          = _descriptorSet,
+            .dstBinding      = kVkmBindlessAccelerationStructureBinding,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
         };
         vkUpdateDescriptorSets(_driver->getDevice(), 1, &write, 0, nullptr);
         return true;

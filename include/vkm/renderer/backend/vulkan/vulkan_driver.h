@@ -33,6 +33,15 @@ namespace vkm
         virtual VkmResourceTableBase* newResourceTableInner() override final;
         virtual VkmAccelerationStructure* newAccelerationStructureInner() override final;
 
+        /*
+        * Waits on every queue's timeline as the base class does, then vkDeviceWaitIdle.
+        * The timeline wait proves the GPU reached the value, but it is not what makes the
+        * validation layer retire the submissions that reached it: a structure destroyed after a
+        * timeline wait alone was still reported in use by the command buffer that built it, three
+        * separate CI runs in a row.
+        */
+        virtual void waitIdle(const uint64_t timeoutMs = UINT64_MAX) override final;
+
         inline VkDevice getDevice() const { return _device; }
         inline VkPhysicalDevice getPhysicalDevice() const { return _physicalDevice; }
         inline VkInstance getInstance() const { return _instance; }

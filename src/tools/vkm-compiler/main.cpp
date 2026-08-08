@@ -473,6 +473,31 @@ namespace
                                       kVkmMetalBindlessSingletonIdBase + i, 0);
                 }
 
+                /*
+                * The scene acceleration structure, after the singletons. This entry is what
+                * unblocked ray query on the Metal path: without it spirv-cross throws "Argument
+                * buffer resource base type could not be determined", the failure restir.md
+                * section 4.4 diagnosed.
+                *
+                * **Declared as a scalar, not as SPIRType::AccelerationStructure**, which does not
+                * work and is not a mistake to repeat: the basetype registered here only selects
+                * which *index category* the id belongs to and which padding member is synthesized
+                * when a shader steps over it, and the switch that does both accepts scalars,
+                * Image, Sampler and SampledImage only -- an AccelerationStructure basetype throws
+                * "Unexpected argument buffer resource base type" for EVERY shader, not just ray
+                * ones (spirv_msl.cpp:88-118 and 20245-20277). A scalar routes to msl_buffer, which
+                * is the category an acceleration structure genuinely uses -- spirv-cross emits it
+                * as `[[buffer(index)]]` (spirv_msl.cpp:15344) -- and its padding is one 8-byte
+                * member, the same width its argument-buffer entry occupies.
+                *
+                * Registered unconditionally, like every other set-0 binding: a shader that never
+                * declares it still has to agree with the runtime about the whole argument-buffer
+                * layout, and an unregistered binding would shift every id after it.
+                */
+                addSetZeroBinding(kVkmBindlessAccelerationStructureBinding, 1,
+                                  spirv_cross::SPIRType::Float,
+                                  kVkmMetalBindlessAccelerationStructureId, 0);
+
                 // Pin the set-0 argument buffer itself ([[buffer(0)]]/[[buffer(1)]] are
                 // reserved for the vertex-stream buffers). With padding enabled, every
                 // registered binding needs a valid basetype (UInt = buffer category); the

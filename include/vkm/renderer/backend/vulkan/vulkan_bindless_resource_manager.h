@@ -37,6 +37,7 @@ namespace vkm
         uint32_t registerBuffer(VkmResourceHandle bufferHandle, VkmBindlessArrayType arrayType) override final;
         void unregisterBuffer(uint32_t slot, VkmBindlessArrayType arrayType) override final;
         bool setSingletonBuffer(VkmBindlessSingletonBuffer which, VkmResourceHandle bufferHandle) override final;
+        bool setAccelerationStructure(VkmResourceHandle accelerationStructureHandle) override final;
 
         // Writes the texture's default image view as an update-after-bind sampled image at
         // the returned slot of binding 0.
@@ -58,6 +59,11 @@ namespace vkm
         VkDescriptorSet _descriptorSet{VK_NULL_HANDLE};
         // Immutable sampler baked into _setLayout at kVkmBindlessSamplerBinding.
         VkSampler _defaultSampler{VK_NULL_HANDLE};
+
+        // Whether _setLayout carries kVkmBindlessAccelerationStructureBinding. False on a device
+        // without VkmDriverCapabilityFlags::RayTracing, where that descriptor type is not a legal
+        // thing to put in a layout at all.
+        bool _hasAccelerationStructureBinding = false;
 
         VkmBindlessSlotAllocator _textureSlots{TEXTURE_CAPACITY};
         VkmBindlessSlotAllocator _bufferSlots{BUFFER_CAPACITY};

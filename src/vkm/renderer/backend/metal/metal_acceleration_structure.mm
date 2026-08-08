@@ -3,8 +3,10 @@
 #include <vkm/renderer/backend/metal/metal_acceleration_structure.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_buffer.h>
+#include <vkm/renderer/backend/common/buffer_view.h>
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
 #include <vkm/renderer/backend/common/command_queue.h>
+#include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 
@@ -14,14 +16,22 @@ namespace vkm
     {
         // A geometry range as Metal 4 wants it: an address that already includes the offset, and a
         // length so validation can catch a range running off the end of its buffer.
-        MTL4BufferRange bufferRange(VkmRenderResourcePool* pool, VkmResourceHandle handle, uint64_t offset)
+        // The range a build should read a geometry view from. The view's offset is relative to its
+        // parent, which is what MTLBuffer.gpuAddress already points at.
+        MTL4BufferRange viewRange(VkmRenderResourcePool* pool, VkmResourceHandle viewHandle)
         {
-            VkmBuffer* buffer = pool->getResource<VkmBuffer>(handle);
-            if (buffer == nullptr)
+            VkmBufferView* view = pool->getResource<VkmBufferView>(viewHandle);
+            if (view == nullptr)
             {
                 return MTL4BufferRange{ 0, 0 };
             }
-            id<MTLBuffer> mtlBuffer = static_cast<VkmBufferMetal*>(buffer)->getBuffer();
+            VkmBuffer* parent = view->tryGetParent();
+            if (parent == nullptr)
+            {
+                return MTL4BufferRange{ 0, 0 };
+            }
+            const uint64_t offset = view->getBufferViewInfo()._offset;
+            id<MTLBuffer> mtlBuffer = static_cast<VkmBufferMetal*>(parent)->getBuffer();
             return MTL4BufferRange{ mtlBuffer.gpuAddress + offset, mtlBuffer.length - offset };
         }
 
@@ -101,6 +111,13 @@ namespace vkm
             return false;
         }
         _instanceCapacity = static_cast<uint32_t>(descriptors.size());
+        // Registered explicitly, for the reason the bindless manager registers its own two
+        // buffers: this does not go through newBuffer(), so nothing else ever makes it resident.
+        // A build reads it on the GPU, so without this the top-level structure is built over
+        // whatever memory happens to be mapped -- which is why the failure depended on what the
+        // process had allocated earlier rather than on anything about the scene.
+        static_cast<VkmRenderResourcePoolMetal*>(_driverMetal->getRenderResourcePool())
+            ->registerExternalAllocation(_instanceBuffer);
         return true;
     }
 
@@ -141,8 +158,8 @@ namespace vkm
                 [geometries release];
                 return nil;
             }
-            const MTL4BufferRange vertexRange = bufferRange(pool, source._vertexBuffer, source._vertexByteOffset);
-            const MTL4BufferRange indexRange = bufferRange(pool, source._indexBuffer, source._indexByteOffset);
+            const MTL4BufferRange vertexRange = viewRange(pool, source._vertexView);
+            const MTL4BufferRange indexRange = viewRange(pool, source._indexView);
             if (vertexRange.bufferAddress == 0 || indexRange.bufferAddress == 0)
             {
                 VKM_DEBUG_ERROR("Acceleration structure geometry references a buffer that could not be resolved");
@@ -169,21 +186,6 @@ namespace vkm
         return descriptor;
     }
 
-    void VkmAccelerationStructureMetal::recordBuild(id<MTL4ComputeCommandEncoder> encoder)
-    {
-        if (_accelerationStructure == nil || _descriptor == nil)
-        {
-            VKM_DEBUG_ERROR("recordBuild on an acceleration structure that failed to initialize");
-            return;
-        }
-        const MTL4BufferRange scratchRange =
-            _scratchBuffer != nil ? MTL4BufferRange{ _scratchBuffer.gpuAddress, _scratchBuffer.length }
-                                  : MTL4BufferRange{ 0, 0 };
-        [encoder buildAccelerationStructure:_accelerationStructure
-                                 descriptor:_descriptor
-                              scratchBuffer:scratchRange];
-    }
-
     bool VkmAccelerationStructureMetal::initialize(VkmResourceHandle handle,
                                                    const VkmAccelerationStructureInfo& info)
     {
@@ -194,11 +196,9 @@ namespace vkm
         _allowUpdate = info._allowUpdate;
 
         /*
-        * Owned outright, not autoreleased. These sources are compiled without ARC, and the
-        * destructor runs on the deferred reclaimer's thread long after any pool that was active
-        * when the structure was created has drained -- so an autoreleased descriptor is released
-        * twice, which surfaces as a mimalloc heap assertion during suite teardown rather than at
-        * the site.
+        * Owned outright, not autoreleased: a rebuild is described by this same descriptor, so it
+        * has to outlive initialize() by the structure's whole lifetime. These sources are compiled
+        * without ARC, and releaseAll() is what balances it.
         */
         _descriptor = makeDescriptor(info);
         if (_descriptor == nil)
@@ -215,6 +215,21 @@ namespace vkm
             return false;
         }
         _structureSize = sizes.accelerationStructureSize;
+        /*
+        * Made resident BEFORE the build, not after. VkmDriverBase::newAccelerationStructure calls
+        * onResourceInitialized() -- which is what normally adds a resource to the pool's residency
+        * set -- only once this initialize() has returned, so the build below would otherwise write
+        * into a structure that is not resident, and a top-level build would read bottom-level ones
+        * that are not either.
+        *
+        * That is not a theoretical hazard: it is why a scene traced correctly in a run of its own
+        * and returned ZERO hits once anything else in the process had allocated first. Whether the
+        * memory happened to be resident anyway is exactly the sort of thing that changes with
+        * allocation history, and Metal reported nothing either way. Registering here is idempotent
+        * with the later onResourceInitialized(), which finds it already present and does nothing.
+        */
+        static_cast<VkmRenderResourcePoolMetal*>(_driverMetal->getRenderResourcePool())
+            ->registerExternalAllocation(_accelerationStructure);
 
         if (sizes.buildScratchBufferSize > 0)
         {
@@ -225,24 +240,28 @@ namespace vkm
                 VKM_DEBUG_ERROR("Failed to create the acceleration structure scratch buffer");
                 return false;
             }
+            // Private storage and raw-allocated, so nothing else makes it resident either.
+            static_cast<VkmRenderResourcePoolMetal*>(_driverMetal->getRenderResourcePool())
+                ->registerExternalAllocation(_scratchBuffer);
         }
 
         /*
-        * Recorded into a command buffer from the engine's own pool and submitted through the
-        * engine's queue, the shape VkmDriverBase::uploadToBuffer uses, with only the encoder
-        * reaching for the raw handle. Metal 4 has no dedicated acceleration-structure encoder --
-        * the build is encoded on a compute encoder.
+        * Recorded through the ordinary command-buffer entry point rather than by reaching for the
+        * encoder here, and submitted through the engine's queue -- the shape
+        * VkmDriverBase::uploadToBuffer uses.
+        *
+        * `buildAccelerationStructure` rather than a hand-rolled encoder block, because a hand-
+        * rolled one is what this was and it was wrong in a way nothing reported: the build
+        * appeared to succeed (the structure had the right size, the right bottom-level ids and a
+        * correctly written argument-buffer entry) and then traversed to zero hits, but only under
+        * Metal API Validation and only once another part of the process had allocated first. The
+        * per-frame rebuild path always worked, and rebuilding a freshly built structure once made
+        * the difference disappear -- so the two paths are now literally the same path.
         */
         VkmCommandQueueBase* commandQueue = _driverMetal->getCommandQueue(VkmCommandQueueType::Graphics, 0);
         VkmCommandBufferBase* commandBuffer = commandQueue->getCommandBufferPool()->allocate();
         commandBuffer->beginCommandBuffer();
-        {
-            id<MTL4CommandBuffer> mtlCommandBuffer =
-                static_cast<VkmCommandBufferMetal*>(commandBuffer)->getMTLCommandBuffer();
-            id<MTL4ComputeCommandEncoder> encoder = [mtlCommandBuffer computeCommandEncoder];
-            recordBuild(encoder);
-            [encoder endEncoding];
-        }
+        commandBuffer->buildAccelerationStructure(handle);
         commandBuffer->endCommandBuffer();
 
         CommandSubmitInfo submitInfo;
@@ -317,6 +336,16 @@ namespace vkm
 
     void VkmAccelerationStructureMetal::releaseAll()
     {
+        VkmRenderResourcePoolMetal* pool =
+            static_cast<VkmRenderResourcePoolMetal*>(_driverMetal->getRenderResourcePool());
+        if (pool != nullptr)
+        {
+            pool->unregisterExternalAllocation(_instanceBuffer);
+            pool->unregisterExternalAllocation(_scratchBuffer);
+            // Idempotent with VkmRenderResourcePoolMetal::releaseResource, which removes the
+            // structure again on its way out; the second erase finds nothing and does nothing.
+            pool->unregisterExternalAllocation(_accelerationStructure);
+        }
         [_accelerationStructure release];
         _accelerationStructure = nil;
         [_instanceBuffer release];

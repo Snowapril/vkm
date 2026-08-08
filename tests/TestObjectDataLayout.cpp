@@ -24,6 +24,9 @@ TEST_CASE("VkmObjectData - matches the shader-side ObjectData layout") {
     CHECK(offsetof(vkm::VkmObjectData, _materialIndex) == 140);
     CHECK(offsetof(vkm::VkmObjectData, _indexOffset) == 144);
     CHECK(offsetof(vkm::VkmObjectData, _indexCount) == 148);
+    // Took one of the two words that used to be pure padding, so the record's size and every other
+    // offset are unchanged -- which is what let it be added without touching any draw path.
+    CHECK(offsetof(vkm::VkmObjectData, _vertexStrideWords) == 152);
     // The float4 must land on a 16-byte boundary, which is what _pad0 exists for.
     CHECK(offsetof(vkm::VkmObjectData, _boundsCenterRadius) == 160);
     CHECK(offsetof(vkm::VkmObjectData, _boundsCenterRadius) % 16 == 0);

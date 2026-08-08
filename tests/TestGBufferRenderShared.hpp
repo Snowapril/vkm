@@ -10,12 +10,14 @@
 #include <vkm/renderer/backend/common/sampler.h>
 #include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
+#include <vkm/renderer/backend/common/deferred_resource_reclaimer.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/frame_constants.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/render_graph.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
+#include <vkm/renderer/backend/common/staging_buffer.h>
 #include <vkm/renderer/gbuffer.h>
 #include <vkm/renderer/scene/gltf_importer.h>
 #include <vkm/renderer/scene/scene.h>
@@ -24,6 +26,7 @@
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/matrix.hpp>
 
+#include <cstdio>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -151,6 +154,7 @@ namespace vkmtest
         vkm::VkmGBuffer gbuffer;
         fillGBuffer(driver, manager, scene, gbuffer);
 
+
         // A pixel well inside the covered lower-left half, matching the scene-model test's choice.
         const uint32_t sampleX = kGBufferRenderSize / 4;
         const uint32_t sampleY = kGBufferRenderSize * 3 / 4;
@@ -187,7 +191,13 @@ namespace vkmtest
             CHECK(readHalfComponent(texel, 1) == 0.0f);
         }
 
+        // The scene's buffers outlive this body otherwise, and VMA reports them as unfreed when
+        // the allocator goes away -- after which the resource pool's own destructor runs their
+        // destructors against a destroyed allocator. Metal tolerated the leak; Vulkan segfaults.
+        driver->waitIdle();
         gbuffer.destroy();
+        scene.destroy(driver);
+        driver->getDeferredReclaimer()->flushBlocking();
     }
 
     /*
@@ -393,7 +403,13 @@ namespace vkmtest
 
         driver->getRenderResourcePool()->releaseResource(lightingTarget->getHandle());
         driver->getRenderResourcePool()->releaseResource(sampler->getHandle());
+        // The scene's buffers outlive this body otherwise, and VMA reports them as unfreed when
+        // the allocator goes away -- after which the resource pool's own destructor runs their
+        // destructors against a destroyed allocator. Metal tolerated the leak; Vulkan segfaults.
+        driver->waitIdle();
         gbuffer.destroy();
+        scene.destroy(driver);
+        driver->getDeferredReclaimer()->flushBlocking();
     }
 
     /*
