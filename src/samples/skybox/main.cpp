@@ -81,14 +81,22 @@ namespace
     class LookCamera
     {
     public:
-        void update(VkmInputHandler& input)
+        // Radians per full viewport height, same convention as the engine's camera
+        // controllers: cursor deltas are in pixels, so dividing by the viewport height keeps
+        // the look speed the same on every display density and window size.
+        static constexpr float kLookSensitivity = 3.6f;
+
+        void update(VkmInputHandler& input, uint32_t viewportHeight)
         {
-            if (input.isMouseButtonDown(VkmMouseButton::Left))
+            if (viewportHeight == 0 || !input.isMouseButtonDown(VkmMouseButton::Left))
             {
-                _yaw += static_cast<float>(input.getCursorDeltaX()) * 0.005f;
-                // Just short of the poles, where the up vector would degenerate.
-                _pitch = std::clamp(_pitch + static_cast<float>(input.getCursorDeltaY()) * 0.005f, -1.5f, 1.5f);
+                return;
             }
+
+            const float lookScale = kLookSensitivity / static_cast<float>(viewportHeight);
+            _yaw += static_cast<float>(input.getCursorDeltaX()) * lookScale;
+            // Just short of the poles, where the up vector would degenerate.
+            _pitch = std::clamp(_pitch + static_cast<float>(input.getCursorDeltaY()) * lookScale, -1.5f, 1.5f);
         }
 
         /*
@@ -225,7 +233,7 @@ public:
     virtual void update(const double deltaTime) override final
     {
         (void)deltaTime;
-        _camera.update(_engine->getInputHandler());
+        _camera.update(_engine->getInputHandler(), _engine->getMainSwapChain()->getExtent().y);
     }
 
     virtual void render(uint32_t windowIndex, VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) override final

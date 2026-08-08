@@ -474,10 +474,14 @@ namespace
     }
 
     // AppKit's origin is bottom-left; flip Y so getCursorY() means the same top-left-origin
-    // thing here as it does on the GLFW backends.
+    // thing here as it does on the GLFW backends. Then convert points to backing pixels:
+    // onWindowResized publishes the window's pixel size, so a cursor position that stayed in
+    // points would live in a different space than the viewport it is meant to index into.
     const NSPoint windowPoint = [event locationInWindow];
     const NSRect contentFrame = [self contentLayoutRect];
-    _engine->getInputHandler().onCursorMove(windowPoint.x, contentFrame.size.height - windowPoint.y);
+    const NSPoint contentPoint = NSMakePoint(windowPoint.x, contentFrame.size.height - windowPoint.y);
+    const NSPoint backingPoint = [self convertPointToBacking:contentPoint];
+    _engine->getInputHandler().onCursorMove(backingPoint.x, backingPoint.y);
 }
 
 - (void)mouseDown:(NSEvent *)event       { [self forwardMouseButtonEvent:event action:vkm::VkmKeyAction::Press];   [super mouseDown:event]; }

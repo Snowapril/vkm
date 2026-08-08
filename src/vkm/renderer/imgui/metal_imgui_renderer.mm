@@ -539,9 +539,16 @@ namespace vkm
         NSWindow* keyWindow = [NSApp keyWindow];
         if (isWindowFocused() && keyWindow != nil)
         {
+            // AppKit reports the cursor in points with a bottom-left origin, while
+            // io.DisplaySize above is the drawable size in backing pixels. Flip Y first, then
+            // convert to backing -- the point counterpart of the convertSizeToBacking: the
+            // platform layer uses to size that drawable -- or ImGui hit-tests the cursor at
+            // 1/backingScaleFactor of where it really is.
             const NSPoint windowPoint = [keyWindow mouseLocationOutsideOfEventStream];
             const NSRect contentFrame = [keyWindow contentLayoutRect];
-            io.AddMousePosEvent((float)windowPoint.x, (float)(contentFrame.size.height - windowPoint.y));
+            const NSPoint contentPoint = NSMakePoint(windowPoint.x, contentFrame.size.height - windowPoint.y);
+            const NSPoint backingPoint = [keyWindow convertPointToBacking:contentPoint];
+            io.AddMousePosEvent((float)backingPoint.x, (float)backingPoint.y);
 
             const NSUInteger pressedButtons = [NSEvent pressedMouseButtons];
             io.AddMouseButtonEvent(ImGuiMouseButton_Left, (pressedButtons & (1u << 0)) != 0);

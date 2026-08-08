@@ -55,6 +55,8 @@ namespace vkm
         inline float getFovYRadians() const { return _fovYRadians; }
         inline float getNearZ() const { return _nearZ; }
         inline float getFarZ() const { return _farZ; }
+        inline uint32_t getViewportWidth() const { return _viewportWidth; }
+        inline uint32_t getViewportHeight() const { return _viewportHeight; }
 
     private:
         glm::vec3 _eye{ 0.0f, 0.0f, 1.0f };
@@ -100,7 +102,7 @@ namespace vkm
         */
         void frame(const glm::vec3& center, float radius);
 
-        inline void setRotateSensitivity(float radiansPerPixel) { _rotateSensitivity = radiansPerPixel; }
+        inline void setRotateSensitivity(float radiansPerViewportHeight) { _rotateSensitivity = radiansPerViewportHeight; }
         inline void setZoomFactorPerScrollUnit(float factor) { _zoomFactor = factor; }
 
         inline float getDistance() const { return _distance; }
@@ -124,7 +126,10 @@ namespace vkm
         float _yaw = 0.6f;
         float _pitch = 0.3f;
 
-        float _rotateSensitivity = 0.005f;
+        // Radians per full viewport height, so the feel does not change with the display's
+        // pixel density or the window's size. 3.6 == the 0.005 rad/pixel this used to be,
+        // measured across the 720-pixel-high default window.
+        float _rotateSensitivity = 3.6f;
         float _zoomFactor = 0.9f;
 
         bool _dragging = false;
@@ -176,7 +181,7 @@ namespace vkm
 
         inline void setMoveSpeed(float unitsPerSecond) { _moveSpeed = unitsPerSecond; }
         inline void setBoostMultiplier(float multiplier) { _boostMultiplier = multiplier; }
-        inline void setLookSensitivity(float radiansPerPixel) { _lookSensitivity = radiansPerPixel; }
+        inline void setLookSensitivity(float radiansPerViewportHeight) { _lookSensitivity = radiansPerViewportHeight; }
 
         inline const glm::vec3& getPosition() const { return _position; }
         inline float getYaw() const { return _yaw; }
@@ -202,7 +207,8 @@ namespace vkm
 
         float _moveSpeed = 3.0f;
         float _boostMultiplier = 4.0f;
-        float _lookSensitivity = 0.005f;
+        // Radians per full viewport height, same convention as VkmOrbitCameraController.
+        float _lookSensitivity = 3.6f;
 
         bool _dragging = false;
         bool _hasLastCursor = false;
