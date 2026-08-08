@@ -85,8 +85,8 @@ TEST_CASE("PushConstantRingAllocator reports overflow instead of leaving its reg
 
 TEST_CASE("PushConstantRingAllocator starts in region 0 without a beginFrame call")
 {
-    // Unit tests drive command buffers without an engine, so nothing calls beginFrame() there;
-    // that path has to keep behaving like the single-region ring it used to be.
+    // Unit tests drive command buffers without an engine, so nothing calls beginFrame() there and
+    // the allocator has to keep handing out region 0 from the start.
     vkm::VkmPushConstantRingAllocator allocator;
 
     CHECK(allocator.allocate() == 0);

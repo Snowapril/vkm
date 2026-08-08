@@ -83,9 +83,8 @@ struct ReadbackFixture {
     }
 };
 
-// Checks every pixel of an R8G8B8A8 image equals the expected RGBA value (within one
-// LSB of quantization tolerance). Direct pixel asserts instead of the PNG-reference
-// comparison originally sketched here -- see implementation-notes.md.
+// Checks every pixel of an R8G8B8A8 image equals the expected RGBA value, within one LSB of
+// quantization tolerance.
 static void checkSolidColor(const std::vector<uint8_t>& pixels, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 {
     REQUIRE(pixels.size() == static_cast<size_t>(kWidth) * kHeight * kChannels);

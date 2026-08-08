@@ -6,10 +6,10 @@
 // render + assertion logic lives here and is called from both TestRasterState.cpp (Vulkan) and
 // TestRasterStateMetal.mm (Metal).
 //
-// What this proves: VkmRasterizationStateDescriptor::fillMode actually reaches the GPU. Vulkan
-// and WebGPU bake it into the pipeline object, but on Metal fill mode is *encoder* state, not
-// part of MTLRenderPipelineState, so it has to be applied at bind time. It previously was not,
-// and the wireframe PSO silently rendered solid there.
+// What this proves: VkmRasterizationStateDescriptor::fillMode actually reaches the GPU. Vulkan and
+// WebGPU bake it into the pipeline object, but on Metal fill mode is encoder state rather than part
+// of MTLRenderPipelineState, so it has to be applied at bind time or the wireframe PSO silently
+// renders solid.
 //
 // The test renders the triangle sample's "wireframe" variant and asserts the triangle's
 // interior is empty. A solid fill covers that point; an outline does not.
