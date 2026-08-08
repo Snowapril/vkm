@@ -22,19 +22,16 @@ namespace vkm
     namespace
     {
         /*
-        * @brief Device address of a buffer the caller handed us, or 0.
-        *
-        * A build reads its vertex and index data in place, so this is where the
-        * `AllowAccelerationStructureInput` flag pays off: without it the buffer may have been
-        * sub-allocated from a pool block that carries no device-address usage, and the address
-        * would be meaningless rather than absent.
-        */
-        /*
-        * The device address a build should read a geometry view from.
-        *
-        * The parent's own address already carries its sub-allocation offset, so the view's
-        * RELATIVE offset is what gets added -- `VkmBufferViewVulkan::getOffset()` is absolute and
-        * would count a pooled buffer's offset twice.
+        * @brief The device address a build should read a geometry view from.
+        * @details A build reads its vertex and index data in place, which is what the
+        * `AllowAccelerationStructureInput` flag is for: without it the buffer may be sub-allocated
+        * from a pool block carrying no device-address usage, making the address meaningless rather
+        * than absent. The parent's own address already carries its sub-allocation offset, so the
+        * view's RELATIVE offset is what gets added -- `VkmBufferViewVulkan::getOffset()` is
+        * absolute and would count a pooled buffer's offset twice.
+        * @param pool Pool the view is resolved through.
+        * @param viewHandle View naming the range to read.
+        * @return The address, or 0 when the view or its parent cannot report one.
         */
         VkDeviceAddress viewAddress(VkmRenderResourcePool* pool, VkmResourceHandle viewHandle)
         {

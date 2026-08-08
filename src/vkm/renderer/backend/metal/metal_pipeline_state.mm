@@ -169,14 +169,16 @@ namespace vkm
             return stencilDescriptor;
         }
 
-        // Loads one stage's .vfcache file into a transient id<MTLLibrary> (+ *outEntryPoint).
-        // Returns nil (+ *outError) on any failure.
-        //
-        // MetalLib content (the default vkm-compiler output) is loaded as a precompiled binary
-        // via -[MTLDevice newLibraryWithData:], which -- unlike compiling Msl source -- serializes
-        // into Xcode GPU captures so a .gputrace replays without a source recompile. Msl source is
-        // a fallback for caches built without a Metal toolchain: the Metal 4 path compiles it via
-        // the MTL4 compiler, the Metal 3 path via [device newLibraryWithSource:].
+        /*
+        * @brief Loads one stage's .vfcache file into a transient id<MTLLibrary>, and its entry
+        * point into *outEntryPoint.
+        * @details MetalLib content, the default vkm-compiler output, is loaded as a precompiled
+        * binary via -[MTLDevice newLibraryWithData:], which unlike compiling Msl source serializes
+        * into Xcode GPU captures so a .gputrace replays without a source recompile. Msl source is
+        * a fallback for caches built without a Metal toolchain: the Metal 4 path compiles it via
+        * the MTL4 compiler, the Metal 3 path via [device newLibraryWithSource:].
+        * @return The library, or nil with *outError set on any failure.
+        */
         id<MTLLibrary> loadStageLibrary(id<MTLDevice> device, id<MTL4Compiler> compiler, bool useMetal4,
             const VkmShaderStageDescriptor& stageDesc, const std::string& shaderCacheDir,
             const std::string& optionName, VkmShaderCacheStage stage,

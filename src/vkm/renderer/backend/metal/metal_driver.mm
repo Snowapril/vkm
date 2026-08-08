@@ -73,13 +73,13 @@ namespace vkm
             return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "Metal 4 requires macOS 26 / iOS 26 or later; this OS version is not supported."};
         }
 
-        // Always true in practice given the MTLGPUFamilyApple9 gate above, but querying it
-        // rather than assuming keeps the texture storage-mode policy honest if that gate is
-        // ever relaxed (an Intel Mac with a discrete GPU reports false here).
+        // Queried rather than assumed, so the texture storage-mode policy stays honest if the
+        // MTLGPUFamilyApple9 gate above is ever relaxed: an Intel Mac with a discrete GPU reports
+        // false here.
         _hasUnifiedMemory = [_mtlDevice hasUnifiedMemory];
 
-        // MTLBuffer.gpuAddress is unconditional on Metal -- the argument buffers and push
-        // constant ring have been binding by address since the MTL4 port.
+        // MTLBuffer.gpuAddress is unconditional on Metal; the argument buffers and push constant
+        // ring bind by address.
         _driverCapabilityFlags = VkmDriverCapabilityFlags::TextureContentCapture | VkmDriverCapabilityFlags::TextureUpload |
                                  VkmDriverCapabilityFlags::BindlessTextures |
                                  VkmDriverCapabilityFlags::BufferDeviceAddress;

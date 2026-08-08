@@ -492,9 +492,8 @@ namespace vkm
         const VkResult createInstanceResult = vkCreateInstance(&instanceCreateInfo, nullptr, &_instance);
         if (createInstanceResult == VK_ERROR_INCOMPATIBLE_DRIVER)
         {
-            // No Vulkan-capable ICD is registered on this system at all (e.g. a CI runner
-            // with no GPU and no software rasterizer) -- same underlying condition as the
-            // "zero physical devices" check below, just surfacing one call earlier.
+            // No Vulkan-capable ICD is registered on this system at all -- the same underlying
+            // condition as the "zero physical devices" check below, one call earlier.
             VKM_DEBUG_ERROR("No compatible Vulkan driver/ICD found");
             return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "No compatible Vulkan driver/ICD found on this system."};
         }
@@ -608,17 +607,14 @@ namespace vkm
             pNextChainPushFront(&_features11, &_swapchainFeatures);
             deviceExtensions.push_back(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
         }
-        // Lets the CPU write an OPTIMAL-tiled image directly (vkCopyMemoryToImage), which a
-        // plain memcpy cannot do because the layout is swizzled. Without it, host-visible
-        // texture memory would be useless and every upload has to go through a staging
-        // buffer -- see shouldUseHostWritableTexture in vulkan_texture.cpp.
+        // Lets the CPU write an OPTIMAL-tiled image directly (vkCopyMemoryToImage), which a plain
+        // memcpy cannot do because the layout is swizzled. Without it, host-visible texture memory
+        // is useless and every upload goes through a staging buffer -- see
+        // shouldUseHostWritableTexture in vulkan_texture.cpp.
         //
-        // Not on MoltenVK. It advertises the extension, but the feature is emulated on top of
-        // Metal rather than implemented by a real driver, and doing so hung the macOS Vulkan
-        // CI job indefinitely during initialization (no output, no crash -- see
-        // implementation-notes.md). Nothing is actually lost: on macOS the engine's own Metal
-        // backend is the primary path and provides this same optimization natively, so
-        // Vulkan-on-Metal falls back to the staging path, which is always correct.
+        // Not requested on MoltenVK: it advertises the extension but emulates the feature on top of
+        // Metal, and enabling it hangs initialization indefinitely. Nothing is lost, since macOS
+        // has the engine's own Metal backend for this and Vulkan-on-Metal falls back to staging.
         VkPhysicalDeviceDriverProperties driverProperties{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES,
         };
@@ -647,17 +643,13 @@ namespace vkm
             deviceExtensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
         }
         /*
-        * Ray query, for Phase 5's acceleration structures. Requested as a set of three because
-        * they only mean anything together -- VK_KHR_acceleration_structure depends on
-        * VK_KHR_deferred_host_operations, and VK_KHR_ray_query needs a structure to traverse --
-        * so a partial set would leave the capability flag ambiguous.
-        *
-        * VK_KHR_ray_tracing_pipeline is deliberately absent: the engine casts rays from compute
-        * shaders, so it needs neither RT pipelines nor shader binding tables (restir.md section 4).
-        *
-        * Opportunistic. MoltenVK exposes none of these, and lavapipe only does from Mesa 24.1, so
-        * a device without them is the common case rather than an error -- it simply reports no
-        * RayTracing capability and the high tier stays unavailable there.
+        * Ray query. Requested as a set of three because they only mean anything together:
+        * VK_KHR_acceleration_structure depends on VK_KHR_deferred_host_operations, and
+        * VK_KHR_ray_query needs a structure to traverse, so a partial set would leave the
+        * capability flag ambiguous. VK_KHR_ray_tracing_pipeline is absent because the engine casts
+        * rays from compute shaders and needs neither RT pipelines nor shader binding tables.
+        * Opportunistic: MoltenVK exposes none of these and lavapipe only does from Mesa 24.1, so a
+        * device without them reports no RayTracing capability rather than failing.
         */
         const bool requestRayTracing =
             isExtensionSupported(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, availableDeviceExtensions) &&

@@ -231,17 +231,13 @@ namespace vkm
 
         /*
          * Record what this build reads, so the deferred reclaimer can actually defer it.
-         * VkmRenderGraph::execute() is otherwise the only thing that calls recordUsage, and it only
-         * knows about resources a pass declared with addReferencedResource -- so a structure built
-         * through a bare queue submit (which is how VkmAccelerationStructure::initialize builds,
-         * and how a caller outside the render graph rebuilds) reached the reclaimer with no usages
-         * at all. An entry with no usages is ready on the worker's very next 4 ms poll, so the
-         * "deferred" release destroyed structures the GPU was still building:
-         * VUID-vkDestroyAccelerationStructureKHR-...-02442 followed by a segmentation fault on
-         * lavapipe.
-         *
+         * VkmRenderGraph::execute() is otherwise the only caller of recordUsage, and it only knows
+         * about resources a pass declared with addReferencedResource, so a structure built through
+         * a bare queue submit would reach the reclaimer with no usages at all -- and an entry with
+         * no usages is ready on the worker's very next poll, releasing a structure the GPU is
+         * still building.
          * The inputs are listed rather than just the structure itself because they are what the
-         * build reads and what the validation layer reports as in use -- a top-level build holds
+         * build reads and what the validation layer reports as in use: a top-level build holds
          * every bottom-level structure it instances, and a bottom-level build holds the vertex and
          * index buffers it reads.
          */
