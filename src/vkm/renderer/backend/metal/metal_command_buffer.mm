@@ -595,6 +595,20 @@ namespace vkm
         _commandEncoder.commit();
     }
 
+    void VkmCommandBufferMetal::onResourceBarrier(const VkmResourceBarrier* barriers, uint32_t count)
+    {
+        // Metal 4 does no automatic hazard tracking, so this does have real work to do -- but the
+        // barrier has to ride an encoder that already exists. Opening one per barrier is the
+        // documented cause of MTL4CommandQueueErrorTimeout (see common/AGENTS.md), and a barrier
+        // recorded at a subgraph boundary has no encoder open at all.
+        //
+        // Until the encoder-scope plumbing lands, the ordering these barriers name is the ordering
+        // the encoder-boundary pairs in beginRenderPass/commit and onBindPipeline/onUnbindPipeline
+        // already provide, conservatively, with MTLStageAll on the queue side.
+        (void)barriers;
+        (void)count;
+    }
+
     void VkmCommandBufferMetal::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)
     {
         (void)buffer;

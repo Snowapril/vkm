@@ -210,6 +210,40 @@ namespace vkm
         onDispatch(groupCountX, groupCountY, groupCountZ);
     }
 
+    void VkmCommandBufferBase::resourceBarrier(const VkmResourceBarrier* barriers, uint32_t count)
+    {
+        if (!_isRecording || _isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("resourceBarrier must be recorded while recording and outside a render pass");
+            return;
+        }
+        if (barriers == nullptr || count == 0)
+        {
+            return; // An empty boundary is the common case once the graph places these.
+        }
+
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            if (!barriers[i]._handle.isValid())
+            {
+                VKM_DEBUG_ERROR("resourceBarrier was given an invalid resource handle");
+                return;
+            }
+            if (barriers[i]._srcAccess == VkmResourceAccess::None &&
+                barriers[i]._dstAccess == VkmResourceAccess::None)
+            {
+                VKM_DEBUG_ERROR("resourceBarrier was given a barrier that orders nothing");
+                return;
+            }
+        }
+        onResourceBarrier(barriers, count);
+    }
+
+    void VkmCommandBufferBase::resourceBarrier(const std::vector<VkmResourceBarrier>& barriers)
+    {
+        resourceBarrier(barriers.data(), static_cast<uint32_t>(barriers.size()));
+    }
+
     void VkmCommandBufferBase::barrierIndirectArgumentBuffer(VkmResourceHandle buffer)
     {
         if (!_isRecording || _isInRenderPass)

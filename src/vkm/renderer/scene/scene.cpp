@@ -991,7 +991,19 @@ namespace vkm
         // Only this view's counts, so a cull recorded earlier in the frame keeps its results.
         commandBuffer->copyBuffer(_countClearBuffer, _visibleListBuffer, 0,
                                   static_cast<uint64_t>(countWordBase) * sizeof(uint32_t), _countRegionSize);
-        commandBuffer->barrierIndirectArgumentBuffer(_visibleListBuffer);
+
+        // These three hazards are *inside* one subgraph, so the render graph's analysis cannot see
+        // them -- it works from what a subgraph declares, and a callback is opaque. They stay
+        // explicit, but each now names the access pair it actually orders instead of sharing one
+        // coarse barrier that was reused for all three.
+        const VkmResourceBarrier clearToCull{
+            ._handle = _visibleListBuffer,
+            ._srcAccess = VkmResourceAccess::TransferWrite,
+            ._dstAccess = VkmResourceAccess::ShaderStorageReadWrite,
+            ._srcScope = VkmPipelineScope::Transfer,
+            ._dstScope = VkmPipelineScope::Compute,
+        };
+        commandBuffer->resourceBarrier(&clearToCull, 1);
 
         const auto dispatchBatches = [&](VkmPipelineStateBase* pipeline) {
             commandBuffer->bindPipeline(pipeline);
@@ -1019,10 +1031,28 @@ namespace vkm
         // Culling is shared by every backend; only the emit pass differs (this HLSL one fills the
         // indirect arguments; a Metal ICB encoder would fill commands instead).
         dispatchBatches(_cullPipeline);
-        commandBuffer->barrierIndirectArgumentBuffer(_visibleListBuffer);
+        const VkmResourceBarrier cullToEmit{
+            ._handle = _visibleListBuffer,
+            ._srcAccess = VkmResourceAccess::ShaderStorageReadWrite,
+            ._dstAccess = VkmResourceAccess::ShaderStorageRead,
+            ._srcScope = VkmPipelineScope::Compute,
+            ._dstScope = VkmPipelineScope::Compute,
+        };
+        commandBuffer->resourceBarrier(&cullToEmit, 1);
 
         dispatchBatches(_emitPipeline);
-        commandBuffer->barrierIndirectArgumentBuffer(_argumentBuffer);
+        // The emit pass's writes have to reach the indirect fetch in the *draw* subgraph. That one
+        // is cross-subgraph, so once the render graph emits its plan this barrier is the graph's
+        // job -- the draw subgraph declares _argumentBuffer as IndirectArgument and the cull
+        // subgraph declares it as a storage write, which is exactly this dependency.
+        const VkmResourceBarrier emitToDraw{
+            ._handle = _argumentBuffer,
+            ._srcAccess = VkmResourceAccess::ShaderStorageWrite,
+            ._dstAccess = VkmResourceAccess::IndirectArgument,
+            ._srcScope = VkmPipelineScope::Compute,
+            ._dstScope = VkmPipelineScope::Graphics,
+        };
+        commandBuffer->resourceBarrier(&emitToDraw, 1);
     }
 
     void VkmScene::recordDrawBatches(VkmCommandBufferBase* commandBuffer,

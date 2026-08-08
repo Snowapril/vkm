@@ -3471,3 +3471,30 @@ Vulkan 237/237 (5572 assertions), Metal 237/237 (25038). The Vulkan run emits fo
 and they are the four `TODO.md` already records for ImGui teardown -- no image-layout VUID appears,
 which is the assertion that matters here, since the validation layer rejects a stale `oldLayout`
 outright.
+
+### Step 4 — the batched barrier entry point, and Vulkan's lowering of it
+
+`VkmCommandBufferBase::resourceBarrier(const VkmResourceBarrier*, uint32_t)` plus a `std::vector`
+overload, with `onResourceBarrier` per backend. `vulkan_barrier.{h,cpp}` holds the four mapping
+functions (`vkmToVkStageMask`, `vkmToVkAccessMask`, `vkmToVkImageLayout`, `vkmToVkAspectMask`) so
+the tables are readable on their own rather than buried in a 700-line command buffer.
+
+Vulkan builds one `VkDependencyInfo` for a whole boundary -- N image barriers, M buffer barriers
+and one accumulated memory barrier for acceleration structures -- and issues a single
+`vkCmdPipelineBarrier2`. `oldLayout` always comes from the texture's own tracker and never from the
+plan, which is what lets a first-touch barrier (`_srcAccess == None`) be correct without the
+analysis knowing anything about uploads, previous frames or swapchain acquires. A range whose
+subresources disagree splits into one barrier per subresource, because `oldLayout` has to name what
+that subresource really is.
+
+`VkmScene::recordCull`'s three barriers are the first callers. They are genuinely intra-subgraph --
+the analysis works from declarations and a callback is opaque to it -- so they stay explicit, but
+each now names the access pair it actually orders (transfer-write to storage-read-write,
+storage-read-write to storage-read, storage-write to indirect-argument) instead of all three
+sharing one coarse `TRANSFER|COMPUTE -> COMPUTE|DRAW_INDIRECT` barrier.
+
+Metal and WebGPU take documented no-op stubs for now: on Metal a barrier recorded at a subgraph
+boundary has no encoder open, and opening one is the documented cause of
+`MTL4CommandQueueErrorTimeout`, so the encoder-scope plumbing is its own step.
+
+Vulkan 237/237 (5577 assertions), Metal 237/237 (25038), same four pre-existing VUIDs.

@@ -7,6 +7,7 @@
 #include <vkm/renderer/backend/common/render_pass.h>
 #include <vkm/renderer/backend/common/driver_resource.h>
 #include <vkm/renderer/backend/common/command_queue.h>
+#include <vkm/renderer/backend/common/render_graph_barrier.h>
 
 #include <string>
 #include <vector>
@@ -131,6 +132,26 @@ namespace vkm
         * pass.
         * @param buffer Buffer whose writes become visible.
         */
+        /*
+        * @brief Orders the dependencies in `barriers` as one batched barrier: everything each
+        * entry's source access did becomes visible to what its destination access is about to do.
+        * Must be recorded while recording and outside a render pass.
+        *
+        * @details Batched rather than one call per resource because that is what the underlying
+        * APIs want -- Vulkan takes arrays and issuing one vkCmdPipelineBarrier2 per texture at a
+        * subgraph boundary is pure waste -- and because a whole boundary's worth of dependencies
+        * is one decision, not N.
+        *
+        * "Outside a render pass" is not "outside an encoder": a compute encoder may well be open,
+        * which is the case VkmScene::recordCull uses this for. Backends that have an encoder-scoped
+        * barrier (Metal) put it on that encoder rather than opening one.
+        *
+        * A pointer and a count rather than a span, matching the rest of this header -- nothing in
+        * the engine uses std::span and this header is included nearly everywhere.
+        */
+        void resourceBarrier(const VkmResourceBarrier* barriers, uint32_t count);
+        void resourceBarrier(const std::vector<VkmResourceBarrier>& barriers);
+
         void barrierIndirectArgumentBuffer(VkmResourceHandle buffer);
 
         /*
@@ -298,6 +319,9 @@ namespace vkm
                                          VkmResourceHandle countBuffer, uint64_t countOffset,
                                          uint32_t maxDrawCount) = 0;
         virtual void onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
+        // `barriers` is non-empty and every entry names a live resource -- the base class drops
+        // the degenerate cases before this is reached.
+        virtual void onResourceBarrier(const VkmResourceBarrier* barriers, uint32_t count) = 0;
         virtual void onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer) = 0;
         virtual void onBuildAccelerationStructure(VkmResourceHandle accelerationStructure) = 0;
         virtual void onBarrierTextureForShaderRead(VkmResourceHandle texture) = 0;

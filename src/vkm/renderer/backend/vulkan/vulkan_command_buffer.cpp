@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/vulkan/vulkan_command_buffer.h>
+#include <vkm/renderer/backend/vulkan/vulkan_barrier.h>
 #include <vkm/renderer/backend/vulkan/vulkan_command_queue.h>
 #include <vkm/renderer/backend/vulkan/vulkan_texture.h>
 #include <vkm/renderer/backend/vulkan/vulkan_buffer.h>
@@ -512,6 +513,172 @@ namespace vkm
         }
         const VkAccelerationStructureBuildRangeInfoKHR* rangePointer = ranges.data();
         vkCmdBuildAccelerationStructuresKHR(_vkCommandBuffer, 1, &buildInfo, &rangePointer);
+    }
+
+    void VkmCommandBufferVulkan::onResourceBarrier(const VkmResourceBarrier* barriers, uint32_t count)
+    {
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+
+        // Members rather than locals: this runs at every subgraph boundary of every frame, and the
+        // vectors keep their capacity across calls.
+        _imageBarrierScratch.clear();
+        _bufferBarrierScratch.clear();
+        VkMemoryBarrier2 memoryBarrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+        bool hasMemoryBarrier = false;
+
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            const VkmResourceBarrier& barrier = barriers[i];
+            const VkPipelineStageFlags2 srcStage = vkmToVkStageMask(barrier._srcAccess, barrier._srcScope);
+            const VkPipelineStageFlags2 dstStage = vkmToVkStageMask(barrier._dstAccess, barrier._dstScope);
+            // A write-after-read needs the two sides ordered, not the caches flushed: the source
+            // only read, so it published nothing.
+            const VkAccessFlags2 srcAccess =
+                barrier._executionOnly ? VK_ACCESS_2_NONE : vkmToVkAccessMask(barrier._srcAccess);
+            const VkAccessFlags2 dstAccess = vkmToVkAccessMask(barrier._dstAccess);
+
+            if (barrier._handle.type == VkmResourceType::Texture)
+            {
+                VkmTextureVulkan* textureVulkan =
+                    static_cast<VkmTextureVulkan*>(renderResourcePool->getResource<VkmTexture>(barrier._handle));
+                if (textureVulkan == nullptr)
+                {
+                    VKM_DEBUG_ERROR("resourceBarrier was given a handle that is not a live texture");
+                    continue;
+                }
+
+                const VkmTextureInfo& info = textureVulkan->getTextureInfo();
+                const VkImageAspectFlags aspectMask = vkmToVkAspectMask(info._format);
+                const VkImageLayout newLayout = vkmToVkImageLayout(barrier._dstAccess, info._format);
+                if (newLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+                {
+                    // An access that names no layout on a texture: order it, but do not pretend to
+                    // know where the image should end up.
+                    hasMemoryBarrier = true;
+                    memoryBarrier.srcStageMask |= srcStage;
+                    memoryBarrier.dstStageMask |= dstStage;
+                    memoryBarrier.srcAccessMask |= srcAccess;
+                    memoryBarrier.dstAccessMask |= dstAccess;
+                    continue;
+                }
+
+                const uint32_t mipCount = std::max(1u, info._numMipLevels);
+                const uint32_t layerCount = std::max(1u, info._numArrayLayers);
+                const uint32_t firstMip = std::min(barrier._range._baseMipLevel, mipCount - 1u);
+                const uint32_t firstLayer = std::min(barrier._range._baseArrayLayer, layerCount - 1u);
+                const uint32_t lastMip =
+                    (barrier._range._mipLevelCount == VKM_ALL_REMAINING_SUBRESOURCES)
+                        ? mipCount - 1u
+                        : std::min(firstMip + barrier._range._mipLevelCount - 1u, mipCount - 1u);
+                const uint32_t lastLayer =
+                    (barrier._range._arrayLayerCount == VKM_ALL_REMAINING_SUBRESOURCES)
+                        ? layerCount - 1u
+                        : std::min(firstLayer + barrier._range._arrayLayerCount - 1u, layerCount - 1u);
+
+                /*
+                * oldLayout comes from the texture's own tracker, never from the plan. The graph
+                * knows the hazards inside one frame; what a texture carried in from a host upload,
+                * a previous frame, or a swapchain acquire is backend knowledge, and naming the
+                * wrong oldLayout is undefined behaviour rather than a missed optimisation.
+                *
+                * One barrier per subresource when the range's layouts disagree, one for the whole
+                * range when they do not -- which is the usual case and the one that has to stay
+                * cheap.
+                */
+                const VkmSubresourceRange resolvedRange{ firstMip, lastMip - firstMip + 1u, firstLayer,
+                                                         lastLayer - firstLayer + 1u };
+                const VkImageLayout sharedOldLayout = textureVulkan->getUniformLayout(resolvedRange);
+                const auto pushImageBarrier = [&](VkImageLayout oldLayout, uint32_t baseMip, uint32_t mips,
+                                                  uint32_t baseLayer, uint32_t layers) {
+                    if (oldLayout == newLayout && !vkmIsWriteAccess(barrier._srcAccess) &&
+                        !vkmIsWriteAccess(barrier._dstAccess))
+                    {
+                        return; // nothing to transition and nothing to publish
+                    }
+                    _imageBarrierScratch.push_back(VkImageMemoryBarrier2{
+                        .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                        .srcStageMask        = srcStage,
+                        .srcAccessMask       = srcAccess,
+                        .dstStageMask        = dstStage,
+                        .dstAccessMask       = dstAccess,
+                        .oldLayout           = oldLayout,
+                        .newLayout           = newLayout,
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .image               = textureVulkan->getImage(),
+                        .subresourceRange    = { aspectMask, baseMip, mips, baseLayer, layers },
+                    });
+                };
+
+                if (sharedOldLayout != VK_IMAGE_LAYOUT_MAX_ENUM)
+                {
+                    pushImageBarrier(sharedOldLayout, firstMip, lastMip - firstMip + 1u, firstLayer,
+                                     lastLayer - firstLayer + 1u);
+                }
+                else
+                {
+                    for (uint32_t layer = firstLayer; layer <= lastLayer; ++layer)
+                    {
+                        for (uint32_t mip = firstMip; mip <= lastMip; ++mip)
+                        {
+                            pushImageBarrier(textureVulkan->getSubresourceLayout(mip, layer), mip, 1, layer, 1);
+                        }
+                    }
+                }
+                textureVulkan->setSubresourceLayout(resolvedRange, newLayout);
+                continue;
+            }
+
+            if (barrier._handle.type == VkmResourceType::Buffer ||
+                barrier._handle.type == VkmResourceType::StagingBuffer)
+            {
+                uint64_t offset = 0;
+                VkBuffer vkBuffer = resolveVkBufferAndOffset(renderResourcePool, barrier._handle, &offset);
+                if (vkBuffer == VK_NULL_HANDLE)
+                {
+                    VKM_DEBUG_ERROR("resourceBarrier was given a handle that is not a live buffer");
+                    continue;
+                }
+                _bufferBarrierScratch.push_back(VkBufferMemoryBarrier2{
+                    .sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                    .srcStageMask        = srcStage,
+                    .srcAccessMask       = srcAccess,
+                    .dstStageMask        = dstStage,
+                    .dstAccessMask       = dstAccess,
+                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .buffer              = vkBuffer,
+                    .offset              = offset,
+                    .size                = VK_WHOLE_SIZE,
+                });
+                continue;
+            }
+
+            // An acceleration structure exposes no VkBuffer of its own here, so its dependency
+            // rides a global memory barrier instead.
+            hasMemoryBarrier = true;
+            memoryBarrier.srcStageMask |= srcStage;
+            memoryBarrier.dstStageMask |= dstStage;
+            memoryBarrier.srcAccessMask |= srcAccess;
+            memoryBarrier.dstAccessMask |= dstAccess;
+        }
+
+        if (_imageBarrierScratch.empty() && _bufferBarrierScratch.empty() && !hasMemoryBarrier)
+        {
+            return;
+        }
+
+        // One vkCmdPipelineBarrier2 for the whole boundary, which is the point of the batched API.
+        const VkDependencyInfo dependencyInfo{
+            .sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .memoryBarrierCount       = hasMemoryBarrier ? 1u : 0u,
+            .pMemoryBarriers          = hasMemoryBarrier ? &memoryBarrier : nullptr,
+            .bufferMemoryBarrierCount = static_cast<uint32_t>(_bufferBarrierScratch.size()),
+            .pBufferMemoryBarriers    = _bufferBarrierScratch.data(),
+            .imageMemoryBarrierCount  = static_cast<uint32_t>(_imageBarrierScratch.size()),
+            .pImageMemoryBarriers     = _imageBarrierScratch.data(),
+        };
+        vkCmdPipelineBarrier2(_vkCommandBuffer, &dependencyInfo);
     }
 
     void VkmCommandBufferVulkan::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)
