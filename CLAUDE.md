@@ -121,3 +121,18 @@ vkm/
 - Each deviation entry: what was planned, what was done instead, and why.
 - Run `/session-report` to generate a readable HTML summary (with a comprehension quiz)
   of a session's changes, including any logged deviations.
+
+## 12. Graphics API Results Must Be Handled
+
+**Never discard a result returned by a Vulkan, Metal, or WebGPU call.**
+
+- Every `VkResult`, every Metal `nil` return and `NSError**` out-param, and every WebGPU status
+  enum must be inspected at the call site.
+- Unrecoverable (device lost, or creation of an object the caller depends on): log the failure and
+  stop that path — propagate it to the caller, or `VKM_ASSERT` where no caller can recover.
+- Recoverable (`VK_SUBOPTIMAL_KHR`, `VK_ERROR_OUT_OF_DATE_KHR`, `VK_INCOMPLETE`, WebGPU
+  `Outdated`/`Lost`): handle it explicitly — recreate the swapchain, re-query the count — rather
+  than only logging and continuing.
+- Use the backend's helper instead of a hand-rolled check: `VKM_VK_CHECK_RESULT_MSG` /
+  `VKM_VK_CHECK_RESULT_MSG_RETURN` (`vulkan_util.h`), `VKM_MTL_CHECK` (`metal_util.h`).
+- The log message must carry the reason the API reported, not just a static description.

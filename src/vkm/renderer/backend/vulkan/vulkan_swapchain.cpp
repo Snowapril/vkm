@@ -118,7 +118,11 @@ namespace vkm
         VkPhysicalDevice physicalDevice = driverVulkan->getPhysicalDevice();
         VkDevice device = driverVulkan->getDevice();
 
-        glfwCreateWindowSurface(instance, glfwWindow, nullptr, reinterpret_cast<VkSurfaceKHR*>(&_surface));
+        if (!VKM_VK_CHECK_RESULT_MSG(glfwCreateWindowSurface(instance, glfwWindow, nullptr, reinterpret_cast<VkSurfaceKHR*>(&_surface)),
+                "Failed to create window surface"))
+        {
+            return false;
+        }
 
         // With multiple windows each surface is created independently; verify the graphics
         // family (used as the present queue) can actually present to this surface instead of
@@ -126,23 +130,54 @@ namespace vkm
         // error at vkQueuePresentKHR.
         const uint32_t graphicsFamily = driverVulkan->getQueueFamilyIndex(VkmCommandQueueType::Graphics);
         VkBool32 presentSupported = VK_FALSE;
-        vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, graphicsFamily, _surface, &presentSupported);
+        if (!VKM_VK_CHECK_RESULT_MSG(vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, graphicsFamily, _surface, &presentSupported),
+                "Failed to query surface present support"))
+        {
+            return false;
+        }
         VKM_ASSERT(presentSupported == VK_TRUE, "Graphics queue family cannot present to this window surface");
 
         // Query the physical device's capabilities for the given surface.
         const VkPhysicalDeviceSurfaceInfo2KHR surfaceInfo2{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR, .surface = _surface};
         VkSurfaceCapabilities2KHR             capabilities2{.sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR};
-        vkGetPhysicalDeviceSurfaceCapabilities2KHR(physicalDevice, &surfaceInfo2, &capabilities2);
+        if (!VKM_VK_CHECK_RESULT_MSG(vkGetPhysicalDeviceSurfaceCapabilities2KHR(physicalDevice, &surfaceInfo2, &capabilities2),
+                "Failed to query surface capabilities"))
+        {
+            return false;
+        }
 
-        uint32_t formatCount;
-        vkGetPhysicalDeviceSurfaceFormats2KHR(physicalDevice, &surfaceInfo2, &formatCount, nullptr);
+        // The count queries leave their out-param untouched on failure, so every count starts at 0
+        // rather than at a stack value that would size the vector below.
+        uint32_t formatCount = 0;
+        if (!VKM_VK_CHECK_RESULT_MSG(vkGetPhysicalDeviceSurfaceFormats2KHR(physicalDevice, &surfaceInfo2, &formatCount, nullptr),
+                "Failed to query surface format count"))
+        {
+            return false;
+        }
         std::vector<VkSurfaceFormat2KHR> formats(formatCount, {.sType = VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR});
-        vkGetPhysicalDeviceSurfaceFormats2KHR(physicalDevice, &surfaceInfo2, &formatCount, formats.data());
+        // VK_INCOMPLETE is recoverable here: the list grew between the two calls, and formatCount
+        // is updated to what was actually written. Selecting from that prefix is fine, so accept it
+        // and shrink the vector rather than reading entries the driver never filled in.
+        const VkResult formatsResult = vkGetPhysicalDeviceSurfaceFormats2KHR(physicalDevice, &surfaceInfo2, &formatCount, formats.data());
+        if (formatsResult != VK_INCOMPLETE && !VKM_VK_CHECK_RESULT_MSG(formatsResult, "Failed to query surface formats"))
+        {
+            return false;
+        }
+        formats.resize(formatCount);
 
-        uint32_t presentModeCount;
-        vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, _surface, &presentModeCount, nullptr);
+        uint32_t presentModeCount = 0;
+        if (!VKM_VK_CHECK_RESULT_MSG(vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, _surface, &presentModeCount, nullptr),
+                "Failed to query surface present mode count"))
+        {
+            return false;
+        }
         std::vector<VkPresentModeKHR> presentModes(presentModeCount);
-        vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, _surface, &presentModeCount, presentModes.data());
+        const VkResult presentModesResult = vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, _surface, &presentModeCount, presentModes.data());
+        if (presentModesResult != VK_INCOMPLETE && !VKM_VK_CHECK_RESULT_MSG(presentModesResult, "Failed to query surface present modes"))
+        {
+            return false;
+        }
+        presentModes.resize(presentModeCount);
 
         // Choose the best available surface format and present mode
         const VkSurfaceFormat2KHR surfaceFormat2 = selectSwapSurfaceFormat(formats);
@@ -198,15 +233,23 @@ namespace vkm
         VkResult vkResult = vkCreateSwapchainKHR(device, &swapchainCreateInfo, nullptr, &_swapChain);
         VKM_VK_ASSERT(vkResult, "Failed to create swapchain");
 
-        uint32_t imageCount;
-        vkGetSwapchainImagesKHR(device, _swapChain, &imageCount, nullptr);
+        uint32_t imageCount = 0;
+        if (!VKM_VK_CHECK_RESULT_MSG(vkGetSwapchainImagesKHR(device, _swapChain, &imageCount, nullptr),
+                "Failed to query swapchain image count"))
+        {
+            return false;
+        }
         // The implementation may legally create more images than the requested minImageCount
         // (Mesa's X11 WSI does); only require the count to be in the range our fixed-size
         // per-image storage supports.
         VKM_ASSERT(imageCount >= minImageCountClamped && imageCount <= MAX_BACK_BUFFER_COUNT,
                    "Swapchain image count outside supported range");
         std::vector<VkImage> swapImages(imageCount);
-        vkGetSwapchainImagesKHR(device, _swapChain, &imageCount, swapImages.data());
+        if (!VKM_VK_CHECK_RESULT_MSG(vkGetSwapchainImagesKHR(device, _swapChain, &imageCount, swapImages.data()),
+                "Failed to query swapchain images"))
+        {
+            return false;
+        }
 
         _backBufferCount = (uint8_t)imageCount;
 
@@ -261,7 +304,8 @@ namespace vkm
                 .objectHandle = reinterpret_cast<uint64_t>(_imageAvailableSemaphores[i]),
                 .pObjectName  = semaphoreName.c_str(),
             };
-            vkSetDebugUtilsObjectNameEXT(device, &nameInfo);
+            VKM_VK_CHECK_RESULT_MSG(vkSetDebugUtilsObjectNameEXT(device, &nameInfo),
+                "Failed to set debug name on swapchain image-available semaphore");
         }
         for (uint32_t i = 0; i < imageCount; ++i)
         {
@@ -272,7 +316,8 @@ namespace vkm
                 .objectHandle = reinterpret_cast<uint64_t>(_renderFinishedSemaphores[i]),
                 .pObjectName  = semaphoreName.c_str(),
             };
-            vkSetDebugUtilsObjectNameEXT(device, &nameInfo);
+            VKM_VK_CHECK_RESULT_MSG(vkSetDebugUtilsObjectNameEXT(device, &nameInfo),
+                "Failed to set debug name on swapchain render-finished semaphore");
         }
 #endif
 
@@ -286,7 +331,7 @@ namespace vkm
 
         // Teardown-only: ensure no submit/present is still referencing the semaphores or images
         // before we destroy them.
-        vkDeviceWaitIdle(device);
+        VKM_VK_CHECK_RESULT_MSG(vkDeviceWaitIdle(device), "Failed to wait for device idle before swapchain teardown");
 
         // Release per-image textures (and their VkImageViews) before tearing down the
         // swapchain/surface those images and views were created from.
@@ -355,7 +400,8 @@ namespace vkm
                     .objectHandle = reinterpret_cast<uint64_t>(_imageAvailableSemaphores[i]),
                     .pObjectName  = semaphoreName.c_str(),
                 };
-                vkSetDebugUtilsObjectNameEXT(device, &nameInfo);
+                VKM_VK_CHECK_RESULT_MSG(vkSetDebugUtilsObjectNameEXT(device, &nameInfo),
+                    "Failed to set debug name on recreated image-available semaphore");
 #endif
                 break;
             }

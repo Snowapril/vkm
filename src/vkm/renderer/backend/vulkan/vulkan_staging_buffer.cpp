@@ -91,13 +91,15 @@ namespace vkm
     void VkmStagingBufferVulkan::flush(uint64_t offset, uint64_t size)
     {
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
-        vmaFlushAllocation(driverVulkan->getVmaAllocator(), _vmaAllocation, offset, size);
+        VKM_VK_CHECK_RESULT_MSG(vmaFlushAllocation(driverVulkan->getVmaAllocator(), _vmaAllocation, offset, size),
+            "Failed to flush staging buffer");
     }
 
     void VkmStagingBufferVulkan::invalidate(uint64_t offset, uint64_t size)
     {
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
-        vmaInvalidateAllocation(driverVulkan->getVmaAllocator(), _vmaAllocation, offset, size);
+        VKM_VK_CHECK_RESULT_MSG(vmaInvalidateAllocation(driverVulkan->getVmaAllocator(), _vmaAllocation, offset, size),
+            "Failed to invalidate staging buffer");
     }
 
     void VkmStagingBufferVulkan::writeDirect(uint64_t offset, const void* data, uint64_t size)
@@ -130,7 +132,8 @@ namespace vkm
             .objectHandle = reinterpret_cast<uint64_t>(_vkBuffer),
             .pObjectName  = name,
         };
-        vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo);
+        VKM_VK_CHECK_RESULT_MSG(vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo),
+            "Failed to set debug name on staging buffer");
 #else
         (void)name;
 #endif

@@ -4,6 +4,7 @@
 #include <vkm/renderer/backend/metal/metal_command_buffer.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
+#include <vkm/renderer/backend/metal/metal_util.h>
 #include <vkm/renderer/backend/common/gpu_crash_handler.h>
 
 #import <Metal/MTL4CommandQueue.h>
@@ -18,6 +19,9 @@ namespace vkm
     {
         VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(driver);
         _commandAllocator = [driverMetal->getMTLDevice() newCommandAllocator];
+        // Every command buffer this pool hands out begins against this allocator, so there is no
+        // path that can recover from losing it.
+        VKM_MTL_ASSERT(_commandAllocator, nil, "Failed to create command allocator");
     }
 
     VkmCommandBufferPoolMetal::~VkmCommandBufferPoolMetal()
@@ -35,6 +39,12 @@ namespace vkm
     {
         VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
         id<MTL4CommandBuffer> mtlCommandBuffer = [driverMetal->getMTLDevice() newCommandBuffer];
+        // Messaging nil is a no-op in ObjC, so an unchecked nil would silently skip the begin and
+        // then bridge out as a handle that looks valid to every caller.
+        if (!VKM_MTL_CHECK(mtlCommandBuffer, nil, "Failed to create command buffer"))
+        {
+            return (VKM_COMMAND_BUFFER_HANDLE) nullptr;
+        }
         [mtlCommandBuffer beginCommandBufferWithAllocator:_commandAllocator];
         return (__bridge VKM_COMMAND_BUFFER_HANDLE)mtlCommandBuffer;
     }
@@ -44,6 +54,9 @@ namespace vkm
     {
         VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(driver);
         _mtlSharedEvent = [driverMetal->getMTLDevice() newSharedEvent];
+        // Without the shared event every completion query below reports 0, and command buffers
+        // would be recycled while the GPU is still reading them.
+        VKM_MTL_ASSERT(_mtlSharedEvent, nil, "Failed to create shared event");
     }
 
     VkmGpuEventTimelineMetal::~VkmGpuEventTimelineMetal()
@@ -160,6 +173,12 @@ namespace vkm
     {
         VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
         _mtlCommandQueue = [driverMetal->getMTLDevice() newMTL4CommandQueue];
+        // Checked before addResidencySet: below, which would otherwise be a silent no-op on nil
+        // and leave the failure to surface only at the return.
+        if (!VKM_MTL_CHECK(_mtlCommandQueue, nil, "Failed to create Metal command queue"))
+        {
+            return false;
+        }
 
         VkmRenderResourcePoolMetal* renderResourcePoolMetal = static_cast<VkmRenderResourcePoolMetal*>(driverMetal->getRenderResourcePool());
         id<MTLResidencySet> residencySet = renderResourcePoolMetal->getResidencySet(VkmResourcePoolType::Default);
@@ -175,6 +194,6 @@ namespace vkm
         _commandBufferPool.reset(new VkmCommandBufferPoolMetal(_driver, this));
         _gpuEventTimeline.reset(new VkmGpuEventTimelineMetal(_driver));
 
-        return _mtlCommandQueue != nil;
+        return true;
     }
 }
