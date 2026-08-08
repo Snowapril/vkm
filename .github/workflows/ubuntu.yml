@@ -159,8 +159,12 @@ jobs:
             export VK_DRIVER_FILES="$icd"
             export VK_ICD_FILENAMES="$icd"
             # Only the first run after a build that actually compiled something crashes; a second
-            # run through the same wrapper passes 222 of 222. That points at what the compile left
-            # behind rather than at anything the tests do, so record the machine's state around it.
+            # run through the same wrapper passes 222 of 222. Memory, disk and dmesg were all
+            # clean, so it is not resource exhaustion. What else is cold on a first run is Mesa's
+            # own shader cache: lavapipe compiles its internal shaders -- including the ones it
+            # builds acceleration structures with, which is where the crash lands -- on first use
+            # and reuses them from ~/.cache afterwards. Disabling it makes every run the cold one.
+            export MESA_SHADER_CACHE_DISABLE=true
             echo "=== resources before"; free -m; df -h /home/runner .
             xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }} || suite_status=$?
             echo "=== resources after"; free -m; df -h /home/runner .
