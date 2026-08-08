@@ -24,17 +24,14 @@ namespace vkm
     {
         std::array<VkmCommandBufferBase*, MAX_NUM_COMMAND_BUFFER_SUBMITS> commandBuffers;
         uint32_t commandBufferCount;
-        // Which VkmRenderGraph frame slot this submission came from (VkmRenderGraph::frameIndex()).
-        // Read by VkmGpuCrashHandler::recordSubmission() to locate the right marker-buffer slice
-        // when reporting per-subgraph completion; unused/0 for submissions outside the render graph.
-        uint32_t frameIndex = 0;
-        // When non-null, this submit consumes the swapchain's pending acquire semaphore as a
-        // wait and its per-image render-finished semaphore as a signal (backend present sync).
+        uint32_t frameIndex = 0;  // VkmRenderGraph::frameIndex() of this submission; 0 outside the render graph
+        // When non-null, this submit waits on the swapchain's pending acquire semaphore and signals its
+        // per-image render-finished semaphore.
         VkmSwapChainBase* presentSwapChain = nullptr;
     };
 
     /*
-    * @brief Command buffer ppol base class
+    * @brief Command buffer pool base class
     */
     class VkmCommandBufferPoolBase
     {
@@ -60,21 +57,16 @@ namespace vkm
     };
 
     /*
-    * @brief GPU event timeline object
-    * @details This structure is used to represent a GPU event timeline object, which contains a
-    * pointer to a GPU event timeline and a timeline value. It is used for synchronization purposes
-    * between the CPU and GPU.
+    * @brief One point on a GPU event timeline, used to synchronize the CPU against the GPU.
     */
     struct VkmGpuEventTimelineObject
     {
-        class VkmGpuEventTimelineBase* _gpuEventTimeline = nullptr; // Pointer to the GPU event timeline
-        uint64_t _timelineValue = INVALID_VALUE64; // The timeline value associated with this event
+        class VkmGpuEventTimelineBase* _gpuEventTimeline = nullptr;
+        uint64_t _timelineValue = INVALID_VALUE64;
     };
 
     /*
-    * @brief Base class for GPU event timeline
-    * @details This class is used to manage GPU event timelines, which can be used for
-    * synchronization and signaling between the CPU and GPU.
+    * @brief Base class for a monotonically increasing GPU event timeline.
     */
     class VkmGpuEventTimelineBase
     {
@@ -93,22 +85,20 @@ namespace vkm
         {
             VkmGpuEventTimelineObject gpuEventTimelineObject;
             gpuEventTimelineObject._gpuEventTimeline = this;
-            gpuEventTimelineObject._timelineValue = ++_lastAllocatedTimeline; // Increment the timeline value for each allocation
+            gpuEventTimelineObject._timelineValue = ++_lastAllocatedTimeline;
             return gpuEventTimelineObject;
         }
 
-        // Records the highest value a submission has asked the GPU to signal. Every backend's
-        // submit() must call this; waitIdle() waits on it rather than on the last ALLOCATED value,
-        // and the difference is not cosmetic. beginCommandBuffer() takes a timeline value too, so
-        // a command buffer that is begun and then never submitted leaves _lastAllocatedTimeline
-        // sitting on a value nothing will ever signal -- after which waiting for the queue to
-        // drain either hangs (Metal) or times out and reports nothing (Vulkan ignores
-        // vkWaitSemaphores' result), and the caller goes on to destroy resources the GPU is still
-        // reading. That is not hypothetical: it presented as VUID-vkDestroy...-02442 followed by a
-        // segmentation fault on the first CI run that had a real ray-tracing driver.
+        /*
+        * @brief Records the highest timeline value a submission has asked the GPU to signal.
+        * @details Every backend's submit() must call this. waitIdle() waits on this value rather
+        * than on the last allocated one, so a command buffer that is begun but never submitted
+        * cannot leave the queue waiting on a value nothing will signal.
+        * @param timelineValue Value handed to the GPU to signal; ignored when lower than the current one.
+        */
         inline void markTimelineSubmitted(const uint64_t timelineValue)
         {
-            // Compared rather than std::max'd so this header does not pull in <algorithm>.
+            // Not std::max: this header must not pull in <algorithm>.
             if (timelineValue > _lastSubmittedTimeline)
             {
                 _lastSubmittedTimeline = timelineValue;
@@ -117,9 +107,9 @@ namespace vkm
 
     protected:
         VkmDriverBase* _driver;
-        uint64_t _lastAllocatedTimeline = 0; // This value is incremented each time a new timeline is allocated for command buffer submission
-        uint64_t _lastSubmittedTimeline = 0; // The highest value actually handed to the GPU to signal; see markTimelineSubmitted
-        uint64_t _lastCompletedCachedTimeline = 0; // This value may not be updated immediately, it is used to cache the last completed timeline for performance reasons
+        uint64_t _lastAllocatedTimeline = 0;
+        uint64_t _lastSubmittedTimeline = 0;  // Highest value actually handed to the GPU to signal
+        uint64_t _lastCompletedCachedTimeline = 0;  // Cached; may lag the GPU's real progress
     };
 
     /*

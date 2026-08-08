@@ -9,27 +9,27 @@
 
 namespace vkm
 {
-    constexpr const uint32_t MAX_COLOR_ATTACHMENTS = 8; // Maximum number of color attachments in a render pass
+    constexpr const uint32_t MAX_COLOR_ATTACHMENTS = 8;
 
     enum class VkmLoadAction : uint8_t
     {
-        Load, // Load the previous contents of the attachment
-        Clear, // Clear the attachment to a specified value
-        DontCare // Do not care about the previous contents of the attachment
+        Load,
+        Clear,
+        DontCare
     };
 
     enum class VkmStoreAction : uint8_t
     {
-        Store, // Store the contents of the attachment after rendering
-        DontCare // Do not store the contents of the attachment
+        Store,
+        DontCare
     };
 
     struct VkmColorAttachmentDescriptor
     {
-        uint32_t _attachmentId; // Unique identifier for the color attachment
-        VkmLoadAction _loadAction; // Load action for the color attachment
-        VkmStoreAction _storeAction; // Store action for the color attachment
-        float _clearColors[4]; // Clear color value (RGBA)
+        uint32_t _attachmentId;
+        VkmLoadAction _loadAction;
+        VkmStoreAction _storeAction;
+        float _clearColors[4];  // RGBA
 
         inline bool operator==(const VkmColorAttachmentDescriptor& other) const noexcept
         {
@@ -49,11 +49,11 @@ namespace vkm
 
     struct VkmDepthStencilAttachmentDescriptor
     {
-        uint32_t _attachmentId; // Unique identifier for the depth/stencil attachment
-        VkmLoadAction _loadAction; // Load action for the depth/stencil attachment
-        VkmStoreAction _storeAction; // Store action for the depth/stencil attachment
-        float _clearDepth; // Clear depth value
-        uint32_t _clearStencil; // Clear stencil value
+        uint32_t _attachmentId;
+        VkmLoadAction _loadAction;
+        VkmStoreAction _storeAction;
+        float _clearDepth;
+        uint32_t _clearStencil;
 
         inline bool operator==(const VkmDepthStencilAttachmentDescriptor& other) const noexcept
         {
@@ -69,12 +69,11 @@ namespace vkm
         }
     };
 
-    // Render pass descriptor
     struct VkmRenderPassDescriptor
     {
-        uint32_t _colorAttachmentCount; // Number of color attachments
-        std::array<VkmColorAttachmentDescriptor, MAX_COLOR_ATTACHMENTS> _colorAttachments; // Array of color attachments
-        std::optional<VkmDepthStencilAttachmentDescriptor> _depthStencilAttachment; // Depth/stencil attachment descriptor
+        uint32_t _colorAttachmentCount;
+        std::array<VkmColorAttachmentDescriptor, MAX_COLOR_ATTACHMENTS> _colorAttachments;
+        std::optional<VkmDepthStencilAttachmentDescriptor> _depthStencilAttachment;
 
         inline bool operator==(const VkmRenderPassDescriptor& other) const noexcept
         {
@@ -88,16 +87,14 @@ namespace vkm
         }
     };
 
-    // Frame buffer descriptor
-    // Contains information about the framebuffer used in a render pass
     struct VkmFrameBufferDescriptor
     {
-        VkmRenderPassDescriptor _renderPass; // Render pass descriptor
-        uint32_t _width; // Width of the framebuffer
-        uint32_t _height; // Height of the framebuffer
-        
-        std::array<VkmResourceHandle, MAX_COLOR_ATTACHMENTS> _colorAttachments; // Handles to color attachments
-        std::optional<VkmResourceHandle> _depthStencilAttachment; // Handle to the depth/stencil attachment
+        VkmRenderPassDescriptor _renderPass;
+        uint32_t _width;
+        uint32_t _height;
+
+        std::array<VkmResourceHandle, MAX_COLOR_ATTACHMENTS> _colorAttachments;
+        std::optional<VkmResourceHandle> _depthStencilAttachment;
 
         inline bool operator==(const VkmFrameBufferDescriptor& other) const noexcept
         {

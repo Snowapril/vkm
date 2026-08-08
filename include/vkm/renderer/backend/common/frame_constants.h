@@ -14,24 +14,21 @@ namespace vkm
     /*
     * @brief The engine's descriptor-set convention, ordered by update frequency so a set is
     * rebound only as often as its contents actually change.
-    *
+    * @details
     *   set 0  bindless   -- resource arrays, never change after registration
     *                        (bindless_resource_manager.h)
     *   set 1  per-frame  -- camera/view constants, written once per frame (this header)
     *   set 2  per-pass   -- declared by a PSO, bound once per pass (resource_table.h)
     *   set 3  per-draw   -- declared by a PSO, bound per draw (resource_table.h)
-    *
     * Per-draw data that fits travels as push constants instead of through set 3 (see
     * kVkmBindlessPushConstantSize); set 3 is for what does not fit or is not a constant at all,
-    * such as the per-material texture table WebGPU needs because it has no bindless arrays.
-    * Unlike push constants, a set-1 read is visible to every shader stage.
-    *
-    * These four exhaust WebGPU's default maxBindGroups of 4, so there is no room for a fifth set
-    * on that backend -- anything further has to be folded into one of these.
-    *
-    * These constants are the C++ half of a shader ABI whose other halves are
-    * include/vkm/shaders/vkm_frame_constants.hlsli and vkm-compiler's Metal binding pins;
-    * changing one without the others breaks shader/runtime agreement silently.
+    * such as the per-material texture table WebGPU needs, having no bindless arrays. Unlike push
+    * constants, a set-1 read is visible to every shader stage.
+    * These four exhaust WebGPU's default maxBindGroups of 4, so anything further has to be folded
+    * into one of them.
+    * They are the C++ half of a shader ABI whose other halves are
+    * include/vkm/shaders/vkm_frame_constants.hlsli and vkm-compiler's Metal binding pins; changing
+    * one without the others breaks shader/runtime agreement silently.
     */
     inline constexpr uint32_t kVkmBindlessSetIndex      = 0;
     inline constexpr uint32_t kVkmFrameConstantSetIndex = 1;
@@ -40,11 +37,10 @@ namespace vkm
 
     /*
     * @brief Which PSO-declared descriptor set a declaration or a resource table belongs to.
-    *
-    * Sets 2 and 3 differ only by their set index, by which declaration they validate against, and
-    * (on Metal, which has no set index at all) by which argument-table index bases they occupy.
-    * Everything else -- JSON parsing, validation, the backend table objects -- is shared, which is
-    * why this is a parameter rather than a duplicated hierarchy.
+    * @details Sets 2 and 3 differ only by their set index, by which declaration they validate
+    * against, and on Metal by which argument-table index bases they occupy. JSON parsing,
+    * validation and the backend table objects are shared, hence a parameter rather than a
+    * duplicated hierarchy.
     */
     enum class VkmResourceSetKind : uint8_t
     {
@@ -75,14 +71,12 @@ namespace vkm
 
     /*
     * @brief Per-frame camera constants published at set 1, binding 0.
-    *
-    * Every member is 16-byte aligned, so the glm layout matches HLSL cbuffer / WGSL uniform
-    * packing with no padding members and the struct can be memcpy'd in as-is. Mirrors
+    * @details Every member is 16-byte aligned, so the glm layout matches HLSL cbuffer / WGSL
+    * uniform packing with no padding members and the struct can be memcpy'd in as-is. Mirrors
     * VkmFrameConstants in include/vkm/shaders/vkm_frame_constants.hlsli.
-    *
     * The default member initializers make a value-initialized instance identity rather than
-    * all-zero, which is what gets published when no camera is active -- a shader reading it
-    * then still produces something defined instead of collapsing every vertex to the origin.
+    * all-zero, which is what gets published when no camera is active, so a shader reading it still
+    * produces something defined instead of collapsing every vertex to the origin.
     */
     struct VkmFrameConstants
     {
@@ -94,11 +88,9 @@ namespace vkm
         /*
         * @brief Last frame's _viewProjection, for reprojecting a world position into the previous
         * frame's screen space.
-        *
-        * Filled by the engine rather than the camera: the camera holds no frame-to-frame state,
-        * and "previous" is a property of the frame loop. Equal to _viewProjection on the first
-        * frame after a camera becomes active, so reprojection is the identity rather than a jump
-        * from an identity matrix.
+        * @details Filled by the engine rather than the camera, "previous" being a property of the
+        * frame loop. Equal to _viewProjection on the first frame after a camera becomes active, so
+        * reprojection is the identity rather than a jump from an identity matrix.
         */
         glm::mat4 _prevViewProjection{ 1.0f };                    // offset 256
 
@@ -110,9 +102,8 @@ namespace vkm
 
         /*
         * @brief x = monotonically increasing frame counter; yzw reserved.
-        *
-        * Distinct from the frame *slot* index (0..FRAME_COUNT-1) the engine cycles through: a
-        * stochastic pass needs a value that never repeats, to decorrelate its sampling between
+        * @details Distinct from the frame slot index (0..FRAME_COUNT-1) the engine cycles through:
+        * a stochastic pass needs a value that never repeats, to decorrelate its sampling between
         * frames. A uvec4 rather than a bare uint so the struct keeps its 16-byte member alignment.
         */
         glm::uvec4 _frameIndex{ 0u, 0u, 0u, 0u };                 // offset 352
@@ -132,13 +123,11 @@ namespace vkm
 
     /*
     * @brief Backend-agnostic owner of the engine-global per-frame constant set ("set 1").
-    *
-    * Holds one host-writable uniform buffer carved into FRAME_COUNT regions plus whatever the
-    * backend needs to bind one of them (a descriptor set per slot on Vulkan, a bind group per
-    * slot on WebGPU, a GPU address on Metal). Like the bindless managers, the buffer is a raw
-    * native allocation rather than a VkmBuffer: no VkmBuffer is host-writable on any backend,
-    * and no staging buffer can carry uniform usage.
-    *
+    * @details Holds one host-writable uniform buffer carved into FRAME_COUNT regions plus whatever
+    * the backend needs to bind one of them: a descriptor set per slot on Vulkan, a bind group per
+    * slot on WebGPU, a GPU address on Metal. Like the bindless managers, the buffer is a raw native
+    * allocation rather than a VkmBuffer -- no VkmBuffer is host-writable on any backend, and no
+    * staging buffer can carry uniform usage.
     * Each backend driver owns one implementation; reach it through
     * VkmDriverBase::getFrameConstantManager().
     */
@@ -150,12 +139,14 @@ namespace vkm
         virtual void destroy() = 0;
 
         /*
-        * @brief Writes `constants` into frame slot `frameIndex` and makes that slot the one
-        * subsequent pipeline binds publish.
-        * @details The write is a plain host write with no GPU synchronization, so the caller
-        * must have already waited out the slot's previous submit (VkmEngine::render() does
-        * this via VkmRenderGraph::ensureCompleted()). Recording is single-threaded, the same
-        * assumption the bindless managers make.
+        * @brief Writes constants into a frame slot and makes that slot the one subsequent pipeline
+        * binds publish.
+        * @details A plain host write with no GPU synchronization, so the caller must already have
+        * waited out the slot's previous submit; VkmEngine::render() does this via
+        * VkmRenderGraph::ensureCompleted(). Recording is single-threaded, as the bindless managers
+        * also assume.
+        * @param frameIndex Slot to write.
+        * @param constants Values to publish.
         */
         virtual void update(uint32_t frameIndex, const VkmFrameConstants& constants) = 0;
 

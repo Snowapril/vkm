@@ -18,10 +18,10 @@ namespace vkm
     };
 
     /*
-    * @brief CPU-side offset allocator for packing many small sub-allocations into a single
-    * large backing buffer (VkBuffer / id<MTLBuffer>), bound at draw/dispatch/copy time via
-    * offset+range. Not used for texture/dedicated-memory placement -- VMA (Vulkan) and
-    * MTLHeap (Metal) already provide that.
+    * @brief CPU-side offset allocator packing many small sub-allocations into a single large
+    * backing buffer, bound at draw/dispatch/copy time via offset+range.
+    * @details Not used for texture or dedicated-memory placement, which VMA on Vulkan and MTLHeap
+    * on Metal already provide.
     */
     class VkmOffsetAllocator
     {

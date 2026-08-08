@@ -8,10 +8,14 @@
 
 namespace vkm
 {
-    // Looks up `key` in `table`. Returns std::nullopt if `key` is not a recognized
-    // value for EnumT. Callers are responsible for turning a nullopt into a
-    // descriptive parse error (field name + offending string) at the call site,
-    // since only the caller knows which JSON field is being parsed.
+    /*
+    * @brief Looks up an enum value by its string spelling.
+    * @details The caller turns a nullopt into a descriptive parse error naming the field and the
+    * offending string, only it knowing which JSON field is being parsed.
+    * @param table Recognized spellings for EnumT.
+    * @param key Spelling to look up.
+    * @return The value, or nullopt when `key` is not a recognized value for EnumT.
+    */
     template <typename EnumT>
     std::optional<EnumT> parseEnumFromString(const std::unordered_map<std::string_view, EnumT>& table, std::string_view key)
     {

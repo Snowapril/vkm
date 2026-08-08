@@ -13,10 +13,9 @@ namespace vkm
 {
     class VkmDriverBase;
 
-    /**
-     * @brief Render resource base class
-     * @details
-     */
+    /*
+    * @brief Render resource base class
+    */
     class VkmRenderResource : public VkmDriverResourceBase
     {
     public:
@@ -27,35 +26,35 @@ namespace vkm
         virtual VkmResourceType getResourceType() const = 0;
 
         /*
-        * @brief Resources that own child resources (e.g. a texture owning its views)
-        * override this so VkmDeferredResourceReclaimer can cascade a release: a parent's
+        * @brief Child resources this one owns, such as a texture's views.
+        * @details Overridden so VkmDeferredResourceReclaimer can cascade a release: a parent's
         * deferred release blocks until every declared child is gone from the pool too.
-        * Default: no children.
+        * @return The owned handles, empty by default.
         */
         virtual std::vector<VkmResourceHandle> getOwnedChildHandles() const { return {}; }
 
         /*
-        * @brief Record that this resource was used, tagged with the timeline value the
-        * triggering submit produced. Keyed by the timeline's own identity (each
-        * VkmCommandQueueBase owns exactly one VkmGpuEventTimelineBase, so this pointer already
-        * uniquely identifies the queue instance -- no separate queue-type/index parameter is
-        * needed). Only the latest usage per queue instance is kept -- an earlier submit on the
-        * same queue is implied complete once a later one is.
+        * @brief Records that this resource was used by a submit.
+        * @details Keyed by the timeline's own identity -- each VkmCommandQueueBase owns exactly one
+        * VkmGpuEventTimelineBase, so the pointer already identifies the queue instance. Only the
+        * latest usage per queue is kept, an earlier submit on the same queue being implied complete
+        * once a later one is.
+        * @param timelineObject Timeline and value the triggering submit produced.
         */
         void recordUsage(VkmGpuEventTimelineObject timelineObject);
         VkmGpuEventTimelineObject getLastUsage(VkmGpuEventTimelineBase* queueTimeline) const;
         const std::vector<VkmGpuEventTimelineObject>& getAllUsages() const { return _lastUsagePerQueue; }
 
         /*
-        * @brief Non-blocking poll: true if any recorded usage's timeline hasn't completed yet.
+        * @brief Non-blocking poll for outstanding GPU work.
+        * @return True if any recorded usage's timeline has not completed yet.
         */
         bool hasAnyPendingUsage() const;
 
         /*
-        * @brief Actual GPU-side allocated size/alignment for this resource, if known. Safe
-        * defaults (0) for types with no independent memory allocation of their own (Sampler,
-        * TextureView, BufferView) or where the backend has no introspection API for it
-        * (Metal/WebGPU report a best-effort passthrough instead, see their overrides).
+        * @brief Actual GPU-side allocated size and alignment for this resource, if known.
+        * @details 0 for types with no independent allocation of their own -- Sampler, TextureView,
+        * BufferView -- and where the backend has no introspection API for it.
         */
         virtual uint64_t getAllocatedSize() const { return 0; }
         virtual uint32_t getMemoryAlignment() const { return 0; }

@@ -26,9 +26,10 @@ namespace vkm
         bool isParentAlive() const;
 
         /*
-        * @brief Resolve the parent buffer, or nullptr if it's gone. Same lookup as
-        * resolveParent() but silent (no error log) -- for callers checking liveness rather
-        * than expecting the parent to always be present.
+        * @brief Resolves the parent buffer without logging when it is gone.
+        * @details Same lookup as resolveParent(), for callers checking liveness rather than
+        * expecting the parent to be present.
+        * @return The parent buffer, or nullptr if it is no longer in the resource pool.
         */
         VkmBuffer* tryGetParent() const;
 
@@ -36,9 +37,9 @@ namespace vkm
         bool initializeBufferViewCommon(VkmResourceHandle handle, const VkmBufferViewInfo& info);
 
         /*
-        * @brief Resolve the parent buffer via the resource pool, logging an error if it's
-        * not found. Shared by every backend's initialize() -- replaces the identical inline
-        * lookup that used to be duplicated per-backend.
+        * @brief Resolves the parent buffer via the resource pool, logging an error if it is
+        * not found. Shared by every backend's initialize().
+        * @return The parent buffer, or nullptr if it is no longer in the resource pool.
         */
         VkmBuffer* resolveParent() const;
 

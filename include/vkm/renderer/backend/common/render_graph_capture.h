@@ -76,15 +76,12 @@ namespace vkm
 
     /*
     * @brief One-shot capture of a single frame's render graph for debug inspection.
-    *
-    * Flow: arm() (hotkey/CLI) -> the engine passes this object to exactly one
-    * VkmRenderGraph::execute() via VkmRenderGraphCommitOptions::capture, which calls
-    * beginCapture() and then recordSubGraph() after each subgraph's commit() -- recording
-    * metadata always, and (when the driver reports TextureContentCapture) post-pass
-    * snapshot copies of color attachments plus staging readback copies of referenced
-    * buffers into the same command buffer. After the submit completes (the engine calls
-    * ensureCompleted() on the capture frame), finalize() maps the staging readbacks and
-    * the capture becomes Ready for UI consumption.
+    * @details arm() flags the next graph. The engine passes this object to exactly one
+    * VkmRenderGraph::execute() via VkmRenderGraphCommitOptions::capture, which calls beginCapture()
+    * and then recordSubGraph() after each subgraph's commit(). Metadata is always recorded; when
+    * the driver reports TextureContentCapture, so are post-pass snapshot copies of color
+    * attachments and staging readback copies of referenced buffers, into the same command buffer.
+    * Once the submit completes, finalize() maps the staging readbacks and the capture becomes Ready.
     */
     class VkmRenderGraphCapture
     {
@@ -97,8 +94,11 @@ namespace vkm
             Ready    // capture data complete and inspectable
         };
 
-        // Request a capture of the next executed render graph. Any previous capture's
-        // data stays readable until that graph's beginCapture() releases it.
+        /*
+        * @brief Request a capture of the next executed render graph.
+        * @details Any previous capture's data stays readable until that graph's beginCapture()
+        * releases it.
+        */
         void arm();
 
         State getState() const { return _state; }
@@ -110,19 +110,39 @@ namespace vkm
         // tracking while the inspector displays them (see VkmEngine::render()).
         const std::vector<VkmResourceHandle>& getSnapshotTextureHandles() const { return _snapshotTextures; }
 
-        // Called by VkmRenderGraph::execute() when armed: releases the previous capture's
-        // resources and transitions Armed -> Pending.
+        /*
+        * @brief Called by VkmRenderGraph::execute() when armed.
+        * @details Releases the previous capture's resources and moves Armed -> Pending.
+        * @param driver Driver executing the graph.
+        * @param frameIndex Frame slot being captured.
+        */
         void beginCapture(VkmDriverBase* driver, uint32_t frameIndex);
-        // Called by VkmRenderGraph::execute() right after subGraph->commit() (outside any
-        // render pass). pipelineHistoryBegin is the command buffer's bound-pipeline-history
-        // size snapshotted before commit().
+
+        /*
+        * @brief Called by VkmRenderGraph::execute() right after subGraph->commit(), outside any
+        * render pass.
+        * @param driver Driver executing the graph.
+        * @param commandBuffer Command buffer the snapshot copies are recorded into.
+        * @param subGraph Subgraph that just committed.
+        * @param pipelineHistoryBegin The command buffer's bound-pipeline-history size, snapshotted
+        * before commit().
+        */
         void recordSubGraph(VkmDriverBase* driver, VkmCommandBufferBase* commandBuffer,
                             const VkmRenderSubGraph* subGraph, size_t pipelineHistoryBegin);
-        // Called by the engine once the capture frame's submit has completed on the GPU:
-        // maps buffer readbacks into CPU memory, releases stagings, Pending -> Ready.
+
+        /*
+        * @brief Called by the engine once the capture frame's submit has completed on the GPU.
+        * @details Maps buffer readbacks into CPU memory, releases the stagings, and moves
+        * Pending -> Ready.
+        * @param driver Driver that executed the graph.
+        */
         void finalize(VkmDriverBase* driver);
-        // Releases all capture-owned GPU resources (via the deferred reclaimer) and
-        // returns to Idle. Also called implicitly by the next beginCapture().
+
+        /*
+        * @brief Releases all capture-owned GPU resources through the deferred reclaimer and returns
+        * to Idle. Also called implicitly by the next beginCapture().
+        * @param driver Driver that owns the resources.
+        */
         void releaseResources(VkmDriverBase* driver);
 
         static constexpr uint64_t kMaxCapturedBufferBytes = 64 * 1024;
@@ -132,9 +152,13 @@ namespace vkm
 
     private:
         /*
-        * @brief Allocate a capture-owned copy of `source`'s mip 0 / layer 0 and record the
-        * copy into `commandBuffer`. Returns an invalid handle when the source cannot be
-        * snapshotted; the caller then keeps metadata only.
+        * @brief Allocate a capture-owned copy of a texture's mip 0 / layer 0 and record the copy.
+        * @param driver Driver that allocates the copy.
+        * @param commandBuffer Command buffer the copy is recorded into.
+        * @param source Texture to snapshot.
+        * @param debugName Name given to the snapshot texture.
+        * @return The snapshot handle, or an invalid handle when the source cannot be snapshotted,
+        * in which case the caller keeps metadata only.
         */
         VkmResourceHandle takeTextureSnapshot(VkmDriverBase* driver, VkmCommandBufferBase* commandBuffer,
                                               VkmResourceHandle source, std::string debugName);

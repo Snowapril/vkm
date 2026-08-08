@@ -42,7 +42,6 @@ namespace vkm
 
     /*
     * @brief Resource handle
-    * @details
     */
     struct VkmResourceHandle
     {
@@ -123,15 +122,12 @@ namespace vkm
         // VkmDrawIndirectArguments records that the draw then fetches from this same buffer.
         AllowIndirectBuffer = 0x00000200,
         /*
-        * Read in place by an acceleration structure build -- vertex and index data a BLAS is
-        * built from, so tracing a scene duplicates none of its geometry.
-        *
-        * On Vulkan this also forces the *committed* allocation path. A sub-allocated buffer
-        * returns before `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` is added and inherits the
-        * pool block's usage instead, and a build input needs both that bit and
-        * `VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR` on the VkBuffer
-        * it is actually reading. Without the forcing, whether a build worked would depend on
-        * whether the buffer happened to be small enough to pool.
+        * Read in place by an acceleration structure build -- vertex and index data a BLAS is built
+        * from, so tracing a scene duplicates none of its geometry.
+        * On Vulkan this also forces the committed allocation path. A build input needs both
+        * `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` and
+        * `VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR` on the VkBuffer it
+        * reads, and a sub-allocated buffer inherits the pool block's usage instead.
         */
         AllowAccelerationStructureInput = 0x00000400,
 
@@ -146,21 +142,18 @@ namespace vkm
     };
 
     // Threadgroup width the engine's own 1D scene compute passes declare as [numthreads(N, 1, 1)],
-    // so their dispatch sites can derive a group count from an item count (see
-    // VkmScene::recordCull). It is a convention for those passes, not a constraint on compute
-    // shaders in general: a shader's real [numthreads(...)] is read out of its compiled SPIR-V by
-    // vkm-compiler and carried in VkmShaderCacheHeader::threadGroupSize, which is what Metal
-    // dispatches with. A 2D screen-space kernel is free to declare [numthreads(8, 8, 1)].
+    // so their dispatch sites can derive a group count from an item count (see VkmScene::recordCull).
+    // A convention for those passes, not a constraint on compute shaders in general: a shader's real
+    // [numthreads(...)] is read out of its compiled SPIR-V by vkm-compiler and carried in
+    // VkmShaderCacheHeader::threadGroupSize, which is what Metal dispatches with.
     inline constexpr uint32_t kVkmComputeThreadGroupSizeX = 64;
 
     /*
     * @brief One non-indexed indirect draw record.
-    *
-    * Byte-identical to VkDrawIndirectCommand, MTLDrawPrimitivesIndirectArguments and WebGPU's
-    * non-indexed indirect layout, so the culling compute shader writes one format for every
-    * backend. An all-zero record draws nothing on all three, which is what culled slots become
-    * on the backends that have no GPU-side draw count (see
-    * VkmCommandBufferBase::drawIndirectCount).
+    * @details Byte-identical to VkDrawIndirectCommand, MTLDrawPrimitivesIndirectArguments and
+    * WebGPU's non-indexed indirect layout, so the culling compute shader writes one format for
+    * every backend. An all-zero record draws nothing on all three, which is what culled slots
+    * become on the backends that have no GPU-side draw count.
     */
     struct VkmDrawIndirectArguments
     {
@@ -175,16 +168,13 @@ namespace vkm
 
     /*
     * @brief One indexed indirect draw record.
-    *
-    * Byte-identical to VkDrawIndexedIndirectCommand, MTLDrawIndexedPrimitivesIndirectArguments and
-    * WebGPU's indexed indirect layout. Note that _vertexOffset is SIGNED on all three -- it is the
-    * one field a mirror written as five uint32s gets wrong.
-    *
-    * Nothing in the engine draws with this layout yet: an indexed draw needs a bound index buffer,
-    * and the engine deliberately has none (indices are pulled in the vertex shader out of a
-    * bindless storage buffer -- see VkmCommandBufferBase::drawIndirectCount). The record lives here
-    * beside its non-indexed sibling because it is what a producing compute shader would write, and
-    * because both layouts have to be describable before a draw call can say which one it is given.
+    * @details Byte-identical to VkDrawIndexedIndirectCommand,
+    * MTLDrawIndexedPrimitivesIndirectArguments and WebGPU's indexed indirect layout. _vertexOffset
+    * is SIGNED on all three -- the one field a mirror written as five uint32s gets wrong.
+    * Nothing in the engine draws with this layout: an indexed draw needs a bound index buffer, and
+    * the engine has none, indices being pulled in the vertex shader from a bindless storage buffer.
+    * It lives beside its non-indexed sibling because both layouts have to be describable before a
+    * draw call can say which one it is given.
     */
     struct VkmDrawIndexedIndirectArguments
     {
@@ -199,10 +189,8 @@ namespace vkm
 
     /*
     * @brief Which record layout an indirect argument buffer holds.
-    *
-    * Supplied alongside the buffer to VkmCommandBufferBase::drawIndirectCount so the record stride
-    * is derived from a layout the caller declared rather than assumed independently by each
-    * backend.
+    * @details Supplied alongside the buffer to VkmCommandBufferBase::drawIndirectCount so the
+    * record stride comes from a layout the caller declared rather than one each backend assumed.
     */
     enum class VkmIndirectArgumentLayout : uint8_t
     {
@@ -236,10 +224,9 @@ namespace vkm
     };
 
     /*
-    * @brief Aggregated, persistent running totals for one VkmResourceType category. Unlike
-    * VkmResourceMemoryTag (which goes away when its handle is released), this decrements on
-    * release rather than resetting -- it is the meaningful historical/debugging signal,
-    * mirroring MemoryTracker's aggregate-level intent.
+    * @brief Aggregated, persistent running totals for one VkmResourceType category.
+    * @details Unlike VkmResourceMemoryTag, which goes away when its handle is released, this
+    * decrements on release rather than resetting.
     */
     struct VkmResourceCategoryUsage
     {
@@ -251,10 +238,9 @@ namespace vkm
     /*
     * @brief What the graphics API itself reports about device memory, as opposed to the
     * per-resource totals the engine accumulates in VkmRenderResourcePool.
-    * @details The gap between the two is the allocator's own cost -- block padding,
-    * alignment, driver-side bookkeeping -- which is exactly why both are worth showing side
-    * by side. Availability is per-backend: WebGPU exposes no memory introspection at all, so
-    * it leaves every field zero and both flags false.
+    * @details The gap between the two is the allocator's own cost: block padding, alignment,
+    * driver-side bookkeeping. Availability is per-backend -- WebGPU exposes no memory
+    * introspection, so it leaves every field zero and both flags false.
     */
     struct VkmGpuMemoryStats
     {
@@ -276,13 +262,11 @@ namespace vkm
     /*
     * @brief Which side is allowed to write a buffer's memory directly.
     * @details A request, not a guarantee: VkmBuffer::isHostWritable() reports what the backend
-    * actually allocated. HostWrite is what enables VkmBuffer::map()/unmap() and the direct
-    * uploadToBuffer path; DeviceLocal (the default) keeps the GPU-only memory every buffer has
-    * always used, reachable from the CPU only through a staging copy.
-    *
-    * HostWrite always takes the committed path -- both backends' suballocation pools are backed
-    * by device-private memory (Vulkan's shared pool block, Metal's MTLStorageModePrivate heap),
-    * so a host-writable buffer cannot be placed in one.
+    * actually allocated. HostWrite enables VkmBuffer::map()/unmap() and the direct uploadToBuffer
+    * path; DeviceLocal, the default, is GPU-only memory reachable from the CPU only through a
+    * staging copy.
+    * HostWrite always takes the committed path, both backends' suballocation pools being backed by
+    * device-private memory, so a host-writable buffer cannot be placed in one.
     */
     enum class VkmMemoryAccessHint : uint8_t
     {
@@ -292,10 +276,9 @@ namespace vkm
 
     /*
     * @brief How a texture (or a view of one) is addressed by the shader.
-    * @details Auto reproduces the inference every backend used before this enum existed --
-    * a plain 2D image, or a 2D array once _numArrayLayers > 1 -- so leaving it unset keeps
-    * existing behavior. Cube is the one case that inference cannot express, since a cubemap
-    * and a 6-layer 2D array are the same allocation described two different ways.
+    * @details Auto infers a plain 2D image, or a 2D array once _numArrayLayers > 1. Cube is the one
+    * case that inference cannot express, a cubemap and a 6-layer 2D array being the same
+    * allocation described two different ways.
     */
     enum class VkmTextureType : uint8_t
     {
@@ -309,16 +292,13 @@ namespace vkm
 
     /*
     * @brief How VkmDriverBase::uploadToTexture / uploadToBuffer move bytes into a resource.
-    * @details Auto is what callers should use: it takes the direct CPU write when the
-    * destination's memory allows one (VkmTexture::isHostWritable / VkmBuffer::isHostWritable,
-    * both decided at creation from what the backend actually allocated) and the staging-buffer
-    * copy otherwise. The direct write skips the staging allocation, the command buffer, the
-    * queue submit and the wait entirely; elsewhere nothing changes.
-    *
-    * The explicit modes exist for benchmarking and for tests that need to exercise one
-    * specific path. ForceHostCopy on a resource whose memory cannot take one warns and falls
-    * back to staging rather than failing -- the resulting bytes are identical either way,
-    * so refusing would only make callers write their own fallback.
+    * @details Auto is what callers should use: it takes the direct CPU write when the destination's
+    * memory allows one (VkmTexture::isHostWritable / VkmBuffer::isHostWritable, both decided at
+    * creation) and the staging-buffer copy otherwise. The direct write skips the staging
+    * allocation, the command buffer, the queue submit and the wait.
+    * The explicit modes are for benchmarking and for tests that need one specific path.
+    * ForceHostCopy on a resource whose memory cannot take one warns and falls back to staging; the
+    * resulting bytes are identical either way.
     */
     enum class VkmResourceUploadMode : uint8_t
     {
@@ -337,22 +317,21 @@ namespace vkm
         VkmMemoryPlacementHint _placementHint = VkmMemoryPlacementHint::Auto;
     };
 
-    /*
-    * @brief Best-effort estimate of a texture's base-mip-level byte footprint (extent x
-    * array layers x bytes-per-texel for the format) -- does not sum the full mip chain, for
-    * the same reason the Vulkan-backend's own VMA-dedicated-allocation heuristic doesn't
-    * either (see shouldUseDedicatedTexture in vulkan_texture.cpp): a rough size estimate is
-    * all that's needed here, not an exact GPU byte count. Used as VkmResourceMemoryTag's
-    * requestedSize for textures, independent of backend (Metal/WebGPU have no format-size
-    * introspection API of their own to compute this).
-    */
-    // Bytes per texel for uncompressed formats; 0 for Undefined/unknown.
-    // Display name for a pixel format, shared by the render graph inspector and the texture
-    // browser.
+    // Display name for a pixel format, shared by the render graph inspector and the texture browser.
     const char* vkmFormatName(VkmFormat format);
 
+    // Bytes per texel for uncompressed formats; 0 for Undefined/unknown.
     uint32_t vkmBytesPerTexel(VkmFormat format);
 
+    /*
+    * @brief Best-effort estimate of a texture's base-mip-level byte footprint: extent x array
+    * layers x bytes-per-texel for the format.
+    * @details Does not sum the full mip chain -- a rough size estimate is all this is for, not an
+    * exact GPU byte count. Used as VkmResourceMemoryTag's requestedSize for textures on every
+    * backend, Metal and WebGPU having no format-size introspection API of their own.
+    * @param info Texture description.
+    * @return The estimated byte size.
+    */
     uint64_t computeTextureByteSize(const VkmTextureInfo& info);
 
     struct VkmBufferInfo : public VkmResourceInfo

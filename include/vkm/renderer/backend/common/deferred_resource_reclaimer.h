@@ -19,14 +19,12 @@ namespace vkm
     class VkmDriverBase;
 
     /*
-    * @brief Defers actually destroying a released resource's internal handle until every
-    * queue it was recorded as used on (see VkmRenderResource::recordUsage) has completed
-    * that timeline value. A dedicated background thread polls pending entries and performs
-    * the real vkm::VkmRenderResourcePool::releaseResource() once safe.
-    *
-    * On WASM, which cannot spawn a blocking background thread, no thread is started; the
-    * same non-blocking sweep is instead driven once per frame via pollOnce(), called from
-    * VkmRenderGraph::execute().
+    * @brief Defers destroying a released resource's internal handle until every queue it was
+    * recorded as used on has completed that timeline value.
+    * @details A dedicated background thread polls pending entries and performs the real
+    * VkmRenderResourcePool::releaseResource() once safe. WASM cannot spawn a blocking background
+    * thread, so no thread is started there and the same non-blocking sweep runs once per frame via
+    * pollOnce(), called from VkmRenderGraph::execute().
     */
     class VkmDeferredResourceReclaimer
     {
@@ -34,29 +32,27 @@ namespace vkm
         explicit VkmDeferredResourceReclaimer(VkmDriverBase* driver);
         ~VkmDeferredResourceReclaimer();
 
-        // Starts the background worker thread; no-op on WASM (see class comment).
+        // Starts the background worker thread; a no-op on WASM.
         void start();
-        // Stops the worker thread (if running) and drains all pending entries, blocking
-        // until each one's recorded timelines complete -- the one place a blocking wait is
-        // acceptable, since this only runs at shutdown.
+
+        // Stops the worker thread if running and drains all pending entries, blocking until each
+        // one's recorded timelines complete. Only runs at shutdown.
         void stop();
 
-        // Replaces a direct VkmRenderResourcePool::releaseResource() call: snapshots the
-        // resource's recorded per-queue usage and defers the actual release until safe.
+        // Replaces a direct VkmRenderResourcePool::releaseResource() call: snapshots the resource's
+        // recorded per-queue usage and defers the actual release until safe.
         void requestRelease(VkmResourceHandle handle);
 
-        // Non-blocking sweep of pending entries, releasing any that are now safe. This is
-        // the WASM per-frame fallback entry point, and is also usable directly in tests
-        // without starting the real worker thread.
+        // Non-blocking sweep of pending entries, releasing any that are now safe. The WASM
+        // per-frame fallback entry point, also usable in tests without the real worker thread.
         void pollOnce();
 
-        // Releases everything currently pending on the CALLING thread, blocking on each
-        // entry's recorded timelines first -- what stop() does, without stopping the worker.
-        //
-        // For callers that must not let the worker keep destroying GPU objects in the
-        // background: a test whose next case starts allocating the moment it returns has no
-        // other way to say "and finish that before I continue", and one that did not left the
-        // ray-query test crashing in teardown on some runs and not others.
+        /*
+        * @brief Releases everything currently pending on the calling thread, blocking on each
+        * entry's recorded timelines first. What stop() does, without stopping the worker.
+        * @details For callers that must not let the worker keep destroying GPU objects in the
+        * background -- a test whose next case starts allocating the moment this returns.
+        */
         void flushBlocking();
 
     private:

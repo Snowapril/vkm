@@ -3038,3 +3038,28 @@ Nothing in it is ours: no validation error, no unfreed allocation, and every fil
 those tests passes. So the CI job runs the suite twice, reports the first as a warm-up and judges
 the second. The judged run executes every test, so a real regression still fails it; what the
 warm-up hides is precisely a failure that needs a cold shader cache, which is the driver defect.
+
+## 2026-08-08 — Comment style rule (CLAUDE.md §12) + codebase-wide comment sweep
+
+Comments had become essays that narrate change history: CI post-mortems, VUID codes, "this used
+to work around", pointers back to this file. `git blame` already carries all of it. CLAUDE.md §12
+now limits doc comments to `@brief`, `@details`, `@param` and `@return`, and the existing comments
+across `include/`, `src/` and `tests/` are being brought in line with it.
+
+The rule keeps the constraint a past failure taught and drops the incident that revealed it. So
+`command_queue.h`'s nine-line VUID/segfault story becomes "every backend's `submit()` must call
+this; `waitIdle()` waits on this value rather than on the last allocated one".
+
+Every batch is checked with a comment-stripping differ (string- and char-literal aware) that
+compares the file against `HEAD` with all comments removed, so a stray code edit cannot ride along
+in a comment-only commit.
+
+### Deviations
+
+- **Planned:** convert prose comment blocks above declarations into the `@brief`/`@details`/
+  `@param`/`@return` tag form.
+  **Done instead:** only *multi-line* prose blocks are converted. A single concise `//` line above
+  a declaration is left alone.
+  **Why:** wrapping a one-line comment in a five-line tag block makes the file longer, which is the
+  opposite of what the rule exists for. §12 forbids "free prose paragraphs", and one line is not a
+  paragraph.
