@@ -477,7 +477,15 @@ namespace vkm
         referenceScene(captureSubGraph, VkmScene::ReferencePhase::Draw);
         captureSubGraph->addReferencedResource(_captureColor, VkmResourceAccess::ColorAttachmentWrite);
         captureSubGraph->addReferencedResource(_captureDepth, VkmResourceAccess::DepthStencilAttachmentWrite);
-        captureSubGraph->addReferencedResource(_captureConstants, VkmResourceAccess::ConstantBufferRead);
+        for (VkmResourceTableBase* captureTable : _captureTables)
+        {
+            if (captureTable != nullptr)
+            {
+                std::vector<VkmResourceAccessDeclaration> captureBound;
+                captureTable->collectReferencedResources(&captureBound);
+                captureSubGraph->addReferencedResources(captureBound);
+            }
+        }
         captureSubGraph->setRenderCallback([this, faceSize, scene](VkmCommandBufferBase* commandBuffer) {
             for (uint32_t slot = 0; slot < _slice.size(); ++slot)
             {
@@ -532,9 +540,9 @@ namespace vkm
 
             VkmRenderGraphicsSubGraph* subGraph = renderGraph->beginGraphicsSubGraph(fb, name);
             subGraph->addReferencedResource(atlas, VkmResourceAccess::ColorAttachmentWrite);
-            subGraph->addReferencedResource(_captureColor, VkmResourceAccess::ShaderSampledRead);
-            subGraph->addReferencedResource(_sampler, VkmResourceAccess::None);
-            subGraph->addReferencedResource(constants, VkmResourceAccess::ConstantBufferRead);
+            std::vector<VkmResourceAccessDeclaration> bound;
+            table->collectReferencedResources(&bound);
+            subGraph->addReferencedResources(bound);
             subGraph->setRenderCallback([this, pipeline, table, cellSize, distanceAtlas](
                                             VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->bindPipeline(pipeline);

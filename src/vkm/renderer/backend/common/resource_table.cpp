@@ -126,12 +126,42 @@ namespace vkm
             _pipelineState = nullptr;
             return false;
         }
+        _entries = std::move(ordered);
         return true;
+    }
+
+    void VkmResourceTableBase::collectReferencedResources(
+        std::vector<VkmResourceAccessDeclaration>* outDeclarations) const
+    {
+        VKM_ASSERT(outDeclarations != nullptr,
+                   "VkmResourceTableBase::collectReferencedResources requires an output vector");
+
+        const std::vector<VkmTableResourceBinding>& declaration = getDeclaration();
+        VKM_ASSERT(declaration.size() == _entries.size(),
+                   "A table's entries and its declaration must index in lockstep");
+
+        for (size_t i = 0; i < _entries.size(); ++i)
+        {
+            VkmResourceAccess access = VkmResourceAccess::None;
+            switch (declaration[i].type)
+            {
+                case VkmTableResourceType::SampledTexture: access = VkmResourceAccess::ShaderSampledRead; break;
+                // RWStructuredBuffer: the declaration cannot say whether a given shader only reads
+                // it, so the read-write answer is the one that cannot be too weak.
+                case VkmTableResourceType::StorageBuffer:  access = VkmResourceAccess::ShaderStorageReadWrite; break;
+                case VkmTableResourceType::UniformBuffer:  access = VkmResourceAccess::ConstantBufferRead; break;
+                // A sampler is state, not memory, so it takes part in no hazard; declaring it at
+                // all is what keeps it alive while the frame that bound it is in flight.
+                case VkmTableResourceType::Sampler:        access = VkmResourceAccess::None; break;
+            }
+            outDeclarations->push_back(VkmResourceAccessDeclaration{ _entries[i].resource, access, {} });
+        }
     }
 
     void VkmResourceTableBase::destroy()
     {
         destroyInner();
         _pipelineState = nullptr;
+        _entries.clear();
     }
 } // namespace vkm

@@ -3664,3 +3664,31 @@ Closed in TODO.md: the Metal `MTLStageAll` serialization entry, the "records not
 trap, and the acceleration-structure entry (`AccelerationStructureBuildWrite` /
 `AccelerationStructureShaderRead` are declared accesses now). One entry added for the remaining
 Metal queue-scoped acquire.
+
+## 2026-08-09 — Resource tables declare what they bind
+
+A table is the one place a subgraph's resources are named without the render graph seeing them, so
+a pass that binds one and does not declare its contents is a pass the dependency analysis believes
+reads nothing. The barrier work handled that by having each call site repeat, by hand, what its
+table bound -- and one of those lists was already wrong.
+
+`_compositeBuffer` in the GI sample is written by `GiSceneUpdate` (`TransferWrite`) and read as a
+uniform buffer by `GiComposite`, which bound it through `_tables._composite` and declared only the
+textures it sampled. With no declared reader the analysis saw a write with no consumer and emitted
+nothing, so that dependency was still carried only by desktop drivers flushing caches globally on
+any barrier. The claim in PR #54 that this was fixed was wrong.
+
+`VkmResourceTableBase::collectReferencedResources` closes the class rather than the instance: the
+table keeps the entries `initialize()` already reordered into declaration order, and pairs them
+with the declared type -- `SampledTexture` to `ShaderSampledRead`, `UniformBuffer` to
+`ConstantBufferRead`, `StorageBuffer` (an `RWStructuredBuffer`) to `ShaderStorageReadWrite`, and
+`Sampler` to `None`, since a sampler is state rather than memory and takes part in no hazard.
+
+Call sites now ask the table instead of restating it: `recordFullscreen` lost its `sampled`
+parameter, and the SSGI, tone-map, probe capture and probe blend subgraphs lost their hand-written
+lists. A list that cannot drift from what is bound cannot be missing an entry.
+
+Verified: Metal 244/244, Vulkan 237/237 (both excluding `captureMemorySnapshot`, which trips its
+10 s budget under full-suite load on both backends -- recorded in TODO.md on main and passing in
+isolation here). The new table test asserts the mapping, that the declarations follow declaration
+order rather than the order entries were passed, and that collecting appends.
