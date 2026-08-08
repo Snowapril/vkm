@@ -3310,3 +3310,36 @@ asked anything. Enumerators are now `Auto` / `Committed` / `Heap`.
   a different `VkBuffer` at offset 0.
 - Pre-existing and deliberately left alone: `metal_gpu_heap_pool.mm` never releases its
   `MTLHeapDescriptor`.
+
+## 2026-08-08 — Metal heap placement moves onto VkmOffsetAllocator
+
+Review asked for one suballocation strategy across backends, so `VkmGpuHeapPoolMetal` switched
+from `MTLHeapTypeAutomatic` to `MTLHeapTypePlacement` and now carves its block with
+`VkmOffsetAllocator` — the same allocator the Vulkan buffer pool has always used.
+
+- **Placement mode is not a drop-in for automatic.** An automatic heap reclaims a resource's
+  space when the resource is released; a placement heap reclaims nothing, so every range has to
+  be handed back explicitly. `VkmBufferMetal`/`VkmTextureMetal` now carry a
+  `VkmGpuHeapAllocatorMetal::Placement` and release it in their destructors, mirroring what
+  `VkmBufferVulkan` already did with `_ownerPool`.
+- **That obligation crashed the suite before it passed it.** Releasing through
+  `getHeapAllocator()` segfaults with mimalloc free-list corruption, because `destroyInner()`
+  frees every block *before* `~VkmDriverBase` destroys the resource pool: `ownerBlock` dangles
+  and `_offsetAllocator->free()` runs on freed memory. The destructor now skips the release when
+  the allocator is already gone — at that point the whole heap is going away and there is
+  nothing to reclaim into. `driver.cpp` already warned about this ordering in a comment; it was
+  the Vulkan path's latent hazard too, just never reached.
+- **Length and footprint are now separate parameters.** A buffer reserves
+  `heapBufferSizeAndAlignWithLength:`'s padded footprint but is created at the caller's
+  requested length; conflating them would make every heap buffer over-report `length`.
+- **`MTLHeap.usedSize` does not track a placement heap**, so the memory report reads used bytes
+  from the block's own counter instead. Reserved bytes still come from `currentAllocatedSize`.
+- The heap explicitly requests `MTLHazardTrackingModeTracked`. Placement heaps default to
+  untracked, which would silently make every placed resource the caller's synchronization
+  problem rather than behaving like the committed resources they replace.
+- New test pins the reclaim, which nothing else would catch: a leaked range still creates and
+  renders textures fine, it just fills the block and silently downgrades later Heap resources to
+  committed. It asserts used bytes return to baseline after release *and* that a re-fill of the
+  same batch does not grow reserved bytes, so the ranges are provably reusable rather than
+  merely uncounted.
+- Verified: Metal 228/228 with `MTL_DEBUG_LAYER=1` and zero validation output.

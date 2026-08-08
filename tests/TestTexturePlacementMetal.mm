@@ -100,6 +100,63 @@ TEST_CASE("VkmTextureMetal - a Heap texture is placed in the shared MTLHeap") {
 }
 
 /*
+* A placement heap reclaims nothing when its resources die, so the range has to be handed back
+* by hand. Nothing else in the suite would notice if that stopped happening: the textures would
+* still be created and still render, and the block would simply fill up and start refusing
+* placements -- silently downgrading every later Heap resource to committed.
+*/
+TEST_CASE("VkmTextureMetal - releasing a Heap texture returns its range to the block") {
+    TexturePlacementFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+
+    const vkm::VkmResourceCreateInfo devicePrivateFlags =
+        vkm::VkmResourceCreateInfo::AllowShaderRead | vkm::VkmResourceCreateInfo::AllowShaderWrite;
+    vkm::VkmRenderResourcePool* resourcePool = f.driver->getRenderResourcePool();
+
+    // Grows the first block, so the baseline below excludes one-time block creation.
+    vkm::VkmTexture* anchorTexture = createTexture(f.driver, vkm::VkmMemoryPlacementHint::Heap,
+                                                   devicePrivateFlags, "AnchorTexture");
+    REQUIRE(anchorTexture != nullptr);
+    const uint64_t baselineUsed = f.driver->getGpuMemoryStats()._poolUsedBytes;
+
+    constexpr uint32_t kBatch = 4;
+    vkm::VkmResourceHandle handles[kBatch];
+    for (uint32_t i = 0; i < kBatch; ++i)
+    {
+        vkm::VkmTexture* texture = createTexture(f.driver, vkm::VkmMemoryPlacementHint::Heap,
+                                                 devicePrivateFlags, "ReleasedTexture");
+        REQUIRE(texture != nullptr);
+        handles[i] = texture->getHandle();
+    }
+    CHECK(f.driver->getGpuMemoryStats()._poolUsedBytes >= baselineUsed + kBatch * kTextureBytes);
+
+    // Never GPU-used, so an immediate release is correct here.
+    for (uint32_t i = 0; i < kBatch; ++i)
+    {
+        resourcePool->releaseResource(handles[i]);
+    }
+    CHECK(f.driver->getGpuMemoryStats()._poolUsedBytes == baselineUsed);
+
+    // The freed ranges are reusable, not merely uncounted: the same batch fits again without
+    // the block having to grow.
+    const uint64_t reservedBeforeRefill = f.driver->getGpuMemoryStats()._poolReservedBytes;
+    for (uint32_t i = 0; i < kBatch; ++i)
+    {
+        vkm::VkmTexture* texture = createTexture(f.driver, vkm::VkmMemoryPlacementHint::Heap,
+                                                 devicePrivateFlags, "RefillTexture");
+        REQUIRE(texture != nullptr);
+        handles[i] = texture->getHandle();
+    }
+    CHECK(f.driver->getGpuMemoryStats()._poolReservedBytes == reservedBeforeRefill);
+
+    for (uint32_t i = 0; i < kBatch; ++i)
+    {
+        resourcePool->releaseResource(handles[i]);
+    }
+    resourcePool->releaseResource(anchorTexture->getHandle());
+}
+
+/*
 * The heap is MTLStorageModePrivate and Metal requires a placed resource's storage mode to
 * match its heap's, so a host-writable (Shared) texture must stay committed even when Heap is
 * asked for explicitly. Without the override this is a Metal validation failure rather than a

@@ -64,7 +64,7 @@
 - The Vulkan test suite prints 72 `JSON parse error: malformed JSON text` lines; also present unchanged on `878f952`.
 - On a unified-memory Mac, any texture with `AllowTransferDst` is inferred host-writable and placed in `MTLStorageModeShared`, which also forces it committed — so an explicit `VkmMemoryPlacementHint::Heap` loses to an inference the caller never asked for, and heap placement reaches only device-private textures there.
 - Acceleration-structure storage and scratch buffers still force `VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT` unconditionally, bypassing the placement policy every `VkmBufferInfo` buffer now goes through.
-- `VkmOffsetAllocator` blocks cap out at `maxAllocs = 4096` per 64 MiB block, so a scene with more small buffers than that silently stops suballocating and falls back to committed.
+- `VkmOffsetAllocator` blocks cap out at `maxAllocs = 4096` per 64 MiB block on both backends, so a scene with more small heap resources than that silently stops suballocating and falls back to committed.
 - `uploadToTexture` never returns its one-off command buffer to the pool, unlike `uploadToBuffer` and `readbackTexture`.
 - Input events carry no window index; only focus changes do, so a listener cannot tell which window an event came from (it is always the scene window today).
 - `VkmImGuiRendererMetal::newFrameInner` calls AppKit (`[NSApp keyWindow]`, `mouseLocationOutsideOfEventStream`) from the CAMetalDisplayLink render thread.

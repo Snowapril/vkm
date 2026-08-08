@@ -101,6 +101,22 @@ namespace vkm
 
     VkmTextureMetal::~VkmTextureMetal()
     {
+        _mtlTexture = nil; // ARC releases the Metal object
+        // A placement heap reclaims nothing on its own, so the range has to go back by hand.
+        // Ordered after the release above: the range must not be reusable while the object
+        // placed there is still alive.
+        if (_heapPlacement.isValid())
+        {
+            // Skipped when the allocator is already gone: destroyInner() releases every block
+            // before ~VkmDriverBase destroys the resource pool, so a resource outliving it has
+            // nothing left to hand the range back to -- and its ownerBlock would dangle.
+            VkmGpuHeapAllocatorMetal* heapAllocator = static_cast<VkmDriverMetal*>(_driver)->getHeapAllocator();
+            if (heapAllocator != nullptr)
+            {
+                heapAllocator->release(_heapPlacement);
+            }
+            _heapPlacement = VkmGpuHeapAllocatorMetal::Placement{};
+        }
     }
 
     VkmTextureInfo VkmTextureMetal::getTextureInfoFromMTLTexture(id<MTLTexture> mtlTexture)
@@ -152,7 +168,8 @@ namespace vkm
 
             if (isHeapPlaceable && !shouldUseCommittedTexture(info, _isHostWritable))
             {
-                _mtlTexture = driverMetal->getHeapAllocator()->allocateTexture(descriptor, sizeAndAlign.size, sizeAndAlign.align);
+                _mtlTexture = driverMetal->getHeapAllocator()->allocateTexture(
+                    descriptor, sizeAndAlign.size, sizeAndAlign.align, &_heapPlacement);
             }
             if (_mtlTexture == nil)
             {

@@ -49,24 +49,33 @@ decided per-resource inside each concrete class's own `initialize()` —
 `newTextureWithDescriptor:]` path.
 
 **Buffers and textures share the same heap blocks.** `VkmGpuHeapPoolMetal` wraps one
-`MTLHeapTypeAutomatic` / `MTLStorageModePrivate` heap per 64 MiB block, owned by
-`VkmGpuHeapAllocatorMetal`, which the driver owns but whose policy it does not implement --
-resources reach it through `VkmDriverMetal::getHeapAllocator()`. Its private
-`acquireBlockWithSpace()` finds or grows a block, and both `allocateBuffer` and
-`allocateTexture` go through it.
-An Automatic heap holds both kinds interchangeably, so a second parallel list would be
+`MTLHeapTypePlacement` / `MTLStorageModePrivate` heap per 64 MiB block, carved into sub-ranges
+by `VkmOffsetAllocator` — the same allocator the Vulkan buffer pool uses, so both backends
+share one suballocation strategy. Blocks are owned by `VkmGpuHeapAllocatorMetal`, which the
+driver owns but whose policy it does not implement; resources reach it through
+`VkmDriverMetal::getHeapAllocator()`.
+A placement heap holds buffers and textures interchangeably, so a second parallel list would be
 bookkeeping for nothing. Texture size/alignment **must** come from
 `heapTextureSizeAndAlignWithDescriptor:` — a texture's heap footprint is padded for tiling and
 is not derivable from its extent the way a buffer's length is. A zero footprint from that call
 means the descriptor cannot be heap-placed at all, and is also why `_memoryAlignment` is only
 overwritten when the footprint is non-zero.
 
-Unlike Vulkan's manual `VkmOffsetAllocator`-based pool, **freeing a heap-placed Metal resource
-needs no explicit release call** — dropping the ARC-managed `id<MTLBuffer>`/`id<MTLTexture>`
-reference lets the heap reclaim that space internally. `MTLHeapTypePlacement` (manual
-caller-managed offsets) is deliberately not used — `MTLHeapTypeAutomatic` already does the
-placement work `VkmGpuHeapPoolMetal` would otherwise have to hand-roll, and this project has no
-need for the additional control `MTLHeapTypePlacement` offers.
+**A placement heap reclaims nothing on its own**, so freeing a heap-placed Metal resource takes
+an explicit `release()` of its range, exactly as on the Vulkan side — dropping the ARC-managed
+`id<MTLBuffer>`/`id<MTLTexture>` only frees the Metal object. `VkmBufferMetal`/`VkmTextureMetal`
+carry a `VkmGpuHeapAllocatorMetal::Placement` for that, released in their destructors *after*
+the Metal object, so a range is never reusable while the resource placed there is alive.
+
+That release is skipped when `getHeapAllocator()` is already null: `destroyInner()` frees every
+block before `~VkmDriverBase` destroys the resource pool, so a resource outliving the allocator
+has nothing to hand its range back to and its `ownerBlock` would dangle.
+
+Two consequences of placement mode carry over from `VkmOffsetAllocator`: offsets are `uint32_t`
+(so a block cannot exceed 4 GiB) and `maxAllocs` defaults to 4096 per block, past which
+placements fail and callers fall back to committed. The heap requests
+`MTLHazardTrackingModeTracked`; a placement heap is untracked by default, which would make
+every placed resource the caller's synchronization problem.
 
 `VkmSamplerMetal` has no memory backing at all (mirrors Vulkan's `VkSampler`).
 `VkmStagingBufferMetal` is always committed + `MTLStorageModeShared` (persistently

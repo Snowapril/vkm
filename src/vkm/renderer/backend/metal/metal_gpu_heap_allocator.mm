@@ -20,22 +20,8 @@ namespace vkm
         destroy();
     }
 
-    VkmGpuHeapPoolMetal* VkmGpuHeapAllocatorMetal::acquireBlockWithSpace(uint64_t sizeBytes, uint64_t alignment)
+    VkmGpuHeapPoolMetal* VkmGpuHeapAllocatorMetal::growBlock()
     {
-        for (auto& block : _blocks)
-        {
-            if (block->hasSpaceFor(sizeBytes, alignment))
-            {
-                return block.get();
-            }
-        }
-
-        if (sizeBytes > VkmGpuHeapPoolMetal::POOL_BLOCK_SIZE_BYTES)
-        {
-            VKM_DEBUG_ERROR("Allocation exceeds heap block size; use a committed allocation instead");
-            return nullptr;
-        }
-
         auto newBlock = std::make_unique<VkmGpuHeapPoolMetal>(_driver);
         if (!newBlock->initialize())
         {
@@ -52,17 +38,86 @@ namespace vkm
         return _blocks.back().get();
     }
 
-    id<MTLBuffer> VkmGpuHeapAllocatorMetal::allocateBuffer(uint64_t sizeBytes, uint64_t alignment, uint64_t options)
+    id<MTLBuffer> VkmGpuHeapAllocatorMetal::allocateBuffer(uint64_t lengthBytes, uint64_t footprintBytes,
+                                                           uint64_t alignment, uint64_t options,
+                                                           Placement* outPlacement)
     {
-        VkmGpuHeapPoolMetal* block = acquireBlockWithSpace(sizeBytes, alignment);
-        return (block != nullptr) ? block->tryAllocateBuffer(sizeBytes, alignment, options) : nil;
+        *outPlacement = Placement{};
+        if (footprintBytes > VkmGpuHeapPoolMetal::POOL_BLOCK_SIZE_BYTES)
+        {
+            VKM_DEBUG_ERROR("Allocation exceeds heap block size; use a committed allocation instead");
+            return nil;
+        }
+
+        for (auto& block : _blocks)
+        {
+            VkmGpuMemoryAllocation range{};
+            id<MTLBuffer> buffer = block->tryAllocateBuffer(lengthBytes, footprintBytes, alignment, options, &range);
+            if (buffer != nil)
+            {
+                *outPlacement = Placement{range, block.get(), footprintBytes};
+                return buffer;
+            }
+        }
+
+        VkmGpuHeapPoolMetal* newBlock = growBlock();
+        if (newBlock == nullptr)
+        {
+            return nil;
+        }
+
+        VkmGpuMemoryAllocation range{};
+        id<MTLBuffer> buffer = newBlock->tryAllocateBuffer(lengthBytes, footprintBytes, alignment, options, &range);
+        if (buffer != nil)
+        {
+            *outPlacement = Placement{range, newBlock, footprintBytes};
+        }
+        return buffer;
     }
 
-    id<MTLTexture> VkmGpuHeapAllocatorMetal::allocateTexture(MTLTextureDescriptor* descriptor,
-                                                             uint64_t sizeBytes, uint64_t alignment)
+    id<MTLTexture> VkmGpuHeapAllocatorMetal::allocateTexture(MTLTextureDescriptor* descriptor, uint64_t footprintBytes,
+                                                             uint64_t alignment, Placement* outPlacement)
     {
-        VkmGpuHeapPoolMetal* block = acquireBlockWithSpace(sizeBytes, alignment);
-        return (block != nullptr) ? block->tryAllocateTexture(descriptor, sizeBytes, alignment) : nil;
+        *outPlacement = Placement{};
+        if (footprintBytes > VkmGpuHeapPoolMetal::POOL_BLOCK_SIZE_BYTES)
+        {
+            VKM_DEBUG_ERROR("Allocation exceeds heap block size; use a committed allocation instead");
+            return nil;
+        }
+
+        for (auto& block : _blocks)
+        {
+            VkmGpuMemoryAllocation range{};
+            id<MTLTexture> texture = block->tryAllocateTexture(descriptor, footprintBytes, alignment, &range);
+            if (texture != nil)
+            {
+                *outPlacement = Placement{range, block.get(), footprintBytes};
+                return texture;
+            }
+        }
+
+        VkmGpuHeapPoolMetal* newBlock = growBlock();
+        if (newBlock == nullptr)
+        {
+            return nil;
+        }
+
+        VkmGpuMemoryAllocation range{};
+        id<MTLTexture> texture = newBlock->tryAllocateTexture(descriptor, footprintBytes, alignment, &range);
+        if (texture != nil)
+        {
+            *outPlacement = Placement{range, newBlock, footprintBytes};
+        }
+        return texture;
+    }
+
+    void VkmGpuHeapAllocatorMetal::release(const Placement& placement)
+    {
+        if (!placement.isValid())
+        {
+            return;
+        }
+        placement.ownerBlock->release(placement.range, placement.footprintBytes);
     }
 
     void VkmGpuHeapAllocatorMetal::accumulateMemoryStats(VkmGpuMemoryStats* outStats) const
@@ -72,8 +127,6 @@ namespace vkm
             return;
         }
 
-        // currentAllocatedSize is what each block reserved from the device, usedSize what has
-        // been placed inside it.
         for (const auto& block : _blocks)
         {
             id<MTLHeap> heap = block->getHeap();
@@ -82,7 +135,8 @@ namespace vkm
                 continue;
             }
             outStats->_poolReservedBytes += static_cast<uint64_t>([heap currentAllocatedSize]);
-            outStats->_poolUsedBytes += static_cast<uint64_t>([heap usedSize]);
+            // From our own bookkeeping: a placement heap does not maintain usedSize.
+            outStats->_poolUsedBytes += block->getUsedBytes();
             outStats->_hasPoolStats = true;
         }
     }
