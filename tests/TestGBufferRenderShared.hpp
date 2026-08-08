@@ -107,35 +107,31 @@ namespace vkmtest
         frameConstants._prevViewProjection = viewProjection;
         driver->getFrameConstantManager()->update(/*frameIndex=*/0, frameConstants);
 
-        std::vector<vkm::VkmResourceHandle> referenced;
-        scene.collectReferencedResources(&referenced);
+        std::vector<vkm::VkmResourceAccessDeclaration> referenced;
 
         const vkm::VkmFrameBufferDescriptor fbDesc = gbuffer.makeFrameBufferDescriptor();
 
         vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
         auto* updateSubGraph = renderGraph.beginTransferSubGraph("SceneUpdate");
-        for (vkm::VkmResourceHandle handle : referenced)
-        {
-            updateSubGraph->addReferencedResource(handle);
-        }
+        referenced.clear();
+        scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Update, &referenced);
+        updateSubGraph->addReferencedResources(referenced);
         updateSubGraph->setTransferCallback([&scene, &frameData](vkm::VkmCommandBufferBase* commandBuffer) {
             scene.recordUpdate(commandBuffer, /*frameIndex=*/0, frameData);
         });
 
         auto* cullSubGraph = renderGraph.beginComputeSubGraph("SceneCull");
-        for (vkm::VkmResourceHandle handle : referenced)
-        {
-            cullSubGraph->addReferencedResource(handle);
-        }
+        referenced.clear();
+        scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Cull, &referenced);
+        cullSubGraph->addReferencedResources(referenced);
         cullSubGraph->setComputeCallback([&scene](vkm::VkmCommandBufferBase* commandBuffer) {
             scene.recordCull(commandBuffer);
         });
 
         auto* drawSubGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
-        for (vkm::VkmResourceHandle handle : referenced)
-        {
-            drawSubGraph->addReferencedResource(handle);
-        }
+        referenced.clear();
+        scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Draw, &referenced);
+        drawSubGraph->addReferencedResources(referenced);
         drawSubGraph->setRenderCallback([&scene, pso](vkm::VkmCommandBufferBase* commandBuffer) {
             scene.recordDrawBatches(commandBuffer, [pso](const vkm::VkmScene::DrawBatch&) { return pso; });
         });
@@ -249,8 +245,8 @@ namespace vkmtest
     *   - set 2 carrying sampled textures, a sampler and a uniform buffer (the buffer-only test
     *     never exercised the texture or sampler paths, and their Metal indices are pinned by
     *     vkm-compiler from the same declaration the runtime binds against),
-    *   - barrierTextureForShaderRead handing an attachment over to be sampled, which until now was
-    *     only checked by its tracked layout rather than by pixels, and
+    *   - the render graph handing an attachment over to be sampled, checked by pixels rather than
+    *     by a tracked layout, and
     *   - the fullscreen triangle and PBR evaluation themselves.
     */
     inline void runDeferredLightingTest(vkm::VkmDriverBase* driver)
@@ -332,18 +328,15 @@ namespace vkmtest
             REQUIRE_MESSAGE(table != nullptr, tableError);
 
             vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
-            auto* barrierSubGraph = renderGraph.beginComputeSubGraph("GBufferToShaderRead");
-            barrierSubGraph->setComputeCallback([&gbuffer](vkm::VkmCommandBufferBase* commandBuffer) {
-                // The G-buffer pass left these as attachments; this is the hand-off to sampling.
-                // Colour targets only: the depth attachment is never sampled (see gbuffer.h).
-                for (uint32_t i = 0; i < vkm::VkmGBuffer::kTargetCount; ++i)
-                {
-                    commandBuffer->barrierTextureForShaderRead(
-                        gbuffer.getTexture(static_cast<vkm::VkmGBuffer::Target>(i)));
-                }
-            });
-
             auto* lightingSubGraph = renderGraph.beginGraphicsSubGraph(lightingFb);
+            // Bound through the resource table, which the render graph cannot see -- so the
+            // sampling has to be declared or nothing hands the attachments over. Colour targets
+            // only: the depth attachment is never sampled (see gbuffer.h).
+            for (uint32_t i = 0; i < vkm::VkmGBuffer::kTargetCount; ++i)
+            {
+                lightingSubGraph->addReferencedResource(gbuffer.getTexture(static_cast<vkm::VkmGBuffer::Target>(i)),
+                                                        vkm::VkmResourceAccess::ShaderSampledRead);
+            }
             lightingSubGraph->setRenderCallback([lightingPso, table](vkm::VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->bindPipeline(lightingPso);
                 commandBuffer->bindResourceTable(table);

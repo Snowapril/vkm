@@ -305,14 +305,12 @@ namespace vkmtest
             REQUIRE_MESSAGE(table != nullptr, tableError);
 
             vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
-            auto* barrierSubGraph = renderGraph.beginComputeSubGraph("ProbeInputsToShaderRead");
-            barrierSubGraph->setComputeCallback([&](vkm::VkmCommandBufferBase* commandBuffer) {
-                commandBuffer->barrierTextureForShaderRead(normalTexture->getHandle());
-                commandBuffer->barrierTextureForShaderRead(motionTexture->getHandle());
-                commandBuffer->barrierTextureForShaderRead(volume.getIrradianceTexture());
-                commandBuffer->barrierTextureForShaderRead(volume.getDistanceTexture());
-            });
             auto* subGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
+            for (vkm::VkmResourceHandle sampled : { normalTexture->getHandle(), motionTexture->getHandle(),
+                                                    volume.getIrradianceTexture(), volume.getDistanceTexture() })
+            {
+                subGraph->addReferencedResource(sampled, vkm::VkmResourceAccess::ShaderSampledRead);
+            }
             subGraph->setRenderCallback([pso, table](vkm::VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->bindPipeline(pso);
                 commandBuffer->bindResourceTable(table);
@@ -487,23 +485,28 @@ namespace vkmtest
         // material colour rather than zero.
         frameData._lightDirection = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
 
-        std::vector<vkm::VkmResourceHandle> referenced;
-        scene.collectReferencedResources(&referenced);
+        std::vector<vkm::VkmResourceAccessDeclaration> referenced;
 
         vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
         auto* updateSubGraph = renderGraph.beginTransferSubGraph("SceneUpdate");
-        for (vkm::VkmResourceHandle handle : referenced) { updateSubGraph->addReferencedResource(handle); }
+        referenced.clear();
+        scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Update, &referenced);
+        updateSubGraph->addReferencedResources(referenced);
         updateSubGraph->setTransferCallback([&scene, &frameData](vkm::VkmCommandBufferBase* commandBuffer) {
             scene.recordUpdate(commandBuffer, /*frameIndex=*/0, frameData);
         });
         auto* cullSubGraph = renderGraph.beginComputeSubGraph("SceneCull");
-        for (vkm::VkmResourceHandle handle : referenced) { cullSubGraph->addReferencedResource(handle); }
+        referenced.clear();
+        scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Cull, &referenced);
+        cullSubGraph->addReferencedResources(referenced);
         cullSubGraph->setComputeCallback([&scene](vkm::VkmCommandBufferBase* commandBuffer) {
             scene.recordCull(commandBuffer);
         });
 
         auto* captureSubGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
-        for (vkm::VkmResourceHandle handle : referenced) { captureSubGraph->addReferencedResource(handle); }
+        referenced.clear();
+        scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Draw, &referenced);
+        captureSubGraph->addReferencedResources(referenced);
         captureSubGraph->setRenderCallback([&scene, pso, table, probePosition](vkm::VkmCommandBufferBase* commandBuffer) {
             // All six faces in one pass: aim the viewport, push which probe and face, draw.
             for (uint32_t face = 0; face < 6; ++face)
@@ -677,11 +680,9 @@ namespace vkmtest
         fbDesc._colorAttachments[0] = atlasTexture->getHandle();
 
         vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
-        auto* barrierSubGraph = renderGraph.beginComputeSubGraph("ProbeBlendInputs");
-        barrierSubGraph->setComputeCallback([&](vkm::VkmCommandBufferBase* commandBuffer) {
-            commandBuffer->barrierTextureForShaderRead(captureTexture->getHandle());
-        });
         auto* blendSubGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
+        blendSubGraph->addReferencedResource(captureTexture->getHandle(),
+                                             vkm::VkmResourceAccess::ShaderSampledRead);
         blendSubGraph->setRenderCallback([pso, table](vkm::VkmCommandBufferBase* commandBuffer) {
             commandBuffer->bindPipeline(pso);
             commandBuffer->bindResourceTable(table);

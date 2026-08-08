@@ -193,8 +193,9 @@ namespace vkm
             }
         }
 
-        for (VkmResourceHandle handle : subGraph->getReferencedResources())
+        for (const VkmResourceAccessDeclaration& declaration : subGraph->getReferencedResources())
         {
+            const VkmResourceHandle handle = declaration._handle;
             if (handle.type == VkmResourceType::Buffer)
             {
                 VkmCapturedBuffer capturedBuffer{};

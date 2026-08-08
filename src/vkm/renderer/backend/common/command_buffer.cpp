@@ -210,14 +210,66 @@ namespace vkm
         onDispatch(groupCountX, groupCountY, groupCountZ);
     }
 
-    void VkmCommandBufferBase::barrierIndirectArgumentBuffer(VkmResourceHandle buffer)
+    void VkmCommandBufferBase::resourceBarrier(const VkmResourceBarrier* barriers, uint32_t count)
     {
         if (!_isRecording || _isInRenderPass)
         {
-            VKM_DEBUG_ERROR("barrierIndirectArgumentBuffer must be recorded while recording and outside a render pass");
+            VKM_DEBUG_ERROR("resourceBarrier must be recorded while recording and outside a render pass");
             return;
         }
-        onBarrierIndirectArgumentBuffer(buffer);
+        if (barriers == nullptr || count == 0)
+        {
+            return; // An empty boundary is the common case once the graph places these.
+        }
+
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            if (!barriers[i]._handle.isValid())
+            {
+                VKM_DEBUG_ERROR("resourceBarrier was given an invalid resource handle");
+                return;
+            }
+            if (barriers[i]._srcAccess == VkmResourceAccess::None &&
+                barriers[i]._dstAccess == VkmResourceAccess::None)
+            {
+                VKM_DEBUG_ERROR("resourceBarrier was given a barrier that orders nothing");
+                return;
+            }
+        }
+        onResourceBarrier(barriers, count);
+    }
+
+    void VkmCommandBufferBase::resourceBarrier(const std::vector<VkmResourceBarrier>& barriers)
+    {
+        resourceBarrier(barriers.data(), static_cast<uint32_t>(barriers.size()));
+    }
+
+    void VkmCommandBufferBase::barrierAcquire(const VkmResourceBarrier* barriers, uint32_t count)
+    {
+        if (!_isRecording || _isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("barrierAcquire must be recorded while recording and outside a render pass");
+            return;
+        }
+        if (barriers == nullptr || count == 0)
+        {
+            return;
+        }
+        onBarrierAcquire(barriers, count);
+    }
+
+    void VkmCommandBufferBase::barrierRelease(const VkmResourceBarrier* barriers, uint32_t count)
+    {
+        if (!_isRecording || _isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("barrierRelease must be recorded while recording and outside a render pass");
+            return;
+        }
+        if (barriers == nullptr || count == 0)
+        {
+            return;
+        }
+        onBarrierRelease(barriers, count);
     }
 
     void VkmCommandBufferBase::buildAccelerationStructure(VkmResourceHandle accelerationStructure)
@@ -280,16 +332,6 @@ namespace vkm
             recordUsageOfViewParent(geometry._vertexView);
             recordUsageOfViewParent(geometry._indexView);
         }
-    }
-
-    void VkmCommandBufferBase::barrierTextureForShaderRead(VkmResourceHandle texture)
-    {
-        if (!_isRecording || _isInRenderPass)
-        {
-            VKM_DEBUG_ERROR("barrierTextureForShaderRead must be recorded while recording and outside a render pass");
-            return;
-        }
-        onBarrierTextureForShaderRead(texture);
     }
 
     void VkmCommandBufferBase::bindResourceTable(VkmResourceTableBase* table)

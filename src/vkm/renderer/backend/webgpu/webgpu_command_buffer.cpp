@@ -318,18 +318,13 @@ namespace vkm
         VKM_DEBUG_ERROR("buildAccelerationStructure is not supported on the WebGPU backend");
     }
 
-    void VkmCommandBufferWebGPU::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)
+    void VkmCommandBufferWebGPU::onResourceBarrier(const VkmResourceBarrier* barriers, uint32_t count)
     {
-        (void)buffer;
-        // WebGPU has no explicit barriers: writes from one pass are visible to the next by
-        // specification, and the scene's copies, culling dispatch and draws are all separate passes.
-    }
-
-    void VkmCommandBufferWebGPU::onBarrierTextureForShaderRead(VkmResourceHandle texture)
-    {
-        (void)texture;
-        // Same reason as onBarrierIndirectArgumentBuffer: WebGPU has no explicit barriers and no
-        // image layouts, and one pass's writes are visible to the next by specification.
+        // WebGPU is implicitly synchronised: writes from one pass are visible to the next by
+        // specification, so there is nothing to record. The ordering only holds across *pass*
+        // boundaries, which the engine's one-subgraph-per-pass convention guarantees.
+        (void)barriers;
+        (void)count;
     }
 
     void VkmCommandBufferWebGPU::onBindResourceTable(VkmResourceTableBase* table)

@@ -170,8 +170,8 @@ namespace vkmtest
             const vkm::VkmResourceHandle tlas = scene.getTopLevelAccelerationStructure();
             vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
             auto* subGraph = renderGraph.beginComputeSubGraph("RayQueryDispatch");
-            subGraph->addReferencedResource(tlas);
-            subGraph->addReferencedResource(result->getHandle());
+            subGraph->addReferencedResource(tlas, vkm::VkmResourceAccess::AccelerationStructureShaderRead);
+            subGraph->addReferencedResource(result->getHandle(), vkm::VkmResourceAccess::ShaderStorageWrite);
             subGraph->setComputeCallback([pso, passTable](vkm::VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->bindPipeline(pso);
                 commandBuffer->bindResourceTable(passTable);

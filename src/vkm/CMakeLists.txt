@@ -81,6 +81,7 @@ set(SRCS
     ${SRC_DIR}/vkm/platform/common/glfw_input.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/renderer_common.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_graph.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/render_graph_barrier.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_graph_capture.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/pipeline_state_parser.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/shader_cache_util.cpp
@@ -215,6 +216,7 @@ if (VKM_USE_VULKAN_API)
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_heap_allocator.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_util.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_queue.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_barrier.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_pipeline_state.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.cpp

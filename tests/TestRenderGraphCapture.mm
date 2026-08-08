@@ -95,7 +95,7 @@ TEST_CASE("Render graph capture - clear pass metadata, snapshot pixels, and buff
 
     vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
     vkm::VkmRenderGraphicsSubGraph* subGraph = renderGraph.beginGraphicsSubGraph(fbDesc, "CaptureTestPass");
-    subGraph->addReferencedResource(buffer->getHandle());
+    subGraph->addReferencedResource(buffer->getHandle(), vkm::VkmResourceAccess::ShaderStorageRead);
     renderGraph.compile();
     renderGraph.execute(vkm::VkmRenderGraphCommitOptions{ .capture = &capture });
     renderGraph.ensureCompleted();
@@ -185,7 +185,7 @@ namespace
         run.capture.arm();
         vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
         vkm::VkmRenderGraphicsSubGraph* subGraph = renderGraph.beginGraphicsSubGraph(fbDesc, "InputCapturePass");
-        subGraph->addReferencedResource(input);
+        subGraph->addReferencedResource(input, vkm::VkmResourceAccess::ShaderSampledRead);
         renderGraph.compile();
         renderGraph.execute(vkm::VkmRenderGraphCommitOptions{ .capture = &run.capture });
         renderGraph.ensureCompleted();
@@ -381,5 +381,58 @@ TEST_CASE("GPU frame capture - scope hooks and request are crash-free headless")
     }
 }
 #endif // VKM_GPU_CAPTURE
+
+/*
+* The dependency edges the inspector's Graph tab draws come from VkmRenderGraph::compile(), through
+* VkmRenderSubGraph::getDependentSubGraphIds() and into the capture. A write followed by a read of
+* the same buffer is one edge, and a pass that touches nothing shared is none.
+*/
+TEST_CASE("Render graph capture - dependency edges follow the declared accesses") {
+    CaptureFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+    vkm::VkmDriverBase* driver = f.driver;
+
+    vkm::VkmBufferInfo bufferInfo{};
+    bufferInfo._flags = static_cast<vkm::VkmResourceCreateInfo>(
+        static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowShaderReadWrite) |
+        static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowTransferDst));
+    bufferInfo._size = 256;
+    bufferInfo._debugName = "CaptureDependencyBuffer";
+    vkm::VkmBuffer* shared = driver->newBuffer(bufferInfo);
+    REQUIRE(shared != nullptr);
+
+    bufferInfo._debugName = "CaptureUnrelatedBuffer";
+    vkm::VkmBuffer* unrelated = driver->newBuffer(bufferInfo);
+    REQUIRE(unrelated != nullptr);
+
+    vkm::VkmRenderGraphCapture capture;
+    capture.arm();
+
+    vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+    auto* producer = renderGraph.beginComputeSubGraph("Producer");
+    producer->addReferencedResource(shared->getHandle(), vkm::VkmResourceAccess::ShaderStorageWrite);
+    auto* bystander = renderGraph.beginComputeSubGraph("Bystander");
+    bystander->addReferencedResource(unrelated->getHandle(), vkm::VkmResourceAccess::ShaderStorageWrite);
+    auto* consumer = renderGraph.beginComputeSubGraph("Consumer");
+    consumer->addReferencedResource(shared->getHandle(), vkm::VkmResourceAccess::ShaderStorageRead);
+
+    renderGraph.compile();
+    renderGraph.execute(vkm::VkmRenderGraphCommitOptions{ .capture = &capture });
+    renderGraph.ensureCompleted();
+    capture.finalize(driver);
+
+    REQUIRE(capture.getPasses().size() == 3);
+    const vkm::VkmCapturedPass& capturedProducer = capture.getPasses()[0];
+    const vkm::VkmCapturedPass& capturedBystander = capture.getPasses()[1];
+    const vkm::VkmCapturedPass& capturedConsumer = capture.getPasses()[2];
+
+    CHECK(capturedProducer.dependencies.empty());
+    CHECK(capturedBystander.dependencies.empty());
+    REQUIRE(capturedConsumer.dependencies.size() == 1);
+    CHECK(capturedConsumer.dependencies[0] == capturedProducer.subGraphId);
+
+    driver->getRenderResourcePool()->releaseResource(shared->getHandle());
+    driver->getRenderResourcePool()->releaseResource(unrelated->getHandle());
+}
 
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE

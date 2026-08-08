@@ -153,7 +153,7 @@ namespace vkm
                         destroyInner();
                         return false;
                     }
-                    // The layout the descriptor promises. barrierTextureForShaderRead() is what
+                    // The layout the descriptor promises. The render graph's analysis is what
                     // gets a render target here; an uploaded texture already is.
                     imageInfos.push_back(VkDescriptorImageInfo{
                         .imageView   = textureVulkan->getImageView(),

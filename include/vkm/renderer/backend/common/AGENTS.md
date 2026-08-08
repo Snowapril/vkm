@@ -596,12 +596,12 @@ enum class VkmCommandQueueType : uint8_t { Graphics=0, Compute=1, Transfer=2, Co
 2. Derive `VkmSwapChain<Name>` from `VkmSwapChainBase`, override all 4 pure virtuals.
 3. Derive `VkmCommandBuffer<Name>` from `VkmCommandBufferBase`, override all pure virtuals
    (unconditional ones include `onDraw`/`onDrawIndirectCount`/`onDispatch`/
-   `onBarrierIndirectArgumentBuffer`/`onSetPushConstants`, plus
+   `onResourceBarrier`/`onSetPushConstants`, plus
    `onWriteCompletionMarker`/`onEndCommandBuffer` under `VKM_ENABLE_GPU_BREAD_CRUMBS`).
    Note the compute lifecycle contract: a compute pass is opened by `onBindPipeline` for a
    compute pipeline and closed by `onUnbindPipeline`, so `onDispatch` may assume an encoder
-   exists. `onBarrierIndirectArgumentBuffer` may be a documented no-op where the backend's
-   own pass boundaries already establish the ordering (Metal, WebGPU).
+   exists. `onResourceBarrier` may be a documented no-op where the backend's own pass
+   boundaries already establish the ordering (WebGPU).
    `onDrawIndirectCount` carries a `VkmIndirectArgumentLayout`; take the record stride from
    `vkmGetIndirectArgumentStride(layout)` rather than assuming a struct size. The common layer
    forwards only `VkmIndirectArgumentLayout::NonIndexed` today (it rejects the rest, since the

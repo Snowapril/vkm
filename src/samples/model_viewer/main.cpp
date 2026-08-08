@@ -262,16 +262,14 @@ public:
         frameData._lightDirection = glm::vec4(glm::normalize(kWorldLightDirection), 0.0f);
         frameData._debugMode = static_cast<uint32_t>(_debugMode);
 
-        std::vector<VkmResourceHandle> referenced;
-        _scene.collectReferencedResources(&referenced);
+        std::vector<VkmResourceAccessDeclaration> referenced;
 
         // The per-frame copies have to be recorded outside a render pass, and subgraphs commit in
         // insertion order, so this publishes them ahead of the draws that read them.
         auto updateSubGraph = renderGraph->beginTransferSubGraph("SceneUpdate");
-        for (VkmResourceHandle handle : referenced)
-        {
-            updateSubGraph->addReferencedResource(handle);
-        }
+        referenced.clear();
+        _scene.collectReferencedResources(VkmScene::ReferencePhase::Update, &referenced);
+        updateSubGraph->addReferencedResources(referenced);
         // The graph is the per-frame-slot object, so it already knows which slot this is.
         const uint32_t frameIndex = renderGraph->frameIndex();
         updateSubGraph->setTransferCallback([this, frameIndex, frameData](VkmCommandBufferBase* commandBuffer) {
@@ -280,19 +278,17 @@ public:
 
         // Frustum culling and the emit pass that writes this frame's indirect draw arguments.
         auto cullSubGraph = renderGraph->beginComputeSubGraph("SceneCull");
-        for (VkmResourceHandle handle : referenced)
-        {
-            cullSubGraph->addReferencedResource(handle);
-        }
+        referenced.clear();
+        _scene.collectReferencedResources(VkmScene::ReferencePhase::Cull, &referenced);
+        cullSubGraph->addReferencedResources(referenced);
         cullSubGraph->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
             _scene.recordCull(commandBuffer);
         });
 
         auto graphicsSubGraph = renderGraph->beginGraphicsSubGraph(frameBufferDesc, "ModelViewerPass");
-        for (VkmResourceHandle handle : referenced)
-        {
-            graphicsSubGraph->addReferencedResource(handle);
-        }
+        referenced.clear();
+        _scene.collectReferencedResources(VkmScene::ReferencePhase::Draw, &referenced);
+        graphicsSubGraph->addReferencedResources(referenced);
         graphicsSubGraph->setRenderCallback([this](VkmCommandBufferBase* commandBuffer) {
             _scene.recordDrawBatches(commandBuffer, [this](const VkmScene::DrawBatch& batch) {
                 return _layoutPipelines[static_cast<size_t>(batch._layout)];

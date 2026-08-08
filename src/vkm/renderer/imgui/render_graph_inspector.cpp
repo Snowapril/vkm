@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <string>
+#include <unordered_map>
 
 namespace vkm
 {
@@ -151,6 +152,11 @@ namespace vkm
             if (ImGui::BeginTabItem("Capture"))
             {
                 drawCaptureTab(capture, imGuiRenderer, pipelineStateManager);
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Graph"))
+            {
+                drawGraphTab(capture);
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Pipelines"))
@@ -380,6 +386,181 @@ namespace vkm
         // A successful reload can still report something worth reading (a variant the edit
         // removed), so show whatever came back either way.
         _reloadStatus = error.empty() ? (_reloadFailed ? "Reload failed." : "Reloaded.") : error;
+    }
+
+    void VkmRenderGraphInspector::drawGraphTab(VkmRenderGraphCapture& capture)
+    {
+        const std::vector<VkmCapturedPass>& passes = capture.getPasses();
+        if (passes.empty())
+        {
+            ImGui::TextDisabled("No capture. Arm one with the button on the Capture tab (F10).");
+            return;
+        }
+        _selectedPass = std::clamp(_selectedPass, 0, static_cast<int>(passes.size()) - 1);
+
+        ImGui::SetNextItemWidth(160.0f);
+        ImGui::SliderFloat("Zoom", &_graphZoom, 0.4f, 2.0f, "%.2fx");
+        ImGui::SameLine();
+        ImGui::Checkbox("Isolate selection", &_graphIsolateSelection);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::BeginItemTooltip())
+        {
+            ImGui::TextUnformatted("One node per subgraph, one edge per dependency the render graph found.\n"
+                                   "Columns are dependency levels: everything in a column can run at the\n"
+                                   "same time as far as resource hazards are concerned.\n"
+                                   "Click a node to select it; the Capture tab details that pass.");
+            ImGui::EndTooltip();
+        }
+
+        // Dependency level: a pass sits one column right of its deepest producer. Producers always
+        // precede consumers in the pass list, so a single forward sweep is enough -- no ordering
+        // pass and no cycle handling, because a cycle cannot be expressed.
+        std::vector<uint32_t> levelOf(passes.size(), 0);
+        std::unordered_map<uint32_t, size_t> indexOfSubGraphId;
+        for (size_t i = 0; i < passes.size(); ++i)
+        {
+            indexOfSubGraphId[passes[i].subGraphId] = i;
+        }
+        uint32_t levelCount = 1;
+        for (size_t i = 0; i < passes.size(); ++i)
+        {
+            for (uint32_t dependency : passes[i].dependencies)
+            {
+                const auto it = indexOfSubGraphId.find(dependency);
+                if (it != indexOfSubGraphId.end() && it->second < i)
+                {
+                    levelOf[i] = std::max(levelOf[i], levelOf[it->second] + 1);
+                }
+            }
+            levelCount = std::max(levelCount, levelOf[i] + 1);
+        }
+
+        // Row within a column, so nodes at one level stack instead of overlapping.
+        std::vector<uint32_t> rowOf(passes.size(), 0);
+        std::vector<uint32_t> nextRow(levelCount, 0);
+        uint32_t rowCount = 1;
+        for (size_t i = 0; i < passes.size(); ++i)
+        {
+            rowOf[i] = nextRow[levelOf[i]]++;
+            rowCount = std::max(rowCount, rowOf[i] + 1);
+        }
+
+        const float nodeWidth = 168.0f * _graphZoom;
+        const float nodeHeight = 44.0f * _graphZoom;
+        const float columnStride = nodeWidth + 64.0f * _graphZoom;
+        const float rowStride = nodeHeight + 20.0f * _graphZoom;
+        const float margin = 16.0f * _graphZoom;
+
+        ImGui::BeginChild("GraphCanvas", ImVec2(0, 0), ImGuiChildFlags_Borders,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        const auto nodeMin = [&](size_t i) {
+            return ImVec2(origin.x + margin + levelOf[i] * columnStride,
+                          origin.y + margin + rowOf[i] * rowStride);
+        };
+
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+        // Edges first so nodes paint over them.
+        for (size_t consumer = 0; consumer < passes.size(); ++consumer)
+        {
+            for (uint32_t dependency : passes[consumer].dependencies)
+            {
+                const auto it = indexOfSubGraphId.find(dependency);
+                if (it == indexOfSubGraphId.end())
+                {
+                    continue;
+                }
+                const size_t producer = it->second;
+                const bool touchesSelection =
+                    static_cast<int>(consumer) == _selectedPass || static_cast<int>(producer) == _selectedPass;
+                if (_graphIsolateSelection && !touchesSelection)
+                {
+                    continue;
+                }
+
+                const ImVec2 producerMin = nodeMin(producer);
+                const ImVec2 consumerMin = nodeMin(consumer);
+                const ImVec2 from(producerMin.x + nodeWidth, producerMin.y + nodeHeight * 0.5f);
+                const ImVec2 to(consumerMin.x, consumerMin.y + nodeHeight * 0.5f);
+                const float slack = std::max(24.0f, (to.x - from.x) * 0.5f);
+                const ImU32 colour = touchesSelection ? IM_COL32(255, 200, 90, 255) : IM_COL32(130, 130, 145, 160);
+                drawList->AddBezierCubic(from, ImVec2(from.x + slack, from.y), ImVec2(to.x - slack, to.y), to,
+                                         colour, touchesSelection ? 2.5f : 1.5f);
+                // Arrow head, so the direction of the dependency is readable without tracing the
+                // curve back to its ends.
+                const float head = 5.0f * _graphZoom;
+                drawList->AddTriangleFilled(ImVec2(to.x, to.y), ImVec2(to.x - head * 1.6f, to.y - head),
+                                            ImVec2(to.x - head * 1.6f, to.y + head), colour);
+            }
+        }
+
+        for (size_t i = 0; i < passes.size(); ++i)
+        {
+            const VkmCapturedPass& pass = passes[i];
+            const ImVec2 min = nodeMin(i);
+            const ImVec2 max(min.x + nodeWidth, min.y + nodeHeight);
+
+            ImGui::SetCursorScreenPos(min);
+            ImGui::InvisibleButton(("node" + std::to_string(pass.subGraphId)).c_str(),
+                                   ImVec2(nodeWidth, nodeHeight));
+            if (ImGui::IsItemClicked())
+            {
+                _selectedPass = static_cast<int>(i);
+                _selectedBuffer = -1;
+            }
+
+            const bool selected = static_cast<int>(i) == _selectedPass;
+            ImU32 fill = IM_COL32(58, 74, 104, 255);   // Graphics
+            if (pass.type == VkmRenderSubGraphType::Compute)
+            {
+                fill = IM_COL32(52, 92, 72, 255);
+            }
+            else if (pass.type == VkmRenderSubGraphType::Transfer)
+            {
+                fill = IM_COL32(96, 76, 48, 255);
+            }
+            if (ImGui::IsItemHovered())
+            {
+                fill = IM_COL32(((fill >> IM_COL32_R_SHIFT) & 0xFF) + 24, ((fill >> IM_COL32_G_SHIFT) & 0xFF) + 24,
+                                ((fill >> IM_COL32_B_SHIFT) & 0xFF) + 24, 255);
+            }
+            drawList->AddRectFilled(min, max, fill, 5.0f);
+            drawList->AddRect(min, max, selected ? IM_COL32(255, 200, 90, 255) : IM_COL32(24, 24, 28, 255),
+                              5.0f, 0, selected ? 2.5f : 1.0f);
+
+            const std::string title = "[" + std::string(subGraphTypeTag(pass.type)) + "] " + pass.name;
+            const std::string subtitle = "#" + std::to_string(pass.subGraphId) +
+                                         "  deps " + std::to_string(pass.dependencies.size());
+            drawList->PushClipRect(min, max, true);
+            drawList->AddText(ImVec2(min.x + 8.0f, min.y + 6.0f), IM_COL32(236, 236, 240, 255), title.c_str());
+            drawList->AddText(ImVec2(min.x + 8.0f, min.y + 6.0f + ImGui::GetTextLineHeight()),
+                              IM_COL32(176, 176, 190, 255), subtitle.c_str());
+            drawList->PopClipRect();
+
+            if (ImGui::IsItemHovered() && ImGui::BeginTooltip())
+            {
+                ImGui::Text("%s (#%u)", pass.name.c_str(), pass.subGraphId);
+                if (pass.dependencies.empty())
+                {
+                    ImGui::TextDisabled("depends on nothing");
+                }
+                for (uint32_t dependency : pass.dependencies)
+                {
+                    const auto it = indexOfSubGraphId.find(dependency);
+                    ImGui::Text("depends on #%u%s", dependency,
+                                it != indexOfSubGraphId.end() ? (" " + passes[it->second].name).c_str() : "");
+                }
+                ImGui::EndTooltip();
+            }
+        }
+
+        // Claim the laid-out area so the child scrolls to fit the whole diagram.
+        ImGui::SetCursorScreenPos(origin);
+        ImGui::Dummy(ImVec2(margin * 2.0f + levelCount * columnStride, margin * 2.0f + rowCount * rowStride));
+        ImGui::EndChild();
     }
 
     void VkmRenderGraphInspector::drawPipelinesTab(VkmPipelineStateManager* pipelineStateManager)

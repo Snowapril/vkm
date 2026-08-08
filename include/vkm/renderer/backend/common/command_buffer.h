@@ -7,6 +7,7 @@
 #include <vkm/renderer/backend/common/render_pass.h>
 #include <vkm/renderer/backend/common/driver_resource.h>
 #include <vkm/renderer/backend/common/command_queue.h>
+#include <vkm/renderer/backend/common/render_graph_barrier.h>
 
 #include <string>
 #include <vector>
@@ -96,8 +97,9 @@ namespace vkm
         * `maxDrawCount` indirect draws and rely on all-zero records being no-ops. The producing
         * pass must therefore ALWAYS compact surviving draws to the front of the range and leave the
         * rest zeroed, or the backends disagree about what gets drawn.
-        * Callers must have recorded barrierIndirectArgumentBuffer() for `argumentBuffer` after the
-        * writing dispatch and before beginRenderPass().
+        * The subgraph producing `argumentBuffer` must declare it as a shader write and the one
+        * drawing from it as VkmResourceAccess::IndirectArgument, so the render graph orders the
+        * write against the fetch.
         * @param layout Record structure. The stride comes from it via vkmGetIndirectArgumentStride.
         * Only VkmIndirectArgumentLayout::NonIndexed is accepted -- an indexed draw needs a bound
         * index buffer, and this engine has none.
@@ -125,29 +127,30 @@ namespace vkm
         void dispatch(uint32_t groupCountX, uint32_t groupCountY = 1, uint32_t groupCountZ = 1);
 
         /*
-        * @brief Orders GPU-driven bookkeeping buffers.
-        * @details Transfer and compute writes recorded before this call become visible to compute
-        * reads and indirect-argument fetches recorded after it. Must be recorded outside a render
-        * pass.
-        * @param buffer Buffer whose writes become visible.
+        * @brief Orders a batch of resource dependencies as one barrier.
+        * @details Everything each entry's source access did becomes visible to what its destination
+        * access is about to do. Batched because that is what the underlying APIs take, and because
+        * a whole subgraph boundary's worth of dependencies is one decision rather than N. Must be
+        * recorded while recording and outside a render pass; that is not the same as outside an
+        * encoder, and a backend with an encoder-scoped barrier puts it on whichever encoder is
+        * already open rather than opening one.
+        * @param barriers Dependencies to order.
+        * @param count Number of entries in `barriers`.
         */
-        void barrierIndirectArgumentBuffer(VkmResourceHandle buffer);
+        void resourceBarrier(const VkmResourceBarrier* barriers, uint32_t count);
+        void resourceBarrier(const std::vector<VkmResourceBarrier>& barriers);
 
         /*
-        * @brief Makes earlier writes to a texture visible to shaders that sample it, and leaves it
-        * in whatever state that sampling needs.
-        * @details The hand-off for a texture written as a render-pass attachment and then sampled
-        * by a later pass -- the G-buffer to lighting-pass dependency in particular. Every other
-        * texture operation manages its own destination state, which works because each both writes
-        * and finishes the texture; a render pass instead leaves an attachment state behind.
-        * Takes no source state, because Vulkan already tracks the texture's current layout and the
-        * other two backends need no layout at all. Must be recorded outside a render pass, so it
-        * sits between the pass that wrote the texture and the pass that reads it.
-        * Only Vulkan does real work here: Metal 4 brackets each compute pass with
-        * barrierAfterQueueStages:/barrierAfterStages:, and WebGPU orders passes implicitly.
-        * @param texture Texture whose writes become visible.
+        * @brief The two halves of a subgraph's dependencies: what must be made visible to it, and
+        * what it will publish.
+        * @details Both are recorded immediately before that subgraph commits, because a backend
+        * whose release must sit inside the producing encoder has no way back into it once the
+        * subgraph has run. Each backend places them where its own API needs them.
+        * @param barriers Dependencies to order.
+        * @param count Number of entries in `barriers`.
         */
-        void barrierTextureForShaderRead(VkmResourceHandle texture);
+        void barrierAcquire(const VkmResourceBarrier* barriers, uint32_t count);
+        void barrierRelease(const VkmResourceBarrier* barriers, uint32_t count);
 
         /*
         * @brief Rebuilds an acceleration structure in place, from the descriptions it was created
@@ -298,9 +301,24 @@ namespace vkm
                                          VkmResourceHandle countBuffer, uint64_t countOffset,
                                          uint32_t maxDrawCount) = 0;
         virtual void onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
-        virtual void onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer) = 0;
+        // `barriers` is non-empty and every entry names a live resource -- the base class drops
+        // the degenerate cases before this is reached.
+        virtual void onResourceBarrier(const VkmResourceBarrier* barriers, uint32_t count) = 0;
+        /*
+        * Empty defaults rather than pure virtuals: a backend with nothing to split (Vulkan by
+        * default, WebGPU always) wants the acquire to behave exactly like onResourceBarrier and
+        * the release to do nothing at all, which is what the base class does for them.
+        */
+        virtual void onBarrierAcquire(const VkmResourceBarrier* barriers, uint32_t count)
+        {
+            onResourceBarrier(barriers, count);
+        }
+        virtual void onBarrierRelease(const VkmResourceBarrier* barriers, uint32_t count)
+        {
+            (void)barriers;
+            (void)count;
+        }
         virtual void onBuildAccelerationStructure(VkmResourceHandle accelerationStructure) = 0;
-        virtual void onBarrierTextureForShaderRead(VkmResourceHandle texture) = 0;
         virtual void onBindResourceTable(VkmResourceTableBase* table) = 0;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) = 0;
         virtual void onSetDebugName(const char* name) = 0;

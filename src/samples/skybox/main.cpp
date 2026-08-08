@@ -262,7 +262,7 @@ public:
         {
             return; // still a valid frame: the clear alone runs.
         }
-        graphicsSubGraph->addReferencedResource(_cubemap);
+        graphicsSubGraph->addReferencedResource(_cubemap, VkmResourceAccess::ShaderSampledRead);
 
         SkyboxPushConstants pushConstants{};
         pushConstants._inverseViewRotationProjection = _camera.getInverseViewRotationProjection(extent.x, extent.y);

@@ -991,7 +991,19 @@ namespace vkm
         // Only this view's counts, so a cull recorded earlier in the frame keeps its results.
         commandBuffer->copyBuffer(_countClearBuffer, _visibleListBuffer, 0,
                                   static_cast<uint64_t>(countWordBase) * sizeof(uint32_t), _countRegionSize);
-        commandBuffer->barrierIndirectArgumentBuffer(_visibleListBuffer);
+
+        // These three hazards are *inside* one subgraph, so the render graph's analysis cannot see
+        // them -- it works from what a subgraph declares, and a callback is opaque. They stay
+        // explicit, but each now names the access pair it actually orders instead of sharing one
+        // coarse barrier that was reused for all three.
+        const VkmResourceBarrier clearToCull{
+            ._handle = _visibleListBuffer,
+            ._srcAccess = VkmResourceAccess::TransferWrite,
+            ._dstAccess = VkmResourceAccess::ShaderStorageReadWrite,
+            ._srcScope = VkmPipelineScope::Transfer,
+            ._dstScope = VkmPipelineScope::Compute,
+        };
+        commandBuffer->resourceBarrier(&clearToCull, 1);
 
         const auto dispatchBatches = [&](VkmPipelineStateBase* pipeline) {
             commandBuffer->bindPipeline(pipeline);
@@ -1019,10 +1031,28 @@ namespace vkm
         // Culling is shared by every backend; only the emit pass differs (this HLSL one fills the
         // indirect arguments; a Metal ICB encoder would fill commands instead).
         dispatchBatches(_cullPipeline);
-        commandBuffer->barrierIndirectArgumentBuffer(_visibleListBuffer);
+        const VkmResourceBarrier cullToEmit{
+            ._handle = _visibleListBuffer,
+            ._srcAccess = VkmResourceAccess::ShaderStorageReadWrite,
+            ._dstAccess = VkmResourceAccess::ShaderStorageRead,
+            ._srcScope = VkmPipelineScope::Compute,
+            ._dstScope = VkmPipelineScope::Compute,
+        };
+        commandBuffer->resourceBarrier(&cullToEmit, 1);
 
         dispatchBatches(_emitPipeline);
-        commandBuffer->barrierIndirectArgumentBuffer(_argumentBuffer);
+        // The emit pass's writes have to reach the indirect fetch in the *draw* subgraph. That one
+        // is cross-subgraph, so once the render graph emits its plan this barrier is the graph's
+        // job -- the draw subgraph declares _argumentBuffer as IndirectArgument and the cull
+        // subgraph declares it as a storage write, which is exactly this dependency.
+        const VkmResourceBarrier emitToDraw{
+            ._handle = _argumentBuffer,
+            ._srcAccess = VkmResourceAccess::ShaderStorageWrite,
+            ._dstAccess = VkmResourceAccess::IndirectArgument,
+            ._srcScope = VkmPipelineScope::Compute,
+            ._dstScope = VkmPipelineScope::Graphics,
+        };
+        commandBuffer->resourceBarrier(&emitToDraw, 1);
     }
 
     void VkmScene::recordDrawBatches(VkmCommandBufferBase* commandBuffer,
@@ -1067,34 +1097,62 @@ namespace vkm
         }
     }
 
-    void VkmScene::collectReferencedResources(std::vector<VkmResourceHandle>* outHandles) const
+    void VkmScene::collectReferencedResources(ReferencePhase phase,
+                                              std::vector<VkmResourceAccessDeclaration>* outDeclarations) const
     {
-        VKM_ASSERT(outHandles != nullptr, "VkmScene::collectReferencedResources requires an output vector");
+        VKM_ASSERT(outDeclarations != nullptr, "VkmScene::collectReferencedResources requires an output vector");
 
-        const auto append = [outHandles](VkmResourceHandle handle) {
+        const auto append = [outDeclarations](VkmResourceHandle handle, VkmResourceAccess access) {
             if (handle != VKM_INVALID_RESOURCE_HANDLE)
             {
-                outHandles->push_back(handle);
+                outDeclarations->push_back(VkmResourceAccessDeclaration{ handle, access, {} });
             }
         };
 
-        for (const std::unique_ptr<VkmSceneGeometryPool>& pool : _pools)
+        switch (phase)
         {
-            if (pool != nullptr)
-            {
-                append(pool->getVertexBuffer());
-                append(pool->getIndexBuffer());
-            }
-        }
-        append(_materialBuffer);
-        append(_objectDataBuffer);
-        append(_frameDataBuffer);
-        append(_visibleListBuffer);
-        append(_argumentBuffer);
-        append(_countClearBuffer);
-        for (VkmResourceHandle staging : _stagingBuffers)
-        {
-            append(staging);
+            case ReferencePhase::Update:
+                // recordUpdate copies one frame slot's staging buffer into the two buffers whose
+                // contents change every frame. Every slot is declared rather than just the one
+                // this frame uses: the caller has the frame index and this method does not, and
+                // over-declaring a read costs one redundant handle, not a wrong barrier.
+                for (VkmResourceHandle staging : _stagingBuffers)
+                {
+                    append(staging, VkmResourceAccess::TransferRead);
+                }
+                append(_frameDataBuffer, VkmResourceAccess::TransferWrite);
+                append(_objectDataBuffer, VkmResourceAccess::TransferWrite);
+                break;
+
+            case ReferencePhase::Cull:
+                // The count clear is a copy, and both dispatches then read-modify-write the
+                // lists. The hazards *between* those three are intra-subgraph and are ordered by
+                // recordCull's own barriers; what is declared here is what the subgraph as a
+                // whole consumes and publishes.
+                append(_countClearBuffer, VkmResourceAccess::TransferRead);
+                append(_visibleListBuffer, VkmResourceAccess::TransferWrite);
+                append(_visibleListBuffer, VkmResourceAccess::ShaderStorageReadWrite);
+                append(_argumentBuffer, VkmResourceAccess::ShaderStorageReadWrite);
+                append(_objectDataBuffer, VkmResourceAccess::ShaderStorageRead);
+                append(_frameDataBuffer, VkmResourceAccess::ShaderStorageRead);
+                break;
+
+            case ReferencePhase::Draw:
+                // Geometry and material data are pulled in-shader out of the bindless set; the
+                // draw count and the argument records come out of the one argument buffer.
+                for (const std::unique_ptr<VkmSceneGeometryPool>& pool : _pools)
+                {
+                    if (pool != nullptr)
+                    {
+                        append(pool->getVertexBuffer(), VkmResourceAccess::ShaderStorageRead);
+                        append(pool->getIndexBuffer(), VkmResourceAccess::ShaderStorageRead);
+                    }
+                }
+                append(_materialBuffer, VkmResourceAccess::ShaderStorageRead);
+                append(_objectDataBuffer, VkmResourceAccess::ShaderStorageRead);
+                append(_frameDataBuffer, VkmResourceAccess::ShaderStorageRead);
+                append(_argumentBuffer, VkmResourceAccess::IndirectArgument);
+                break;
         }
     }
 

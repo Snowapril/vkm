@@ -143,9 +143,7 @@ namespace vkmtest
         vkm::VkmFrameData frameData;
         vkm::vkmExtractFrustumPlanes(viewProjection, frameData._frustumPlanes);
 
-        std::vector<vkm::VkmResourceHandle> referenced;
-        scene.collectReferencedResources(&referenced);
-        referenced.push_back(scene.getTopLevelAccelerationStructure());
+        std::vector<vkm::VkmResourceAccessDeclaration> referenced;
 
         vkm::VkmGBuffer gbuffer;
         REQUIRE(gbuffer.initialize(driver, glm::uvec2(detail::kCornellSize, detail::kCornellSize)));
@@ -207,40 +205,31 @@ namespace vkmtest
 
             vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
             auto* updateSubGraph = renderGraph.beginTransferSubGraph("CornellSceneUpdate");
-            for (vkm::VkmResourceHandle handle : referenced) { updateSubGraph->addReferencedResource(handle); }
+            referenced.clear();
+            scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Update, &referenced);
+            updateSubGraph->addReferencedResources(referenced);
             updateSubGraph->setTransferCallback([&scene, frameData](vkm::VkmCommandBufferBase* commandBuffer) {
                 scene.recordUpdate(commandBuffer, /*frameIndex=*/0, frameData, /*viewIndex=*/0);
             });
 
             auto* cullSubGraph = renderGraph.beginComputeSubGraph("CornellSceneCull");
-            for (vkm::VkmResourceHandle handle : referenced) { cullSubGraph->addReferencedResource(handle); }
+            referenced.clear();
+            scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Cull, &referenced);
+            cullSubGraph->addReferencedResources(referenced);
             cullSubGraph->setComputeCallback([&scene](vkm::VkmCommandBufferBase* commandBuffer) {
                 scene.recordCull(commandBuffer, /*viewIndex=*/0);
             });
 
             auto* gbufferSubGraph = renderGraph.beginGraphicsSubGraph(fbDesc, "CornellGBuffer");
-            for (vkm::VkmResourceHandle handle : referenced) { gbufferSubGraph->addReferencedResource(handle); }
+            referenced.clear();
+            scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Draw, &referenced);
+            gbufferSubGraph->addReferencedResources(referenced);
             gbufferSubGraph->setRenderCallback([&scene, &manager](vkm::VkmCommandBufferBase* commandBuffer) {
                 scene.recordDrawBatches(commandBuffer, [&manager](const vkm::VkmScene::DrawBatch& batch) {
                     return manager.getPipelineState(
                         std::string("gbuffer_pso[") + vkm::vkmVertexLayoutPresetName(batch._layout) + "]",
                         vkm::VkmPipelineStateOrigin::Engine);
                 });
-            });
-
-            // Everything the estimators sample has to leave its attachment layout first. Without
-            // this the G-buffer is read while still in COLOR_ATTACHMENT_OPTIMAL, which Metal does
-            // not care about and Vulkan reports as VUID-vkCmdDraw-None-09600 -- and the reads come
-            // back as nothing, so the coverage REQUIRE below is what actually fails. Same shape as
-            // the gi sample's GiGBufferToShaderRead subgraph.
-            auto* barrierSubGraph = renderGraph.beginComputeSubGraph("CornellGBufferToShaderRead");
-            for (vkm::VkmResourceHandle handle : referenced) { barrierSubGraph->addReferencedResource(handle); }
-            barrierSubGraph->setComputeCallback([&gbuffer](vkm::VkmCommandBufferBase* commandBuffer) {
-                for (uint32_t i = 0; i < vkm::VkmGBuffer::kTargetCount; ++i)
-                {
-                    commandBuffer->barrierTextureForShaderRead(
-                        gbuffer.getTexture(static_cast<vkm::VkmGBuffer::Target>(i)));
-                }
             });
 
             renderGraph.compile();
@@ -254,13 +243,27 @@ namespace vkmtest
         {
             vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
             auto* subGraph = renderGraph.beginComputeSubGraph("CornellEstimators");
-            for (vkm::VkmResourceHandle handle : referenced) { subGraph->addReferencedResource(handle); }
-            subGraph->addReferencedResource(reference.getAccumulationBuffer());
-            subGraph->addReferencedResource(indirect.getAccumulationBuffer());
-            subGraph->addReferencedResource(restir.getAccumulationBuffer());
-            subGraph->addReferencedResource(restir.getReservoirBuffer());
-            subGraph->addReferencedResource(spatial.getAccumulationBuffer());
-            subGraph->addReferencedResource(spatial.getReservoirBuffer());
+            referenced.clear();
+            scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Draw, &referenced);
+            subGraph->addReferencedResources(referenced);
+            subGraph->addReferencedResource(scene.getTopLevelAccelerationStructure(),
+                                           vkm::VkmResourceAccess::AccelerationStructureShaderRead);
+            // The G-buffer pass in the graph above left these as attachments; the estimators sample
+            // them through set 0, which the render graph only knows about because of this.
+            for (uint32_t i = 0; i < vkm::VkmGBuffer::kTargetCount; ++i)
+            {
+                subGraph->addReferencedResource(gbuffer.getTexture(static_cast<vkm::VkmGBuffer::Target>(i)),
+                                                vkm::VkmResourceAccess::ShaderSampledRead);
+            }
+            for (vkm::VkmResourceHandle accumulation : { reference.getAccumulationBuffer(),
+                                                         indirect.getAccumulationBuffer(),
+                                                         restir.getAccumulationBuffer(),
+                                                         restir.getReservoirBuffer(),
+                                                         spatial.getAccumulationBuffer(),
+                                                         spatial.getReservoirBuffer() })
+            {
+                subGraph->addReferencedResource(accumulation, vkm::VkmResourceAccess::ShaderStorageReadWrite);
+            }
             subGraph->setComputeCallback([&](vkm::VkmCommandBufferBase* commandBuffer) {
                 reference.recordAccumulate(commandBuffer, referenceOptions);
                 indirect.recordAccumulate(commandBuffer, indirectOptions);

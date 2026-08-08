@@ -274,8 +274,25 @@ namespace vkm
                                const std::function<void(VkmCommandBufferBase*, const DrawBatch&)>& beforeDraw = {},
                                uint32_t viewIndex = 0);
 
-        // Every buffer a frame's update and draws touch, for VkmRenderSubGraph::addReferencedResource.
-        void collectReferencedResources(std::vector<VkmResourceHandle>* outHandles) const;
+        /*
+        * @brief Which of a frame's three scene subgraphs is asking. The same buffer is touched
+        * differently by each -- the object data a transfer subgraph copies into is the same one
+        * the cull dispatch and the draws read -- so the access a declaration carries depends on
+        * the phase, not just the buffer.
+        */
+        enum class ReferencePhase : uint8_t
+        {
+            Update, // recordUpdate: the staging copies
+            Cull,   // recordCull: the count clear, the cull dispatch and the emit dispatch
+            Draw,   // recordDrawBatches: the indirect draws
+        };
+
+        /*
+        * @brief Every buffer `phase` touches, tagged with how it touches it, for
+        * VkmRenderSubGraph::addReferencedResource. Appends to `outDeclarations`.
+        */
+        void collectReferencedResources(ReferencePhase phase,
+                                        std::vector<VkmResourceAccessDeclaration>* outDeclarations) const;
 
         inline const std::vector<DrawBatch>& getDrawBatches() const { return _drawBatches; }
         inline const std::vector<VkmSceneObject>& getObjects() const { return _objects; }

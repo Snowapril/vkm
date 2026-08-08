@@ -197,10 +197,7 @@ namespace vkmtest
 
         // The path tracer reads the camera from set 1 and everything else from set 0, so the only
         // per-frame work is publishing the scene's own records.
-        std::vector<vkm::VkmResourceHandle> referenced;
-        scene.collectReferencedResources(&referenced);
-        referenced.push_back(tracer.getAccumulationBuffer());
-        referenced.push_back(scene.getTopLevelAccelerationStructure());
+        std::vector<vkm::VkmResourceAccessDeclaration> referenced;
 
         const vkm::VkmPathTraceOptions options{
             /*_maxBounces=*/4,
@@ -216,13 +213,21 @@ namespace vkmtest
             vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
 
             auto* updateSubGraph = renderGraph.beginTransferSubGraph("FurnaceSceneUpdate");
-            for (vkm::VkmResourceHandle handle : referenced) { updateSubGraph->addReferencedResource(handle); }
+            referenced.clear();
+            scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Update, &referenced);
+            updateSubGraph->addReferencedResources(referenced);
             updateSubGraph->setTransferCallback([&scene, frameData](vkm::VkmCommandBufferBase* commandBuffer) {
                 scene.recordUpdate(commandBuffer, /*frameIndex=*/0, frameData, /*viewIndex=*/0);
             });
 
             auto* traceSubGraph = renderGraph.beginComputeSubGraph("FurnacePathTrace");
-            for (vkm::VkmResourceHandle handle : referenced) { traceSubGraph->addReferencedResource(handle); }
+            referenced.clear();
+            scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Draw, &referenced);
+            traceSubGraph->addReferencedResources(referenced);
+            traceSubGraph->addReferencedResource(scene.getTopLevelAccelerationStructure(),
+                                                vkm::VkmResourceAccess::AccelerationStructureShaderRead);
+            traceSubGraph->addReferencedResource(tracer.getAccumulationBuffer(),
+                                                vkm::VkmResourceAccess::ShaderStorageReadWrite);
             traceSubGraph->setComputeCallback([&tracer, options](vkm::VkmCommandBufferBase* commandBuffer) {
                 tracer.recordAccumulate(commandBuffer, options);
             });

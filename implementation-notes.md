@@ -3343,3 +3343,324 @@ from `MTLHeapTypeAutomatic` to `MTLHeapTypePlacement` and now carves its block w
   same batch does not grow reserved bytes, so the ranges are provably reusable rather than
   merely uncounted.
 - Verified: Metal 228/228 with `MTL_DEBUG_LAYER=1` and zero validation output.
+## 2026-08-08 — Barrier model: declared resource access on the render graph
+
+Reworking synchronisation so render subgraphs declare *how* they touch each resource, the graph
+derives the dependencies, and barriers are emitted as a release/acquire pair. Plan approved in
+`~/.claude/plans/barrier-split-barrier-squishy-hennessy.md`; this section logs the deviations from
+it as the steps land.
+
+### Step 1 — access vocabulary and the declaration API
+
+`VkmResourceAccess`, `VkmPipelineScope`, `VkmSubresourceRange` and `VkmResourceAccessDeclaration`
+in `renderer_common.h`; `VkmRenderSubGraph::addReferencedResource` now requires an access;
+`VkmScene::collectReferencedResources` takes a `ReferencePhase`. Nothing consumes the accesses yet
+-- `compile()` is still a stub and the two old barrier entry points still do all the work -- so
+this step is a pure API migration across 19 files.
+
+### Deviations
+
+- **Planned:** rename the empty `VkmResourceUsageBits` placeholder to `VkmResourceAccess` and
+  retype `VkmResourceInfo::_usage` with it.
+  **Done instead:** left both untouched and added `VkmResourceAccess` as a new enum.
+  **Why:** `_usage` is a *creation-time* field on a resource-info struct, while an access is a
+  *per-pass* property of one subgraph's use of that resource. Putting the new enum in that field
+  would invite the two to be conflated by the next reader, and `CLAUDE.md` §3 says pre-existing
+  dead code is to be mentioned rather than deleted. `VkmResourceUsageBits` stays dead; it is
+  recorded in `TODO.md` instead.
+
+- **Planned:** the access enum as listed in the plan.
+  **Done instead:** added `ConstantBufferRead` and a separate `VkmPipelineScope`.
+  **Why:** two gaps the plan's table did not cover. A uniform-buffer read maps to Vulkan's
+  `VK_ACCESS_2_UNIFORM_READ_BIT`, not `SHADER_STORAGE_READ`, so a barrier built from the storage
+  bit would not make a write visible to it -- and `VkmTableResourceType::UniformBuffer` really is
+  bound as `VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER` (`vulkan_resource_table.cpp:37`). Separately, an
+  access bit alone cannot say whether a shader read happens in a draw or a dispatch; the scope
+  comes from the declaring subgraph's type, which is exact here because a graphics subgraph can
+  only draw and a compute one can only dispatch.
+
+- **Planned:** a manual declaration of a graphics subgraph's own attachment is a validation error,
+  since `compile()` derives attachments from the frame buffer descriptor.
+  **Done instead:** a manual declaration that *agrees* with the derived one is deduped; only a
+  conflicting one is an error.
+  **Why:** attachments must stay declared for lifetime tracking until `compile()` actually derives
+  them (step 3), so making the manual form an error would have required migrating those call sites
+  twice.
+
+- **Planned:** the new command-buffer API takes `std::span`.
+  **Will do instead:** `(const VkmResourceBarrier*, uint32_t)` plus a `std::vector` overload.
+  **Why:** `std::span` is used nowhere in this repo and `<span>` is included nowhere, and
+  `command_buffer.h` is a widely-included header (see commit 1420109, which removed `<algorithm>`
+  from `command_queue.h` for the same reason).
+
+### Two pre-existing bugs this fixes by construction
+
+Both verified against the source rather than assumed:
+
+1. `VkmScene::recordUpdate` copies into `_frameDataBuffer`/`_objectDataBuffer`
+   (`scene.cpp:964,972`) and nothing creates a *memory* dependency for either before the cull
+   dispatch and the draws read them. `barrierIndirectArgumentBuffer(_visibleListBuffer)` at
+   `scene.cpp:997` orders the *stages*, but its `VkBufferMemoryBarrier` names a different buffer.
+2. Same shape in the gi sample: `_compositeStaging[frame] -> _compositeBuffer` is copied in
+   `GiSceneUpdate` and read as a uniform buffer by `GiComposite`, with nothing between them naming
+   that buffer.
+
+The Vulkan backend has exactly one buffer barrier and it is scoped to a single `.buffer`
+(`vulkan_command_buffer.cpp:485`), and its image barriers to a single `.image`
+(`vulkan_command_buffer.cpp:61`), so there is no other candidate. Both work today only because
+desktop drivers flush caches globally on any pipeline barrier. Declaring the buffers with their
+real accesses is what makes the graph emit a barrier that actually names them.
+
+### Step 3 — the dependency analysis (built, not yet emitted)
+
+`render_graph_barrier.{h,cpp}` and `VkmRenderGraph::compile()`, which was an empty stub. The
+analysis is a free function over plain data (`VkmSubGraphAccessView` + a
+`VkmResourceSubresourceLookup` interface) rather than something that walks `VkmRenderSubGraph*`,
+which is what lets `TestRenderGraphBarrierPlan.cpp` exercise all of it with no driver and no GPU --
+14 cases covering RAW/WAR/WAW, the read-after-read merge, the adjacent-producer collapse,
+per-subresource ranges, first-touch, `optimize=false`, and validation of dead handles.
+
+`execute()` still ignores the plan and the two old barrier entry points still do all the work, so
+this step cannot change rendering. What it does change: `_dependentSubGraphIds` is populated for
+the first time, so the render graph capture and its ImGui inspector show real edges instead of an
+always-empty list.
+
+Two defects were caught by re-reading the analysis before it ever ran, both of which would have
+made it emit wrong barriers rather than merely redundant ones:
+
+- Write-after-read waited only on the *latest* reader. Two subgraphs sampling one texture may both
+  still be in flight, so a write now waits on every reader since the last write.
+- Repeated reads of one write each re-emitted a RAW barrier -- exactly the redundancy this change
+  exists to remove. The write now records which pipeline scopes it has been published to, so a
+  G-buffer sampled by three graphics passes costs one barrier; a later *compute* read still pays,
+  because publishing to a draw does not make the write visible to a dispatch.
+
+### Deviation
+
+- **Planned:** `compile()` calls `addDependentSubGraphIds`.
+  **Done instead:** added `setDependentSubGraphIds` and used that.
+  **Why:** the existing method appends, so compiling one graph twice would list every edge twice.
+  The append form is left alone -- it is pre-existing public API.
+
+### Step 2 — per-subresource layout tracking on Vulkan
+
+`VkmTextureVulkan::_currentLayout` (one `VkImageLayout` per texture) became a uniform layout plus a
+lazily-materialised per-subresource vector, with `getSubresourceLayout` / `getUniformLayout` /
+`setSubresourceLayout` / `isLayoutUniform` replacing the old getter/setter. The vector is allocated
+only on the first partial transition and collapses back — and frees itself — whenever every
+subresource agrees again, so the common case still costs one `VkImageLayout` and emits one
+whole-image barrier.
+
+Two new helpers in `vulkan_command_buffer.cpp` carry every call site:
+`transitionWholeTexture` (one barrier while uniform, one per subresource when not, because
+`oldLayout` has to name what that subresource really is) and `transitionTextureSubresource`.
+
+This turns a latent correctness problem into a fixed one. `onCopyBufferToTexture` already took
+`mipLevel`/`arrayLayer` but transitioned the *whole image* on every call, so a six-face cubemap
+upload recorded all six faces as `SHADER_READ_ONLY_OPTIMAL` after the first copy — five of them
+before their contents had been written, and each subsequent face then named a stale `oldLayout`.
+It only escaped notice because the transition was `ALL_COMMANDS`-to-`ALL_COMMANDS` and the wrong
+`oldLayout` happened to be the layout the driver had already put the image in. The same shape
+applied to `writeRegion`'s host-image-copy path.
+
+`TestTextureShaderReadBarrier.cpp` gains a cubemap case asserting exactly that: uniform before any
+upload, one face readable and the rest `UNDEFINED` after the first, and collapsed back to uniform
+once all six agree.
+
+Vulkan 237/237 (5572 assertions), Metal 237/237 (25038). The Vulkan run emits four distinct VUIDs
+and they are the four `TODO.md` already records for ImGui teardown -- no image-layout VUID appears,
+which is the assertion that matters here, since the validation layer rejects a stale `oldLayout`
+outright.
+
+### Step 4 — the batched barrier entry point, and Vulkan's lowering of it
+
+`VkmCommandBufferBase::resourceBarrier(const VkmResourceBarrier*, uint32_t)` plus a `std::vector`
+overload, with `onResourceBarrier` per backend. `vulkan_barrier.{h,cpp}` holds the four mapping
+functions (`vkmToVkStageMask`, `vkmToVkAccessMask`, `vkmToVkImageLayout`, `vkmToVkAspectMask`) so
+the tables are readable on their own rather than buried in a 700-line command buffer.
+
+Vulkan builds one `VkDependencyInfo` for a whole boundary -- N image barriers, M buffer barriers
+and one accumulated memory barrier for acceleration structures -- and issues a single
+`vkCmdPipelineBarrier2`. `oldLayout` always comes from the texture's own tracker and never from the
+plan, which is what lets a first-touch barrier (`_srcAccess == None`) be correct without the
+analysis knowing anything about uploads, previous frames or swapchain acquires. A range whose
+subresources disagree splits into one barrier per subresource, because `oldLayout` has to name what
+that subresource really is.
+
+`VkmScene::recordCull`'s three barriers are the first callers. They are genuinely intra-subgraph --
+the analysis works from declarations and a callback is opaque to it -- so they stay explicit, but
+each now names the access pair it actually orders (transfer-write to storage-read-write,
+storage-read-write to storage-read, storage-write to indirect-argument) instead of all three
+sharing one coarse `TRANSFER|COMPUTE -> COMPUTE|DRAW_INDIRECT` barrier.
+
+Metal and WebGPU take documented no-op stubs for now: on Metal a barrier recorded at a subgraph
+boundary has no encoder open, and opening one is the documented cause of
+`MTL4CommandQueueErrorTimeout`, so the encoder-scope plumbing is its own step.
+
+Vulkan 237/237 (5577 assertions), Metal 237/237 (25038), same four pre-existing VUIDs.
+
+### Step 5 — `execute()` emits the plan
+
+`barrierAcquire` / `barrierRelease` on the command buffer, called for each subgraph immediately
+*before* `commit()` -- both halves before, never one on each side, because Metal's release must be
+recorded inside the producing encoder and that encoder is closed by the time `commit()` returns.
+The base class defaults make the acquire behave as an ordinary batched barrier and the release do
+nothing, which is exactly right for Vulkan (one queue, one command buffer per frame, so a split
+buys nothing) and for WebGPU.
+
+`compile()` now also derives a graphics subgraph's attachments from its `VkmFrameBufferDescriptor`
+rather than requiring them to be declared. They are the one thing the graph can read directly, and
+declaring them as well would write every render target down twice and silently lose a writer
+whenever the two drifted apart. A caller that also declares its target costs a duplicate the
+analysis folds away, not a conflict.
+
+Verified the plan is not silently empty: temporary instrumentation over the Vulkan suite shows
+`SceneCull` acquiring 3 barriers and the draw subgraph 7. The `SceneCull` ones are pre-existing bug
+1 from the step-1 notes actually being fixed -- the transfer writes into `_frameDataBuffer` and
+`_objectDataBuffer` finally get a memory dependency naming those buffers before the cull dispatch
+reads them.
+
+The old barrier entry points still record as well, so every dependency is currently covered twice.
+That is deliberate for this step: it means a missing declaration cannot break rendering yet, and
+deleting the old path (step 7) is what will actually put the analysis under load.
+
+Vulkan 237/237, Metal 237/237, WebGPU PASS. The Vulkan run's VUID set is unchanged -- still only
+the four pre-existing ImGui-teardown ones, with the graph now emitting real image layout
+transitions of its own.
+
+### Step 5b — declaring what the deferred passes sample
+
+A resource table binds textures the render graph cannot see, so the GI sample's fullscreen passes
+looked to the analysis like passes that write an attachment and read nothing -- and the G-buffer
+handover barrier is exactly what would have gone missing. `recordFullscreen` now takes the list of
+textures its pass samples, and each list mirrors precisely what `buildTables()` binds into that
+pass's table: over-declaring would invent a dependency, under-declaring would lose a barrier.
+
+### Remaining work (not in this branch)
+
+- **Metal lowering.** `onResourceBarrier` / `onBarrierAcquire` / `onBarrierRelease` are still
+  documented no-ops there, and the ordering comes from the conservative `MTLStageAll` encoder-
+  boundary pairs as before. Narrowing those to the stages the plan names is the step that would
+  finally let independent render passes overlap (`TODO.md:105`), and it is the highest-risk one:
+  Metal has no other protection, since the old barrier entry points are no-ops there too. It needs
+  the gi sample verified by eye and left running for several minutes, which is what caught
+  `MTL4CommandQueueErrorTimeout` last time.
+- **Deleting `barrierTextureForShaderRead` / `barrierIndirectArgumentBuffer`** and the five
+  barrier-only subgraphs that exist only to call them. Must come after the Metal step, because
+  until then those subgraphs are the only thing standing between a missing declaration and a
+  rendering bug.
+- The `vkCmdSetEvent2` / `vkCmdWaitEvents2` split path behind a capability flag, as planned.
+
+### Subgraph dependency graph in the ImGui inspector
+
+`VkmRenderGraphInspector` gains a Graph tab drawing the captured passes as a node-link diagram:
+one node per subgraph, one edge per dependency the analysis found. Nodes are placed in columns by
+dependency level -- level 0 depends on nothing, and a node sits one column right of its deepest
+producer -- so every edge points left to right and a column reads as "these can run at the same
+time as far as resource hazards go". Producers always precede consumers in the pass list, so the
+levelling is a single forward sweep with no ordering pass and no cycle handling.
+
+Nodes are coloured by subgraph type, selection is shared with the Capture tab, and the selected
+node's edges are highlighted (with an isolate toggle for a frame with more edges than can be read
+at once).
+
+The rendering itself needs an interactive session to judge; what is testable is the data behind
+it, and `TestRenderGraphCapture.mm` now asserts it end to end: a producer/bystander/consumer graph
+gives the consumer exactly one edge, to the producer, and the other two none.
+
+### Step 6 — Metal actually records barriers
+
+The earlier stub's justification conflated two things: Metal 4's barriers being encoder-scoped
+means one cannot *open* an encoder to hold a barrier, not that a barrier cannot be recorded. It
+rides an encoder that already exists.
+
+`onResourceBarrier` now emits `barrierAfterEncoderStages:beforeEncoderStages:` on whichever encoder
+is open -- the intra-pass memory barrier, clamped to the stages that encoder can encode, since the
+intra-encoder form rejects stages it cannot express while the queue-scoped ones accept anything.
+This is what makes `VkmScene::recordCull`'s three barriers real on Metal for the first time; they
+previously recorded nothing there and the ordering came from the encoder-boundary pairs by luck of
+the pass structure. A pure write-after-read uses `MTL4VisibilityOptionNone`, an execution barrier
+with no cache flush.
+
+`onBarrierAcquire` is called while no encoder is open, so it accumulates stage masks that the next
+encoder to open discharges: `beginRenderPass` and the compute branch of `onBindPipeline` take them
+in place of their hardcoded `MTLStageAll` pair. **Where the analysis named nothing, the masks are
+zero and the conservative pair is used unchanged**, so an undeclared resource degrades to the old
+behaviour rather than to unordered -- which is the property that makes this safe to land.
+
+The copy and acceleration-structure paths keep their `MTLStageAll` brackets: those are
+self-contained per operation rather than subgraph boundaries, and they already order against all
+prior work.
+
+Not done: the cross-encoder `updateFence:`/`waitForFence:` pair. It is the more precise mechanism
+-- a consumer would wait on its producers rather than on every prior stage -- but it needs the
+producer's identity carried in `VkmResourceBarrier` (the analysis has it and currently drops it),
+a fence pool, and a scope boundary, because a subgraph that records several copies closes several
+encoders and the fence has to be updated at each. The queue-stage pair narrowed here is correct
+today; the fence is what would let two independent render passes overlap.
+
+Metal 240/240 (25080 assertions), no `MTL4CommandQueueError`. The probe GI propagation test still
+measures 16 frames to 90%, which is the direct regression test for the NaN-atlas failure that
+missing Metal barriers produced before. Vulkan 237/237.
+
+### Self-dependencies in the analysis
+
+A subgraph that declares one resource twice was becoming its own producer on the second
+declaration: the plan gained a barrier in `_acquire`, a matching one in `_release`, and the
+subgraph's own id in `_dependencies`. Both halves are recorded before the subgraph runs, so such a
+barrier can only order it against itself.
+
+Two declarations are the normal way to say a subgraph touches something two ways --
+`VkmScene::collectReferencedResources` declares `_visibleListBuffer` as `TransferWrite` and then
+`ShaderStorageReadWrite` for the cull pass, which fires in every graph that culls -- and it is also
+what `compile()` produces when it derives an attachment a caller had already declared by hand,
+which covers every fullscreen pass in the GI sample. So this was firing on roughly ten barriers per
+GI frame, and it put a self-edge on those nodes in the inspector's Graph tab.
+
+Fixed by returning from the emit lambda when the producer is the consumer, before anything is
+pushed. Under `validate` the case is reported when the two declarations also disagree about image
+layout, since no barrier can satisfy that and the guard would otherwise hide it.
+
+### Step 7a — `barrierIndirectArgumentBuffer` deleted
+
+Nothing called it any more: its three call sites in `VkmScene::recordCull` became typed
+`resourceBarrier` calls when the batched entry point landed. Removed the declaration, the base
+implementation, the pure virtual and all three backend overrides, plus the stale sentence in
+`drawIndirectCount`'s doc comment and the two backend contract paragraphs in `common/AGENTS.md`.
+
+The one buffer barrier the Vulkan backend still built with the pre-synchronization2
+`vkCmdPipelineBarrier` + `VkBufferMemoryBarrier` went with it; every barrier the backend records is
+now a `vkCmdPipelineBarrier2`.
+
+Metal 241/241, Vulkan 238/238, same four pre-existing VUIDs.
+
+### Step 7b — `barrierTextureForShaderRead` and the barrier-only subgraphs deleted
+
+The audit that had to come first: a resource table binds textures the render graph cannot see, so
+a pass sampling one without declaring it is a pass the analysis believes reads nothing. Every live
+`barrierTextureForShaderRead` call named exactly such a hand-off, so each was checked against the
+consuming subgraph's declarations. The GI sample and the probe updater were already covered; three
+test harnesses were not, and their consuming subgraphs declared nothing at all:
+
+- `TestGBufferRenderShared.hpp` — the lighting pass samples three G-buffer targets through its table.
+- `TestIndirectPassShared.hpp` — the estimators sample them through set 0, and across a *submit*
+  boundary rather than a subgraph one, so the graph places it as a first-touch transition.
+- `TestProbeVolumeShared.hpp` — two sites, the probe lighting inputs and the blend's capture atlas.
+
+With those declared, the nine barrier-only subgraphs and both entry points are gone, along with
+`onBarrierTextureForShaderRead` in all three backends. `TestTextureShaderReadBarrier.cpp` became
+`TestTextureLayoutTracking.cpp`, keeping the per-subresource cubemap case and dropping the three
+that exercised the removed API.
+
+The proof that the graph now carries these dependencies is a negative one and it is specific:
+`VUID-vkCmdDraw-None-09600` does not appear. That is the VUID `TestIndirectPassShared` documented
+as firing when the G-buffer is sampled while still in `COLOR_ATTACHMENT_OPTIMAL`, which is exactly
+what a missing declaration would now produce.
+
+Vulkan 235/235 (4800 assertions), Metal 241/241 (25086), same four pre-existing VUIDs. Probe GI
+propagation still 16 frames to 90%.
+
+Closed in TODO.md: the Metal `MTLStageAll` serialization entry, the "records nothing on Metal"
+trap, and the acceleration-structure entry (`AccelerationStructureBuildWrite` /
+`AccelerationStructureShaderRead` are declared accesses now). One entry added for the remaining
+Metal queue-scoped acquire.

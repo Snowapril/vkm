@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/vulkan/vulkan_command_buffer.h>
+#include <vkm/renderer/backend/vulkan/vulkan_barrier.h>
 #include <vkm/renderer/backend/vulkan/vulkan_command_queue.h>
 #include <vkm/renderer/backend/vulkan/vulkan_texture.h>
 #include <vkm/renderer/backend/vulkan/vulkan_buffer.h>
@@ -47,8 +48,11 @@ namespace vkm
     // needs an explicit barrier between whatever it was doing before and how this render pass
     // (or present) is about to use it.
     static void transitionImageLayout(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
-                                      VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_COLOR_BIT)
+                                      VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                      const VkImageSubresourceRange* subresourceRange = nullptr)
     {
+        const VkImageSubresourceRange wholeImage{ aspectMask, 0, VK_REMAINING_MIP_LEVELS, 0,
+                                                  VK_REMAINING_ARRAY_LAYERS };
         const VkImageMemoryBarrier2 barrier{
             .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
             .srcStageMask        = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
@@ -60,10 +64,7 @@ namespace vkm
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image               = image,
-            // Whole image: VkmTextureVulkan tracks one layout per texture, not per
-            // subresource, so a partial barrier would leave the tracker lying about the
-            // layers it skipped (a 6-face cubemap upload is the case that exposes this).
-            .subresourceRange    = { aspectMask, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS },
+            .subresourceRange    = (subresourceRange != nullptr) ? *subresourceRange : wholeImage,
         };
         const VkDependencyInfo dependencyInfo{
             .sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -71,6 +72,67 @@ namespace vkm
             .pImageMemoryBarriers    = &barrier,
         };
         vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+    }
+
+    /*
+    * @brief Moves an entire texture to `newLayout`, whatever its subresources are in now, and
+    * records the result.
+    *
+    * @details One barrier while the texture's layout is uniform, which is the overwhelmingly
+    * common case. A texture that some earlier partial transition left non-uniform -- a cubemap
+    * mid-upload, a probe atlas cell rewritten on its own -- needs one barrier per subresource
+    * instead, because `oldLayout` has to name what that subresource really is: naming the wrong
+    * one is undefined behaviour and a validation error, not a missed optimisation.
+    */
+    static void transitionWholeTexture(VkCommandBuffer commandBuffer, VkmTextureVulkan* textureVulkan,
+                                       VkImageLayout newLayout, VkImageAspectFlags aspectMask)
+    {
+        const VkmSubresourceRange wholeRange{};
+        if (textureVulkan->isLayoutUniform())
+        {
+            const VkImageLayout oldLayout = textureVulkan->getSubresourceLayout(0, 0);
+            if (oldLayout != newLayout)
+            {
+                transitionImageLayout(commandBuffer, textureVulkan->getImage(), oldLayout, newLayout, aspectMask);
+            }
+            textureVulkan->setSubresourceLayout(wholeRange, newLayout);
+            return;
+        }
+
+        const VkmTextureInfo& info = textureVulkan->getTextureInfo();
+        const uint32_t mipCount = std::max(1u, info._numMipLevels);
+        const uint32_t layerCount = std::max(1u, info._numArrayLayers);
+        for (uint32_t layer = 0; layer < layerCount; ++layer)
+        {
+            for (uint32_t mip = 0; mip < mipCount; ++mip)
+            {
+                const VkImageLayout oldLayout = textureVulkan->getSubresourceLayout(mip, layer);
+                if (oldLayout == newLayout)
+                {
+                    continue;
+                }
+                const VkImageSubresourceRange subresource{ aspectMask, mip, 1, layer, 1 };
+                transitionImageLayout(commandBuffer, textureVulkan->getImage(), oldLayout, newLayout,
+                                      aspectMask, &subresource);
+            }
+        }
+        textureVulkan->setSubresourceLayout(wholeRange, newLayout);
+    }
+
+    // Moves one subresource, leaving every other one alone -- what a per-face cubemap upload and
+    // a single-cell atlas rewrite need.
+    static void transitionTextureSubresource(VkCommandBuffer commandBuffer, VkmTextureVulkan* textureVulkan,
+                                             uint32_t mipLevel, uint32_t arrayLayer,
+                                             VkImageLayout newLayout, VkImageAspectFlags aspectMask)
+    {
+        const VkImageLayout oldLayout = textureVulkan->getSubresourceLayout(mipLevel, arrayLayer);
+        if (oldLayout != newLayout)
+        {
+            const VkImageSubresourceRange subresource{ aspectMask, mipLevel, 1, arrayLayer, 1 };
+            transitionImageLayout(commandBuffer, textureVulkan->getImage(), oldLayout, newLayout, aspectMask,
+                                  &subresource);
+        }
+        textureVulkan->setSubresourceLayout(VkmSubresourceRange{ mipLevel, 1, arrayLayer, 1 }, newLayout);
     }
 
     // copyBuffer() is a generic buffer-to-buffer copy usable for either a Buffer or a
@@ -126,12 +188,8 @@ namespace vkm
             VkmTextureVulkan* colorTextureVulkan = static_cast<VkmTextureVulkan*>(renderResourcePool->getResource<VkmTexture>(frameBufferDesc._colorAttachments[i]));
             const VkmColorAttachmentDescriptor& colorAttachmentDesc = frameBufferDesc._renderPass._colorAttachments[i];
 
-            const VkImageLayout previousLayout = colorTextureVulkan->getCurrentLayout();
-            if (previousLayout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-            {
-                transitionImageLayout(_vkCommandBuffer, colorTextureVulkan->getImage(), previousLayout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-                colorTextureVulkan->setCurrentLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-            }
+            transitionWholeTexture(_vkCommandBuffer, colorTextureVulkan,
+                                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
 
             colorAttachments.push_back(VkRenderingAttachmentInfo{
                 .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -167,13 +225,8 @@ namespace vkm
                 (hasDepthAttachment ? VK_IMAGE_ASPECT_DEPTH_BIT : 0u) |
                 (hasStencilAttachment ? VK_IMAGE_ASPECT_STENCIL_BIT : 0u);
 
-            const VkImageLayout previousLayout = depthTextureVulkan->getCurrentLayout();
-            if (previousLayout != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-            {
-                transitionImageLayout(_vkCommandBuffer, depthTextureVulkan->getImage(), previousLayout,
-                                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, aspectMask);
-                depthTextureVulkan->setCurrentLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-            }
+            transitionWholeTexture(_vkCommandBuffer, depthTextureVulkan,
+                                   VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, aspectMask);
 
             const VkRenderingAttachmentInfo attachmentInfo{
                 .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -238,8 +291,8 @@ namespace vkm
             VkmTextureVulkan* colorTextureVulkan = static_cast<VkmTextureVulkan*>(renderResourcePool->getResource<VkmTexture>(_currentFrameBufferDesc._colorAttachments[i]));
             if ((colorTextureVulkan->getTextureInfo()._flags & VkmResourceCreateInfo::AllowPresent) != 0)
             {
-                transitionImageLayout(_vkCommandBuffer, colorTextureVulkan->getImage(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-                colorTextureVulkan->setCurrentLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                transitionWholeTexture(_vkCommandBuffer, colorTextureVulkan,
+                                       VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_ASPECT_COLOR_BIT);
             }
         }
     }
@@ -301,8 +354,11 @@ namespace vkm
         VkBuffer dstVkBuffer = resolveVkBufferAndOffset(renderResourcePool, dstBuffer, &dstBaseOffset);
 
         const VkmTextureInfo& textureInfo = textureVulkan->getTextureInfo();
-        const VkImageLayout previousLayout = textureVulkan->getCurrentLayout();
-        transitionImageLayout(_vkCommandBuffer, textureVulkan->getImage(), previousLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        // Only the layer being read back, so a readback of one face of a cubemap does not move
+        // the other five.
+        const VkImageLayout previousLayout = textureVulkan->getSubresourceLayout(0, arrayLayer);
+        transitionTextureSubresource(_vkCommandBuffer, textureVulkan, 0, arrayLayer,
+                                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
 
         const VkBufferImageCopy region{
             .bufferOffset      = dstOffset + dstBaseOffset,
@@ -319,11 +375,8 @@ namespace vkm
         // the texture was never rendered to anyway) -- keep TRANSFER_SRC and track it.
         if (previousLayout != VK_IMAGE_LAYOUT_UNDEFINED)
         {
-            transitionImageLayout(_vkCommandBuffer, textureVulkan->getImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, previousLayout);
-        }
-        else
-        {
-            textureVulkan->setCurrentLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            transitionTextureSubresource(_vkCommandBuffer, textureVulkan, 0, arrayLayer, previousLayout,
+                                         VK_IMAGE_ASPECT_COLOR_BIT);
         }
     }
 
@@ -336,8 +389,11 @@ namespace vkm
         VkBuffer srcVkBuffer = resolveVkBufferAndOffset(renderResourcePool, srcBuffer, &srcBaseOffset);
 
         const VkmTextureInfo& textureInfo = textureVulkan->getTextureInfo();
-        transitionImageLayout(_vkCommandBuffer, textureVulkan->getImage(), textureVulkan->getCurrentLayout(),
-                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        // One subresource, not the whole image. This is the call a cubemap upload makes six times,
+        // and it used to move all six faces on every one of them -- so five of the six were left
+        // recorded as being in a layout their contents had not been written in yet.
+        transitionTextureSubresource(_vkCommandBuffer, textureVulkan, mipLevel, arrayLayer,
+                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
 
         const VkBufferImageCopy region{
             .bufferOffset      = srcOffset + srcBaseOffset,
@@ -356,9 +412,8 @@ namespace vkm
 
         // Leave it sampleable, which is what every caller wants next (see the contract on
         // VkmCommandBufferBase::copyBufferToTexture).
-        transitionImageLayout(_vkCommandBuffer, textureVulkan->getImage(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        textureVulkan->setCurrentLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        transitionTextureSubresource(_vkCommandBuffer, textureVulkan, mipLevel, arrayLayer,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
     }
 
     void VkmCommandBufferVulkan::onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
@@ -460,68 +515,170 @@ namespace vkm
         vkCmdBuildAccelerationStructuresKHR(_vkCommandBuffer, 1, &buildInfo, &rangePointer);
     }
 
-    void VkmCommandBufferVulkan::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)
+    void VkmCommandBufferVulkan::onResourceBarrier(const VkmResourceBarrier* barriers, uint32_t count)
     {
-        VkmBufferVulkan* bufferVulkan =
-            static_cast<VkmBufferVulkan*>(_driver->getRenderResourcePool()->getResource<VkmBuffer>(buffer));
-        if (bufferVulkan == nullptr)
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+
+        // Members rather than locals: this runs at every subgraph boundary of every frame, and the
+        // vectors keep their capacity across calls.
+        _imageBarrierScratch.clear();
+        _bufferBarrierScratch.clear();
+        VkMemoryBarrier2 memoryBarrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+        bool hasMemoryBarrier = false;
+
+        for (uint32_t i = 0; i < count; ++i)
         {
-            VKM_DEBUG_ERROR("barrierIndirectArgumentBuffer was given a handle that is not a live buffer");
+            const VkmResourceBarrier& barrier = barriers[i];
+            const VkPipelineStageFlags2 srcStage = vkmToVkStageMask(barrier._srcAccess, barrier._srcScope);
+            const VkPipelineStageFlags2 dstStage = vkmToVkStageMask(barrier._dstAccess, barrier._dstScope);
+            // A write-after-read needs the two sides ordered, not the caches flushed: the source
+            // only read, so it published nothing.
+            const VkAccessFlags2 srcAccess =
+                barrier._executionOnly ? VK_ACCESS_2_NONE : vkmToVkAccessMask(barrier._srcAccess);
+            const VkAccessFlags2 dstAccess = vkmToVkAccessMask(barrier._dstAccess);
+
+            if (barrier._handle.type == VkmResourceType::Texture)
+            {
+                VkmTextureVulkan* textureVulkan =
+                    static_cast<VkmTextureVulkan*>(renderResourcePool->getResource<VkmTexture>(barrier._handle));
+                if (textureVulkan == nullptr)
+                {
+                    VKM_DEBUG_ERROR("resourceBarrier was given a handle that is not a live texture");
+                    continue;
+                }
+
+                const VkmTextureInfo& info = textureVulkan->getTextureInfo();
+                const VkImageAspectFlags aspectMask = vkmToVkAspectMask(info._format);
+                const VkImageLayout newLayout = vkmToVkImageLayout(barrier._dstAccess, info._format);
+                if (newLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+                {
+                    // An access that names no layout on a texture: order it, but do not pretend to
+                    // know where the image should end up.
+                    hasMemoryBarrier = true;
+                    memoryBarrier.srcStageMask |= srcStage;
+                    memoryBarrier.dstStageMask |= dstStage;
+                    memoryBarrier.srcAccessMask |= srcAccess;
+                    memoryBarrier.dstAccessMask |= dstAccess;
+                    continue;
+                }
+
+                const uint32_t mipCount = std::max(1u, info._numMipLevels);
+                const uint32_t layerCount = std::max(1u, info._numArrayLayers);
+                const uint32_t firstMip = std::min(barrier._range._baseMipLevel, mipCount - 1u);
+                const uint32_t firstLayer = std::min(barrier._range._baseArrayLayer, layerCount - 1u);
+                const uint32_t lastMip =
+                    (barrier._range._mipLevelCount == VKM_ALL_REMAINING_SUBRESOURCES)
+                        ? mipCount - 1u
+                        : std::min(firstMip + barrier._range._mipLevelCount - 1u, mipCount - 1u);
+                const uint32_t lastLayer =
+                    (barrier._range._arrayLayerCount == VKM_ALL_REMAINING_SUBRESOURCES)
+                        ? layerCount - 1u
+                        : std::min(firstLayer + barrier._range._arrayLayerCount - 1u, layerCount - 1u);
+
+                /*
+                * oldLayout comes from the texture's own tracker, never from the plan. The graph
+                * knows the hazards inside one frame; what a texture carried in from a host upload,
+                * a previous frame, or a swapchain acquire is backend knowledge, and naming the
+                * wrong oldLayout is undefined behaviour rather than a missed optimisation.
+                *
+                * One barrier per subresource when the range's layouts disagree, one for the whole
+                * range when they do not -- which is the usual case and the one that has to stay
+                * cheap.
+                */
+                const VkmSubresourceRange resolvedRange{ firstMip, lastMip - firstMip + 1u, firstLayer,
+                                                         lastLayer - firstLayer + 1u };
+                const VkImageLayout sharedOldLayout = textureVulkan->getUniformLayout(resolvedRange);
+                const auto pushImageBarrier = [&](VkImageLayout oldLayout, uint32_t baseMip, uint32_t mips,
+                                                  uint32_t baseLayer, uint32_t layers) {
+                    if (oldLayout == newLayout && !vkmIsWriteAccess(barrier._srcAccess) &&
+                        !vkmIsWriteAccess(barrier._dstAccess))
+                    {
+                        return; // nothing to transition and nothing to publish
+                    }
+                    _imageBarrierScratch.push_back(VkImageMemoryBarrier2{
+                        .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                        .srcStageMask        = srcStage,
+                        .srcAccessMask       = srcAccess,
+                        .dstStageMask        = dstStage,
+                        .dstAccessMask       = dstAccess,
+                        .oldLayout           = oldLayout,
+                        .newLayout           = newLayout,
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .image               = textureVulkan->getImage(),
+                        .subresourceRange    = { aspectMask, baseMip, mips, baseLayer, layers },
+                    });
+                };
+
+                if (sharedOldLayout != VK_IMAGE_LAYOUT_MAX_ENUM)
+                {
+                    pushImageBarrier(sharedOldLayout, firstMip, lastMip - firstMip + 1u, firstLayer,
+                                     lastLayer - firstLayer + 1u);
+                }
+                else
+                {
+                    for (uint32_t layer = firstLayer; layer <= lastLayer; ++layer)
+                    {
+                        for (uint32_t mip = firstMip; mip <= lastMip; ++mip)
+                        {
+                            pushImageBarrier(textureVulkan->getSubresourceLayout(mip, layer), mip, 1, layer, 1);
+                        }
+                    }
+                }
+                textureVulkan->setSubresourceLayout(resolvedRange, newLayout);
+                continue;
+            }
+
+            if (barrier._handle.type == VkmResourceType::Buffer ||
+                barrier._handle.type == VkmResourceType::StagingBuffer)
+            {
+                uint64_t offset = 0;
+                VkBuffer vkBuffer = resolveVkBufferAndOffset(renderResourcePool, barrier._handle, &offset);
+                if (vkBuffer == VK_NULL_HANDLE)
+                {
+                    VKM_DEBUG_ERROR("resourceBarrier was given a handle that is not a live buffer");
+                    continue;
+                }
+                _bufferBarrierScratch.push_back(VkBufferMemoryBarrier2{
+                    .sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                    .srcStageMask        = srcStage,
+                    .srcAccessMask       = srcAccess,
+                    .dstStageMask        = dstStage,
+                    .dstAccessMask       = dstAccess,
+                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .buffer              = vkBuffer,
+                    .offset              = offset,
+                    .size                = VK_WHOLE_SIZE,
+                });
+                continue;
+            }
+
+            // An acceleration structure exposes no VkBuffer of its own here, so its dependency
+            // rides a global memory barrier instead.
+            hasMemoryBarrier = true;
+            memoryBarrier.srcStageMask |= srcStage;
+            memoryBarrier.dstStageMask |= dstStage;
+            memoryBarrier.srcAccessMask |= srcAccess;
+            memoryBarrier.dstAccessMask |= dstAccess;
+        }
+
+        if (_imageBarrierScratch.empty() && _bufferBarrierScratch.empty() && !hasMemoryBarrier)
+        {
             return;
         }
 
-        // Deliberately one coarse barrier used at both sites the scene needs (the clear copy before
-        // the culling dispatch, and that dispatch before the indirect fetch) rather than two
-        // narrower variants: this is the engine's only buffer barrier, and a per-frame handful of
-        // them is not worth splitting until something measures it.
-        const VkBufferMemoryBarrier barrier{
-            .sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-            .srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-            .dstAccessMask       = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
-                                   VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .buffer              = bufferVulkan->getBuffer(),
-            .offset              = bufferVulkan->getBufferOffset(),
-            .size                = bufferVulkan->getBufferInfo()._size,
+        // One vkCmdPipelineBarrier2 for the whole boundary, which is the point of the batched API.
+        const VkDependencyInfo dependencyInfo{
+            .sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .memoryBarrierCount       = hasMemoryBarrier ? 1u : 0u,
+            .pMemoryBarriers          = hasMemoryBarrier ? &memoryBarrier : nullptr,
+            .bufferMemoryBarrierCount = static_cast<uint32_t>(_bufferBarrierScratch.size()),
+            .pBufferMemoryBarriers    = _bufferBarrierScratch.data(),
+            .imageMemoryBarrierCount  = static_cast<uint32_t>(_imageBarrierScratch.size()),
+            .pImageMemoryBarriers     = _imageBarrierScratch.data(),
         };
-        vkCmdPipelineBarrier(_vkCommandBuffer,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
-                             0, 0, nullptr, 1, &barrier, 0, nullptr);
-    }
-
-    void VkmCommandBufferVulkan::onBarrierTextureForShaderRead(VkmResourceHandle texture)
-    {
-        VkmTextureVulkan* textureVulkan =
-            static_cast<VkmTextureVulkan*>(_driver->getRenderResourcePool()->getResource<VkmTexture>(texture));
-        if (textureVulkan == nullptr)
-        {
-            VKM_DEBUG_ERROR("barrierTextureForShaderRead was given a handle that is not a live texture");
-            return;
-        }
-
-        // SHADER_READ_ONLY_OPTIMAL is the layout the bindless texture descriptors declare
-        // (VkmBindlessResourceManagerVulkan writes imageLayout = SHADER_READ_ONLY_OPTIMAL), so a
-        // texture sampled through set 0 has to actually be in it. Uploaded textures already end up
-        // here via copyBufferToTexture; a render target does not, which is the gap this closes.
-        if (textureVulkan->getCurrentLayout() == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-        {
-            return;
-        }
-
-        // A sampled depth texture (a shadow map, or the G-buffer depth a GI pass reads) needs the
-        // depth/stencil aspects rather than the colour one.
-        const VkmFormat format = textureVulkan->getTextureInfo()._format;
-        const VkImageAspectFlags aspectMask =
-            (hasDepth(format) || hasStencil(format))
-                ? ((hasDepth(format) ? VK_IMAGE_ASPECT_DEPTH_BIT : 0u) |
-                   (hasStencil(format) ? VK_IMAGE_ASPECT_STENCIL_BIT : 0u))
-                : VK_IMAGE_ASPECT_COLOR_BIT;
-        transitionImageLayout(_vkCommandBuffer, textureVulkan->getImage(),
-                              textureVulkan->getCurrentLayout(),
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, aspectMask);
-        textureVulkan->setCurrentLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        vkCmdPipelineBarrier2(_vkCommandBuffer, &dependencyInfo);
     }
 
     void VkmCommandBufferVulkan::onBindResourceTable(VkmResourceTableBase* table)
