@@ -3527,3 +3527,26 @@ deleting the old path (step 7) is what will actually put the analysis under load
 Vulkan 237/237, Metal 237/237, WebGPU PASS. The Vulkan run's VUID set is unchanged -- still only
 the four pre-existing ImGui-teardown ones, with the graph now emitting real image layout
 transitions of its own.
+
+### Step 5b — declaring what the deferred passes sample
+
+A resource table binds textures the render graph cannot see, so the GI sample's fullscreen passes
+looked to the analysis like passes that write an attachment and read nothing -- and the G-buffer
+handover barrier is exactly what would have gone missing. `recordFullscreen` now takes the list of
+textures its pass samples, and each list mirrors precisely what `buildTables()` binds into that
+pass's table: over-declaring would invent a dependency, under-declaring would lose a barrier.
+
+### Remaining work (not in this branch)
+
+- **Metal lowering.** `onResourceBarrier` / `onBarrierAcquire` / `onBarrierRelease` are still
+  documented no-ops there, and the ordering comes from the conservative `MTLStageAll` encoder-
+  boundary pairs as before. Narrowing those to the stages the plan names is the step that would
+  finally let independent render passes overlap (`TODO.md:105`), and it is the highest-risk one:
+  Metal has no other protection, since the old barrier entry points are no-ops there too. It needs
+  the gi sample verified by eye and left running for several minutes, which is what caught
+  `MTL4CommandQueueErrorTimeout` last time.
+- **Deleting `barrierTextureForShaderRead` / `barrierIndirectArgumentBuffer`** and the five
+  barrier-only subgraphs that exist only to call them. Must come after the Metal step, because
+  until then those subgraphs are the only thing standing between a missing declaration and a
+  rendering bug.
+- The `vkCmdSetEvent2` / `vkCmdWaitEvents2` split path behind a capability flag, as planned.

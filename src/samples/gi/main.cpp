@@ -379,7 +379,10 @@ public:
             commandBuffer->barrierTextureForShaderRead(_volume.getDistanceTexture());
         });
 
-        recordFullscreen(renderGraph, "GiDirectLighting", _directTarget, _lightingPipeline, _tables._lighting);
+        recordFullscreen(renderGraph, "GiDirectLighting", _directTarget, _lightingPipeline, _tables._lighting,
+                         { _gbuffer.getTexture(VkmGBuffer::Target::Normal),
+                           _gbuffer.getTexture(VkmGBuffer::Target::BaseColorRoughness),
+                           _gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) });
 
         // Before the probe and contact passes, not after: SSGI samples the direct lighting as the
         // radiance that bounces, so it has to be readable by the time that pass runs.
@@ -387,7 +390,11 @@ public:
         directBarrier->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
             commandBuffer->barrierTextureForShaderRead(_directTarget);
         });
-        recordFullscreen(renderGraph, "GiProbeLighting", _indirectTarget, _probeLightingPipeline, _tables._probeLighting);
+        recordFullscreen(renderGraph, "GiProbeLighting", _indirectTarget, _probeLightingPipeline,
+                         _tables._probeLighting,
+                         { _gbuffer.getTexture(VkmGBuffer::Target::Normal),
+                           _gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic),
+                           _volume.getIrradianceTexture(), _volume.getDistanceTexture() });
 
         // The contact term is added on top of the probe result, in the same target: its PSO blends
         // one-to-one and the pass loads rather than discards, so it can only ever brighten what the
@@ -400,6 +407,10 @@ public:
             VkmRenderGraphicsSubGraph* ssgiSubGraph = renderGraph->beginGraphicsSubGraph(ssgiFb, "GiSsgi");
             ssgiSubGraph->addReferencedResource(_indirectTarget, VkmResourceAccess::ColorAttachmentWrite);
             ssgiSubGraph->addReferencedResource(_directTarget, VkmResourceAccess::ShaderSampledRead);
+            ssgiSubGraph->addReferencedResource(_gbuffer.getTexture(VkmGBuffer::Target::Normal),
+                                               VkmResourceAccess::ShaderSampledRead);
+            ssgiSubGraph->addReferencedResource(_gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic),
+                                               VkmResourceAccess::ShaderSampledRead);
             VkmPipelineStateBase* ssgiPipeline = _ssgiPipeline;
             VkmResourceTableBase* ssgiTable = _tables._ssgi;
             ssgiSubGraph->setRenderCallback([ssgiPipeline, ssgiTable](VkmCommandBufferBase* commandBuffer) {
@@ -414,7 +425,11 @@ public:
             commandBuffer->barrierTextureForShaderRead(_indirectTarget);
         });
 
-        recordFullscreen(renderGraph, "GiComposite", _compositeTarget, _compositePipeline, _tables._composite);
+        recordFullscreen(renderGraph, "GiComposite", _compositeTarget, _compositePipeline, _tables._composite,
+                         { _directTarget, _indirectTarget,
+                           _gbuffer.getTexture(VkmGBuffer::Target::BaseColorRoughness),
+                           _gbuffer.getTexture(VkmGBuffer::Target::Normal),
+                           _gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) });
 
         VkmRenderComputeSubGraph* compositeBarrier = renderGraph->beginComputeSubGraph("GiCompositeToShaderRead");
         compositeBarrier->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
@@ -490,12 +505,25 @@ private:
         subGraph->addReferencedResources(declarations);
     }
 
+    /*
+    * @brief A fullscreen pass writing `target`, reading `sampled` through its resource table.
+    *
+    * The sampled list is not optional bookkeeping: a table binds textures the render graph cannot
+    * see, so a pass that does not declare what it samples is a pass the dependency analysis thinks
+    * reads nothing -- and the barrier handing the G-buffer over to be sampled is exactly what would
+    * go missing.
+    */
     void recordFullscreen(VkmRenderGraph* renderGraph, const char* name, VkmResourceHandle target,
-                          VkmPipelineStateBase* pipeline, VkmResourceTableBase* table)
+                          VkmPipelineStateBase* pipeline, VkmResourceTableBase* table,
+                          const std::vector<VkmResourceHandle>& sampled)
     {
         VkmRenderGraphicsSubGraph* subGraph =
             renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_extent, target), name);
         subGraph->addReferencedResource(target, VkmResourceAccess::ColorAttachmentWrite);
+        for (VkmResourceHandle handle : sampled)
+        {
+            subGraph->addReferencedResource(handle, VkmResourceAccess::ShaderSampledRead);
+        }
         subGraph->setRenderCallback([pipeline, table](VkmCommandBufferBase* commandBuffer) {
             commandBuffer->bindPipeline(pipeline);
             commandBuffer->bindResourceTable(table);
