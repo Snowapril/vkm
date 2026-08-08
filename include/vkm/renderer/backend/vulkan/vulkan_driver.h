@@ -17,8 +17,7 @@ namespace vkm
     class VkmGpuBufferPoolVulkan;
 
     /*
-    * @brief renderer backend driver base class
-    * @details
+    * @brief Vulkan renderer backend driver.
     */
     class VkmDriverVulkan : public VkmDriverBase
     {
@@ -34,11 +33,11 @@ namespace vkm
         virtual VkmAccelerationStructure* newAccelerationStructureInner() override final;
 
         /*
-        * Waits on every queue's timeline as the base class does, then vkDeviceWaitIdle.
-        * The timeline wait proves the GPU reached the value, but it is not what makes the
-        * validation layer retire the submissions that reached it: a structure destroyed after a
-        * timeline wait alone was still reported in use by the command buffer that built it, three
-        * separate CI runs in a row.
+        * @brief Waits on every queue's timeline as the base class does, then vkDeviceWaitIdle.
+        * @details The timeline wait proves the GPU reached the value, but it is not what makes the
+        * validation layer retire the submissions that reached it. Without the vkDeviceWaitIdle, a
+        * resource destroyed after a timeline wait alone is still reported in use by the command
+        * buffer that built it.
         */
         virtual void waitIdle(const uint64_t timeoutMs = UINT64_MAX) override final;
 
@@ -74,9 +73,10 @@ namespace vkm
         inline VkQueryPool getGpuTimestampQueryPool() const { return _timestampQueryPool; }
 
         /*
-        * @brief true if VK_EXT_device_fault was requested (enableGpuCrashDump) and the
-        * GPU/driver actually supports it. Guards whether vkGetDeviceFaultInfoEXT() may be
-        * called from vulkan_util.cpp's device-lost handling.
+        * @brief true if VK_EXT_device_fault was requested via enableGpuCrashDump and the driver
+        * supports it.
+        * @details Guards whether vulkan_util.cpp's device-lost handling may call
+        * vkGetDeviceFaultInfoEXT().
         */
         inline bool isDeviceFaultExtensionEnabled() const { return _deviceFaultExtensionEnabled; }
         // False on drivers without VkPhysicalDeviceVulkan12Features::drawIndirectCount (MoltenVK):
@@ -84,16 +84,16 @@ namespace vkm
         inline bool isDrawIndirectCountSupported() const { return _drawIndirectCountSupported; }
 
         /*
-        * @brief Whether VkPhysicalDeviceVulkan12Features::bufferDeviceAddress is on, so buffers
-        * may carry VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT and vkGetBufferDeviceAddress is
-        * valid to call. Mirrors VkmDriverCapabilityFlags::BufferDeviceAddress, but is readable
-        * before that flag is assembled -- the VMA allocator needs it at creation time.
+        * @brief Whether VkPhysicalDeviceVulkan12Features::bufferDeviceAddress is on, so buffers may
+        * carry VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT and vkGetBufferDeviceAddress may be called.
+        * @details Mirrors VkmDriverCapabilityFlags::BufferDeviceAddress, but is readable before that
+        * flag is assembled, the VMA allocator needing it at creation time.
         */
         inline bool isBufferDeviceAddressEnabled() const { return _bufferDeviceAddressEnabled; }
 
         /*
-        * @brief Whether VK_EXT_host_image_copy is enabled *and* its feature bit is on, so
-        * vkCopyMemoryToImage / vkTransitionImageLayoutEXT are valid to call.
+        * @brief Whether VK_EXT_host_image_copy is enabled and its feature bit is on, so
+        * vkCopyMemoryToImage and vkTransitionImageLayoutEXT may be called.
         */
         inline bool isHostImageCopyEnabled() const { return _hostImageCopyEnabled; }
 
@@ -172,14 +172,11 @@ namespace vkm
 
         /*
         * Ray query, not ray tracing pipelines. The engine's GI work casts rays from compute
-        * shaders (see restir.md section 4), so VK_KHR_ray_tracing_pipeline and its shader binding
-        * tables are deliberately not requested -- ray query alone is a much smaller surface and is
-        * what both the low and high tiers need.
-        *
+        * shaders, so VK_KHR_ray_tracing_pipeline and its shader binding tables are not requested.
         * All three come together: an acceleration structure cannot be built without
-        * VK_KHR_deferred_host_operations (VK_KHR_acceleration_structure lists it as a dependency),
-        * and a ray query is useless without one to traverse. Requesting them as a set means the
-        * capability flag has a single meaning rather than three partial ones.
+        * VK_KHR_deferred_host_operations, which VK_KHR_acceleration_structure lists as a
+        * dependency, and a ray query is useless without one to traverse. Requesting them as a set
+        * gives the capability flag a single meaning rather than three partial ones.
         */
         VkPhysicalDeviceAccelerationStructureFeaturesKHR _accelerationStructureFeatures{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};

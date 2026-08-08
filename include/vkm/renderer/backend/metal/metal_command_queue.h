@@ -12,7 +12,7 @@
 namespace vkm
 {
     /*
-    * @brief Command buffer ppol base class
+    * @brief Metal command buffer pool
     */
     class VkmCommandBufferPoolMetal : public VkmCommandBufferPoolBase
     {
@@ -49,7 +49,7 @@ namespace vkm
     };
 
     /*
-    * @brief Command queue 
+    * @brief Metal command queue
     */
     class VkmCommandQueueMetal : public VkmCommandQueueBase
     {

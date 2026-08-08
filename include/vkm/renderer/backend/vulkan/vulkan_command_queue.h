@@ -17,14 +17,14 @@ namespace vkm
         ~VkmCommandBufferPoolVulkan();
 
         /*
-        * @brief Hands a no-longer-current VkCommandBuffer back, together with the timeline
-        * object of the submission that last used it. A later getOrCreateRHICommandBuffer()
-        * returns it to the reuse pool once that timeline value has completed.
-        * @details Not recycled eagerly on purpose: resetting or re-recording a command buffer
-        * still in the pending state is a validation error, and the render graph releases a
-        * command buffer back to the pool in the same frame it submits it -- up to FRAME_COUNT
-        * frames before that submission completes. Callers must hold the pool's command-buffer
-        * mutex, which VkmCommandBufferPoolBase::allocate() already does across the whole handoff.
+        * @brief Hands a no-longer-current VkCommandBuffer back, with the timeline object of the
+        * submission that last used it.
+        * @details A later getOrCreateRHICommandBuffer() returns it to the reuse pool once that
+        * timeline value has completed. Not recycled eagerly: resetting or re-recording a command
+        * buffer still in the pending state is a validation error, and the render graph releases a
+        * command buffer back to the pool in the same frame it submits it, up to FRAME_COUNT frames
+        * before that submission completes. Callers must hold the pool's command-buffer mutex, which
+        * VkmCommandBufferPoolBase::allocate() already does across the whole handoff.
         */
         void retireRHICommandBuffer(VkCommandBuffer commandBuffer, const VkmGpuEventTimelineObject& timelineObject);
 

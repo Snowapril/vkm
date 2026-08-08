@@ -16,16 +16,19 @@ namespace vkm
 {
     class VkmDriverMetal;
 
-    // Metal implementation of the engine-global "set 0" bindless convention (see
-    // common/bindless_resource_manager.h). Owns:
-    //  - the Tier-2 argument buffer: one shared MTLBuffer of 8-byte entries where entry
-    //    [id] holds a buffer's gpuAddress (texture MTLResourceIDs reserved at ids 0..4095),
-    //    matching the [[id(N)]] layout vkm-compiler pins in the generated MSL;
-    //  - the push-constant ring: a shared MTLBuffer sub-divided into fixed 256-byte
-    //    entries handed out per setPushConstants() call;
-    //  - the MTL4ArgumentTable every graphics encoder binds (argument buffer at
-    //    [[buffer(2)]], push constants at [[buffer(3)]] -- single-threaded recording,
-    //    the same assumption the ImGui Metal renderer already makes).
+    /*
+    * @brief Metal implementation of the engine-global "set 0" bindless convention (see
+    * common/bindless_resource_manager.h).
+    * @details Owns:
+    *  - the Tier-2 argument buffer, one shared MTLBuffer of 8-byte entries where entry [id] holds a
+    *    buffer's gpuAddress, texture MTLResourceIDs being reserved at ids 0..4095, matching the
+    *    [[id(N)]] layout vkm-compiler pins in the generated MSL;
+    *  - the push-constant ring, a shared MTLBuffer sub-divided into fixed 256-byte entries handed
+    *    out per setPushConstants() call;
+    *  - the MTL4ArgumentTable every graphics encoder binds, argument buffer at [[buffer(2)]] and
+    *    push constants at [[buffer(3)]]. Recording is single-threaded, the same assumption the
+    *    ImGui Metal renderer makes.
+    */
     class VkmBindlessResourceManagerMetal : public VkmBindlessResourceManagerBase
     {
     public:
@@ -48,11 +51,15 @@ namespace vkm
         uint32_t registerTexture(VkmResourceHandle textureHandle) override final;
         void unregisterTexture(uint32_t slot) override final;
 
-        // Copies `size` bytes into the next push-constant ring entry and returns that
-        // entry's GPU address (to be bound at kVkmMetalPushConstantBufferIndex). Entries come
-        // from the current frame slot's region and the cursor wraps within it after
-        // PUSH_CONSTANT_ENTRY_COUNT allocations, which would reuse entries this same frame
-        // still references -- so that wrap is logged as the overflow it is.
+        /*
+        * @brief Copies bytes into the next push-constant ring entry.
+        * @details Entries come from the current frame slot's region, and the cursor wraps within it
+        * after PUSH_CONSTANT_ENTRY_COUNT allocations, which would reuse entries this same frame
+        * still references. That wrap is logged as the overflow it is.
+        * @param data Source bytes.
+        * @param size Number of bytes to copy.
+        * @return The entry's GPU address, to be bound at kVkmMetalPushConstantBufferIndex.
+        */
         uint64_t allocatePushConstantSlot(const void* data, uint32_t size);
 
         void beginFrame(uint32_t frameSlot) override final;
@@ -66,12 +73,12 @@ namespace vkm
 
         VkmDriverMetal* _driver;
 
-        id<MTLBuffer> _argumentBuffer = nullptr;      // kVkmMetalBindlessArgumentEntryCount x 8 bytes, shared storage
+        id<MTLBuffer> _argumentBuffer = nullptr;  // kVkmMetalBindlessArgumentEntryCount x 8 bytes, shared storage
         // kVkmPushConstantRingTotalEntryCount x PUSH_CONSTANT_ENTRY_STRIDE, shared storage:
         // FRAME_BUFFER_COUNT regions of PUSH_CONSTANT_ENTRY_COUNT entries each.
         id<MTLBuffer> _pushConstantRing = nullptr;
         id<MTL4ArgumentTable> _argumentTable = nullptr;
-        id<MTLSamplerState> _defaultSampler = nullptr; // published at kVkmMetalBindlessSamplerId
+        id<MTLSamplerState> _defaultSampler = nullptr;  // published at kVkmMetalBindlessSamplerId
 
         VkmPushConstantRingAllocator _pushConstantEntries;
 

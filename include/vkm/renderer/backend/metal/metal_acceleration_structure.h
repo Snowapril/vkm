@@ -11,17 +11,14 @@ namespace vkm
 
     /*
     * @brief An `MTLAccelerationStructure` built through the Metal 4 descriptors.
-    *
     * @details Metal allocates the structure itself, so unlike Vulkan there is no separate storage
-    * buffer to own -- just the structure, its instance buffer, and (for an updatable one) its
-    * scratch.
-    *
-    * Metal 4 rebuilt this API rather than renaming it, and two differences drive the shape here:
-    * geometry is addressed by `MTL4BufferRange` (a GPU address plus a length) instead of
-    * `id<MTLBuffer>`, and an instance names its bottom-level structure by `MTLResourceID` in the
-    * descriptor buffer -- the `MTLAccelerationStructureInstanceDescriptorTypeIndirect` layout --
-    * rather than indexing an `instancedAccelerationStructures` array. The second is what lets
-    * `updateInstances` rewrite transforms without touching the descriptor.
+    * buffer to own: just the structure, its instance buffer, and, for an updatable one, its scratch.
+    * Two Metal 4 API traits drive the shape here. Geometry is addressed by `MTL4BufferRange`, a GPU
+    * address plus a length, rather than `id<MTLBuffer>`; and an instance names its bottom-level
+    * structure by `MTLResourceID` in the descriptor buffer -- the
+    * `MTLAccelerationStructureInstanceDescriptorTypeIndirect` layout -- rather than indexing an
+    * `instancedAccelerationStructures` array. The second lets `updateInstances` rewrite transforms
+    * without touching the descriptor.
     */
     class VkmAccelerationStructureMetal : public VkmAccelerationStructure
     {
@@ -37,8 +34,7 @@ namespace vkm
         inline id<MTLAccelerationStructure> getAccelerationStructure() const { return _accelerationStructure; }
 
         // What a build needs to know about this structure, for the one caller that records one:
-        // VkmCommandBufferMetal::onBuildAccelerationStructure. A resource describes itself; the
-        // command buffer is what turns that into a command. A nil scratch means the structure was
+        // VkmCommandBufferMetal::onBuildAccelerationStructure. A nil scratch means the structure was
         // built without `_allowUpdate` and a rebuild must refuse -- Metal's debug layer aborts the
         // process on a nil scratch buffer rather than reporting it.
         inline MTL4AccelerationStructureDescriptor* getDescriptor() const { return _descriptor; }

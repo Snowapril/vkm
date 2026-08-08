@@ -19,8 +19,7 @@ namespace vkm
     class VkmGpuHeapPoolMetal;
 
     /*
-    * @brief renderer backend driver base class
-    * @details
+    * @brief Metal renderer backend driver.
     */
     class VkmDriverMetal : public VkmDriverBase
     {
@@ -35,8 +34,11 @@ namespace vkm
 
 
         /*
-        * @brief Suballocate a buffer from an existing (or newly grown) heap pool block.
-        * Returns nil if allocation failed (e.g. size exceeds a single pool block).
+        * @brief Suballocate a buffer from an existing, or newly grown, heap pool block.
+        * @param sizeBytes Size to allocate.
+        * @param alignment Required alignment.
+        * @param options MTLResourceOptions for the allocation.
+        * @return The buffer, or nil when the allocation failed, e.g. the size exceeds one block.
         */
         id<MTLBuffer> allocateFromHeapPool(uint64_t sizeBytes, uint64_t alignment, uint64_t options);
 
