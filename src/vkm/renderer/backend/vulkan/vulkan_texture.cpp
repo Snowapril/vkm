@@ -153,7 +153,8 @@ namespace vkm
             _isHostWritable = (memoryProperties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
         }
 
-        _currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        _uniformLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        _subresourceLayouts.clear();
         return createDefaultView();
     }
 
@@ -179,24 +180,26 @@ namespace vkm
             return false;
         }
 
-        // Host-side layout transition -- no command buffer, no queue, nothing to wait on,
-        // which is the whole point of this path. Whole-image range for the same reason
-        // transitionImageLayout uses one: the layout tracker is per-texture, not per-layer.
-        if (_currentLayout != copyLayout)
+        // Host-side layout transition -- no command buffer, no queue, nothing to wait on, which
+        // is the whole point of this path. Only the subresource being written: a cubemap arrives
+        // one face at a time, and transitioning the whole image per face would move five layers
+        // that this call is not touching.
+        const VkmSubresourceRange writtenRange{ mipLevel, 1, arrayLayer, 1 };
+        if (getSubresourceLayout(mipLevel, arrayLayer) != copyLayout)
         {
             const VkHostImageLayoutTransitionInfo transitionInfo{
                 .sType            = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO,
                 .image            = _vkTexture,
-                .oldLayout        = _currentLayout,
+                .oldLayout        = getSubresourceLayout(mipLevel, arrayLayer),
                 .newLayout        = copyLayout,
-                .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS },
+                .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, mipLevel, 1, arrayLayer, 1 },
             };
             const VkResult transitionResult = vkTransitionImageLayoutEXT(driverVulkan->getDevice(), 1, &transitionInfo);
             if (!VKM_VK_CHECK_RESULT_MSG(transitionResult, "Failed to transition image layout on the host"))
             {
                 return false;
             }
-            _currentLayout = copyLayout;
+            setSubresourceLayout(writtenRange, copyLayout);
         }
 
         const VkMemoryToImageCopy region{
@@ -227,21 +230,21 @@ namespace vkm
         // Same end state copyBufferToTexture guarantees, so callers need not care which path
         // ran. Usually already satisfied -- the driver prefers SHADER_READ_ONLY_OPTIMAL as
         // the copy layout precisely so this is a no-op.
-        if (_currentLayout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        if (getSubresourceLayout(mipLevel, arrayLayer) != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
         {
             const VkHostImageLayoutTransitionInfo shaderReadTransition{
                 .sType            = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO,
                 .image            = _vkTexture,
-                .oldLayout        = _currentLayout,
+                .oldLayout        = getSubresourceLayout(mipLevel, arrayLayer),
                 .newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS },
+                .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, mipLevel, 1, arrayLayer, 1 },
             };
             const VkResult transitionResult = vkTransitionImageLayoutEXT(driverVulkan->getDevice(), 1, &shaderReadTransition);
             if (!VKM_VK_CHECK_RESULT_MSG(transitionResult, "Failed to transition image to shader-read on the host"))
             {
                 return false;
             }
-            _currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            setSubresourceLayout(writtenRange, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
         return true;
     }
@@ -249,8 +252,112 @@ namespace vkm
     bool VkmTextureVulkan::overrideExternalHandle(void* externalHandle)
     {
         _vkTexture = static_cast<VkImage>(externalHandle);
-        _currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        _uniformLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        _subresourceLayouts.clear();
         return createDefaultView();
+    }
+
+    void VkmTextureVulkan::makeLayoutsPerSubresource()
+    {
+        if (!_subresourceLayouts.empty())
+        {
+            return;
+        }
+        const uint32_t count = std::max(1u, _textureInfo._numMipLevels) *
+                               std::max(1u, _textureInfo._numArrayLayers);
+        _subresourceLayouts.assign(count, _uniformLayout);
+    }
+
+    VkImageLayout VkmTextureVulkan::getSubresourceLayout(uint32_t mipLevel, uint32_t arrayLayer) const
+    {
+        if (_subresourceLayouts.empty())
+        {
+            return _uniformLayout;
+        }
+        const uint32_t index = subresourceIndex(mipLevel, arrayLayer);
+        VKM_ASSERT(index < _subresourceLayouts.size(), "Subresource index is out of range");
+        return _subresourceLayouts[index];
+    }
+
+    VkImageLayout VkmTextureVulkan::getUniformLayout(const VkmSubresourceRange& range) const
+    {
+        if (_subresourceLayouts.empty())
+        {
+            return _uniformLayout;
+        }
+
+        const uint32_t mipCount = std::max(1u, _textureInfo._numMipLevels);
+        const uint32_t layerCount = std::max(1u, _textureInfo._numArrayLayers);
+        const uint32_t lastMip = (range._mipLevelCount == VKM_ALL_REMAINING_SUBRESOURCES)
+                                     ? mipCount - 1u
+                                     : std::min(range._baseMipLevel + range._mipLevelCount - 1u, mipCount - 1u);
+        const uint32_t lastLayer =
+            (range._arrayLayerCount == VKM_ALL_REMAINING_SUBRESOURCES)
+                ? layerCount - 1u
+                : std::min(range._baseArrayLayer + range._arrayLayerCount - 1u, layerCount - 1u);
+
+        VkImageLayout shared = VK_IMAGE_LAYOUT_MAX_ENUM;
+        for (uint32_t layer = range._baseArrayLayer; layer <= lastLayer; ++layer)
+        {
+            for (uint32_t mip = range._baseMipLevel; mip <= lastMip; ++mip)
+            {
+                const VkImageLayout layout = _subresourceLayouts[subresourceIndex(mip, layer)];
+                if (shared == VK_IMAGE_LAYOUT_MAX_ENUM)
+                {
+                    shared = layout;
+                }
+                else if (shared != layout)
+                {
+                    return VK_IMAGE_LAYOUT_MAX_ENUM;
+                }
+            }
+        }
+        return shared;
+    }
+
+    void VkmTextureVulkan::setSubresourceLayout(const VkmSubresourceRange& range, VkImageLayout layout)
+    {
+        const uint32_t mipCount = std::max(1u, _textureInfo._numMipLevels);
+        const uint32_t layerCount = std::max(1u, _textureInfo._numArrayLayers);
+
+        // The whole image: collapse back to the uniform form so the common case keeps costing one
+        // VkImageLayout and one whole-image barrier, and the vector is freed rather than kept.
+        if (range.coversAll(mipCount, layerCount))
+        {
+            _uniformLayout = layout;
+            _subresourceLayouts.clear();
+            _subresourceLayouts.shrink_to_fit();
+            return;
+        }
+
+        makeLayoutsPerSubresource();
+        const uint32_t lastMip = (range._mipLevelCount == VKM_ALL_REMAINING_SUBRESOURCES)
+                                     ? mipCount - 1u
+                                     : std::min(range._baseMipLevel + range._mipLevelCount - 1u, mipCount - 1u);
+        const uint32_t lastLayer =
+            (range._arrayLayerCount == VKM_ALL_REMAINING_SUBRESOURCES)
+                ? layerCount - 1u
+                : std::min(range._baseArrayLayer + range._arrayLayerCount - 1u, layerCount - 1u);
+
+        for (uint32_t layer = range._baseArrayLayer; layer <= lastLayer; ++layer)
+        {
+            for (uint32_t mip = range._baseMipLevel; mip <= lastMip; ++mip)
+            {
+                _subresourceLayouts[subresourceIndex(mip, layer)] = layout;
+            }
+        }
+
+        // A partial write that happens to leave every subresource agreeing collapses too -- the
+        // last face of a cubemap upload is exactly that, and it must not leave the texture stuck
+        // in the per-subresource form for the rest of its life.
+        const VkImageLayout first = _subresourceLayouts[0];
+        if (std::all_of(_subresourceLayouts.begin(), _subresourceLayouts.end(),
+                        [first](VkImageLayout candidate) { return candidate == first; }))
+        {
+            _uniformLayout = first;
+            _subresourceLayouts.clear();
+            _subresourceLayouts.shrink_to_fit();
+        }
     }
 
     bool VkmTextureVulkan::createDefaultView()

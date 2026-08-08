@@ -3441,3 +3441,33 @@ made it emit wrong barriers rather than merely redundant ones:
   **Done instead:** added `setDependentSubGraphIds` and used that.
   **Why:** the existing method appends, so compiling one graph twice would list every edge twice.
   The append form is left alone -- it is pre-existing public API.
+
+### Step 2 — per-subresource layout tracking on Vulkan
+
+`VkmTextureVulkan::_currentLayout` (one `VkImageLayout` per texture) became a uniform layout plus a
+lazily-materialised per-subresource vector, with `getSubresourceLayout` / `getUniformLayout` /
+`setSubresourceLayout` / `isLayoutUniform` replacing the old getter/setter. The vector is allocated
+only on the first partial transition and collapses back — and frees itself — whenever every
+subresource agrees again, so the common case still costs one `VkImageLayout` and emits one
+whole-image barrier.
+
+Two new helpers in `vulkan_command_buffer.cpp` carry every call site:
+`transitionWholeTexture` (one barrier while uniform, one per subresource when not, because
+`oldLayout` has to name what that subresource really is) and `transitionTextureSubresource`.
+
+This turns a latent correctness problem into a fixed one. `onCopyBufferToTexture` already took
+`mipLevel`/`arrayLayer` but transitioned the *whole image* on every call, so a six-face cubemap
+upload recorded all six faces as `SHADER_READ_ONLY_OPTIMAL` after the first copy — five of them
+before their contents had been written, and each subsequent face then named a stale `oldLayout`.
+It only escaped notice because the transition was `ALL_COMMANDS`-to-`ALL_COMMANDS` and the wrong
+`oldLayout` happened to be the layout the driver had already put the image in. The same shape
+applied to `writeRegion`'s host-image-copy path.
+
+`TestTextureShaderReadBarrier.cpp` gains a cubemap case asserting exactly that: uniform before any
+upload, one face readable and the rest `UNDEFINED` after the first, and collapsed back to uniform
+once all six agree.
+
+Vulkan 237/237 (5572 assertions), Metal 237/237 (25038). The Vulkan run emits four distinct VUIDs
+and they are the four `TODO.md` already records for ImGui teardown -- no image-layout VUID appears,
+which is the assertion that matters here, since the validation layer rejects a stale `oldLayout`
+outright.
