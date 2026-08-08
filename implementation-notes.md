@@ -3567,3 +3567,38 @@ at once).
 The rendering itself needs an interactive session to judge; what is testable is the data behind
 it, and `TestRenderGraphCapture.mm` now asserts it end to end: a producer/bystander/consumer graph
 gives the consumer exactly one edge, to the producer, and the other two none.
+
+### Step 6 — Metal actually records barriers
+
+The earlier stub's justification conflated two things: Metal 4's barriers being encoder-scoped
+means one cannot *open* an encoder to hold a barrier, not that a barrier cannot be recorded. It
+rides an encoder that already exists.
+
+`onResourceBarrier` now emits `barrierAfterEncoderStages:beforeEncoderStages:` on whichever encoder
+is open -- the intra-pass memory barrier, clamped to the stages that encoder can encode, since the
+intra-encoder form rejects stages it cannot express while the queue-scoped ones accept anything.
+This is what makes `VkmScene::recordCull`'s three barriers real on Metal for the first time; they
+previously recorded nothing there and the ordering came from the encoder-boundary pairs by luck of
+the pass structure. A pure write-after-read uses `MTL4VisibilityOptionNone`, an execution barrier
+with no cache flush.
+
+`onBarrierAcquire` is called while no encoder is open, so it accumulates stage masks that the next
+encoder to open discharges: `beginRenderPass` and the compute branch of `onBindPipeline` take them
+in place of their hardcoded `MTLStageAll` pair. **Where the analysis named nothing, the masks are
+zero and the conservative pair is used unchanged**, so an undeclared resource degrades to the old
+behaviour rather than to unordered -- which is the property that makes this safe to land.
+
+The copy and acceleration-structure paths keep their `MTLStageAll` brackets: those are
+self-contained per operation rather than subgraph boundaries, and they already order against all
+prior work.
+
+Not done: the cross-encoder `updateFence:`/`waitForFence:` pair. It is the more precise mechanism
+-- a consumer would wait on its producers rather than on every prior stage -- but it needs the
+producer's identity carried in `VkmResourceBarrier` (the analysis has it and currently drops it),
+a fence pool, and a scope boundary, because a subgraph that records several copies closes several
+encoders and the fence has to be updated at each. The queue-stage pair narrowed here is correct
+today; the fence is what would let two independent render passes overlap.
+
+Metal 240/240 (25080 assertions), no `MTL4CommandQueueError`. The probe GI propagation test still
+measures 16 frames to 90%, which is the direct regression test for the NaN-atlas failure that
+missing Metal barriers produced before. Vulkan 237/237.

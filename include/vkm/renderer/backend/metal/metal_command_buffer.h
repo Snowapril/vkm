@@ -31,7 +31,21 @@ namespace vkm
             _mtlCommandBuffer = mtlCommandBuffer;
         }
 
-        void beginRenderPass(VkmRenderResourcePool* renderResourcePool, const VkmFrameBufferDescriptor& frameBufferDesc);
+        /*
+        * @brief Opens a render encoder, waiting first for the ordering the caller accumulated.
+        * @details Metal 4 does no automatic hazard tracking, so an encoder that reads what an
+        * earlier one wrote must open with a barrier or it samples memory still being written. The
+        * masks come from the render graph's dependency analysis where it named one, and fall back
+        * to the conservative whole-queue pair where it did not.
+        * @param renderResourcePool Pool the attachments are resolved through.
+        * @param frameBufferDesc Attachments and load/store actions for the pass.
+        * @param acquireAfterQueueStages MTLStages to wait for; 0 means every stage.
+        * @param acquireBeforeStages MTLStages in this encoder that wait; 0 means vertex and
+        * fragment. Typed as uint64_t to keep MTLStages out of this header, as _boundPrimitiveType
+        * does for MTLPrimitiveType.
+        */
+        void beginRenderPass(VkmRenderResourcePool* renderResourcePool, const VkmFrameBufferDescriptor& frameBufferDesc,
+                             uint64_t acquireAfterQueueStages = 0, uint64_t acquireBeforeStages = 0);
         void beginComputePass();
         void commit();
         void reset();
@@ -73,6 +87,7 @@ namespace vkm
                                          uint32_t maxDrawCount) override final;
         virtual void onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) override final;
         virtual void onResourceBarrier(const VkmResourceBarrier* barriers, uint32_t count) override final;
+        virtual void onBarrierAcquire(const VkmResourceBarrier* barriers, uint32_t count) override final;
         virtual void onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer) override final;
         virtual void onBuildAccelerationStructure(VkmResourceHandle accelerationStructure) override final;
         virtual void onBarrierTextureForShaderRead(VkmResourceHandle texture) override final;
@@ -98,6 +113,24 @@ namespace vkm
         // VkmCommandBufferPoolMetal::getOrCreateRHICommandBuffer().
         id<MTL4CommandBuffer> _mtlCommandBuffer = nullptr;
         VkmCommandEncoderMetal _commandEncoder;
+
+        /*
+        * Ordering named while no encoder was open, carried to the next one that opens. Metal 4's
+        * barriers are encoder-scoped and opening an encoder just to hold one is what causes
+        * MTL4CommandQueueErrorTimeout, so a barrier recorded between passes waits here instead.
+        */
+        uint64_t _pendingAcquireAfterQueueStages = 0;
+        uint64_t _pendingAcquireBeforeStages = 0;
+
+        // Hands the accumulated masks to the encoder now opening and clears them, so one barrier
+        // discharges them rather than every later encoder repeating it.
+        void takePendingAcquire(uint64_t* outAfterQueueStages, uint64_t* outBeforeStages)
+        {
+            *outAfterQueueStages = _pendingAcquireAfterQueueStages;
+            *outBeforeStages = _pendingAcquireBeforeStages;
+            _pendingAcquireAfterQueueStages = 0;
+            _pendingAcquireBeforeStages = 0;
+        }
 
         // Primitive type of the currently bound graphics pipeline, captured at
         // onBindPipeline() time for onDraw() (Metal passes it per draw call, not in the
