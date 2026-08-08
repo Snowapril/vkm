@@ -422,7 +422,43 @@ namespace vkm
             VKM_DEBUG_ERROR("buildAccelerationStructure: invalid acceleration structure handle");
             return;
         }
-        static_cast<VkmAccelerationStructureVulkan*>(structure)->recordBuild(_vkCommandBuffer);
+
+        VkmAccelerationStructureVulkan* structureVulkan = static_cast<VkmAccelerationStructureVulkan*>(structure);
+        if (structureVulkan->getAccelerationStructure() == VK_NULL_HANDLE || !structureVulkan->isRebuildable())
+        {
+            // No scratch means the structure was built without _allowUpdate and its scratch was
+            // freed; rebuilding would read whatever now occupies that memory.
+            VKM_DEBUG_ERROR("buildAccelerationStructure on a structure that was not created with _allowUpdate");
+            return;
+        }
+
+        VkAccelerationStructureBuildGeometryInfoKHR buildInfo{
+            .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
+            .type  = structureVulkan->getType() == VkmAccelerationStructureType::TopLevel
+                         ? VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR
+                         : VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+            .flags = static_cast<VkBuildAccelerationStructureFlagsKHR>(
+                         VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                         (structureVulkan->allowsUpdate() ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR : 0)),
+            // BUILD rather than UPDATE. A top-level rebuild over its instances is cheap and stays
+            // optimal; an update is faster still but degrades traversal as instances drift from
+            // where the structure was built, and the dynamic case here is a rigid body moving a
+            // long way. Refit belongs to deforming geometry, which nothing produces yet.
+            .mode                     = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR,
+            .dstAccelerationStructure = structureVulkan->getAccelerationStructure(),
+            .geometryCount            = static_cast<uint32_t>(structureVulkan->getGeometries().size()),
+            .pGeometries              = structureVulkan->getGeometries().data(),
+        };
+        buildInfo.scratchData.deviceAddress = structureVulkan->getScratchAddress();
+
+        std::vector<VkAccelerationStructureBuildRangeInfoKHR> ranges;
+        ranges.reserve(structureVulkan->getPrimitiveCounts().size());
+        for (uint32_t count : structureVulkan->getPrimitiveCounts())
+        {
+            ranges.push_back(VkAccelerationStructureBuildRangeInfoKHR{ .primitiveCount = count });
+        }
+        const VkAccelerationStructureBuildRangeInfoKHR* rangePointer = ranges.data();
+        vkCmdBuildAccelerationStructuresKHR(_vkCommandBuffer, 1, &buildInfo, &rangePointer);
     }
 
     void VkmCommandBufferVulkan::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)

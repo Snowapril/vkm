@@ -36,9 +36,13 @@ namespace vkm
 
         inline id<MTLAccelerationStructure> getAccelerationStructure() const { return _accelerationStructure; }
 
-        // Records a rebuild. Only valid on a structure created with `_allowUpdate`, which is what
-        // kept its scratch alive; see the Vulkan counterpart for why this is a rebuild not a refit.
-        void recordBuild(id<MTL4ComputeCommandEncoder> encoder);
+        // What a build needs to know about this structure, for the one caller that records one:
+        // VkmCommandBufferMetal::onBuildAccelerationStructure. A resource describes itself; the
+        // command buffer is what turns that into a command. A nil scratch means the structure was
+        // built without `_allowUpdate` and a rebuild must refuse -- Metal's debug layer aborts the
+        // process on a nil scratch buffer rather than reporting it.
+        inline MTL4AccelerationStructureDescriptor* getDescriptor() const { return _descriptor; }
+        inline id<MTLBuffer> getScratchBuffer() const { return _scratchBuffer; }
 
     private:
         MTL4AccelerationStructureDescriptor* makeDescriptor(const VkmAccelerationStructureInfo& info);

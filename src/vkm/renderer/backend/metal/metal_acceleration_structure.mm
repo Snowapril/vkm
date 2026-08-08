@@ -186,28 +186,6 @@ namespace vkm
         return descriptor;
     }
 
-    void VkmAccelerationStructureMetal::recordBuild(id<MTL4ComputeCommandEncoder> encoder)
-    {
-        if (_accelerationStructure == nil || _descriptor == nil)
-        {
-            VKM_DEBUG_ERROR("recordBuild on an acceleration structure that failed to initialize");
-            return;
-        }
-        if (_scratchBuffer == nil)
-        {
-            // The scratch is gone on a static structure, which is exactly the case this must
-            // refuse: rebuilding one would read whatever now occupies that memory. Passing an
-            // empty range instead is not a softer failure -- Metal's debug layer aborts the
-            // process on a nil scratch buffer, which is how this guard's absence surfaced.
-            VKM_DEBUG_ERROR("recordBuild on an acceleration structure that was not created with _allowUpdate");
-            return;
-        }
-        [encoder buildAccelerationStructure:_accelerationStructure
-                                 descriptor:_descriptor
-                              scratchBuffer:MTL4BufferRange{ _scratchBuffer.gpuAddress,
-                                                             _scratchBuffer.length }];
-    }
-
     bool VkmAccelerationStructureMetal::initialize(VkmResourceHandle handle,
                                                    const VkmAccelerationStructureInfo& info)
     {

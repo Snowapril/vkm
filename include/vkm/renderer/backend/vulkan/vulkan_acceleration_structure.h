@@ -35,14 +35,19 @@ namespace vkm
         bool updateInstances(const std::vector<VkmAccelerationStructureInstance>& instances) override final;
 
         /*
-        * @brief Records a rebuild into `commandBuffer`. Only valid on a structure created with
-        * `_allowUpdate`, which is what kept its scratch buffer alive.
+        * What a build needs to know about this structure, for the one caller that records one:
+        * VkmCommandBufferVulkan::onBuildAccelerationStructure. A resource describes itself; the
+        * command buffer is what turns that into a command.
         *
-        * Called by VkmCommandBufferVulkan::onBuildAccelerationStructure rather than directly, so
-        * the recording rules (outside a render pass, while recording) are checked once in the base
-        * class rather than per backend.
+        * `_scratchBuffer` is VK_NULL_HANDLE on a structure built without `_allowUpdate` -- its
+        * scratch is freed once the initial build completes -- and a rebuild must refuse then
+        * rather than read whatever now occupies that memory.
         */
-        void recordBuild(VkCommandBuffer commandBuffer);
+        inline bool isRebuildable() const { return _scratchBuffer != VK_NULL_HANDLE; }
+        inline VkDeviceAddress getScratchAddress() const { return _scratchAddress; }
+        inline bool allowsUpdate() const { return _allowUpdate; }
+        inline const std::vector<VkAccelerationStructureGeometryKHR>& getGeometries() const { return _geometries; }
+        inline const std::vector<uint32_t>& getPrimitiveCounts() const { return _primitiveCounts; }
 
         inline VkAccelerationStructureKHR getAccelerationStructure() const { return _accelerationStructure; }
         // The value an instance descriptor or a shader-side ray query needs. Zero if the build

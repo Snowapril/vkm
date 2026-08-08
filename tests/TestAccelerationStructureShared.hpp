@@ -92,7 +92,7 @@ namespace vkmtest
             vkm::VkmAccelerationStructureInfo tlasInfo{};
             tlasInfo._type = vkm::VkmAccelerationStructureType::TopLevel;
             tlasInfo._debugName = "AsTestTlas";
-            // The dynamic-object flag: without it the structure is built once and recordBuild
+            // The dynamic-object flag: without it the structure is built once and a later build
             // refuses, because the scratch it needs was freed.
             tlasInfo._allowUpdate = true;
             vkm::VkmAccelerationStructureInstance instance{};
