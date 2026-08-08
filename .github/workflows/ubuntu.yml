@@ -158,7 +158,13 @@ jobs:
             echo "Using lavapipe ICD: $icd"
             export VK_DRIVER_FILES="$icd"
             export VK_ICD_FILENAMES="$icd"
+            # Only the first run after a build that actually compiled something crashes; a second
+            # run through the same wrapper passes 222 of 222. That points at what the compile left
+            # behind rather than at anything the tests do, so record the machine's state around it.
+            echo "=== resources before"; free -m; df -h /home/runner .
             xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }} || suite_status=$?
+            echo "=== resources after"; free -m; df -h /home/runner .
+            echo "=== kernel messages (OOM kills, if any)"; sudo dmesg | tail -30 || true
             # Every filtered ordering of the ray-tracing tests passes and only the whole suite
             # crashes, so the remaining variable is the wrapper itself: run_tests.py runs the
             # binary as a captured subprocess, and every probe so far invoked it directly. This
