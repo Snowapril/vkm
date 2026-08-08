@@ -21,6 +21,7 @@ namespace vkm
 
         virtual bool initialize(VkmResourceHandle handle, const VkmTextureInfo& info) override final;
         virtual bool overrideExternalHandle(void* externalHandle) override final;
+        virtual bool finalizeAliasPlacement(const VkmAliasPlacement& placement) override final;
         virtual bool writeRegion(const void* data, uint64_t size, uint32_t mipLevel, uint32_t arrayLayer) override final;
         virtual void setDebugName(const char* name) override final;
 

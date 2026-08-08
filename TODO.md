@@ -25,6 +25,11 @@
 - wasm.yml CI builds no WebGPU shader caches: `scripts/run_tests.py` does it now, but CI has no actions cache for the ~30-minute Dawn/tint build.
 - Extend `VkmResourcePoolType` with Graphics/Compute categories for narrower Metal residency sets (`Transient` exists; Graphics/Compute do not).
 - Nothing in the engine creates a `VkmResourceCreateInfo::Transient` texture yet; `VkmProbeCaptureDepth` is the only existing flag-legal candidate.
+- Render-graph memory aliasing rests on every submit going to `(Graphics, 0)`: the acquisition barrier orders against prior frames only because one queue carries them. A second queue needs a timeline-semaphore wait instead of a barrier, or per-frame-slot aliasing heaps.
+- An `Aliasable` texture has no native handle until the frame after the first `compile()` that declares it, so a resource table or bindless registration built from one must wait on `isAliasPlaced()`; placement is frozen once chosen because rebinding would invalidate every immutable `VkmResourceTable` naming it.
+- Nothing in the engine creates a `VkmResourceCreateInfo::Aliasable` texture yet. `VkmGBuffer`'s two depth targets against a full-screen HDR target is the only viable pair found (~16.6 MB at 1080p); the gi sample's three HDR targets cannot alias because `GiComposite` samples `_directTarget` while writing `_compositeTarget`.
+- `VkmGBuffer`'s history depth is never read by anything: `getPrevDepthTexture()` has no caller outside `tests/TestGBufferShared.hpp`, so 8.3 MB at 1080p is pure dead weight that deleting would beat aliasing.
+- The texture browser can sample an aliased texture outside its render-graph lifetime, which shows whatever the other alias wrote rather than its own contents.
 - Metal resources bound via `overrideExternalHandle()` rely on the caller registering them (`VkmRenderResourcePoolMetal::registerExternalAllocation`); the swapchain deliberately opts out because `CAMetalLayer.residencySet` already covers its drawables.
 - `VkmGpuCrashHandler` breadcrumbs are per-submission only; `VK_NV_device_diagnostic_checkpoints` (per-draw-call attribution on NVIDIA) was deliberately not implemented.
 - Sporadic `MTL4CommandQueueErrorTimeout` feedback errors observed on the Metal4 triangle sample even without the crash-dump flag; frequency environment-dependent, root cause not yet investigated.

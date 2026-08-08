@@ -78,6 +78,26 @@ namespace vkm
         }
         const std::vector<VkmResourceAccessDeclaration>& getReferencedResources() const { return _referencedResources; }
 
+        /*
+        * @brief Declare that this subgraph touches an Aliasable texture, read or written.
+        *
+        * @details Mandatory for every subgraph that touches one, and the *only* source of the
+        * lifetime VkmRenderGraph::compile() packs against -- an aliasable texture's bytes are
+        * handed to another texture the moment its last declaring subgraph ends, so an omitted
+        * declaration is not a missed optimization but a use-after-free.
+        *
+        * Inference is not an option: a texture read through a bindless index or a
+        * VkmResourceTable is invisible to the graph, and addReferencedResource() (which exists
+        * only to drive the deferred reclaimer) is opt-in and routinely incomplete. compile()
+        * catches the one case it can see -- an undeclared texture bound as an attachment -- and
+        * widens the lifetime rather than trusting the omission.
+        *
+        * Reads and writes are not distinguished: a read extends a lifetime exactly as a write
+        * does, and nothing in the packer would use the difference.
+        */
+        void addAliasedResource(VkmResourceHandle handle) { _aliasedResources.push_back(handle); }
+        const std::vector<VkmResourceHandle>& getAliasedResources() const { return _aliasedResources; }
+
     private:
         VkmRenderSubGraphType _subGraphType;
         uint32_t _subGraphId;
@@ -85,6 +105,7 @@ namespace vkm
 
         std::vector<uint32_t> _dependentSubGraphIds;
         std::vector<VkmResourceAccessDeclaration> _referencedResources;
+        std::vector<VkmResourceHandle> _aliasedResources;
     };
 
     class VkmRenderGraphicsSubGraph : public VkmRenderSubGraph
@@ -102,6 +123,12 @@ namespace vkm
         void setRenderCallback(VkmRenderCallback callback) { _renderCallback = std::move(callback); }
 
         const VkmFrameBufferDescriptor& getFrameBufferDescriptor() const { return _frameBufferDesc; }
+
+        // Mutable access for VkmRenderGraph::compile() only, which coerces an aliased
+        // attachment's first-use load action to DontCare (its bytes belonged to another texture
+        // a moment ago, so there is nothing to load). Not for general use: the descriptor is
+        // otherwise the caller's declaration and must not be rewritten behind their back.
+        VkmFrameBufferDescriptor& getFrameBufferDescriptorForCompile() { return _frameBufferDesc; }
 
     private:
         VkmFrameBufferDescriptor _frameBufferDesc;
@@ -186,6 +213,10 @@ namespace vkm
         uint32_t frameIndex() const { return _frameIndex; }
 
     private:
+        // Computes every Aliasable texture's lifetime from the per-subgraph declarations, places
+        // the ones that have no memory yet, and records where each needs its acquisition barrier.
+        void compileAliasedResources();
+
         template <typename RenderSubGraphT, typename... Arg>
         RenderSubGraphT* beginSubGraph(Arg&&... arg)
         {
@@ -202,6 +233,11 @@ namespace vkm
 
         // Built by compile() from the subgraphs' declared accesses; cleared by reset().
         VkmRenderGraphBarrierPlan _barrierPlan;
+
+        // Per subgraph index, the aliased textures whose bytes must be discarded and fenced off
+        // from the previous alias before that subgraph runs. Built by compile(), consumed by
+        // execute(), cleared by reset(). Empty unless something is actually aliased.
+        std::vector<std::vector<VkmResourceHandle>> _aliasAcquisitions;
 
         VkmGpuEventTimelineObject _lastSubmitInfo;
     };

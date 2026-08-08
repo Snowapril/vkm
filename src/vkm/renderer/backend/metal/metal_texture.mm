@@ -161,6 +161,31 @@ namespace vkm
             descriptor.storageMode = _isTransient ? MTLStorageModeMemoryless
                                                   : (_isHostWritable ? MTLStorageModeShared : MTLStorageModePrivate);
 
+            /*
+            * An aliasable texture stops here with a descriptor but no texture object: how many
+            * bytes at what alignment it needs is knowable now, but who else shares those bytes
+            * is not until VkmRenderGraph::compile() has seen the whole frame. Unlike Vulkan
+            * there is no separate bind step -- finalizeAliasPlacement() is what finally calls
+            * newTextureWithDescriptor:offset: against the chosen block.
+            */
+            _isAliasable = (info._flags & VkmResourceCreateInfo::Aliasable) != 0;
+            if (_isAliasable)
+            {
+                id<MTLDevice> aliasDevice = driverMetal->getMTLDevice();
+                const MTLSizeAndAlign sizeAndAlign = [aliasDevice heapTextureSizeAndAlignWithDescriptor:descriptor];
+                _memoryAlignment = (uint32_t)sizeAndAlign.align;
+                // Counted once as a heap block, like a transient texture's zero.
+                _allocatedSize = 0;
+                // Retained until finalizeAliasPlacement() consumes it; the non-aliased paths
+                // below release theirs as soon as the texture exists.
+                _aliasDescriptor = descriptor;
+
+                VkmAliasedMemoryHeap* heap = driverMetal->getAliasedMemoryHeap();
+                // Metal has no memory-type restriction, so every block is compatible.
+                return heap != nullptr && heap->registerResource(handle, (uint64_t)sizeAndAlign.size,
+                                                                 (uint64_t)sizeAndAlign.align, ~0u);
+            }
+
             id<MTLDevice> device = driverMetal->getMTLDevice();
             // Also the "can this be heap-placed at all" test: Metal reports a zero footprint
             // for a descriptor it cannot place, and overwriting _memoryAlignment with that 0
@@ -237,6 +262,32 @@ namespace vkm
     // deliberately does not -- CAMetalLayer.residencySet already covers its drawables, and
     // registering them individually would retain every drawable the layer ever vends, since a
     // residency set retains its members and only the last drawable is ever released back.
+    bool VkmTextureMetal::finalizeAliasPlacement(const VkmAliasPlacement& placement)
+    {
+        if (_aliasDescriptor == nil)
+        {
+            VKM_DEBUG_ERROR("finalizeAliasPlacement was called on a texture with no pending descriptor");
+            return false;
+        }
+
+        VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
+        // Object and placement in one call: newTextureWithDescriptor:offset: is what makes this
+        // texture share bytes with whatever else overlaps [offset, offset + size).
+        _mtlTexture = driverMetal->createTextureInAliasBlock(placement._blockIndex, _aliasDescriptor,
+                                                             placement._offset);
+        [_aliasDescriptor release];
+        _aliasDescriptor = nil;
+
+        if (_mtlTexture == nil)
+        {
+            VKM_DEBUG_ERROR("Failed to place an aliased MTLTexture into its heap block");
+            return false;
+        }
+
+        _isAliasPlaced = true;
+        return true;
+    }
+
     bool VkmTextureMetal::overrideExternalHandle(void* externalHandle)
     {
         _mtlTexture = static_cast<id<MTLTexture>>(externalHandle);

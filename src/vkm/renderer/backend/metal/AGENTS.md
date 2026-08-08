@@ -91,6 +91,19 @@ make the backing heap resident on their own. `onResourceInitialized` additionall
 each resource's own allocation, so heap-placed resources are covered twice over — harmless, and
 `registerExternalAllocation` is idempotent.
 
+**Aliasable textures use their own blocks**, not the shared ones above: `VkmGpuImageHeapMetal`,
+one `MTLHeapTypePlacement` heap per block, created on demand by `VkmDriverMetal::onCreateAliasBlock`
+and indexed by the block index `VkmAliasedMemoryHeap` hands out. They cannot share
+`VkmGpuHeapAllocatorMetal`'s blocks because their offsets are not the allocator's to pick: the
+packer decides `(block, offset)` for every aliasable texture at once from whole-frame lifetimes,
+so two textures that never coexist are placed *on top of each other* on purpose.
+`MTLHeapTypeAutomatic` + `-[MTLResource makeAliasable]` was rejected for this: it is irreversible
+and gives no control over which resource claims the bytes, so reusing them would mean re-creating
+the `MTLTexture` every frame and invalidating every immutable `VkmResourceTable` naming it. These
+blocks keep the untracked default `hazardTrackingMode` — tracking would serialize every resource
+in the heap against every other, the opposite of the point — and the ordering that keeps aliases
+apart is `acquireAliasedTexture`'s explicit barrier instead.
+
 A `VkmResourceCreateInfo::Transient` texture is `MTLStorageModeMemoryless`, and the request is
 **always granted** here — the backend already refuses to initialize below `MTLGPUFamilyApple9`,
 where memoryless is unconditional, so there is no runtime check and no fallback path. It cannot
@@ -119,7 +132,7 @@ Overrides all 7 `VkmDriverBase` pure virtuals:
 - `newRenderResourcePoolInner` → `new VkmRenderResourcePoolMetal`
 
 ### VkmRenderResourcePoolMetal
-- Owns one `id<MTLResidencySet>` per `VkmResourcePoolType` (`Default`, `Transient`), **all** of them attached to each `MTL4CommandQueue` at queue init — Metal4 command buffers do not implicitly make referenced resources resident. The `Transient` set is attached too rather than skipped: its sub-pool holds whatever `VkmResourceCreateInfo::Transient` asked for, which on a backend that could not honor the request would be an ordinary device-backed texture, so leaving it off would be a latent GPU fault. A memoryless texture, by contrast, is deliberately kept **out** of every set: `fetchAllocation` returns nil for one, because `-[MTLResidencySet addAllocation:]` asserts `residency sets do not support memoryless resources` (only visible with `MTL_DEBUG_LAYER=1`, which is why the unit tests run with it). Excluding it in `fetchAllocation` rather than at the `onResourceInitialized`/`releaseResource` call sites is what keeps add and remove from disagreeing
+- Owns one `id<MTLResidencySet>` per `VkmResourcePoolType` (`Default`, `Transient`, `Aliased`), **all** of them attached to each `MTL4CommandQueue` at queue init — Metal4 command buffers do not implicitly make referenced resources resident. The `Transient` set is attached too rather than skipped: its sub-pool holds whatever `VkmResourceCreateInfo::Transient` asked for, which on a backend that could not honor the request would be an ordinary device-backed texture, so leaving it off would be a latent GPU fault. A memoryless texture, by contrast, is deliberately kept **out** of every set: `fetchAllocation` returns nil for one, because `-[MTLResidencySet addAllocation:]` asserts `residency sets do not support memoryless resources` (only visible with `MTL_DEBUG_LAYER=1`, which is why the unit tests run with it). Excluding it in `fetchAllocation` rather than at the `onResourceInitialized`/`releaseResource` call sites is what keeps add and remove from disagreeing
 - Sets are created in `initialize()` (called after `initializeInner()`'s device validation), never in the constructor — residency-set APIs hang inside the Metal framework on unsupported (e.g. paravirtualized CI) GPUs instead of returning nil
 - `onResourceInitialized` / `releaseResource` — stage `addAllocation:`/`removeAllocation:` for Buffer/Texture/StagingBuffer native handles (samplers/views own no distinct `MTLAllocation`); guarded by a dedicated mutex because the deferred reclaimer releases from a background thread
 - `commitPendingResidencyChanges` — flushes staged changes with one `commit` per set; called from `VkmCommandQueueMetal::submit()` before command-buffer commit, no-op when nothing staged

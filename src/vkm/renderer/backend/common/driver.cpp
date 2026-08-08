@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/common/driver.h>
+#include <vkm/renderer/backend/common/aliased_memory_heap.h>
 #include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/backend/common/buffer.h>
 #include <vkm/renderer/backend/common/staging_buffer.h>
@@ -45,11 +46,27 @@ namespace vkm
             (uint32_t)VkmResourceCreateInfo::AllowColorAttachment |
             (uint32_t)VkmResourceCreateInfo::AllowDepthStencilAttachment);
 
+        /*
+        * An aliased texture shares its bytes with another, so anything that implies memory it
+        * does not own outright, or that the render graph cannot see the lifetime of, rules it
+        * out. Unlike Transient it may still be sampled and blitted -- the graph's declaration
+        * is what bounds the lifetime, not the usage.
+        */
+        constexpr VkmResourceCreateInfo kAliasableIncompatibleFlags = (VkmResourceCreateInfo)(
+            (uint32_t)VkmResourceCreateInfo::Transient | (uint32_t)VkmResourceCreateInfo::AllowPresent |
+            (uint32_t)VkmResourceCreateInfo::ExternalHandleOwner |
+            (uint32_t)VkmResourceCreateInfo::DeferredCreation);
+
         // VkmResourceCreateInfo has no operator~ or operator&=, and one local helper is less
         // surface than adding them for a single call site each.
+        VkmResourceCreateInfo clearFlag(VkmResourceCreateInfo flags, VkmResourceCreateInfo toClear)
+        {
+            return (VkmResourceCreateInfo)((uint32_t)flags & ~(uint32_t)toClear);
+        }
+
         VkmResourceCreateInfo clearTransient(VkmResourceCreateInfo flags)
         {
-            return (VkmResourceCreateInfo)((uint32_t)flags & ~(uint32_t)VkmResourceCreateInfo::Transient);
+            return clearFlag(flags, VkmResourceCreateInfo::Transient);
         }
 
         VkmResourceCreateInfo sanitizeTransientTextureFlags(VkmResourceCreateInfo flags, const char* debugName)
@@ -91,6 +108,56 @@ namespace vkm
                                        debugName != nullptr ? debugName : "<unnamed>").c_str());
             return clearTransient(flags);
         }
+
+        VkmResourceCreateInfo sanitizeAliasableTextureFlags(VkmResourceCreateInfo flags, const char* debugName,
+                                                           bool backendSupportsAliasing)
+        {
+            if ((flags & VkmResourceCreateInfo::Aliasable) == 0)
+            {
+                return flags;
+            }
+
+            const char* name = debugName != nullptr ? debugName : "<unnamed>";
+            if (!backendSupportsAliasing)
+            {
+                // Accepted and downgraded rather than rejected, so one VkmTextureInfo stays
+                // portable across every backend -- the contract Transient and ForcePooled carry.
+                VKM_DEBUG_WARN(fmt::format("VkmResourceCreateInfo::Aliasable is not supported by this backend; "
+                                           "texture '{}' will own its memory", name).c_str());
+                return clearFlag(flags, VkmResourceCreateInfo::Aliasable);
+            }
+            if ((flags & kAliasableIncompatibleFlags) != 0)
+            {
+                VKM_DEBUG_WARN(fmt::format("VkmResourceCreateInfo::Aliasable on texture '{}' is combined with a flag "
+                                           "that implies memory it does not own; the texture will own its memory",
+                                           name).c_str());
+                return clearFlag(flags, VkmResourceCreateInfo::Aliasable);
+            }
+            // Attachment use is the only use VkmRenderGraph::compile() can check for an omitted
+            // declaration, and the only place the mandatory discard has any meaning.
+            if ((flags & kTransientAttachmentFlags) == 0)
+            {
+                VKM_DEBUG_WARN(fmt::format("VkmResourceCreateInfo::Aliasable on texture '{}' carries no attachment "
+                                           "usage; the texture will own its memory", name).c_str());
+                return clearFlag(flags, VkmResourceCreateInfo::Aliasable);
+            }
+            return flags;
+        }
+
+        VkmResourceCreateInfo sanitizeAliasableBufferFlags(VkmResourceCreateInfo flags, const char* debugName)
+        {
+            if ((flags & VkmResourceCreateInfo::Aliasable) == 0)
+            {
+                return flags;
+            }
+
+            // A buffer's use is invisible to the render graph -- it is never an attachment, so
+            // the undeclared-use check that makes aliasing safe cannot exist for one. Deliberately
+            // out of scope rather than silently unsafe.
+            VKM_DEBUG_WARN(fmt::format("VkmResourceCreateInfo::Aliasable is texture-only; ignored on buffer '{}'",
+                                       debugName != nullptr ? debugName : "<unnamed>").c_str());
+            return clearFlag(flags, VkmResourceCreateInfo::Aliasable);
+        }
     }
 
     VkmDriverBase::VkmDriverBase()
@@ -125,6 +192,12 @@ namespace vkm
         if (result.code != VkmInitResultCode::Success)
         {
             return result;
+        }
+
+        // After initializeInner(), which is what decides whether this device can alias at all.
+        if (supportsResourceAliasing())
+        {
+            _aliasedMemoryHeap = std::make_unique<VkmAliasedMemoryHeap>(this);
         }
 
         // Decide the swapchain color format now (after the device is valid) so it is known
@@ -186,6 +259,13 @@ namespace vkm
             _gpuProfiler->destroy();
         }
 
+        // Before destroyInner() too: the blocks are backend allocations owned by the device it
+        // is about to tear down.
+        if (_aliasedMemoryHeap)
+        {
+            _aliasedMemoryHeap->destroy();
+        }
+
         destroyInner();
     }
 
@@ -195,10 +275,19 @@ namespace vkm
         // render-pass guard all read the same, legal flag set.
         VkmTextureInfo info = textureInfo;
         info._flags = sanitizeTransientTextureFlags(info._flags, info._debugName);
+        // After the Transient pass, so a texture asking for both is told about the one that
+        // survived rather than about a combination it no longer has.
+        info._flags = sanitizeAliasableTextureFlags(info._flags, info._debugName, supportsResourceAliasing());
 
-        const VkmResourcePoolType poolType = ((info._flags & VkmResourceCreateInfo::Transient) != 0)
-            ? VkmResourcePoolType::Transient
-            : VkmResourcePoolType::Default;
+        VkmResourcePoolType poolType = VkmResourcePoolType::Default;
+        if ((info._flags & VkmResourceCreateInfo::Transient) != 0)
+        {
+            poolType = VkmResourcePoolType::Transient;
+        }
+        else if ((info._flags & VkmResourceCreateInfo::Aliasable) != 0)
+        {
+            poolType = VkmResourcePoolType::Aliased;
+        }
 
         VkmTexture* texture = newTextureInner();
         VkmResourceHandle handle = _renderResourcePool->allocateTexture(texture, poolType);
@@ -217,9 +306,10 @@ namespace vkm
         tag.allocatedSize = texture->getAllocatedSize();
         tag.alignment = texture->getMemoryAlignment();
         tag.name = info._debugName != nullptr ? info._debugName : "";
-        // Distinguishes "0 bytes because the allocation is tile-only" from "0 bytes because
-        // nothing reported a size" in the memory report.
-        tag.metadata = texture->isTransient() ? "transient" : "";
+        // Distinguishes "0 bytes because the allocation is tile-only" and "0 bytes because the
+        // bytes are shared and counted once as a heap block" from "0 bytes because nothing
+        // reported a size" in the memory report.
+        tag.metadata = texture->isTransient() ? "transient" : (texture->isAliasable() ? "aliased" : "");
         tag.type = texture->getResourceType();
         _renderResourcePool->tagResource(handle, tag);
         _renderResourcePool->onResourceInitialized(handle);
@@ -236,6 +326,7 @@ namespace vkm
     {
         VkmBufferInfo info = bufferInfo;
         info._flags = sanitizeTransientBufferFlags(info._flags, info._debugName);
+        info._flags = sanitizeAliasableBufferFlags(info._flags, info._debugName);
 
         VkmBuffer* buffer = newBufferInner();
         VkmResourceHandle handle = _renderResourcePool->allocateBuffer(buffer, VkmResourcePoolType::Default);
@@ -270,6 +361,7 @@ namespace vkm
     {
         VkmStagingBufferInfo info = stagingBufferInfo;
         info._flags = sanitizeTransientBufferFlags(info._flags, info._debugName);
+        info._flags = sanitizeAliasableBufferFlags(info._flags, info._debugName);
 
         VkmStagingBuffer* stagingBuffer = newStagingBufferInner();
         VkmResourceHandle handle = _renderResourcePool->allocateStagingBuffer(stagingBuffer, VkmResourcePoolType::Default);

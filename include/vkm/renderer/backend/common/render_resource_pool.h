@@ -106,6 +106,14 @@ namespace vkm
         */
         inline bool hasTransientTextures() const { return _hasTransientTextures.load(std::memory_order_relaxed); }
 
+        /*
+        * @brief Whether an aliasable texture has ever been allocated from this pool.
+        * @details The same one-way latch hasTransientTextures() is, and used the same way:
+        * VkmRenderGraph::compile()'s lifetime pass is a no-op when nothing is aliasable, so a
+        * lock-free load lets every existing graph skip it entirely.
+        */
+        inline bool hasAliasableTextures() const { return _hasAliasableTextures.load(std::memory_order_relaxed); }
+
     private:
         // Caller must already hold _mutex.
         VkmResourceHandle allocateResourceLocked(VkmResourceType type, VkmResourcePoolType poolType);
@@ -138,6 +146,7 @@ namespace vkm
         VkmDriverBase* _driver;
         std::array<VkmDriverResourceSubPool, (uint8_t)VkmResourcePoolType::Count> _subPools;
         std::atomic<bool> _hasTransientTextures{false};
+        std::atomic<bool> _hasAliasableTextures{false};
         mutable std::mutex _mutex;
     };
 }

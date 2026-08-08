@@ -47,7 +47,11 @@ unconditionally — Dawn/emdawnwebgpu exposes no placement/suballocation API at 
 to committed, with a `VKM_DEBUG_WARN` logged each time it's requested. `VkmResourceCreateInfo::Transient`
 is accepted and warned about the same way — WebGPU has no memoryless/lazily-allocated concept at
 all, so `isTransient()` stays false and the texture is device-backed like any other.
-`VkmSamplerWebGPU` has no memory backing at all (mirrors Vulkan's `VkSampler`/Metal's
+`VkmResourceCreateInfo::Aliasable` is refused the same way, and here the downgrade is a
+correctness requirement rather than a lost optimization: `toWGPULoadOp` maps `DontCare` to
+`WGPULoadOp_Load`, so a first-use pass on an aliased texture would read whatever the other alias
+left behind. `VkmDriverBase::supportsResourceAliasing()` stays false, which is what makes the
+sanitizer clear the flag. `VkmSamplerWebGPU` has no memory backing at all (mirrors Vulkan's `VkSampler`/Metal's
 `MTLSamplerState`).
 
 ## StagingBuffer Mapping — the One Non-Trivial Backend

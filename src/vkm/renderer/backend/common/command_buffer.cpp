@@ -389,6 +389,16 @@ namespace vkm
         }
     }
 
+    void VkmCommandBufferBase::acquireAliasedTexture(VkmResourceHandle texture)
+    {
+        if (!_isRecording || _isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("acquireAliasedTexture must be recorded while recording and outside a render pass");
+            return;
+        }
+        onAcquireAliasedTexture(texture);
+    }
+
     void VkmCommandBufferBase::bindResourceTable(VkmResourceTableBase* table)
     {
         if (!_isRecording || _boundPipelineState == nullptr)

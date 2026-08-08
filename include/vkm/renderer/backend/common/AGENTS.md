@@ -109,6 +109,51 @@ descriptor to a validation layer:
 `VkmTexture::isTransient()` reports what was allocated, the same request-vs-grant contract
 `isHostWritable()` carries. A granted texture must never be sampled, blitted or read back.
 
+### Aliased (memory-sharing) textures
+
+`VkmResourceCreateInfo::Aliasable` lets two textures whose render-graph lifetimes do not overlap
+share the same bytes — Vulkan binds both images into one `VkDeviceMemory` block at chosen
+offsets, Metal creates both into one `MTLHeapTypePlacement` heap. WebGPU has neither and warns.
+
+The packing lives in `VkmAliasedMemoryHeap` (`common/aliased_memory_heap.h`), which owns no
+device memory at all: the driver supplies blocks through `onCreateAliasBlock`, and each backend
+turns a `VkmAliasPlacement` into a real binding. That split is what makes the rules unit-testable
+with no GPU (`tests/TestAliasedMemoryHeap.cpp`).
+
+Four rules, all enforced in common code:
+
+1. **Lifetimes are declared, never inferred.** Every subgraph touching an aliasable texture must
+   call `VkmRenderSubGraph::addAliasedResource()`. A texture read through a bindless index or a
+   `VkmResourceTable` is invisible to the graph, and `addReferencedResource` (which exists only
+   to drive the deferred reclaimer) is opt-in and routinely incomplete. `compile()` catches the
+   one case it can see — an aliasable texture attached without being declared — logs an error and
+   **widens** the lifetime: an over-wide lifetime costs memory, an under-wide one corrupts pixels.
+   A registered texture nobody declared this frame is treated as live for the whole graph, since
+   an empty lifetime would let two such textures look mutually disjoint.
+2. **Placement is decided once and never revisited.** `vkBindImageMemory` may be called once per
+   image, `vkCreateImageView` needs bound memory, and `VkmResourceTableBase` bakes that view in —
+   so moving a texture later would invalidate every table naming it. The consequence is a
+   one-frame gate: an aliasable texture has no usable native handle until the frame after the
+   first `compile()` that declares it. Check `isAliasPlaced()` before attaching it, building a
+   table from it, or registering it bindless.
+3. **Acquisition discards and fences, in one call.** `VkmRenderGraph::execute()` emits
+   `VkmCommandBufferBase::acquireAliasedTexture()` before the first subgraph that declared each
+   texture whose bytes are actually shared. Application code never calls it — forgetting it would
+   be undefined pixels rather than a compile error. `compile()` also coerces that first use's
+   load action to `DontCare`, since the previous contents belong to another texture.
+4. **One global heap, because there is one queue.** A barrier's first synchronization scope covers
+   everything earlier in *submission order* on the queue, which spans command buffers — so the
+   acquisition barrier orders this frame's first write after the previous frame's reads of the
+   other alias, and per-frame-slot heaps are unnecessary. **This holds only while everything
+   submits to `(Graphics, 0)`.** A second queue would break it and need a timeline-semaphore wait
+   instead; see `TODO.md`.
+
+`isAliasable()` reports the grant, the same request-vs-grant contract `isHostWritable()` and
+`isTransient()` carry. `Aliasable` is mutually exclusive with `Transient` (memoryless has no
+memory to alias), `ExternalHandleOwner`, `DeferredCreation` and `AllowPresent`, requires at least
+one attachment usage, and is texture-only — a buffer is never an attachment, so the undeclared-use
+check could not exist for one.
+
 ### GPU virtual addresses
 
 `VkmBuffer::getGPUVirtualAddress()` and `VkmStagingBuffer::getGPUVirtualAddress()` report the

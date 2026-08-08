@@ -15,6 +15,8 @@ typedef struct VmaAllocator_T* VmaAllocator;
 namespace vkm
 {
     class VkmGpuHeapAllocatorVulkan;
+    class VkmGpuHeapAllocatorVulkan;
+    class VkmGpuImageHeapVulkan;
 
     /*
     * @brief Vulkan renderer backend driver.
@@ -111,6 +113,13 @@ namespace vkm
         */
         inline VkmGpuHeapAllocatorVulkan* getHeapAllocator() const { return _heapAllocator.get(); }
 
+        // Binds an aliasable image into the block VkmAliasedMemoryHeap assigned it.
+        bool bindImageToAliasBlock(uint32_t blockIndex, VkImage image, uint64_t offset);
+
+        bool supportsResourceAliasing() const override final { return true; }
+        bool onCreateAliasBlock(uint32_t blockIndex, uint64_t sizeBytes, uint32_t memoryTypeBits) override final;
+        void onDestroyAliasBlock(uint32_t blockIndex) override final;
+
     protected:
         virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) override final;
         virtual void destroyInner() override final;
@@ -128,6 +137,9 @@ namespace vkm
     private:
         VmaAllocator _vmaAllocator{VK_NULL_HANDLE};
         std::unique_ptr<VkmGpuHeapAllocatorVulkan> _heapAllocator;
+        // Indexed by the block index VkmAliasedMemoryHeap hands out; append-only, and freed only
+        // at teardown, since a live placement always points into one.
+        std::vector<std::unique_ptr<VkmGpuImageHeapVulkan>> _imageHeaps;
 
         VkQueryPool _timestampQueryPool{VK_NULL_HANDLE};
         double _timestampPeriodNs{1.0};

@@ -681,6 +681,39 @@ namespace vkm
         vkCmdPipelineBarrier2(_vkCommandBuffer, &dependencyInfo);
     }
 
+    void VkmCommandBufferVulkan::onAcquireAliasedTexture(VkmResourceHandle texture)
+    {
+        VkmTextureVulkan* textureVulkan =
+            static_cast<VkmTextureVulkan*>(_driver->getRenderResourcePool()->getResource<VkmTexture>(texture));
+        if (textureVulkan == nullptr)
+        {
+            VKM_DEBUG_ERROR("acquireAliasedTexture was given a handle that is not a live texture");
+            return;
+        }
+
+        /*
+        * UNDEFINED as the *source* is the discard: it tells the driver the previous contents --
+        * which belong to whichever texture last held these bytes -- need not be preserved. It is
+        * illegal as a destination (VUID-VkImageMemoryBarrier2-newLayout-01198), so this goes
+        * straight to the attachment layout the first use needs, and the tracker is updated so the
+        * barrier plan's own acquire sees where the image actually is.
+        *
+        * transitionImageLayout is ALL_COMMANDS + MEMORY_READ|WRITE on both sides over the whole
+        * image, which is exactly the hazard scope aliasing needs: it orders this write after every
+        * read of the previous alias, including ones submitted in earlier frames, because a
+        * barrier's first scope covers everything earlier in submission order on the queue -- and
+        * everything in this engine submits to the graphics queue.
+        */
+        const VkmFormat format = textureVulkan->getTextureInfo()._format;
+        const VkImageAspectFlags aspectMask = vkmToVkAspectMask(format);
+        const bool isDepth = (aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0;
+        const VkImageLayout acquiredLayout =
+            isDepth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        transitionImageLayout(_vkCommandBuffer, textureVulkan->getImage(), VK_IMAGE_LAYOUT_UNDEFINED,
+                              acquiredLayout, aspectMask);
+        textureVulkan->setSubresourceLayout(VkmSubresourceRange{}, acquiredLayout);
+    }
+
     void VkmCommandBufferVulkan::onBindResourceTable(VkmResourceTableBase* table)
     {
         VkmResourceTableVulkan* tableVulkan = static_cast<VkmResourceTableVulkan*>(table);

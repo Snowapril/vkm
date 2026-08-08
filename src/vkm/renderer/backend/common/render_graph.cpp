@@ -2,6 +2,7 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/backend/common/render_graph.h>
+#include <vkm/renderer/backend/common/aliased_memory_heap.h>
 #include <vkm/renderer/backend/common/command_queue.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/driver.h>
@@ -192,6 +193,168 @@ namespace vkm
         {
             _subGraphs[i]->setDependentSubGraphIds(_barrierPlan._dependencies[i]);
         }
+
+        compileAliasedResources();
+    }
+
+    /*
+    * Decides where every Aliasable texture's bytes live, and where the discard-and-fence has to
+    * happen so two textures sharing bytes can never coexist on the GPU.
+    *
+    * This runs after every subgraph is declared and before any command is recorded, which is the
+    * only point where both facts are available. Subgraphs commit in declaration order into one
+    * command buffer, so a lifetime is just the closed interval of subgraph indices that declared
+    * the resource, and "these two never coexist" is interval non-intersection.
+    */
+    void VkmRenderGraph::compileAliasedResources()
+    {
+        VkmRenderResourcePool* resourcePool = _driver->getRenderResourcePool();
+        // Nothing aliasable has ever been created: one relaxed load and every existing graph is
+        // untouched by this pass.
+        if (resourcePool == nullptr || !resourcePool->hasAliasableTextures())
+        {
+            return;
+        }
+
+        VkmAliasedMemoryHeap* heap = _driver->getAliasedMemoryHeap();
+        if (heap == nullptr)
+        {
+            return;
+        }
+
+        const uint32_t subGraphCount = (uint32_t)_subGraphs.size();
+        std::vector<VkmAliasLifetime> lifetimes;
+
+        const auto mergeLifetime = [&lifetimes](VkmResourceHandle handle, uint32_t subGraphIndex) {
+            const auto it = std::find_if(lifetimes.begin(), lifetimes.end(),
+                                         [handle](const VkmAliasLifetime& l) { return l._handle == handle; });
+            if (it == lifetimes.end())
+            {
+                lifetimes.push_back(VkmAliasLifetime{handle, subGraphIndex, subGraphIndex});
+                return;
+            }
+            it->_first = std::min(it->_first, subGraphIndex);
+            it->_last = std::max(it->_last, subGraphIndex);
+        };
+
+        const auto isAliasableTexture = [resourcePool](VkmResourceHandle handle) {
+            VkmTexture* texture = resourcePool->getResource<VkmTexture>(handle);
+            return texture != nullptr && texture->isAliasable();
+        };
+
+        for (uint32_t subGraphIndex = 0; subGraphIndex < subGraphCount; ++subGraphIndex)
+        {
+            VkmRenderSubGraph* subGraph = _subGraphs[subGraphIndex].get();
+            const std::vector<VkmResourceHandle>& declared = subGraph->getAliasedResources();
+            for (VkmResourceHandle handle : declared)
+            {
+                if (!isAliasableTexture(handle))
+                {
+                    VKM_DEBUG_WARN(fmt::format("Subgraph '{}' declared resource {} as aliased, but it is not an "
+                                               "Aliasable texture; the declaration is ignored",
+                                               subGraph->getName(), handle.id).c_str());
+                    continue;
+                }
+                mergeLifetime(handle, subGraphIndex);
+            }
+
+            // Attachments are the only use the graph can see for itself. An aliasable texture
+            // attached without being declared is a caller bug, but the lifetime is widened rather
+            // than trusted: an over-wide lifetime costs memory, an under-wide one corrupts pixels.
+            if (subGraph->getSubGraphType() != VkmRenderSubGraphType::Graphics)
+            {
+                continue;
+            }
+            VkmRenderGraphicsSubGraph* graphicsSubGraph = static_cast<VkmRenderGraphicsSubGraph*>(subGraph);
+            const VkmFrameBufferDescriptor& frameBufferDesc = graphicsSubGraph->getFrameBufferDescriptor();
+
+            const auto checkAttachment = [&](VkmResourceHandle handle, const char* slot) {
+                if (!handle.isValid() || !isAliasableTexture(handle))
+                {
+                    return;
+                }
+                if (std::find(declared.begin(), declared.end(), handle) == declared.end())
+                {
+                    VKM_DEBUG_ERROR(fmt::format("Subgraph '{}' attaches aliasable texture {} as its {} without "
+                                                "declaring it via addAliasedResource; its lifetime is widened to "
+                                                "cover this subgraph", subGraph->getName(), handle.id, slot).c_str());
+                }
+                mergeLifetime(handle, subGraphIndex);
+            };
+
+            for (uint32_t i = 0; i < frameBufferDesc._renderPass._colorAttachmentCount; ++i)
+            {
+                checkAttachment(frameBufferDesc._colorAttachments[i], "color attachment");
+            }
+            if (frameBufferDesc._depthStencilAttachment.has_value())
+            {
+                checkAttachment(frameBufferDesc._depthStencilAttachment.value(), "depth/stencil attachment");
+            }
+        }
+
+        // Place anything that has no memory yet; everything else keeps the placement it was
+        // given, and only has to still be justified by this frame's lifetimes.
+        std::vector<VkmResourceHandle> newlyPlaced;
+        heap->place(lifetimes, &newlyPlaced);
+        for (VkmResourceHandle handle : newlyPlaced)
+        {
+            VkmTexture* texture = resourcePool->getResource<VkmTexture>(handle);
+            const std::optional<VkmAliasPlacement> placement = heap->getPlacement(handle);
+            if (texture != nullptr && placement.has_value())
+            {
+                texture->finalizeAliasPlacement(*placement);
+            }
+        }
+
+        std::string validationError;
+        if (!heap->validate(lifetimes, &validationError))
+        {
+            // Placement is frozen, so this cannot be repaired -- say exactly what changed and let
+            // the frame run rather than aborting, matching how the transient coercion degrades.
+            VKM_DEBUG_ERROR(fmt::format("Render graph aliasing conflict: {}", validationError).c_str());
+        }
+
+        _aliasAcquisitions.assign(subGraphCount, {});
+        for (const VkmAliasLifetime& lifetime : lifetimes)
+        {
+            // A texture whose bytes nobody else shares needs no discard and no fence.
+            if (!heap->isAliased(lifetime._handle))
+            {
+                continue;
+            }
+            _aliasAcquisitions[lifetime._first].push_back(lifetime._handle);
+
+            // Its bytes belonged to another texture a moment ago, so there is nothing to load.
+            VkmRenderSubGraph* firstSubGraph = _subGraphs[lifetime._first].get();
+            if (firstSubGraph->getSubGraphType() != VkmRenderSubGraphType::Graphics)
+            {
+                continue;
+            }
+            VkmFrameBufferDescriptor& frameBufferDesc =
+                static_cast<VkmRenderGraphicsSubGraph*>(firstSubGraph)->getFrameBufferDescriptorForCompile();
+            const auto coerceLoad = [&](VkmResourceHandle handle, VkmLoadAction& loadAction, const char* slot) {
+                if (handle == lifetime._handle && loadAction == VkmLoadAction::Load)
+                {
+                    VKM_DEBUG_ERROR(fmt::format("Aliased texture {} is loaded on its first use as the {} of '{}'; "
+                                                "its previous contents belong to another texture, so the load is "
+                                                "forced to DontCare", handle.id, slot,
+                                                firstSubGraph->getName()).c_str());
+                    loadAction = VkmLoadAction::DontCare;
+                }
+            };
+            for (uint32_t i = 0; i < frameBufferDesc._renderPass._colorAttachmentCount; ++i)
+            {
+                coerceLoad(frameBufferDesc._colorAttachments[i],
+                           frameBufferDesc._renderPass._colorAttachments[i]._loadAction, "color attachment");
+            }
+            if (frameBufferDesc._depthStencilAttachment.has_value() &&
+                frameBufferDesc._renderPass._depthStencilAttachment.has_value())
+            {
+                coerceLoad(frameBufferDesc._depthStencilAttachment.value(),
+                           frameBufferDesc._renderPass._depthStencilAttachment->_loadAction,
+                           "depth/stencil attachment");
+            }
+        }
     }
 
     void VkmRenderGraph::execute(const VkmRenderGraphCommitOptions& options)
@@ -242,6 +405,18 @@ namespace vkm
         {
             auto& subGraph = _subGraphs[subGraphIndex];
             const size_t pipelineHistoryBegin = commandBuffer->getBoundPipelineHistory().size();
+
+            // Discard the bytes the previous alias left here and fence this frame's first use
+            // against every read of that alias, including the previous frame's. Before the plan's
+            // own acquire, so the layout tracker it reads is already where the discard put it.
+            // Correctly outside a render pass: commit() is what opens one.
+            if (subGraphIndex < _aliasAcquisitions.size())
+            {
+                for (VkmResourceHandle handle : _aliasAcquisitions[subGraphIndex])
+                {
+                    commandBuffer->acquireAliasedTexture(handle);
+                }
+            }
 
             /*
             * Both halves before commit(), never one on each side. Metal has to record its release
@@ -357,6 +532,8 @@ namespace vkm
         _currentSubGraphId = 0;
         // The plan indexes the subgraphs that just went away, so it cannot outlive them.
         _barrierPlan = VkmRenderGraphBarrierPlan{};
+        // Indexed by subgraph, so it cannot outlive the subgraphs it indexes.
+        _aliasAcquisitions.clear();
     }
 
     void VkmRenderGraph::ensureCompleted()

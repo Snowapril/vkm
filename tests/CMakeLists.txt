@@ -43,6 +43,8 @@ set(SRCS
     ${SRC_DIR}/TestCubemapTexture.cpp
     ${SRC_DIR}/TestBufferHostWrite.cpp
     ${SRC_DIR}/TestTransientTexture.cpp
+    ${SRC_DIR}/TestAliasedMemoryHeap.cpp
+    ${SRC_DIR}/TestAliasedTexture.cpp
     ${SRC_DIR}/TestAccelerationStructure.cpp
     ${SRC_DIR}/TestGBufferRenderVulkan.cpp
     ${SRC_DIR}/TestPathTracerMetrics.cpp
@@ -63,6 +65,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
         ${SRC_DIR}/TestTexturePlacementMetal.mm
         ${SRC_DIR}/TestTransientTextureMetal.mm
+        ${SRC_DIR}/TestAliasedTextureMetal.mm
         ${SRC_DIR}/TestResourceTablesMetal.mm
         ${SRC_DIR}/TestGBufferMetal.mm
         ${SRC_DIR}/TestGBufferRenderMetal.mm
@@ -88,6 +91,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
         ${SRC_DIR}/TestTexturePlacementMetal.mm
         ${SRC_DIR}/TestTransientTextureMetal.mm
+        ${SRC_DIR}/TestAliasedTextureMetal.mm
         ${SRC_DIR}/TestResourceTablesMetal.mm
         ${SRC_DIR}/TestGBufferMetal.mm
         ${SRC_DIR}/TestGBufferRenderMetal.mm

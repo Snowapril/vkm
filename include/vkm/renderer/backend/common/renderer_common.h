@@ -46,7 +46,16 @@ namespace vkm
         * VkmTexture::isTransient() is what reports whether the request was honored.
         */
         Transient = 1,
-        Count = 2,
+        /*
+        * Textures asked for by VkmResourceCreateInfo::Aliasable -- attachments whose backing
+        * bytes are shared with another aliasable texture whose render-graph lifetime does not
+        * overlap. Textures only, like Transient.
+        *
+        * Membership follows the *request*: a backend that cannot alias (WebGPU) still places
+        * its ordinary allocation here, and VkmTexture::isAliasable() reports the grant.
+        */
+        Aliased = 2,
+        Count = 3,
         Undefined = Count,
     };
 
@@ -159,6 +168,34 @@ namespace vkm
         * VkmLoadAction::Load -- VkmCommandBufferBase::beginRenderPass coerces both.
         */
         Transient = 0x00000800,
+        /*
+        * Shares backing memory with another Aliasable texture whose render-graph lifetime does
+        * not overlap this one's. Vulkan binds both images into one VkDeviceMemory block at
+        * chosen offsets; Metal places both into one MTLHeapTypePlacement heap. WebGPU has no
+        * aliasing at all and warns.
+        *
+        * Textures only. A buffer's use is invisible to the render graph, so the undeclared-use
+        * check below cannot exist for one, and a silently wrong lifetime is memory corruption.
+        *
+        * Three obligations come with it:
+        *
+        * 1. Every subgraph that touches the texture must declare it with
+        *    VkmRenderSubGraph::addAliasedResource(). Lifetimes are never inferred -- reads
+        *    through a bindless table or a resource table are invisible to the graph. Attaching
+        *    an undeclared aliasable texture is an error, and the lifetime is widened to cover
+        *    that subgraph rather than the frame being aborted.
+        * 2. Its contents are garbage on acquisition, so the first use in a frame must not
+        *    VkmLoadAction::Load. VkmRenderGraph::compile() coerces that to DontCare.
+        * 3. It has no usable native handle until the frame after the first compile() that
+        *    declares it -- placement is decided once and never revisited, because rebinding
+        *    would invalidate every immutable VkmResourceTable naming the texture. Check
+        *    isAliasPlaced() before building a table or attaching it.
+        *
+        * A request, not a guarantee: VkmTexture::isAliasable() reports what was granted. Cannot
+        * be combined with Transient (memoryless has no memory to alias), ExternalHandleOwner,
+        * DeferredCreation or AllowPresent, and requires at least one attachment usage.
+        */
+        Aliasable = 0x00001000,
 
         AllowShaderReadWrite = AllowShaderRead | AllowShaderWrite,
     };

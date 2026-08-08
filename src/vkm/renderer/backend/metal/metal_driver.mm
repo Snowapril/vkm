@@ -10,6 +10,7 @@
 #include <vkm/renderer/backend/metal/metal_texture_view.h>
 #include <vkm/renderer/backend/metal/metal_buffer_view.h>
 #include <vkm/renderer/backend/metal/metal_gpu_heap_allocator.h>
+#include <vkm/renderer/backend/metal/metal_gpu_image_heap.h>
 #include <vkm/renderer/backend/metal/metal_swapchain.h>
 #include <vkm/renderer/backend/metal/metal_command_queue.h>
 #include <vkm/renderer/backend/metal/metal_pipeline_state.h>
@@ -315,6 +316,60 @@ namespace vkm
     VkmBufferView* VkmDriverMetal::newBufferViewInner()
     {
         return new VkmBufferViewMetal(this);
+    }
+
+    bool VkmDriverMetal::onCreateAliasBlock(uint32_t blockIndex, uint64_t sizeBytes, uint32_t memoryTypeBits)
+    {
+        // Metal has no memory-type concept; VkmAliasedMemoryHeap passes ~0u so every block is
+        // compatible with every texture.
+        (void)memoryTypeBits;
+
+        // VkmAliasedMemoryHeap hands out indices in order and never reuses one, so a mismatch
+        // means the two have fallen out of step rather than that a block is missing.
+        if (blockIndex != (uint32_t)_imageHeaps.size())
+        {
+            VKM_DEBUG_ERROR("Aliasing block indices are out of step with the driver's heap list");
+            return false;
+        }
+
+        auto heap = std::make_unique<VkmGpuImageHeapMetal>(this);
+        if (!heap->initialize(sizeBytes))
+        {
+            return false;
+        }
+
+        // A placed texture does not make its heap resident on its own, exactly as for the buffer
+        // pool above -- register the block so every texture in it is covered by one entry.
+        VkmRenderResourcePoolMetal* renderResourcePoolMetal =
+            static_cast<VkmRenderResourcePoolMetal*>(getRenderResourcePool());
+        renderResourcePoolMetal->registerExternalAllocation(heap->getHeap());
+
+        _imageHeaps.push_back(std::move(heap));
+        return true;
+    }
+
+    void VkmDriverMetal::onDestroyAliasBlock(uint32_t blockIndex)
+    {
+        // Destroyed in place rather than erased: indices are the heap's identity for a block and
+        // must stay stable for the placements still naming them.
+        if (blockIndex < (uint32_t)_imageHeaps.size() && _imageHeaps[blockIndex] != nullptr)
+        {
+            VkmRenderResourcePoolMetal* renderResourcePoolMetal =
+                static_cast<VkmRenderResourcePoolMetal*>(getRenderResourcePool());
+            renderResourcePoolMetal->unregisterExternalAllocation(_imageHeaps[blockIndex]->getHeap());
+            _imageHeaps[blockIndex]->destroy();
+        }
+    }
+
+    id<MTLTexture> VkmDriverMetal::createTextureInAliasBlock(uint32_t blockIndex, MTLTextureDescriptor* descriptor,
+                                                             uint64_t offset)
+    {
+        if (blockIndex >= (uint32_t)_imageHeaps.size() || _imageHeaps[blockIndex] == nullptr)
+        {
+            VKM_DEBUG_ERROR("An aliased texture was placed into a block that does not exist");
+            return nil;
+        }
+        return _imageHeaps[blockIndex]->createTexture(descriptor, offset);
     }
 
     VkmGpuMemoryStats VkmDriverMetal::getGpuMemoryStats() const

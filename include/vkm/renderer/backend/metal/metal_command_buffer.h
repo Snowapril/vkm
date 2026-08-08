@@ -36,6 +36,19 @@ namespace vkm
         }
 
         void beginRenderPass(VkmRenderResourcePool* renderResourcePool, const VkmFrameBufferDescriptor& frameBufferDesc);
+
+        // Arms the alias-coherence flush on the next encoder this opens. Set by
+        // VkmCommandBufferMetal::onAcquireAliasedTexture; see that function for why the barrier
+        // has to ride an encoder that exists anyway rather than open one.
+        void markAliasAcquirePending() { _pendingAliasAcquire = true; }
+
+        /*
+        * @brief Emits the alias-coherence flush on the open encoder, if one is armed.
+        * @details Called right after an encoder opens. Clears the latch, so an armed flush
+        * reaches exactly one encoder -- the first one after the acquisition, which is the one
+        * that writes the newly acquired bytes.
+        */
+        void flushAliasAcquireIfPending();
         void beginComputePass();
         void commit();
 
@@ -76,6 +89,7 @@ namespace vkm
         id<MTL4ComputeCommandEncoder> _mtlComputeCommandEncoder = nullptr;
 
         VkmCommandEncoderType _currentEncoderType = VkmCommandEncoderType::None;
+        bool _pendingAliasAcquire = false;
     };
 
     class VkmCommandBufferMetal : public VkmCommandBufferBase
@@ -106,6 +120,7 @@ namespace vkm
         virtual void onBarrierAcquire(const VkmResourceBarrier* barriers, uint32_t count) override final;
         virtual void onBarrierRelease(const VkmResourceBarrier* barriers, uint32_t count) override final;
         virtual void onBuildAccelerationStructure(VkmResourceHandle accelerationStructure) override final;
+        virtual void onAcquireAliasedTexture(VkmResourceHandle texture) override final;
         virtual void onBindResourceTable(VkmResourceTableBase* table) override final;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) override final;
         virtual void onSetDebugName(const char* name) override final;
