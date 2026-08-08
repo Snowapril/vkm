@@ -12,17 +12,14 @@ namespace vkm
     /*
     * @brief Engine-owned ImGui window showing what VkmGpuProfiler collected: a GPU frame-time
     * history strip on top, and below it one timeline per command queue for the selected frame,
-    * with the whole submission on the top row and each render graph subgraph under it. Every
-    * duration is in milliseconds. Toggled with F6; drawn from VkmEngine::update(), before the
-    * frame's first ImGui::Render() call.
-    *
-    * The CPU counterpart is VkmCpuProfilerInspector, and this window deliberately behaves the
-    * same way: same history strip, same pin-a-frame gesture, same zoom/pan/drag-to-select
-    * interaction, and (through profiler_chart_common.h) the same color for a given zone name --
-    * so a subgraph is recognisable in both charts at a glance.
-    *
+    * with the whole submission on the top row and each render graph subgraph under it.
+    * @details Every duration is in milliseconds. Toggled with F6; drawn from VkmEngine::update(),
+    * before the frame's first ImGui::Render() call.
+    * The CPU counterpart is VkmCpuProfilerInspector, and this window behaves the same way: same
+    * history strip, same pin-a-frame gesture, same zoom/pan/drag-to-select interaction, and,
+    * through profiler_chart_common.h, the same color for a given zone name.
     * Unlike the CPU profiler, closing the window does not stop the GPU profiler recording
-    * timestamps: the debug overlay's always-visible "GPU" stat reads the same collector. Capture
+    * timestamps, the debug overlay's always-visible "GPU" stat reading the same collector. Capture
     * here only controls whether resolved frames are kept for history.
     */
     class VkmGpuProfilerInspector

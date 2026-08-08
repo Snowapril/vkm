@@ -16,14 +16,12 @@ namespace vkm
     /*
     * @brief Metal set 2: discrete argument-table bindings, resolved once and replayed on each bind.
     *
-    * @details Metal has no descriptor set to allocate, so unlike the Vulkan table there is nothing
-    * to write up front -- an argument table belongs to the encoder, not to the pass. What this
-    * table stores is the *resolved* form of each entry (a GPU address, or an MTLResourceID) at the
-    * Metal index vkm-compiler pinned it to, so binding is a short loop of setAddress:/setTexture:/
-    * setSamplerState: with no handle lookups in the recording path.
-    *
-    * Resolving at build time is also what makes the immutability in the base class meaningful
-    * here: a resource that moved or was recreated needs a rebuilt table, exactly as on Vulkan.
+    * @details Metal has no descriptor set to allocate, an argument table belonging to the encoder
+    * rather than to the pass, so there is nothing to write up front. This table stores the resolved
+    * form of each entry -- a GPU address, or an MTLResourceID -- at the Metal index vkm-compiler
+    * pinned it to, so binding is a short loop of setAddress:/setTexture:/setSamplerState: with no
+    * handle lookups in the recording path. Resolving at build time is what makes the base class's
+    * immutability meaningful here: a resource that moved or was recreated needs a rebuilt table.
     */
     class VkmResourceTableMetal : public VkmResourceTableBase
     {

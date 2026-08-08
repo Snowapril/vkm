@@ -64,34 +64,31 @@ namespace vkm
     * @brief Loads the ray-tracing PSO directory into `pipelineStateManager`.
     *
     * @details Call once, before initializing any pass that needs one. Separate from those passes
-    * on purpose: `loadPipelineStatesFromDirectory` *replaces* an already-registered pipeline
-    * object rather than skipping it, so two passes each loading the same directory would leave the
-    * first holding a raw pointer to a destroyed pipeline (`TODO.md`). Every other pass in the
-    * engine already works this way -- `VkmScene` resolves `scene_cull_pso` from a manager someone
-    * else loaded.
-    *
-    * These pipelines are deliberately not part of the set `VkmEngine` loads at startup: that one
-    * has to be creatable on every backend, and a ray-query pipeline is not.
+    * because `loadPipelineStatesFromDirectory` replaces an already-registered pipeline object
+    * rather than skipping it, so two passes each loading the same directory would leave the first
+    * holding a raw pointer to a destroyed pipeline.
+    * These pipelines are not part of the set `VkmEngine` loads at startup: that one has to be
+    * creatable on every backend, and a ray-query pipeline is not.
+    * @param pipelineStateManager Manager the PSOs are registered in.
+    * @param outError Receives the failure reason.
+    * @return False when a pipeline could not be loaded.
     */
     bool vkmLoadRayTracingPipelineStates(VkmPipelineStateManager* pipelineStateManager,
                                          std::string* outError);
 
     /*
-    * @brief Phase 6's brute-force reference path tracer.
-    *
-    * @details Ground truth, not a technique: every later phase is measured against what this
-    * converges to. It accumulates into one buffer across dispatches, so a caller drives it by
-    * calling `recordAccumulate` once per frame and reading the result whenever it likes; `reset()`
-    * starts a new average, which is what a moved camera needs.
-    *
+    * @brief Brute-force reference path tracer.
+    * @details Ground truth, not a technique: every GI pass is measured against what this converges
+    * to. It accumulates into one buffer across dispatches, so a caller drives it by calling
+    * `recordAccumulate` once per frame and reading the result whenever it likes. `reset()` starts a
+    * new average, which is what a moved camera needs.
     * Requires `VkmDriverCapabilityFlags::RayTracing` and a scene whose acceleration structure is
-    * published in the bindless set (`VkmScene::buildAccelerationStructures`). It reads the scene
-    * entirely through set 0 and set 1 -- objects, materials, geometry pools, the structure and the
-    * camera -- so it takes no scene pointer and needs no per-frame binding beyond its own output.
-    *
-    * The output is a buffer rather than a storage texture because `VkmTableResourceType` has no
-    * storage-texture kind; `rgb` is summed radiance and `a` is the number of samples in that sum,
-    * so a consumer divides.
+    * published in the bindless set. It reads the scene entirely through set 0 and set 1 -- objects,
+    * materials, geometry pools, the structure and the camera -- so it takes no scene pointer and
+    * needs no per-frame binding beyond its own output.
+    * The output is a buffer rather than a storage texture, `VkmTableResourceType` having no
+    * storage-texture kind. `rgb` is summed radiance and `a` the number of samples in that sum, so
+    * a consumer divides.
     */
     class VkmPathTracer
     {
@@ -142,13 +139,14 @@ namespace vkm
 
     /*
     * @brief Mean squared error between two accumulated images, per RGB component averaged.
-    *
-    * @details The number later phases are scored with. Both inputs are the path tracer's
-    * `float4` layout (rgb summed, a = sample count) and are normalized by their own alpha before
-    * comparison, so an image with more samples in it is not penalised for being brighter. Pixels
-    * whose sample count is zero on either side are skipped and excluded from the divisor.
-    *
-    * Returns 0 for an empty comparison, which is also what identical inputs give.
+    * @details Both inputs are the path tracer's `float4` layout (rgb summed, a = sample count) and
+    * are normalized by their own alpha before comparison, so an image with more samples is not
+    * penalised for being brighter. Pixels whose sample count is zero on either side are skipped and
+    * excluded from the divisor.
+    * @param referenceRgba Reference image.
+    * @param candidateRgba Image being scored.
+    * @param pixelCount Pixels in each image.
+    * @return The error, or 0 for an empty comparison, which is also what identical inputs give.
     */
     float vkmComputeImageMse(const float* referenceRgba, const float* candidateRgba, uint32_t pixelCount);
 

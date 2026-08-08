@@ -10,6 +10,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_acceleration_structure.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
+#include <vkm/renderer/backend/vulkan/vulkan_util.h>
 #include <vkm/renderer/backend/vulkan/vulkan_frame_constant_manager.h>
 #include <vkm/renderer/backend/common/render_pass.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
@@ -197,15 +198,13 @@ namespace vkm
         };
         vkCmdBeginRendering(_vkCommandBuffer, &renderingInfo);
 
-        // Every pipeline created by VkmPipelineStateVulkan marks viewport/scissor as
-        // dynamic state (extents aren't known at pipeline-creation time), so they must be
-        // set here every render pass or drawing has undefined viewport/scissor state.
+        // Every pipeline created by VkmPipelineStateVulkan marks viewport and scissor as dynamic
+        // state, extents not being known at pipeline-creation time, so they must be set here every
+        // render pass or drawing has undefined viewport/scissor state.
         //
-        // Plain positive-height viewport: the engine's +Y-up clip space is normalized to
-        // Vulkan's +Y-down NDC upstream by -fvk-invert-y in vkm-compiler (Vulkan target
-        // only), so no coordinate-space compensation happens here. That upstream Y-flip
-        // reverses screen-space winding, which toVkFrontFace() in vulkan_pipeline_state.cpp
-        // accounts for.
+        // Plain positive-height viewport: vkm-compiler's -fvk-invert-y already normalizes the
+        // engine's +Y-up clip space to Vulkan's +Y-down NDC, so nothing is compensated here.
+        //
         // The pass-wide default; setViewportAndScissor() narrows it afterwards if a caller wants
         // to pack several views into this attachment.
         onSetViewportAndScissor(0, 0, frameBufferDesc._width, frameBufferDesc._height);
@@ -617,7 +616,8 @@ namespace vkm
             .objectHandle = reinterpret_cast<uint64_t>(_vkCommandBuffer),
             .pObjectName  = name,
         };
-        vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo);
+        VKM_VK_CHECK_RESULT_MSG(vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo),
+            "Failed to set debug name on command buffer");
 #else
         (void)name;
 #endif

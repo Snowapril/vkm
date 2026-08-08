@@ -162,17 +162,13 @@ namespace vkm
         _currentEncoderType = VkmCommandEncoderType::Graphics;
 
         /*
-        * Metal 4 does no automatic hazard tracking, and that applies between two render passes as
-        * much as between a compute pass and a render pass. Without this, a pass that samples what
-        * an earlier pass rendered reads it while it is still being written: the probe blend read
-        * the probe capture that way and filled both atlases with NaN and out-of-range values,
-        * which the Chebyshev test then turned into a GI term of exactly zero.
-        *
-        * The compute path already brackets itself this way (see onBindPipeline / onUnbindPipeline).
-        * barrierTextureForShaderRead() cannot do it instead: it records nothing here, because
-        * opening an encoder per barrier is what caused the MTL4CommandQueueErrorTimeout in
-        * common/AGENTS.md -- so the barrier has to ride an encoder that exists anyway, which is
-        * this one. One pair per pass, not one per barrier call.
+        * Metal 4 does no automatic hazard tracking, between two render passes as much as between a
+        * compute pass and a render pass. Without this, a pass that samples what an earlier pass
+        * rendered reads it while it is still being written.
+        * The compute path brackets itself the same way (see onBindPipeline / onUnbindPipeline).
+        * barrierTextureForShaderRead() cannot do it instead -- it records nothing here, opening an
+        * encoder per barrier being what stalls the command queue -- so the barrier rides an
+        * encoder that exists anyway. One pair per pass, not one per barrier call.
         */
         [_mtlRenderCommandEncoder barrierAfterQueueStages:MTLStageAll
                                              beforeStages:MTLStageVertex | MTLStageFragment
@@ -614,14 +610,12 @@ namespace vkm
         (void)texture;
         // Metal has no image layouts to transition, and Metal 4's barriers are encoder-scoped
         // rather than per-resource, so there is nothing to record for one texture. The ordering
-        // this call exists to establish is already covered: a compute pass opens with
+        // this call establishes is already covered: a compute pass opens with
         // barrierAfterQueueStages:MTLStageAll (onBindPipeline) and closes with
         // barrierAfterStages:...beforeQueueStages:MTLStageAll (onUnbindPipeline), so a render
-        // pass's writes are visible to a later pass's reads and vice versa.
-        //
-        // As with onBarrierIndirectArgumentBuffer, opening an encoder purely to emit a barrier is
-        // what caused the MTL4CommandQueueErrorTimeout documented in common/AGENTS.md, so this
-        // deliberately records nothing rather than forcing one.
+        // pass's writes are visible to a later pass's reads and vice versa. As with
+        // onBarrierIndirectArgumentBuffer, opening an encoder purely to emit a barrier stalls the
+        // command queue, so this records nothing rather than forcing one.
     }
 
     void VkmCommandBufferMetal::onBindResourceTable(VkmResourceTableBase* table)

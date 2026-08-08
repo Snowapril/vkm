@@ -41,21 +41,21 @@ namespace vkm
 
         /*
         * @brief Recreate the swapchain at a new extent.
-        * @details A no-op at the same extent unless the swapchain is out of date. A zero extent
-        * (a minimized window) tears the swapchain down and creates nothing; the next non-zero
-        * resize brings it back.
-        *
-        * The caller must already have drained every submission that could still reference the
-        * back buffers -- this destroys them immediately rather than through the deferred
-        * reclaimer. VkmEngine::recreateSwapChain() is that caller.
+        * @details A no-op at the same extent unless the swapchain is out of date. A zero extent, a
+        * minimized window, tears the swapchain down and creates nothing; the next non-zero resize
+        * brings it back. The caller must already have drained every submission that could still
+        * reference the back buffers -- this destroys them immediately rather than through the
+        * deferred reclaimer. VkmEngine::recreateSwapChain() is that caller.
+        * @param width New width in pixels.
+        * @param height New height in pixels.
         */
         void resize(uint32_t width, uint32_t height);
 
         /*
-        * @brief True once acquire or present reported the swapchain no longer matches its
-        * surface (Vulkan's VK_ERROR_OUT_OF_DATE_KHR, WebGPU's Outdated/Lost). The engine
-        * recreates on the next frame, which covers resizes the window layer never reported --
-        * tiling window managers, display changes.
+        * @brief True once acquire or present reported the swapchain no longer matches its surface:
+        * Vulkan's VK_ERROR_OUT_OF_DATE_KHR, WebGPU's Outdated/Lost.
+        * @details The engine recreates on the next frame, which covers resizes the window layer
+        * never reported -- tiling window managers, display changes.
         */
         inline bool isOutOfDate() const
         {
@@ -63,8 +63,9 @@ namespace vkm
         }
 
         /*
-        * @brief Acquire next back buffer image index
-        * @details get next back buffer image index for rendering. wait for acquire in cpu time if necessary
+        * @brief Acquire the next back buffer for rendering.
+        * @details Waits on the CPU for the acquire when necessary.
+        * @return Handle of the acquired back buffer.
         */
         VkmResourceHandle acquireNextImage();
 
@@ -91,8 +92,9 @@ namespace vkm
         }
 
         /*
-        * @brief The back buffer at `index`, or an invalid handle when `index` is past
-        * getBackBufferCount(). The set is replaced wholesale by resize().
+        * @brief One of the swapchain's back buffers. The set is replaced wholesale by resize().
+        * @param index Back buffer index.
+        * @return The handle, or an invalid handle when `index` is past getBackBufferCount().
         */
         inline VkmResourceHandle getBackBuffer(uint8_t index) const
         {

@@ -35,15 +35,13 @@ namespace vkm
             return true;
         }
 
-        // Roll back to the last known-good descriptor so a bad edit leaves a working
-        // pipeline behind rather than a destroyed one every cached pointer still refers to.
-        // destroyInner() again first: a failed createInner() can return with some of its
-        // objects already created (Vulkan builds the pipeline layout before the pipeline).
-        //
-        // The caller only reaches here after vkm-compiler exited 0, and vkm-compiler writes a
-        // .vfcache only for a stage that compiled -- so a failure here is a descriptor
-        // problem, not a shader one, and the rollback loads the freshly compiled shaders with
-        // the previous render state. That is still a working pipeline, which is the contract.
+        // Roll back to the last known-good descriptor so a bad edit leaves a working pipeline
+        // behind rather than a destroyed one every cached pointer still refers to. destroyInner()
+        // again first: a failed createInner() can return with some of its objects already created.
+        // A failure here is a descriptor problem rather than a shader one -- the caller only gets
+        // this far after vkm-compiler exited 0, and it writes a .vfcache only for a stage that
+        // compiled -- so the rollback pairs the freshly compiled shaders with the previous render
+        // state, which is still a working pipeline.
         destroyInner();
         std::string rollbackError;
         if (!createInner(_descriptor, shaderCacheDir, &rollbackError))

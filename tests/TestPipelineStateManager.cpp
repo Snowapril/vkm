@@ -680,7 +680,7 @@ TEST_CASE("VkmPipelineStateManager - reloading with recompile runs vkm-compiler 
     std::string reloadError;
     REQUIRE_MESSAGE(manager.reloadSource(0, /*recompileShaders=*/true, &reloadError), reloadError);
 
-    // The compiler really ran: the cache is no longer the hand-written placeholder, and the
+    // The compiler really ran: the cache is not the hand-written placeholder any more, and the
     // pipeline was rebuilt in place from it.
     CHECK(fs::file_size(vertCache, ec) != placeholderSize);
     CHECK(manager.getPipelineState("recompile_pso", vkm::VkmPipelineStateOrigin::User) == pso);

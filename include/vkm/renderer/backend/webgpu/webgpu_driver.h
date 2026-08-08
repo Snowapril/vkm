@@ -10,7 +10,7 @@
 namespace vkm
 {
     /*
-    * @brief renderer backend driver for WebGPU (Emscripten/WASM only)
+    * @brief WebGPU renderer backend driver. Emscripten/WASM only.
     */
     class VkmDriverWebGPU final : public VkmDriverBase
     {
@@ -42,15 +42,15 @@ namespace vkm
         }
 
         /*
-        * @brief GPU timestamp pool backing VkmGpuProfiler: one WGPUQuerySet of `slotCount`
-        * timestamp queries, plus the two buffers a query set can only be read through (a
-        * QueryResolve target the GPU writes and a MapRead copy the CPU reads). Only available
-        * when the adapter offers the optional "timestamp-query" feature, which is requested at
-        * device creation.
-        *
-        * WebGPU has no encoder-level timestamp write, so unlike Vulkan/Metal the writes
-        * themselves are attached to render/compute pass descriptors -- see
+        * @brief GPU timestamp pool backing VkmGpuProfiler: one WGPUQuerySet plus the two buffers a
+        * query set can only be read through, a QueryResolve target the GPU writes and a MapRead
+        * copy the CPU reads.
+        * @details Only available when the adapter offers the optional "timestamp-query" feature,
+        * requested at device creation. WebGPU has no encoder-level timestamp write, so unlike
+        * Vulkan and Metal the writes are attached to render/compute pass descriptors; see
         * VkmCommandBufferWebGPU::onBeginGpuZone.
+        * @param slotCount Timestamp queries the set holds.
+        * @return False when the device has no timestamp-query support.
         */
         virtual bool initializeGpuTimestampPool(uint32_t slotCount) override final;
         virtual void destroyGpuTimestampPool() override final;

@@ -88,15 +88,13 @@ namespace vkm
         }
         const VkmTextureInfo& sourceInfo = sourceTexture->getTextureInfo();
 
-        // Swapchain back buffers are framebufferOnly drawables on Metal and cannot be copy
-        // sources. Depth/stencil is metadata only, matching the existing depth-attachment
-        // rule -- the ImGui preview pipeline samples a color texture2d. A 3D texture has no
-        // single-slice destination shaped like this one.
-        //
-        // Note there is deliberately no AllowTransferSrc requirement: a sampled input texture
-        // is typically AllowShaderRead|AllowTransferDst, and demanding the flag would exclude
-        // exactly the textures this is for. Metal, the only backend that reaches here, imposes
-        // no usage restriction on a blit source.
+        // Swapchain back buffers are framebufferOnly drawables on Metal and cannot be copy sources.
+        // Depth/stencil is metadata only, matching the depth-attachment rule -- the ImGui preview
+        // pipeline samples a color texture2d. A 3D texture has no single-slice destination shaped
+        // like this one. No AllowTransferSrc requirement: a sampled input texture is typically
+        // AllowShaderRead|AllowTransferDst, and demanding the flag would exclude exactly the
+        // textures this is for. Metal, the only backend that reaches here, imposes no usage
+        // restriction on a blit source.
         if ((sourceInfo._flags & VkmResourceCreateInfo::AllowPresent) != 0 ||
             hasDepth(sourceInfo._format) || hasStencil(sourceInfo._format) ||
             vkmBytesPerTexel(sourceInfo._format) == 0 ||

@@ -22,19 +22,15 @@ namespace vkm
     * @details On Vulkan and Metal a shader reaches a material's textures through the set-0 bindless
     * array, using the slots in VkmMaterialData, and nothing here is built. WebGPU has no
     * array-of-handle type, so its shaders declare the textures at set 3 and the runtime binds one
-    * table per material before each draw -- which works because VkmScene splits draw batches per
-    * material, so every draw has exactly one.
-    *
-    * Whether tables are needed is read off the **pipeline's own declaration** rather than off a
-    * capability flag: a PSO scopes `per_draw_resources` to the backends whose shader actually
-    * declares set 3 (see VkmPipelineStateDescriptor::perDrawResourceBackends), so an empty
-    * declaration is exactly "this backend does not want them". One source of truth, and it cannot
-    * disagree with the shader.
-    *
-    * A channel the material has no texture for still needs a binding, because an unbound entry in a
-    * declared set is a validation error rather than a silently absent one. Those bind a 1x1 white
-    * placeholder this class owns, which samples to 1 and leaves the material's factor exactly --
-    * the same result the bindless path produces for an invalid slot.
+    * table per material before each draw, which works because VkmScene splits draw batches per
+    * material.
+    * Whether tables are needed is read off the pipeline's own declaration rather than a capability
+    * flag: a PSO scopes `per_draw_resources` to the backends whose shader declares set 3, so an
+    * empty declaration means this backend does not want them. That cannot disagree with the shader.
+    * A channel the material has no texture for still needs a binding, an unbound entry in a
+    * declared set being a validation error. Those bind a 1x1 white placeholder this class owns,
+    * which samples to 1 and leaves the material's factor exactly, as the bindless path does for an
+    * invalid slot.
     */
     class VkmSceneMaterialTables
     {

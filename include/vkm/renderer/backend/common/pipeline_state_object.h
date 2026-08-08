@@ -10,36 +10,41 @@ namespace vkm
 {
     class VkmDriverBase;
 
-    // A single backend pipeline object built from one fully-resolved
-    // VkmPipelineStateDescriptor (already expanded via expandPipelineStateOptions() if it
-    // came from a JSON node with "options" -- this class itself knows nothing about option
-    // expansion). On Vulkan, every pipeline shares the engine-global bindless set 0 (see
-    // VkmBindlessResourceManagerVulkan); descriptor sets 1-3 and any Metal/WebGPU
-    // resource-binding equivalent remain a deferred follow-up.
+    /*
+    * @brief A single backend pipeline object built from one fully-resolved
+    * VkmPipelineStateDescriptor.
+    * @details The descriptor must already be expanded via expandPipelineStateOptions() if it came
+    * from a JSON node with "options" -- this class knows nothing about option expansion.
+    */
     class VkmPipelineStateBase
     {
     public:
         explicit VkmPipelineStateBase(VkmDriverBase* driver);
         virtual ~VkmPipelineStateBase();
 
-        // `shaderCacheDir`: directory containing the .vfcache files vkm-compiler wrote for
-        // this exact descriptor (one per present stage; filenames per
-        // buildShaderCacheFilename() in shader_cache_util.h). Loads each stage's cache file,
-        // builds a transient backend shader module/library, and creates the real backend
-        // pipeline object.
+        /*
+        * @brief Loads each stage's shader cache and creates the backend pipeline object.
+        * @param desc Fully-resolved descriptor.
+        * @param shaderCacheDir Directory holding the .vfcache files vkm-compiler wrote for this
+        * exact descriptor, one per present stage, named per buildShaderCacheFilename().
+        * @param outError Receives the failure reason. May be null.
+        * @return False if a cache file could not be loaded or the pipeline could not be created.
+        */
         bool initialize(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError = nullptr);
         void destroy();
 
         /*
-        * @brief Rebuild this pipeline from `desc` in place, keeping the object's address so
-        * every cached raw VkmPipelineStateBase* stays valid -- samples, render-graph render
-        * callbacks and VkmCommandBufferBase's bound-pipeline history all hold non-owning
-        * pointers with no invalidation hook. On failure the previous descriptor is rebuilt so
-        * the pipeline is left usable, and false is returned with *outError set.
-        *
-        * The caller must ensure no in-flight GPU work still references this pipeline
-        * (destroyInner() is synchronous) -- VkmPipelineStateManager does this by calling
-        * VkmDriverBase::waitIdle() once per reload batch.
+        * @brief Rebuild this pipeline in place, keeping the object's address so every cached raw
+        * VkmPipelineStateBase* stays valid.
+        * @details Samples, render-graph render callbacks and VkmCommandBufferBase's bound-pipeline
+        * history all hold non-owning pointers with no invalidation hook. The caller must ensure no
+        * in-flight GPU work still references this pipeline, destroyInner() being synchronous;
+        * VkmPipelineStateManager calls VkmDriverBase::waitIdle() once per reload batch.
+        * @param desc New fully-resolved descriptor.
+        * @param shaderCacheDir Directory holding its .vfcache files.
+        * @param outError Receives the failure reason. May be null.
+        * @return False on failure, in which case the previous descriptor is rebuilt so the pipeline
+        * is left usable.
         */
         bool reload(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError = nullptr);
 
@@ -48,12 +53,10 @@ namespace vkm
         inline const std::string& getName() const { return _descriptor.name; } // includes "[option]" suffix
 
     protected:
-        // For each present stage in `desc`: compute its cache filename
-        // (buildShaderCacheFilename + currentShaderCacheBackend()), loadShaderCacheFile() it,
-        // build a transient backend shader module/library/function, and create either a
-        // graphics or compute pipeline object depending on isCompute(). Must reject
-        // unsupported fixed-function combinations noted in pipeline_state.h (e.g.
-        // VkmFillMode::Point on non-Vulkan, VkmCullMode::FrontAndBack on Metal/WebGPU).
+        // For each present stage: compute its cache filename (buildShaderCacheFilename +
+        // currentShaderCacheBackend()), loadShaderCacheFile() it, build a transient backend shader
+        // module/library/function, and create a graphics or compute pipeline per isCompute(). Must
+        // reject the unsupported fixed-function combinations noted in pipeline_state.h.
         virtual bool createInner(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir, std::string* outError) = 0;
         virtual void destroyInner() = 0;
 

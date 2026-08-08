@@ -49,15 +49,17 @@ namespace vkm
         }
 
         /*
-        * Decision policy for CPU-writable texture memory. An OPTIMAL-tiled image cannot be
-        * memcpy'd into -- its layout is swizzled -- so host-visible memory alone buys
-        * nothing; VK_EXT_host_image_copy is what makes a host-side write correct. Requested
-        * only where it also pays off: a unified-memory device, where the GPU reads the same
-        * memory the CPU wrote at no extra cost.
-        *
-        * Restricted to plain upload destinations: render targets and presentables are
-        * GPU-written and never CPU-written, so steering them towards host-visible memory
-        * would trade attachment bandwidth for a fast path they never take.
+        * @brief Decision policy for CPU-writable texture memory.
+        * @details An OPTIMAL-tiled image cannot be memcpy'd into, its layout being swizzled, so
+        * host-visible memory alone buys nothing; VK_EXT_host_image_copy is what makes a host-side
+        * write correct. Requested only where it also pays off, on a unified-memory device where
+        * the GPU reads the same memory the CPU wrote at no extra cost.
+        * Restricted to plain upload destinations: render targets and presentables are GPU-written
+        * and never CPU-written, so steering them towards host-visible memory would trade
+        * attachment bandwidth for a fast path they never take.
+        * @param driverVulkan Driver whose capabilities decide availability.
+        * @param info Texture being created.
+        * @return True when the texture should be placed in CPU-writable memory.
         */
         bool shouldUseHostWritableTexture(const VkmDriverVulkan* driverVulkan, const VkmTextureInfo& info)
         {
@@ -311,7 +313,8 @@ namespace vkm
             .objectHandle = reinterpret_cast<uint64_t>(_vkTexture),
             .pObjectName  = name,
         };
-        vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo);
+        VKM_VK_CHECK_RESULT_MSG(vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo),
+            "Failed to set debug name on texture");
 #else
         (void)name;
 #endif

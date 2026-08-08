@@ -205,7 +205,8 @@ namespace vkm
         // The mapping outlives this call; flushing is the whole point, since the memory VMA
         // picked for a SEQUENTIAL_WRITE allocation is not guaranteed to be coherent.
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
-        vmaFlushAllocation(driverVulkan->getVmaAllocator(), _vmaAllocation, 0, VK_WHOLE_SIZE);
+        VKM_VK_CHECK_RESULT_MSG(vmaFlushAllocation(driverVulkan->getVmaAllocator(), _vmaAllocation, 0, VK_WHOLE_SIZE),
+            "Failed to flush host-writable buffer");
     }
 
     uint64_t VkmBufferVulkan::getGPUVirtualAddress() const
@@ -240,7 +241,8 @@ namespace vkm
             .objectHandle = reinterpret_cast<uint64_t>(_vkBuffer),
             .pObjectName  = name,
         };
-        vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo);
+        VKM_VK_CHECK_RESULT_MSG(vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo),
+            "Failed to set debug name on buffer");
 #else
         (void)name;
 #endif

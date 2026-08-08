@@ -141,9 +141,8 @@ TEST_CASE("VkmGpuEventTimelineBase - allocateGpuEventTimelineObject increments m
 TEST_CASE("VkmGpuEventTimelineBase - the submitted timeline trails the allocated one") {
     // beginCommandBuffer() allocates a timeline value and only submit() hands one to the GPU, so
     // the two counters are not interchangeable: waiting on the ALLOCATED value waits for something
-    // nothing will ever signal as soon as one command buffer is begun and dropped. That is what
-    // took a CI run down with VUID-vkDestroyAccelerationStructureKHR-...-02442 and a segmentation
-    // fault -- the drain silently timed out and the resources were destroyed in flight anyway.
+    // nothing will ever signal as soon as one command buffer is begun and dropped, and the drain
+    // then times out silently while resources are destroyed in flight.
     MockGpuEventTimeline tl;
     CHECK(tl.getLastSubmittedTimeline() == 0);
 
@@ -188,10 +187,9 @@ TEST_CASE("VkmRenderResource - recordUsage/getLastUsage/hasAnyPendingUsage track
     timeline.setLastCompleted(2);
     CHECK_FALSE(resource.hasAnyPendingUsage());
 
-    // A second, independent timeline (simulating a second queue instance of the same
-    // type) must not clobber the first's tracked entry -- this is the actual regression
-    // test for the bug this phase fixes (previously, a fixed 3-slot array indexed only by
-    // queue TYPE could not distinguish two instances of the same type).
+    // A second, independent timeline, simulating a second queue instance of the same type, must
+    // not clobber the first's tracked entry. Keying usages by queue TYPE alone cannot distinguish
+    // two instances of one type.
     MockGpuEventTimeline timeline2;
     auto usage3 = timeline2.allocateGpuEventTimelineObject(); // timelineValue == 1 on timeline2
     resource.recordUsage(usage3);
@@ -593,10 +591,9 @@ struct VulkanDriverFixture {
         initResult = driver->initialize(&opts);
     }
     ~VulkanDriverFixture() {
-        // destroy() must run before the driver object is deleted: it tears down
-        // driver-owned pools (VmaAllocator, buffer pools, deferred reclaimer thread) that
-        // pooled resources' destructors depend on. Skipping it (as this fixture previously
-        // did) is safe only by accident when nothing needs ordered teardown.
+        // destroy() must run before the driver object is deleted: it tears down driver-owned pools
+        // -- VmaAllocator, buffer pools, the deferred reclaimer thread -- that pooled resources'
+        // destructors depend on.
         if (driver)
         {
             driver->destroy();
@@ -638,8 +635,8 @@ TEST_CASE("VkmDriverVulkan - initialization succeeds") {
         const bool rayTracing = (flags & static_cast<uint32_t>(vkm::VkmDriverCapabilityFlags::RayTracing)) != 0u;
         const bool deviceAddress =
             (flags & static_cast<uint32_t>(vkm::VkmDriverCapabilityFlags::BufferDeviceAddress)) != 0u;
-        // Logged, not asserted: this is how a CI run reports which platforms can host Phase 5
-        // at all, which is a property of the runner rather than of the code.
+        // Logged, not asserted: whether a device offers ray tracing is a property of the machine
+        // rather than of the code.
         if (rayTracing) { MESSAGE("RayTracing capability on this device: yes"); }
         else            { MESSAGE("RayTracing capability on this device: no"); }
         CHECK((!rayTracing || deviceAddress));

@@ -60,19 +60,10 @@ namespace vkm
         }
 
         /*
-        * Mapped straight through, and it used to be inverted. The inversion counted the Y-flip
-        * vkm-compiler applies to Vulkan vertex shaders (-fvk-invert-y, putting the engine's +Y-up
-        * clip space on Vulkan's +Y-down NDC) and concluded that screen-space winding was mirrored
-        * relative to Metal. It is not: Metal flips as well, in its viewport transform, because its
-        * NDC is +Y up and its framebuffer origin is top-left. One flip each, so both backends
-        * rasterise the same triangle with the same winding, and there is nothing left to cancel.
-        *
-        * Measured rather than reasoned, because the reasoning is what got it wrong the first time:
-        * the same scene rendered through both backends fills 2016 of 4096 texels with a covered-
-        * mask centroid of (20.7, 42.3) on each -- pixel-identical, so identically wound. Under the
-        * inversion, Vulkan culled every front face and the G-buffer came back empty, which is what
-        * made the deferred GI test report zero covered pixels on lavapipe while its reference path
-        * tracer covered all of them.
+        * Mapped straight through, not inverted. vkm-compiler's -fvk-invert-y puts the engine's
+        * +Y-up clip space on Vulkan's +Y-down NDC, but Metal flips as well, in its viewport
+        * transform, its NDC being +Y up with a top-left framebuffer origin. One flip each, so both
+        * backends rasterise the same triangle with the same winding and there is nothing to cancel.
         */
         VkFrontFace toVkFrontFace(VkmFrontFace frontFace)
         {
@@ -260,11 +251,10 @@ namespace vkm
         // and per-frame set 1 (VkmFrameConstantManagerVulkan), plus a push-constant range carrying
         // whatever per-invocation data the shader declares, up to kVkmBindlessPushConstantSize.
         // The range covers the vertex and compute stages: the scene's culling pass pushes its batch
-        // bounds there. The fragment stage still cannot read push constants -- everything it needs
-        // travels as an interpolant, which is part of why set 1 exists. Both sets are declared even
-        // for shaders that use neither -- an unused set in a pipeline layout is valid and keeps
-        // every pipeline layout-compatible. Sets 2-3 remain reserved (see
-        // common/frame_constants.h).
+        // bounds there. The fragment stage cannot read push constants -- everything it needs travels
+        // as an interpolant, which is part of why set 1 exists. Both sets are declared even for
+        // shaders that use neither, an unused set in a pipeline layout being valid and keeping every
+        // pipeline layout-compatible.
         std::vector<VkDescriptorSetLayout> setLayouts{
             driverVulkan->getBindlessResourceManager()->getSetLayout(),
             driverVulkan->getFrameConstantManager()->getSetLayout(),
@@ -272,8 +262,8 @@ namespace vkm
 
         // Sets 2 and 3 are this pipeline's own, built from its `perPassResources` /
         // `perDrawResources` declarations. Declaring either makes this pipeline
-        // layout-incompatible with one that does not, so each is only added when the PSO actually
-        // asked for it, leaving every existing pipeline exactly as it was.
+        // layout-incompatible with one that does not, so each is only added when the PSO asked
+        // for it.
         //
         // A set must land at its own index, so a pipeline that declares set 3 and not set 2 --
         // which a G-buffer pass wanting only per-material textures does -- needs an empty

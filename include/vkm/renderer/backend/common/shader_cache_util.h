@@ -8,23 +8,26 @@
 
 namespace vkm
 {
-    // Builds the on-disk filename (no directory) for one compiled shader stage's
-    // .vfcache file, shared by vkm-compiler (producer) and the runtime loader
-    // (consumer) so the two can never drift on naming.
-    //
-    // `shaderStem` = std::filesystem::path(stageDesc.filepath).stem() (e.g.
-    // "triangle" for "triangle.hlsl"). `optionName` = the owning descriptor's
-    // optionName ("" for the base/no-options case, in which the produced name is
-    // byte-identical to what vkm-compiler wrote before option support existed):
-    //   buildShaderCacheFilename("triangle", "", Vertex, Vulkan)
-    //     == "triangle.vert.vulkan.vfcache"
-    //   buildShaderCacheFilename("triangle", "wireframe", Vertex, Vulkan)
-    //     == "triangle[wireframe].vert.vulkan.vfcache"
+    /*
+    * @brief Builds the on-disk filename, without directory, for one compiled shader stage's
+    * .vfcache file.
+    * @details Shared by vkm-compiler as producer and the runtime loader as consumer, so the two
+    * cannot drift on naming.
+    *   buildShaderCacheFilename("triangle", "", Vertex, Vulkan)
+    *     == "triangle.vert.vulkan.vfcache"
+    *   buildShaderCacheFilename("triangle", "wireframe", Vertex, Vulkan)
+    *     == "triangle[wireframe].vert.vulkan.vfcache"
+    * @param shaderStem std::filesystem::path(stageDesc.filepath).stem(), e.g. "triangle".
+    * @param optionName The owning descriptor's optionName, empty for the base case.
+    * @param stage Shader stage the cache holds.
+    * @param backend Backend the cache was compiled for.
+    * @return The filename.
+    */
     std::string buildShaderCacheFilename(const std::string& shaderStem, const std::string& optionName,
         VkmShaderCacheStage stage, VkmShaderCacheBackend backend);
 
-    // The backend this vkmcore build targets. One backend is active per build (see
-    // ShaderCompile.cmake's identical selection); the priority order below matches it.
+    // The backend this vkmcore build targets. One backend is active per build; the priority order
+    // below matches ShaderCompile.cmake's identical selection.
     inline VkmShaderCacheBackend vkmActiveShaderCacheBackend()
     {
 #if defined(VKM_USE_VULKAN_API)
@@ -36,8 +39,8 @@ namespace vkm
 #endif
     }
 
-    // The spelling vkm-compiler's --backend option expects. Kept here alongside the filename
-    // builder for the same reason: producer and consumer must not drift on it.
+    // The spelling vkm-compiler's --backend option expects. Kept beside the filename builder so
+    // producer and consumer cannot drift on it.
     inline const char* vkmShaderCacheBackendName(VkmShaderCacheBackend backend)
     {
         switch (backend)

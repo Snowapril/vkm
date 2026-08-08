@@ -48,48 +48,35 @@ namespace vkm
         // copyBufferToTexture staging copy (Vulkan, Metal) or a queue write (WebGPU).
         TextureUpload           = 0x00000004,
         // Backend can write a texture's memory from the CPU, so uploadToTexture can skip the
-        // staging buffer and the queue submit entirely. Requires both the mechanism (Metal:
-        // MTLStorageModeShared; Vulkan: VK_EXT_host_image_copy) and a reason to use it
-        // (unified memory) -- see VkmResourceUploadMode. A texture still only takes that path
-        // when its own memory allows it: VkmTexture::isHostWritable is the per-texture answer,
-        // this flag is the per-device precondition.
+        // staging buffer and the queue submit. The per-device precondition only: a texture takes
+        // that path when VkmTexture::isHostWritable also says its own memory allows it.
         TextureHostCopy         = 0x00000008,
         // Buffers can report an address in the GPU's address space
-        // (VkmBuffer/VkmStagingBuffer::getGPUVirtualAddress). Native on Metal; on Vulkan it
-        // needs VkPhysicalDeviceVulkan12Features::bufferDeviceAddress, which the driver already
-        // enables wherever the GPU offers it. WebGPU has no such concept, and neither does a
-        // Vulkan driver without that feature -- both report 0 rather than failing.
+        // (VkmBuffer/VkmStagingBuffer::getGPUVirtualAddress). Native on Metal; on Vulkan it needs
+        // VkPhysicalDeviceVulkan12Features::bufferDeviceAddress. WebGPU has no such concept, and
+        // neither does a Vulkan driver without that feature -- both report 0 rather than failing.
         BufferDeviceAddress     = 0x00000010,
-        // Backend can write GPU timestamps into a pool of slots and read them back, which is
-        // what VkmGpuProfiler needs to time render graph subgraphs. Set by each backend from
-        // initializeGpuTimestampPool() -- it is a runtime answer, not a compile-time one
-        // (Vulkan needs timestampComputeAndGraphics, WebGPU needs the optional timestamp-query
-        // feature), so it is only meaningful after driver initialization.
+        // Backend can write GPU timestamps into a pool of slots and read them back, which is what
+        // VkmGpuProfiler needs to time render graph subgraphs. Set by each backend from
+        // initializeGpuTimestampPool(), so it is only meaningful after driver initialization.
         TimestampQuery          = 0x00000020,
         /*
-        * Backend has the set-0 bindless texture array, so registerTexture returns a slot a
-        * shader can index. Separate from TextureUpload because WebGPU has one and not the other:
-        * WGSL has no array-of-handle type, so pixels upload there but nothing can index them --
-        * material textures reach a WebGPU shader through descriptor set 3 instead.
-        *
-        * A consumer needs the distinction to tell "this backend has no such array" from
-        * "the array is exhausted", which are a fallback and an error respectively.
+        * Backend has the set-0 bindless texture array, so registerTexture returns a slot a shader
+        * can index. Separate from TextureUpload because WebGPU has one and not the other: WGSL has
+        * no array-of-handle type, so pixels upload there but nothing can index them, and material
+        * textures reach a WebGPU shader through descriptor set 3 instead. The distinction tells
+        * "this backend has no such array" apart from "the array is exhausted".
         */
         BindlessTextures        = 0x00000040,
         /*
-        * Backend can build acceleration structures and traverse them from a shader ray query.
-        * Reported as one flag rather than three because the pieces are useless apart: Vulkan
-        * requests VK_KHR_acceleration_structure, VK_KHR_ray_query and
-        * VK_KHR_deferred_host_operations as a set and checks both feature bits, and Metal 4
-        * answers through MTLDevice.supportsRaytracing.
-        *
-        * Ray tracing *pipelines* are deliberately outside this: the engine casts rays from
-        * compute shaders, so it needs no shader binding tables (restir.md section 4). A backend
-        * that gains them later wants its own flag.
-        *
-        * Absent on WebGPU, and absent on MoltenVK -- so on macOS the Vulkan backend reports no
-        * ray tracing while the Metal backend reports it, which is exactly why this is a runtime
-        * capability and not an #ifdef.
+        * Backend can build acceleration structures and traverse them from a shader ray query. One
+        * flag rather than three because the pieces are useless apart: Vulkan requests
+        * VK_KHR_acceleration_structure, VK_KHR_ray_query and VK_KHR_deferred_host_operations as a
+        * set, and Metal 4 answers through MTLDevice.supportsRaytracing.
+        * Ray tracing *pipelines* are outside this: the engine casts rays from compute shaders, so
+        * it needs no shader binding tables. A backend that gains them wants its own flag.
+        * Absent on WebGPU and on MoltenVK, so on macOS the Vulkan backend reports no ray tracing
+        * while the Metal backend reports it -- hence a runtime capability rather than an #ifdef.
         */
         RayTracing              = 0x00000080,
     };
@@ -149,7 +136,7 @@ namespace vkm
         bool setUpPredefinedCommandQueues();
 
         /*
-        * @brief desrtroy all resources and clean up
+        * @brief destroy all resources and clean up
         */
         void destroy();
 
@@ -171,40 +158,48 @@ namespace vkm
 
         /*
          * @brief Synchronous GPU texture -> CPU pixels readback of mip 0 of one array layer of an
-         * uncompressed color texture, via a transient readback staging buffer and a one-off
-         * command buffer on the Graphics queue. Blocks until the copy completes -- intended
-         * for tests and debugging, not per-frame use. Returns empty pixels on failure.
+         * uncompressed color texture.
+         * @details Goes through a transient readback staging buffer and a one-off command buffer on
+         * the Graphics queue, and blocks until the copy completes. Intended for tests and
+         * debugging, not per-frame use.
+         * @param textureHandle Texture to read back.
+         * @param arrayLayer Array layer to read.
+         * @return The pixels, or an empty result on failure.
          */
         VkmTextureReadbackResult readbackTexture(VkmResourceHandle textureHandle, uint32_t arrayLayer = 0);
 
         /*
-         * @brief Synchronously upload `size` bytes from `data` into `dstBuffer` at
-         * `dstOffset`.
-         *
-         * `mode` selects how the bytes get there; the default picks the direct CPU write when
-         * the destination buffer's memory allows it (see VkmResourceUploadMode) and otherwise
-         * goes through a transient staging buffer and a one-off command buffer submitted to
-         * the Graphics queue (this engine has no dedicated Transfer queue). Only a buffer
-         * created with VkmMemoryAccessHint::HostWrite can take the direct write; the staging
-         * path blocks until the GPU copy completes, so it is intended for setup-time uploads
-         * (e.g. postDriverReady), not per-frame streaming.
+         * @brief Synchronously uploads bytes into a buffer.
+         * @details The staging path blocks until the GPU copy completes, so this is for setup-time
+         * uploads (e.g. postDriverReady), not per-frame streaming. It uses a transient staging
+         * buffer and a one-off command buffer on the Graphics queue; this engine has no dedicated
+         * Transfer queue.
+         * @param dstBuffer Destination buffer.
+         * @param data Source bytes.
+         * @param size Number of bytes to upload.
+         * @param dstOffset Byte offset into the destination.
+         * @param mode How the bytes get there. Auto takes the direct CPU write when the buffer was
+         * created with VkmMemoryAccessHint::HostWrite, and the staging copy otherwise.
+         * @return False if the upload failed.
          */
         bool uploadToBuffer(VkmResourceHandle dstBuffer, const void* data, uint64_t size, uint64_t dstOffset = 0,
                              VkmResourceUploadMode mode = VkmResourceUploadMode::Auto);
 
         /*
-         * @brief Synchronously upload `size` bytes of tightly-packed pixels into one mip
-         * level of one array layer of `dstTexture` -- the texture counterpart of
-         * uploadToBuffer, with the same transient-staging, one-off-command-buffer, blocking
-         * shape and the same setup-time-only intent. A cubemap is six calls, one per face,
-         * with arrayLayer running over VkmTextureInfo's +X, -X, +Y, -Y, +Z, -Z order.
-         * The texture is sampleable once this returns.
-         *
-         * `mode` selects how the pixels get there; the default picks the direct CPU write
-         * when the destination texture's memory allows it and the staging copy otherwise
-         * (see VkmResourceUploadMode). The direct write does no queue work at all, so it does
-         * not block -- but it is only available where the memory type permits, which is why
-         * this stays a single entry point rather than two.
+         * @brief Synchronously uploads tightly-packed pixels into one mip level of one array layer.
+         * @details The texture counterpart of uploadToBuffer, with the same transient-staging,
+         * one-off-command-buffer, blocking shape and the same setup-time-only intent. A cubemap is
+         * six calls, one per face, with arrayLayer running over VkmTextureInfo's +X, -X, +Y, -Y,
+         * +Z, -Z order. The texture is sampleable once this returns.
+         * @param dstTexture Destination texture.
+         * @param data Source pixels, tightly packed.
+         * @param size Number of bytes to upload.
+         * @param mipLevel Mip level to write.
+         * @param arrayLayer Array layer to write.
+         * @param mode How the pixels get there. Auto takes the direct CPU write when the texture's
+         * memory allows it -- that path does no queue work and does not block -- and the staging
+         * copy otherwise.
+         * @return False if the upload failed.
          */
         bool uploadToTexture(VkmResourceHandle dstTexture, const void* data, uint64_t size,
                              uint32_t mipLevel = 0, uint32_t arrayLayer = 0,
@@ -216,17 +211,14 @@ namespace vkm
         VkmSampler* newSampler(const VkmSamplerInfo& info);
 
         /*
-        * @brief Creates and builds an acceleration structure, or returns null.
-        *
-        * @details Builds synchronously -- a one-off command buffer, submitted and waited on, the
-        * same shape uploadToBuffer has. That fits how structures are used today (built once when a
-        * scene loads) and keeps the command-buffer API out of this. A per-frame rebuild or refit
-        * needs a *recorded* build instead; see TODO.md.
-        *
-        * Returns null, with an error logged, on a backend whose capability flags lack
-        * VkmDriverCapabilityFlags::RayTracing. Callers must check the flag rather than the result
-        * when the absence is expected -- WebGPU has no such API at all, and Vulkan-on-MoltenVK
-        * exposes no RT extensions.
+        * @brief Creates and builds an acceleration structure.
+        * @details Builds synchronously, through a one-off command buffer that is submitted and
+        * waited on -- the same shape uploadToBuffer has. A per-frame rebuild or refit needs a
+        * recorded build instead.
+        * @param info Structure description.
+        * @return The structure, or null with an error logged on a backend whose capability flags
+        * lack VkmDriverCapabilityFlags::RayTracing. Check the flag rather than the result where the
+        * absence is expected.
         */
         VkmAccelerationStructure* newAccelerationStructure(const VkmAccelerationStructureInfo& info);
 
@@ -246,10 +238,14 @@ namespace vkm
         /*
         * @brief Builds the resources `pipelineState` declared for one PSO-declared set: set 2
         * (VkmResourceSetKind::PerPass) or set 3 (PerDraw).
-        * @details Returns nullptr if the pipeline declares nothing for that set, if `entries` does
-        * not exactly cover the declaration, or if a resource is of the wrong kind -- see
-        * VkmResourceTableBase. The caller owns the result: destroy() then delete, once no
-        * in-flight frame can still be using it.
+        * @details The caller owns the result: destroy() then delete, once no in-flight frame can
+        * still be using it.
+        * @param pipelineState Pipeline whose declaration the entries must cover.
+        * @param kind Which set to build.
+        * @param entries Resources to bind, one per declared binding.
+        * @param outError Receives a message when the table cannot be built. May be null.
+        * @return The table, or nullptr if the pipeline declares nothing for that set, if `entries`
+        * does not exactly cover the declaration, or if a resource is of the wrong kind.
         */
         VkmResourceTableBase* newResourceTable(const VkmPipelineStateBase* pipelineState,
                                                VkmResourceSetKind kind,
@@ -257,21 +253,24 @@ namespace vkm
                                                std::string* outError = nullptr);
 
         /*
-        * @brief Replace every VkmFormat::Swapchain color-format sentinel in `desc` with the
-        * concrete swapchain format. The format converters (getMTLPixelFormat/toVkFormat/...)
-        * must never see VkmFormat::Swapchain, so every path that hands a descriptor to a
-        * backend must run this first -- newPipelineState() and VkmPipelineStateManager's
-        * reload path both do.
+        * @brief Replaces every VkmFormat::Swapchain color-format sentinel in a descriptor with the
+        * concrete swapchain format.
+        * @details The format converters (getMTLPixelFormat/toVkFormat/...) must never see
+        * VkmFormat::Swapchain, so every path that hands a descriptor to a backend must run this
+        * first. newPipelineState() and VkmPipelineStateManager's reload path both do.
+        * @param desc Descriptor to resolve in place.
+        * @param outError Receives a message when a sentinel cannot be resolved. May be null.
+        * @return False if the descriptor could not be resolved.
         */
         bool resolveSwapChainFormats(VkmPipelineStateDescriptor& desc, std::string* outError = nullptr) const;
 
         /*
-        * @brief Block until every command queue of this driver has finished all submitted
-        * work. Used by the pipeline-state reload path, which destroys backend pipeline
-        * objects synchronously (they never go through the deferred reclaimer).
-        *
-        * Virtual because waiting on each queue's timeline is not, on every backend, the same
-        * thing as the API considering the device idle -- see VkmDriverVulkan::waitIdle.
+        * @brief Blocks until every command queue of this driver has finished all submitted work.
+        * @details Used by the pipeline-state reload path, which destroys backend pipeline objects
+        * synchronously rather than through the deferred reclaimer. Virtual because waiting on each
+        * queue's timeline is not, on every backend, the same as the API considering the device
+        * idle -- see VkmDriverVulkan::waitIdle.
+        * @param timeoutMs Milliseconds to wait before giving up.
         */
         virtual void waitIdle(const uint64_t timeoutMs = UINT64_MAX);
 
@@ -283,14 +282,15 @@ namespace vkm
         /*
         * @brief Whether the CPU and GPU share one memory pool, so a texture placed in
         * CPU-writable memory costs the GPU nothing to sample.
-        * @details Set by each backend during initializeInner (Metal: hasUnifiedMemory;
-        * Vulkan: a DEVICE_LOCAL|HOST_VISIBLE memory type exists). This is what gates the
-        * host-copy texture upload path -- see VkmResourceUploadMode and
-        * VkmTexture::isHostWritable. False on backends that never checked.
+        * @details Set by each backend during initializeInner (Metal: hasUnifiedMemory; Vulkan: a
+        * DEVICE_LOCAL|HOST_VISIBLE memory type exists), and gates the host-copy texture upload
+        * path. False on backends that never checked.
         */
         inline bool hasUnifiedMemory() const { return _hasUnifiedMemory; }
 
-        // @brief get command dispatcher for the driver
+        /*
+        * @brief get one of the driver's command queues
+        */
         inline VkmCommandQueueBase* getCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex) const
         {
             VKM_ASSERT(queueType < VkmCommandQueueType::Count, "Invalid command queue type");
@@ -305,59 +305,57 @@ namespace vkm
 
         /*
         * @brief get the engine-global bindless resource manager (set 0 convention -- see
-        * common/bindless_resource_manager.h). Created by each backend driver during
-        * initialization (Vulkan in initializeInner since pipeline layouts need the set
-        * layout; Metal/WebGPU in postInitializeInner since they need the resource pool
-        * and queues).
+        * common/bindless_resource_manager.h).
+        * @details Created by each backend driver during initialization: Vulkan in initializeInner,
+        * since pipeline layouts need the set layout; Metal and WebGPU in postInitializeInner, since
+        * they need the resource pool and queues.
         */
         inline VkmBindlessResourceManagerBase* getBindlessResourceManager() const { return _bindlessResourceManager.get(); }
 
         /*
         * @brief get the engine-global per-frame constant manager (set 1 convention -- see
-        * common/frame_constants.h). Created by each backend driver during initialization,
-        * next to the bindless manager. VkmEngine::render() writes one frame slot through it
-        * per frame; every pipeline bind publishes that slot.
+        * common/frame_constants.h).
+        * @details Created by each backend driver during initialization, next to the bindless
+        * manager. VkmEngine::render() writes one frame slot through it per frame, and every
+        * pipeline bind publishes that slot.
         */
         inline VkmFrameConstantManagerBase* getFrameConstantManager() const { return _frameConstantManager.get(); }
 
         /*
-        * @brief get deferred resource reclaimer; VkmRenderGraph drives its per-frame
-        * pollOnce() fallback on WASM through this accessor.
+        * @brief get deferred resource reclaimer; VkmRenderGraph drives its per-frame pollOnce()
+        * fallback on WASM through this accessor.
         */
         inline VkmDeferredResourceReclaimer* getDeferredReclaimer() const { return _deferredReclaimer.get(); }
 
         /*
-        * @brief get the launch options this driver was initialized with. If initialize()
-        * was called with a null options pointer (some test fixtures do this), this returns
-        * DEFAULT_ENGINE_LAUNCH_OPTIONS -- but note isDebugNamingEnabled() is still false in
-        * that case regardless (see initialize()'s null-guard), since a null-options caller
-        * has explicitly opted out of the whole launch-configuration story.
+        * @brief get the launch options this driver was initialized with.
+        * @details Returns DEFAULT_ENGINE_LAUNCH_OPTIONS when initialize() was called with a null
+        * options pointer, as some test fixtures do. isDebugNamingEnabled() stays false in that
+        * case regardless.
         */
         inline const VkmEngineLaunchOptions& getLaunchOptions() const { return _launchOptions; }
 
         /*
-        * @brief true if either enableValidationLayer or enableGpuCapture was requested at
-        * launch. Resources (see newTexture/newBuffer/etc. in driver.cpp) and command queues
-        * (VkmCommandQueueBase::initialize()) only push a native debug label when this is
-        * true AND a debug name was actually supplied.
+        * @brief true if either enableValidationLayer or enableGpuCapture was requested at launch.
+        * @details Resources and command queues push a native debug label only when this is true
+        * and a debug name was supplied.
         */
         inline bool isDebugNamingEnabled() const { return _debugNamingEnabled; }
 
         /*
-        * @brief The color format the swapchain is (or will be) created with, decided once at
-        * initialize() from the platform's non-HDR/HDR table and the display's HDR capability
-        * (see selectSwapChainColorFormat). Known before any swapchain object exists, so it is
-        * the single source of truth used both to create the swapchain and to resolve a
-        * pipeline's "swapchain" color format (newPipelineState).
+        * @brief The color format the swapchain is (or will be) created with.
+        * @details Decided once at initialize() from the platform's non-HDR/HDR table and the
+        * display's HDR capability (see selectSwapChainColorFormat). Known before any swapchain
+        * object exists, so it is the single source of truth for both creating the swapchain and
+        * resolving a pipeline's "swapchain" color format.
         */
         inline VkmFormat getSwapChainColorFormat() const { return _swapChainColorFormat; }
 
         /*
         * @brief What the graphics API reports about device memory right now -- the "actual"
         * counterpart to the per-resource totals in getRenderResourcePool()'s category usage.
-        * @details Backends that cannot introspect their memory (WebGPU) keep this default,
-        * which reports nothing rather than echoing the engine's own tracked numbers back as
-        * if they were measured.
+        * @details Backends that cannot introspect their memory (WebGPU) keep this default, which
+        * reports nothing rather than echoing the engine's own tracked numbers back as if measured.
         */
         virtual VkmGpuMemoryStats getGpuMemoryStats() const { return VkmGpuMemoryStats{}; }
 
@@ -371,10 +369,10 @@ namespace vkm
         virtual void onFrameEnd() {}
 
         /*
-        * @brief Arm a GPU capture (.gputrace) starting `startFrameDelay` frames after the
-        * next onFrameBegin() and spanning `frameCount` consecutive frames. Metal-only;
-        * default is a no-op. Requires enableGpuCapture at launch (the capture scope only
-        * exists then).
+        * @brief Arms a GPU capture (.gputrace). Metal-only; the default is a no-op.
+        * @details Requires enableGpuCapture at launch, since the capture scope only exists then.
+        * @param startFrameDelay Frames to wait after the next onFrameBegin() before capturing.
+        * @param frameCount Consecutive frames to capture.
         */
         virtual void requestGpuFrameCapture(uint32_t startFrameDelay = 0, uint32_t frameCount = 1)
         {
@@ -383,10 +381,9 @@ namespace vkm
 #endif // VKM_GPU_CAPTURE
 
         /*
-        * @brief true if --enable-gpu-crash-dump was requested at launch. Gates
-        * VkmGpuCrashHandler::recordSubmission()'s breadcrumb bookkeeping and (on Vulkan)
-        * VK_EXT_device_fault extension enablement. Device-lost/error detection itself stays
-        * always-on regardless of this flag -- see gpu_crash_handler.h.
+        * @brief true if --enable-gpu-crash-dump was requested at launch.
+        * @details Gates VkmGpuCrashHandler::recordSubmission()'s breadcrumb bookkeeping and, on
+        * Vulkan, VK_EXT_device_fault enablement. Device-lost/error detection stays always-on.
         */
         inline bool isGpuCrashDumpEnabled() const { return _gpuCrashDumpEnabled; }
 
@@ -398,32 +395,37 @@ namespace vkm
 
         /*
         * @brief get the per-subgraph GPU profiler driven by VkmRenderGraph::execute() and read by
-        * the debug overlay's "GPU" stat and VkmGpuProfilerInspector. Never null after
-        * initialize(); reports isSupported() == false on a device without timestamp queries.
+        * the debug overlay's "GPU" stat and VkmGpuProfilerInspector.
+        * @details Never null after initialize(); reports isSupported() == false on a device without
+        * timestamp queries.
         */
         inline VkmGpuProfiler* getGpuProfiler() const { return _gpuProfiler.get(); }
 
         /*
-        * @brief GPU timestamp pool services, used only by VkmGpuProfiler.
-        *
-        * @details Virtual with a default that declines rather than pure virtual: a backend that
-        * cannot (or does not yet) time GPU work says so by leaving initializeGpuTimestampPool()
-        * returning false, and then none of the others is ever called. `slotCount` is a flat
-        * array of timestamp slots; the profiler owns how they are partitioned.
-        *
-        * A backend that returns true must also raise VkmDriverCapabilityFlags::TimestampQuery.
+        * @brief Creates the GPU timestamp pool. Used only by VkmGpuProfiler.
+        * @details A backend that cannot time GPU work leaves this returning false, and then none
+        * of the other timestamp entry points is ever called. A backend that returns true must also
+        * raise VkmDriverCapabilityFlags::TimestampQuery.
+        * @param slotCount Flat number of timestamp slots; the profiler owns how they partition.
+        * @return False if the backend has no timestamp support.
         */
         virtual bool initializeGpuTimestampPool(uint32_t slotCount) { (void)slotCount; return false; }
         virtual void destroyGpuTimestampPool() {}
 
-        // Nanoseconds per raw timestamp tick (Vulkan's VkPhysicalDeviceLimits::timestampPeriod;
-        // 1.0 on backends whose timestamps are already nanoseconds).
+        /*
+        * @brief Nanoseconds per raw timestamp tick.
+        * @return Vulkan's VkPhysicalDeviceLimits::timestampPeriod, or 1.0 on backends whose
+        * timestamps are already nanoseconds.
+        */
         virtual double getGpuTimestampPeriodNs() const { return 1.0; }
 
         /*
-        * @brief Records the reset of slots [firstSlot, firstSlot + count) into `commandBuffer`,
-        * ahead of the writes that will fill them. Must be recorded outside a render pass.
-        * Vulkan requires this before a slot can be read back at all.
+        * @brief Records the reset of a range of timestamp slots, ahead of the writes that fill them.
+        * @details Must be recorded outside a render pass. Vulkan requires it before a slot can be
+        * read back at all.
+        * @param commandBuffer Command buffer to record into.
+        * @param firstSlot First slot in the range.
+        * @param count Number of slots to reset.
         */
         virtual void resetGpuTimestampSlots(VkmCommandBufferBase* commandBuffer, uint32_t firstSlot, uint32_t count)
         {
@@ -431,9 +433,13 @@ namespace vkm
         }
 
         /*
-        * @brief Reads `count` raw timestamp ticks starting at `firstSlot` into `outTicks`.
-        * Callers only ask once the submission that wrote them has completed, so a false return
-        * means the read genuinely failed rather than "not yet".
+        * @brief Reads raw timestamp ticks back from the pool.
+        * @details Callers only ask once the submission that wrote them has completed, so a false
+        * return means the read genuinely failed rather than "not yet".
+        * @param firstSlot First slot to read.
+        * @param count Number of slots to read.
+        * @param outTicks Receives `count` raw ticks.
+        * @return False if the read failed.
         */
         virtual bool resolveGpuTimestamps(uint32_t firstSlot, uint32_t count, uint64_t* outTicks)
         {
@@ -444,16 +450,16 @@ namespace vkm
         VkmCommandQueueBase* newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
 
         /*
-         * @brief Create a texture view referencing an existing (pooled) texture. Protected
-         * and friended to VkmTexture only -- views must be created via
-         * VkmTexture::createView() so ownership is tracked; nothing else may call this.
+         * @brief Create a texture view referencing an existing (pooled) texture.
+         * @details Friended to VkmTexture only: views must be created via VkmTexture::createView()
+         * so ownership is tracked.
          */
         VkmTextureView* newTextureView(const VkmTextureViewInfo& info);
 
         /*
-         * @brief Create a buffer view referencing an existing (pooled) buffer. Protected
-         * and friended to VkmBuffer only -- views must be created via
-         * VkmBuffer::createView() so ownership is tracked; nothing else may call this.
+         * @brief Create a buffer view referencing an existing (pooled) buffer.
+         * @details Friended to VkmBuffer only: views must be created via VkmBuffer::createView()
+         * so ownership is tracked.
          */
         VkmBufferView* newBufferView(const VkmBufferViewInfo& info);
 
@@ -463,9 +469,10 @@ namespace vkm
     protected:
         virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) = 0;
         /*
-        * @brief called at the end of initialize(), after the render resource pool and
-        * command queues exist. Backends whose bindless manager needs those (Metal residency
-        * registration, WebGPU queue-side uploads) create it here.
+        * @brief called at the end of initialize(), after the render resource pool and command
+        * queues exist.
+        * @details Backends whose bindless manager needs those -- Metal residency registration,
+        * WebGPU queue-side uploads -- create it here.
         */
         virtual bool postInitializeInner() { return true; }
         virtual void destroyInner() = 0;
@@ -478,17 +485,18 @@ namespace vkm
         virtual VkmSwapChainBase* newSwapChainInner() = 0;
         virtual VkmResourceTableBase* newResourceTableInner() = 0;
         // Every backend implements this, including those without ray tracing: the WebGPU one logs
-        // and returns null, matching the copyTexture/registerTexture precedent rather than
-        // splitting the base class behind an #ifdef (backend/common/AGENTS.md).
+        // and returns null rather than splitting the base class behind an #ifdef.
         virtual VkmAccelerationStructure* newAccelerationStructureInner() = 0;
         virtual VkmCommandQueueBase* newCommandQueueInner() = 0;
         virtual VkmPipelineStateBase* newPipelineStateInner() = 0;
         virtual VkmRenderResourcePool* newRenderResourcePoolInner() = 0;
 
         /*
-        * @brief Choose the swapchain color format for this platform. `enableHdr` is the launch
-        * request; a backend returns an HDR format only if it also confirms the display supports
-        * it, otherwise the non-HDR format. Called once from initialize() after initializeInner().
+        * @brief Choose the swapchain color format for this platform.
+        * @details Called once from initialize(), after initializeInner().
+        * @param enableHdr The launch request. A backend returns an HDR format only if it also
+        * confirms the display supports it, and the non-HDR format otherwise.
+        * @return The chosen color format.
         */
         virtual VkmFormat selectSwapChainColorFormat(bool enableHdr) const = 0;
 

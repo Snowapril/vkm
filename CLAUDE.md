@@ -121,3 +121,50 @@ vkm/
 - Each deviation entry: what was planned, what was done instead, and why.
 - Run `/session-report` to generate a readable HTML summary (with a comprehension quiz)
   of a session's changes, including any logged deviations.
+
+## 12. Comment Style
+
+**Comments describe what the code does now — not why it changed. History belongs in git.**
+
+Doc comments use the existing house form: a `/* ... */` block directly above the declaration,
+with `@`-prefixed tags. Only four tags are allowed:
+
+| Tag | Use |
+|---|---|
+| `@brief` | One or two sentences: what it does. Always present. |
+| `@details` | Optional. The contract a caller must honor: invariants, lifetime/ownership, units, valid ranges, thread-safety. |
+| `@param <name>` | One line per parameter. Document every parameter, or none. |
+| `@return` | Only when the return value is not already obvious from `@brief`. |
+
+Nothing else — no `@note`, `@warning`, `@see`, and no free prose paragraphs above a declaration.
+
+**Never write in a comment:**
+- Why a change was made, or what the code used to do ("previously", "used to", "no longer",
+  "this was changed because", "this used to work around").
+- Bug or CI post-mortems: failing job names, VUID codes, crash symptoms, error text.
+- Pointers to `implementation-notes.md`, issue numbers, or commit rationale.
+
+`git blame` and the commit message already carry all of that. If a past failure taught a real
+constraint, state the constraint — "every backend's `submit()` must call this, or `waitIdle()`
+will not drain" — not the incident that revealed it.
+
+**Inline `//` comments** are for a genuinely non-obvious single line, and stay on one line.
+Delete comments that restate the code (`++x;  // increment x`).
+`TODO(owner):` and `NOTE(topic):` keep their existing tagged form.
+
+This does not license a cleanup pass over unrelated files — §3 still applies. Fix the comments
+in code you are already editing.
+## 12. Graphics API Results Must Be Handled
+
+**Never discard a result returned by a Vulkan, Metal, or WebGPU call.**
+
+- Every `VkResult`, every Metal `nil` return and `NSError**` out-param, and every WebGPU status
+  enum must be inspected at the call site.
+- Unrecoverable (device lost, or creation of an object the caller depends on): log the failure and
+  stop that path — propagate it to the caller, or `VKM_ASSERT` where no caller can recover.
+- Recoverable (`VK_SUBOPTIMAL_KHR`, `VK_ERROR_OUT_OF_DATE_KHR`, `VK_INCOMPLETE`, WebGPU
+  `Outdated`/`Lost`): handle it explicitly — recreate the swapchain, re-query the count — rather
+  than only logging and continuing.
+- Use the backend's helper instead of a hand-rolled check: `VKM_VK_CHECK_RESULT_MSG` /
+  `VKM_VK_CHECK_RESULT_MSG_RETURN` (`vulkan_util.h`), `VKM_MTL_CHECK` (`metal_util.h`).
+- The log message must carry the reason the API reported, not just a static description.

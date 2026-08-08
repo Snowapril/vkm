@@ -101,9 +101,8 @@ VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_screenshot_frame, 600u);
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_debug_view, 0u);
 // Off switch for the contact term, so a screenshot run can A/B it against the probes alone.
 VKM_GLOBAL_VARIABLE(bool, gv_gi_ssgi, true);
-// Probes per axis. More is better lit and slower to converge -- a round is probeCount/budget
-// frames -- so it is a knob rather than a constant. Y is lower than X and Z because scenes are
-// wider than they are tall, not because height matters less.
+// Probes per axis. More is better lit and slower to converge, a round being probeCount/budget
+// frames. Y is lower than X and Z because scenes are wider than they are tall.
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_x, 20u);
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_y, 10u);
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_z, 20u);
@@ -586,18 +585,15 @@ private:
             return;
         }
 
-        // The capture pass pushes once per (probe, face, batch), so the budget still has to fit
-        // inside one frame's push-constant ring region on Metal/WebGPU -- but that region is now
-        // rewound every frame, so it is one frame's pushes that must fit rather than all frames in
-        // flight together. What remains is a plain per-frame capacity check, not the 3x-tighter
-        // "entries a running frame still references" constraint this used to work around.
+        // The capture pass pushes once per (probe, face, batch), so the budget has to fit inside one
+        // frame's push-constant ring region on Metal and WebGPU. The region is rewound every frame,
+        // so this is a plain per-frame capacity check.
         const uint32_t batchCount = static_cast<uint32_t>(_scene.getDrawBatches().size());
         const uint32_t ringBudget = kVkmPushConstantRingEntryCount / std::max(1u, 6u * batchCount + 2u);
         const uint32_t requestedBudget = _probeBudget;
         _probeBudget = std::clamp(std::min(_probeBudget, ringBudget), 1u, VkmProbeVolumeUpdater::kMaxBudget);
         // Only when the ring is what took it down. Comparing against kMaxBudget instead would
-        // report every budget below the engine's ceiling as ring-limited, which is how this line
-        // came to claim "limited to 32 by the push-constant ring" for a scene the ring allowed 128.
+        // report every budget below the engine's ceiling as ring-limited.
         if (_probeBudget < requestedBudget)
         {
             VKM_DEBUG_INFO(("Probe budget limited to " + std::to_string(_probeBudget) + " (from " +

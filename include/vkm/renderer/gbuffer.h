@@ -17,12 +17,10 @@ namespace vkm
     /*
     * @brief The geometry buffer both GI tiers read: surface attributes rasterized once per frame,
     * plus last frame's copy for temporal reuse.
-    *
-    * @details Engine-level rather than sample-level because it is shared infrastructure -- the
-    * probe/SSGI tier and ReSTIR both consume it, and so will any denoiser.
-    *
-    * Channel layout. The engine exposes no two-channel formats, so the two normals share one
-    * RGBA16F target via octahedral encoding rather than costing a target each:
+    * @details Engine-level rather than sample-level, being shared infrastructure: the probe/SSGI
+    * tier and ReSTIR both consume it.
+    * The engine exposes no two-channel formats, so the two normals share one RGBA16F target via
+    * octahedral encoding rather than costing a target each:
     *
     *   Normal              RGBA16F  xy = octahedral shading normal, zw = octahedral geometric normal
     *   BaseColorRoughness  RGBA8    rgb = base colour, a = roughness
@@ -34,18 +32,14 @@ namespace vkm
     *                                camera distance above instead of sampling this.
     *
     * Both normals are carried because they answer different questions: the shading normal is what
-    * lighting and temporal-tap rejection use, while the *geometric* normal is what a secondary ray
-    * must be offset along to avoid re-hitting its own surface. Using the shading normal for that
-    * offset is a classic source of self-intersection on normal-mapped geometry.
-    *
+    * lighting and temporal-tap rejection use, while the geometric normal is what a secondary ray
+    * must be offset along to avoid re-hitting its own surface.
     * History is a full second copy of every target, flipped by advanceFrame(). Double-buffering
-    * only depth and normal would save roughly a third of the memory, since those are all a
-    * temporal tap strictly needs, but a whole second set keeps the accessors symmetric and leaves
-    * material-similarity rejection possible without another format change. At 1080p the pair costs
+    * only depth and normal would save roughly a third of the memory, but a whole second set keeps
+    * the accessors symmetric and leaves material-similarity rejection open. At 1080p the pair costs
     * roughly 100 MB.
-    *
-    * Not stored: a material ID. Nothing consumes one yet -- normal and roughness rejection covers
-    * the temporal-tap cases -- so it waits for a consumer rather than occupying a channel now.
+    * No material ID: nothing consumes one, normal and roughness rejection covering the temporal-tap
+    * cases.
     */
     class VkmGBuffer
     {

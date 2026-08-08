@@ -108,9 +108,8 @@ namespace vkm
         std::vector<uint32_t> _openGpuZoneEndSlots;
 
 #if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)
-        // onWriteCompletionMarker() queues here instead of opening/closing its own compute
-        // encoder immediately; onEndCommandBuffer() flushes all of them as one batched compute
-        // pass. See onEndCommandBuffer()'s doc comment in command_buffer.h for why.
+        // onWriteCompletionMarker() queues here instead of opening and closing its own compute
+        // encoder; onEndCommandBuffer() flushes all of them as one batched compute pass.
         struct PendingMarkerWrite
         {
             VkmResourceHandle markerBuffer;

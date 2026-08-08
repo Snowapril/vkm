@@ -14,6 +14,7 @@
 #include <vkm/renderer/backend/metal/metal_command_queue.h>
 #include <vkm/renderer/backend/metal/metal_pipeline_state.h>
 #include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
+#include <vkm/renderer/backend/metal/metal_util.h>
 
 #import <Metal/MTLDevice.h>
 #import <Metal/MTL4Counters.h>
@@ -73,13 +74,13 @@ namespace vkm
             return VkmInitResult{VkmInitResultCode::HardwareUnsupported, "Metal 4 requires macOS 26 / iOS 26 or later; this OS version is not supported."};
         }
 
-        // Always true in practice given the MTLGPUFamilyApple9 gate above, but querying it
-        // rather than assuming keeps the texture storage-mode policy honest if that gate is
-        // ever relaxed (an Intel Mac with a discrete GPU reports false here).
+        // Queried rather than assumed, so the texture storage-mode policy stays honest if the
+        // MTLGPUFamilyApple9 gate above is ever relaxed: an Intel Mac with a discrete GPU reports
+        // false here.
         _hasUnifiedMemory = [_mtlDevice hasUnifiedMemory];
 
-        // MTLBuffer.gpuAddress is unconditional on Metal -- the argument buffers and push
-        // constant ring have been binding by address since the MTL4 port.
+        // MTLBuffer.gpuAddress is unconditional on Metal; the argument buffers and push constant
+        // ring bind by address.
         _driverCapabilityFlags = VkmDriverCapabilityFlags::TextureContentCapture | VkmDriverCapabilityFlags::TextureUpload |
                                  VkmDriverCapabilityFlags::BindlessTextures |
                                  VkmDriverCapabilityFlags::BufferDeviceAddress;
@@ -193,7 +194,7 @@ namespace vkm
                     else
                     {
                         VKM_DEBUG_ERROR(fmt::format("startCaptureWithDescriptor failed: {}",
-                            error != nil ? error.localizedDescription.UTF8String : "unknown error").c_str());
+                            mtlErrorToString(error)).c_str());
                         _captureFramesRemaining = 0;
                     }
                     [captureDescriptor release]; // MRC
@@ -377,12 +378,16 @@ namespace vkm
         MTL4CounterHeapDescriptor* descriptor = [[MTL4CounterHeapDescriptor alloc] init]; // MRC
         descriptor.type = MTL4CounterHeapTypeTimestamp;
         descriptor.count = slotCount;
-        _timestampCounterHeap = [_mtlDevice newCounterHeapWithDescriptor:descriptor error:nil];
+        NSError* counterHeapError = nil;
+        _timestampCounterHeap = [_mtlDevice newCounterHeapWithDescriptor:descriptor error:&counterHeapError];
         [descriptor release]; // MRC
 
         if (_timestampCounterHeap == nil)
         {
-            VKM_DEBUG_INFO("Failed to create the GPU timestamp counter heap; GPU profiling is disabled");
+            // Recoverable: GPU profiling turns itself off, the engine keeps running. Logged at info
+            // level for that reason, but with the reason Metal gave rather than a bare message.
+            VKM_DEBUG_INFO(fmt::format("Failed to create the GPU timestamp counter heap ({}); GPU profiling is disabled",
+                mtlErrorToString(counterHeapError)).c_str());
             return false;
         }
         _timestampCounterHeap.label = @"VkmGpuProfilerTimestamps";

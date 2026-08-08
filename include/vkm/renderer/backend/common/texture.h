@@ -26,22 +26,23 @@ namespace vkm
         /*
         * @brief Whether this texture's memory can be written by the CPU directly, as opposed
         * to through a staging buffer and a queue-submitted copy.
-        * @details Set by the backend at creation from what it actually allocated -- asking
-        * for host-writable memory is a request, not a guarantee, so this reports the outcome
-        * rather than the intent. Metal: MTLStorageModeShared. Vulkan: the allocation reports
-        * HOST_VISIBLE and the image carries VK_IMAGE_USAGE_HOST_TRANSFER_BIT. False
-        * everywhere else, including every backend without
-        * VkmDriverCapabilityFlags::TextureUpload, which keeps the staging path the default.
+        * @details Reports the outcome, not the request: set by the backend at creation from what it
+        * actually allocated. Metal, MTLStorageModeShared; Vulkan, the allocation reports
+        * HOST_VISIBLE and the image carries VK_IMAGE_USAGE_HOST_TRANSFER_BIT. False everywhere
+        * else, including every backend without VkmDriverCapabilityFlags::TextureUpload.
         */
         inline bool isHostWritable() const { return _isHostWritable; }
 
         /*
-        * @brief Writes tightly-packed pixels straight into this texture's memory, with no
-        * staging buffer and no queue submission. Only called when isHostWritable() is true.
-        * @details The counterpart of VkmCommandBufferBase::copyBufferToTexture, and carries
-        * the same end-state contract: the texture is shader-readable once this returns.
-        * Not pure -- a backend that never reports isHostWritable() has nothing to implement,
-        * and this default is the matching "should be unreachable" guard.
+        * @brief Writes tightly-packed pixels straight into this texture's memory, with no staging
+        * buffer and no queue submission. Only call this when isHostWritable().
+        * @details The counterpart of VkmCommandBufferBase::copyBufferToTexture, with the same
+        * end-state contract: the texture is shader-readable once this returns.
+        * @param data Source pixels, tightly packed.
+        * @param size Number of bytes to write.
+        * @param mipLevel Mip level to write.
+        * @param arrayLayer Array layer to write.
+        * @return False if the texture's memory cannot be written directly.
         */
         virtual bool writeRegion(const void* data, uint64_t size, uint32_t mipLevel, uint32_t arrayLayer)
         {
@@ -51,11 +52,10 @@ namespace vkm
         }
 
         /*
-        * @brief Create a view of this texture. This is the ONLY way to create a
-        * VkmTextureView -- VkmDriverBase::newTextureView() is protected and friended to
-        * this class specifically so callers cannot bypass ownership tracking. info._texture
-        * is always overwritten with this texture's own handle, regardless of what the
-        * caller passed in.
+        * @brief Creates a view of this texture. The only supported way to obtain a VkmTextureView.
+        * @param info View description. Its _texture field is always overwritten with this texture's
+        * own handle, whatever the caller passed in.
+        * @return The new view, owned by this texture.
         */
         VkmTextureView* createView(VkmTextureViewInfo info);
 
@@ -67,7 +67,6 @@ namespace vkm
     protected:
         VkmTextureInfo _textureInfo;
         std::vector<VkmResourceHandle> _ownedViewHandles;
-        // Safe default: a backend that never opts in keeps the staging upload path.
         bool _isHostWritable = false;
     };
 } // namespace vkm

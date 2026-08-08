@@ -26,9 +26,8 @@ namespace vkm
     /*
     * @brief Refreshes a VkmProbeVolume a few probes per frame, by rasterizing the scene from them.
     *
-    * @details VkmProbeVolume is storage and VkmProbeVolume's shaders are the read path; this is the
-    * write path's frame loop, and it is the piece that makes the low-spec GI tier a running
-    * technique rather than three passes that exist. Per call it appends five subgraphs:
+    * @details VkmProbeVolume is storage and its shaders are the read path; this is the write path's
+    * frame loop. Per call it appends five subgraphs:
     *
     *   transfer  scene object/frame data upload
     *   compute   scene cull, aimed at this frame's probes rather than at a camera
@@ -36,20 +35,14 @@ namespace vkm
     *   compute   barrier, so the capture can be sampled
     *   graphics  x2  blend the captures into the irradiance and distance atlases
     *
-    * **Amortization is the whole design.** Rasterizing a probe's surroundings re-renders the scene
-    * six times, so refreshing every probe every frame is not affordable at any useful grid size --
-    * `_budget` probes are refreshed per frame instead, round-robin, and the rest keep last round's
-    * values. That is what the blend pass's hysteresis is for, and it is also this tier's known
-    * weak point: a light change takes a full round to reach every probe and then several more
-    * rounds to converge, so the propagation latency is a real number worth measuring rather than
-    * estimating (see TestProbeVolumeUpdaterShared.hpp).
-    *
-    * The volume is referenced, not owned: it is also the read path's input (probe_lighting.hlsl)
-    * and outlives any particular updater.
-    *
-    * What this does *not* do is composite anything. Whoever samples the atlases afterwards needs
-    * its own barrierTextureForShaderRead on them, because this class cannot know when that read
-    * happens.
+    * Amortization is the whole design. Rasterizing a probe's surroundings re-renders the scene six
+    * times, so `_budget` probes are refreshed per frame, round-robin, and the rest keep last
+    * round's values -- which is what the blend pass's hysteresis is for. It is also the tier's weak
+    * point: a light change takes a full round to reach every probe and several more to converge.
+    * The volume is referenced, not owned: it is also the read path's input and outlives any
+    * particular updater.
+    * This composites nothing. Whoever samples the atlases afterwards needs its own
+    * barrierTextureForShaderRead on them, this class not knowing when that read happens.
     */
     class VkmProbeVolumeUpdater
     {
@@ -66,16 +59,14 @@ namespace vkm
             // One cube face's edge, in texels, inside the shared capture atlas.
             uint32_t _captureFaceSize = 16u;
             /*
-            * Probe range. **Leave these at 0 to derive them from the volume**, which is almost
-            * always what you want: they are world-space distances, so a fixed value silently
-            * assumes a scene scale. A far plane shorter than the room clips away everything a
-            * probe should have seen -- the capture comes back nearly empty, the distance moments
-            * are meaningless, and the Chebyshev test then rejects every probe around a surface,
-            * which the lookup honestly reports as black.
-            *
-            * Derived: far = the grid's diagonal (a probe can see across the volume it belongs to,
-            * and the grid is normally fitted to the scene), near = a small fraction of the probe
-            * spacing, which is the smallest feature the grid can resolve anyway.
+            * Probe range. Leave these at 0 to derive them from the volume: they are world-space
+            * distances, so a fixed value silently assumes a scene scale. A far plane shorter than
+            * the room clips away everything a probe should have seen, the capture comes back nearly
+            * empty, the distance moments are meaningless, and the Chebyshev test then rejects every
+            * probe around a surface, which the lookup reports as black.
+            * Derived: far = the grid's diagonal, a probe being able to see across the volume it
+            * belongs to; near = a small fraction of the probe spacing, the smallest feature the
+            * grid can resolve.
             */
             float _nearZ = 0.0f;
             float _farZ = 0.0f;
@@ -91,17 +82,13 @@ namespace vkm
 
         /*
         * @brief The largest budget the push-constant ring can carry.
-        *
         * @details Metal and WebGPU hand out a push-constant ring entry per setPushConstants() call.
         * The capture pass pushes once per (probe, face, batch) and the blend pass once per
-        * (probe, atlas), so a single-batch frame costs 6*budget + 2*budget entries. The ring gives
-        * each frame slot its own region of kVkmPushConstantRingEntryCount (1024) entries and
-        * rewinds it every frame, so this bounds *one* frame's pushes: 1024 / 8 = 128. It was 32
-        * while the cursor never reset and FRAME_COUNT frames had to share one region.
-        *
+        * (probe, atlas), so a single-batch frame costs 6*budget + 2*budget entries. Each frame slot
+        * gets its own region of kVkmPushConstantRingEntryCount (1024) entries, rewound every frame,
+        * so this bounds one frame's pushes: 1024 / 8 = 128.
         * A scene with more than one draw batch costs proportionally more and has to lower the
-        * budget itself -- the capture's push count scales with the batch count, which only the
-        * caller knows (see the gi sample).
+        * budget itself, the capture's push count scaling with a batch count only the caller knows.
         */
         static constexpr uint32_t kMaxBudget = 128u;
 
@@ -151,13 +138,15 @@ namespace vkm
         glm::uvec2 getCaptureAtlasExtent() const;
 
         /*
-        * @brief Frames for a probe's value to fall within `errorFraction` of a step change.
-        *
-        * @details The blend is a fixed-ratio geometric decay -- after k refreshes a probe retains
-        * hysteresis^k of its old value -- so this is exact rather than a heuristic, and it is what
-        * turns a hysteresis and a budget into the number that actually matters. The result is the
-        * upper bound of the interval: a probe refreshed just before the change waits a whole round
-        * for its first update, so the true figure lies in (result - roundLength, result].
+        * @brief Frames for a probe's value to fall within a fraction of a step change.
+        * @details Exact rather than a heuristic: the blend is a fixed-ratio geometric decay, a
+        * probe retaining hysteresis^k of its old value after k refreshes.
+        * @param probeCount Probes in the volume.
+        * @param budget Probes refreshed per frame.
+        * @param hysteresis Weight of the existing value in an update.
+        * @param errorFraction Remaining error to converge within.
+        * @return The upper bound of the interval. A probe refreshed just before the change waits a
+        * whole round for its first update, so the true figure lies in (result - roundLength, result].
         */
         static uint32_t framesToConverge(uint32_t probeCount, uint32_t budget, float hysteresis,
                                          float errorFraction);

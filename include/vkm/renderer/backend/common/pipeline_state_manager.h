@@ -24,9 +24,10 @@ namespace vkm
     };
 
     /*
-    * @brief One PSO json file and everything needed to reload it. A single json expands into
-    * N named variants (see expandPipelineStateOptions), so reload is per source file rather
-    * than per variant -- the option set itself is part of what an edit can change.
+    * @brief One PSO json file and everything needed to reload it.
+    * @details A single json expands into N named variants (see expandPipelineStateOptions), so
+    * reload is per source file rather than per variant -- the option set is itself part of what an
+    * edit can change.
     */
     struct VkmPipelineStateSource
     {
@@ -40,35 +41,53 @@ namespace vkm
         bool stale = false; // a watched file changed since the last load/reload
     };
 
-    // Owns every live VkmPipelineStateBase created for this driver, categorized as
-    // Engine-owned (shared, loaded from resources/Pipelines/Engine/) or User-owned
-    // (loaded from a caller-supplied directory, e.g. a sample's own source dir).
+    /*
+    * @brief Owns every live VkmPipelineStateBase created for this driver.
+    * @details Categorized as Engine-owned, loaded from resources/Pipelines/Engine/, or User-owned,
+    * loaded from a caller-supplied directory such as a sample's own source dir.
+    */
     class VkmPipelineStateManager
     {
     public:
         explicit VkmPipelineStateManager(VkmDriverBase* driver);
         ~VkmPipelineStateManager();
 
-        // Non-recursively scans `directory` for *.json, parses each with
-        // parsePipelineStateFromFile, expands options via expandPipelineStateOptions, loads
-        // each variant's .vfcache files from `shaderCacheDir`, creates the backend pipeline
-        // object via _driver->newPipelineState(), and registers it under `origin`. Aborts on
-        // the first file that fails to parse/expand/load, reporting which file via
-        // *outError (fail-fast, consistent with the parser's own fail-fast style). If
-        // `directory` doesn't exist, logs and returns true (a no-op).
+        /*
+        * @brief Loads every PSO json in a directory, non-recursively.
+        * @details Parses each with parsePipelineStateFromFile, expands options via
+        * expandPipelineStateOptions, loads each variant's .vfcache files, creates the backend
+        * pipeline object via _driver->newPipelineState(), and registers it. Fail-fast: aborts on
+        * the first file that fails to parse, expand or load.
+        * @param directory Directory to scan. A missing directory logs and succeeds as a no-op.
+        * @param shaderCacheDir Directory holding the variants' .vfcache files.
+        * @param origin Which map to register the results under.
+        * @param outError Receives the failing file and reason. May be null.
+        * @return False on the first file that could not be loaded.
+        */
         bool loadPipelineStatesFromDirectory(const std::string& directory, const std::string& shaderCacheDir,
             VkmPipelineStateOrigin origin, std::string* outError = nullptr);
 
-        // Registers one already-parsed descriptor directly (mainly for unit tests). `jsonPath`
-        // is the file it was parsed from when there is one; leaving it empty registers a
-        // source that reloadSource() will refuse (there is nothing to re-read).
+        /*
+        * @brief Registers one already-parsed descriptor directly. Mainly for unit tests.
+        * @param desc Descriptor to register.
+        * @param shaderCacheDir Directory holding its .vfcache files.
+        * @param origin Which map to register it under.
+        * @param outError Receives the failure reason. May be null.
+        * @param jsonPath File it was parsed from. Leaving it empty registers a source that
+        * reloadSource() refuses, there being nothing to re-read.
+        * @return False if the pipeline could not be created.
+        */
         bool loadPipelineState(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir,
             VkmPipelineStateOrigin origin, std::string* outError = nullptr, const std::string& jsonPath = std::string());
 
-        // Looks up by name (must include the "[option]" suffix when applicable, exactly as
-        // expandPipelineStateOptions() produced it). The single-arg overload checks Engine
-        // first, then User; a name can never collide across origins since loadPipelineState()
-        // rejects loading a name that already exists in the other origin's map.
+        /*
+        * @brief Looks up a loaded pipeline by name.
+        * @details The single-argument overload checks Engine first, then User. A name cannot
+        * collide across origins, loadPipelineState() rejecting a name already in the other map.
+        * @param name Pipeline name, including the "[option]" suffix exactly as
+        * expandPipelineStateOptions() produced it.
+        * @return The pipeline, or nullptr when no such name is registered.
+        */
         VkmPipelineStateBase* getPipelineState(const std::string& name) const;
         VkmPipelineStateBase* getPipelineState(const std::string& name, VkmPipelineStateOrigin origin) const;
 
@@ -81,40 +100,50 @@ namespace vkm
         size_t findSourceIndexOfPipelineState(const std::string& name) const;
 
         /*
-        * @brief Re-read one PSO json and rebuild its pipelines in place, so cached
+        * @brief Re-reads one PSO json and rebuilds its pipelines in place, so cached
         * VkmPipelineStateBase* stay valid (see VkmPipelineStateBase::reload).
-        *
-        * @param recompileShaders when true, run vkm-compiler over the json first so shader
-        * edits are picked up; requires the build to have baked in a compiler path
-        * (isShaderRecompilationAvailable()).
-        *
-        * Nothing is destroyed until every fallible step (recompile, parse, expand) has
-        * passed, so a bad edit leaves the previously loaded pipelines untouched and running.
-        * Variants that disappeared from the edited json stay registered -- destroying them
-        * would dangle pointers callers still hold -- and are reported through *outError.
+        * @details Nothing is destroyed until every fallible step -- recompile, parse, expand -- has
+        * passed, so a bad edit leaves the loaded pipelines untouched and running. Variants that
+        * disappeared from the edited json stay registered, destroying them would dangle pointers
+        * callers still hold.
+        * @param sourceIndex Index into getSources().
+        * @param recompileShaders Run vkm-compiler over the json first, so shader edits are picked
+        * up. Requires isShaderRecompilationAvailable().
+        * @param outError Receives the failure reason, or a kept-alive variant warning. May be null.
+        * @return False if the source could not be reloaded.
         */
         bool reloadSource(size_t sourceIndex, bool recompileShaders, std::string* outError = nullptr);
-        // Reloads every source with a json path; reports the first failure but still attempts
-        // the rest, so one broken file does not block the others.
+
+        /*
+        * @brief Reloads every source with a json path.
+        * @param recompileShaders Run vkm-compiler over each json first.
+        * @param outError Receives the first failure. May be null.
+        * @return False if any source failed. The rest are still attempted, so one broken file does
+        * not block the others.
+        */
         bool reloadAllSources(bool recompileShaders, std::string* outError = nullptr);
 
-        // Re-stats every source's watched files and updates their `stale` flag. Returns true
-        // when any flag changed.
+        /*
+        * @brief Re-stats every source's watched files and updates their `stale` flag.
+        * @return True when any flag changed.
+        */
         bool refreshStaleness();
 
         /*
-        * @brief Throttled staleness poll, driven from VkmEngine::update() at the same cadence
-        * as the memory inspector's sampling. A few dozen last_write_time() calls twice a
-        * second is free, and a watcher thread would have to synchronize with a reload path
-        * that calls waitIdle() and destroys GPU objects.
-        *
-        * Reloads sources that just went stale when auto-reload is enabled.
+        * @brief Throttled staleness poll, driven from VkmEngine::update().
+        * @details Runs at the same cadence as the memory inspector's sampling. A watcher thread
+        * would have to synchronize with a reload path that calls waitIdle() and destroys GPU
+        * objects. Reloads sources that just went stale when auto-reload is enabled.
+        * @param deltaTime Seconds since the last call.
         */
         void pollSourceChanges(double deltaTime);
 
-        // When set, pollSourceChanges() reloads a source as soon as one of its watched files
-        // changes, instead of only flagging it. Off by default -- an editor that saves a
-        // half-written file would otherwise reload it.
+        /*
+        * @brief Whether pollSourceChanges() reloads a stale source or only flags it.
+        * @details Off by default: an editor that saves a half-written file would otherwise trigger
+        * a reload of it.
+        * @param enabled True to reload as soon as a watched file changes.
+        */
         void setAutoReloadOnChange(bool enabled) { _autoReloadOnChange = enabled; }
         bool isAutoReloadOnChange() const { return _autoReloadOnChange; }
 
@@ -122,9 +151,11 @@ namespace vkm
         // variant warning). Empty when the last reload succeeded cleanly.
         const std::string& getLastReloadError() const { return _lastReloadError; }
 
-        // True when this build baked in a vkm-compiler path (dev builds; see
-        // VKM_COMPILER_EXECUTABLE in CMakeLists.txt). False in Emscripten/installed builds,
-        // where reloadSource() can still re-apply json changes but not recompile shaders.
+        /*
+        * @brief Whether this build baked in a vkm-compiler path (VKM_COMPILER_EXECUTABLE).
+        * @return False in Emscripten and installed builds, where reloadSource() can still re-apply
+        * json changes but not recompile shaders.
+        */
         static bool isShaderRecompilationAvailable();
 
     private:

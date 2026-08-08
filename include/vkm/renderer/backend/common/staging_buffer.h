@@ -19,28 +19,30 @@ namespace vkm
         virtual void flush(uint64_t offset, uint64_t size) = 0;
 
         /*
-        * @brief Makes GPU writes visible to the CPU before reading a mapped range back
-        * (mirror of flush()). Default no-op: Metal Shared storage and WebGPU MapRead
-        * mappings are coherent; only Vulkan overrides this (vmaInvalidateAllocation) for
-        * potentially non-coherent host memory.
+        * @brief Makes GPU writes visible to the CPU before reading a mapped range back, the mirror
+        * of flush().
+        * @details A no-op by default: Metal Shared storage and WebGPU MapRead mappings are
+        * coherent. Only Vulkan overrides it, for potentially non-coherent host memory.
+        * @param offset Byte offset of the range.
+        * @param size Byte length of the range.
         */
         virtual void invalidate(uint64_t offset, uint64_t size) { (void)offset; (void)size; }
 
         /*
-        * @brief Writes `size` bytes from `data` into this buffer at `offset` from the CPU,
-        * without requiring the buffer to be in a mapped state (unlike map()+memcpy()+flush()).
-        * On Vulkan/Metal this is equivalent to map()+memcpy()+flush(), since those buffers stay
-        * persistently mapped and coherent regardless of concurrent GPU access. On WebGPU it's
-        * implemented via wgpuQueueWriteBuffer(): a WebGPU buffer must be unmapped for the GPU
-        * to read/write it, so a buffer a GPU command stream also writes into (e.g.
-        * VkmGpuCrashHandler's completion-marker buffer) can't stay persistently mapped there --
-        * this lets the CPU still update it without an explicit map()/unmap() round trip.
+        * @brief Writes bytes into this buffer from the CPU without requiring it to be mapped.
+        * @details Equivalent to map()+memcpy()+flush() on Vulkan and Metal, whose buffers stay
+        * persistently mapped and coherent regardless of concurrent GPU access. WebGPU implements it
+        * via wgpuQueueWriteBuffer(): a WebGPU buffer must be unmapped for the GPU to touch it, so a
+        * buffer a command stream also writes into cannot stay persistently mapped there.
+        * @param offset Byte offset to write at.
+        * @param data Source bytes.
+        * @param size Number of bytes to write.
         */
         virtual void writeDirect(uint64_t offset, const void* data, uint64_t size) = 0;
 
         /*
-        * @brief This buffer's address in the GPU's address space, or 0 where there is no such
-        * concept: WebGPU always, and Vulkan without
+        * @brief This buffer's address in the GPU's address space.
+        * @return The address, or 0 on backends without one: WebGPU always, and Vulkan without
         * VkmDriverCapabilityFlags::BufferDeviceAddress.
         */
         virtual uint64_t getGPUVirtualAddress() const { return 0; }

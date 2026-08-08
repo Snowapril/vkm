@@ -90,7 +90,8 @@ namespace vkm
             .objectHandle = reinterpret_cast<uint64_t>(_vkImageView),
             .pObjectName  = name,
         };
-        vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo);
+        VKM_VK_CHECK_RESULT_MSG(vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo),
+            "Failed to set debug name on texture view");
 #else
         (void)name;
 #endif

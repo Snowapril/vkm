@@ -47,12 +47,11 @@ namespace vkm
         uint32_t _indexCount = 0;           // offset 148, becomes the indirect draw's vertexCount
         /*
         * offset 152, u32 words per vertex in this object's pool.
-        *
-        * The rasterizing shaders do not read it -- a draw knows its layout at compile time, from
-        * the PSO permutation it was built as. A ray-tracing shader cannot: one ray hits whatever
-        * is there, and the objects it hits may sit in pools of different strides. Carrying the
-        * stride is what lets a single path-tracing kernel fetch positions out of any layout,
-        * since position is attribute 0 of every VkmVertexLayoutPreset.
+        * The rasterizing shaders do not read it, a draw knowing its layout at compile time from the
+        * PSO permutation it was built as. A ray-tracing shader cannot: one ray hits whatever is
+        * there, across pools of different strides. Carrying the stride lets a single path-tracing
+        * kernel fetch positions out of any layout, position being attribute 0 of every
+        * VkmVertexLayoutPreset.
         */
         uint32_t _vertexStrideWords = 0;
         uint32_t _pad0 = 0;                 // offset 156, aligns the following float4 to 16
@@ -62,14 +61,12 @@ namespace vkm
 
     /*
     * @brief Per-frame GPU constants.
-    *
-    * Everything the draw path used to receive as push constants now lives here or in
-    * VkmObjectData, which is what lets an indirect draw carry its object index in firstInstance
-    * and the graphics pipelines push no constants at all.
-    *
-    * Deliberately carries no camera: that is descriptor set 1's job (VkmFrameConstants), which the
-    * engine already rewrites once per frame and which every stage -- including the culling compute
-    * pass -- can read. Only the per-frame data set 1 does not have lives here.
+    * @details Everything the draw path needs beyond VkmObjectData lives here, which lets an
+    * indirect draw carry its object index in firstInstance and the graphics pipelines push no
+    * constants at all.
+    * Carries no camera: that is descriptor set 1's job (VkmFrameConstants), which the engine
+    * rewrites once per frame and every stage, including the culling compute pass, can read. Only
+    * the per-frame data set 1 does not have lives here.
     */
     struct VkmFrameData
     {
@@ -113,14 +110,11 @@ namespace vkm
 
     /*
     * @brief Material factors plus texture slots, as uploaded into the scene's material pool.
-    *
-    * glTF multiplies factor by texture, so a slot of INVALID_VALUE32 ("no texture") has to be
-    * distinguishable from slot 0 or every untextured material samples whatever lives there.
-    *
-    * All four slots are present even though only base colour and metallic-roughness are sampled
-    * today: the importer already produces four image references, and the alternative is paying the
-    * same ABI churn twice (the record's word stride is mirrored in vkm_material.hlsli and pinned by
-    * TestObjectDataLayout).
+    * @details glTF multiplies factor by texture, so a slot of INVALID_VALUE32, meaning no texture,
+    * has to be distinguishable from slot 0, or every untextured material samples whatever lives
+    * there. All four slots are present even though only base colour and metallic-roughness are
+    * sampled: the importer produces four image references, and the record's word stride is mirrored
+    * in vkm_material.hlsli and pinned by TestObjectDataLayout.
     */
     struct VkmMaterialData
     {
@@ -216,20 +210,18 @@ namespace vkm
         /*
         * @brief Builds one bottom-level structure per pooled mesh and one top-level structure over
         * the placed objects. Must follow build(); blocking, like it.
-        *
         * @details No vertex data is duplicated to trace it: a bottom-level structure is described
-        * as a range into the geometry pool's own buffers, which is what
-        * `VkmSceneGeometryPool::MeshRange` already carries. Position is the first attribute of
-        * every vertex layout preset, so the pool's stride is all a triangle geometry needs.
-        *
-        * Separate from build() rather than part of it, because a scene that is only rasterized
-        * should not pay for structures nothing traverses. Fails on a driver without
-        * `VkmDriverCapabilityFlags::RayTracing` rather than silently doing nothing -- a caller
-        * that asks for this has to be told it did not happen.
-        *
-        * The top-level structure is created rebuildable: an object that moves changes its instance
-        * transform, and nothing else. Bottom-level structures are built once, since a mesh's
-        * geometry is unchanged in object space no matter where the object goes.
+        * as a range into the geometry pool's own buffers, which `VkmSceneGeometryPool::MeshRange`
+        * already carries. Position is the first attribute of every vertex layout preset, so the
+        * pool's stride is all a triangle geometry needs.
+        * Separate from build() so a scene that is only rasterized does not pay for structures
+        * nothing traverses. The top-level structure is created rebuildable, an object that moves
+        * changing only its instance transform; bottom-level structures are built once, a mesh's
+        * geometry being unchanged in object space wherever the object goes.
+        * @param driver Driver that allocates and builds the structures.
+        * @param outError Receives the failure reason.
+        * @return False on a driver without `VkmDriverCapabilityFlags::RayTracing`, rather than
+        * silently doing nothing, and on any build failure.
         */
         bool buildAccelerationStructures(VkmDriverBase* driver, std::string* outError);
 
@@ -256,28 +248,26 @@ namespace vkm
 
         /*
         * @brief Records the frustum-culling pass and the emit pass that turns its output into
-        * native indirect draw arguments. Must be recorded into a compute subgraph (outside any
-        * render pass) after recordUpdate() and before the draws.
-        *
-        * Culling is one shared shader on every backend; only the emit step is backend-specific.
-        * The two are separate dispatches with the compute pass closed and reopened between them,
-        * which is what orders the emit's reads after the cull's compacting writes.
+        * native indirect draw arguments.
+        * @details Must be recorded into a compute subgraph, outside any render pass, after
+        * recordUpdate() and before the draws. Culling is one shared shader on every backend; only
+        * the emit step is backend-specific. The two are separate dispatches with the compute pass
+        * closed and reopened between them, which orders the emit's reads after the cull's
+        * compacting writes.
+        * @param commandBuffer Command buffer to record into.
+        * @param viewIndex Which cull view this pass fills.
         */
         void recordCull(VkmCommandBufferBase* commandBuffer, uint32_t viewIndex = 0);
 
         /*
-        * @brief Records the frame's draws, one PSO bind and one GPU-driven indirect draw per batch.
-        * `pipelineResolver` maps a batch to the PSO permutation matching its vertex layout; a batch
-        * whose resolver returns nullptr is skipped with a warning.
-        */
-        /*
-        * @brief Records one indirect draw per batch, resolving each batch's pipeline through
-        * `pipelineResolver`.
-        *
-        * `beforeDraw`, if set, runs after the batch's pipeline is bound and before its draw. That
-        * is the only point at which per-draw state can be set, since push constants require a
-        * bound pipeline and this method owns the binding. The probe capture uses it to push which
-        * cube face is being rendered; the ordinary scene draw passes nothing at all.
+        * @brief Records the frame's draws: one PSO bind and one GPU-driven indirect draw per batch.
+        * @param commandBuffer Command buffer to record into.
+        * @param pipelineResolver Maps a batch to the PSO permutation matching its vertex layout. A
+        * batch it returns nullptr for is skipped with a warning.
+        * @param beforeDraw Runs after the batch's pipeline is bound and before its draw, the only
+        * point at which per-draw state can be set, push constants requiring a bound pipeline. The
+        * probe capture uses it to push which cube face is being rendered.
+        * @param viewIndex Which cull view's results to draw.
         */
         void recordDrawBatches(VkmCommandBufferBase* commandBuffer,
                                const std::function<VkmPipelineStateBase*(const DrawBatch&)>& pipelineResolver,
@@ -327,12 +317,11 @@ namespace vkm
         /*
         * @brief One material's texture references, as resolved file paths plus the colour space
         * each is sampled in.
-        *
-        * Held as paths from addModel() until build(), which is where a driver first exists. Colour
-        * space is a property of the *channel that references* the image, not of the image: base
-        * colour and emissive are sRGB-encoded, metallic-roughness and normal are linear data. The
-        * upload cache is therefore keyed on (path, sRGB) so an image used as both gets two
-        * textures rather than one that is wrong for one of them.
+        * @details Held as paths from addModel() until build(), where a driver first exists. Colour
+        * space is a property of the channel that references the image rather than of the image:
+        * base colour and emissive are sRGB-encoded, metallic-roughness and normal are linear data.
+        * The upload cache is keyed on (path, sRGB), so an image used as both gets two textures
+        * rather than one that is wrong for one of them.
         */
         struct MaterialImageRefs
         {

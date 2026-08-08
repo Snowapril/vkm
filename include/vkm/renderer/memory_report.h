@@ -15,16 +15,14 @@ namespace vkm
     class VkmDriverBase;
 
     /*
-    * @brief One coherent sample of everything the engine knows about its memory use, on both
-    * sides of the "tracked vs. actual" divide.
-    *
-    * Tracked: MemoryTracker's per-tag CPU allocations and VkmRenderResourcePool's per-resource
-    * GPU totals -- what the engine believes it asked for. Actual: the OS's process figures and
-    * the graphics API's device figures -- what someone looking at Activity Monitor or a GPU
-    * profiler would see. The gap between them is the point of collecting both.
-    *
-    * Deliberately free of any ImGui dependency so the shutdown log dump and the unit tests can
-    * use the same capture path the inspector window does.
+    * @brief One coherent sample of everything the engine knows about its memory use, on both sides
+    * of the tracked-versus-actual divide.
+    * @details Tracked is MemoryTracker's per-tag CPU allocations and VkmRenderResourcePool's
+    * per-resource GPU totals, what the engine believes it asked for. Actual is the OS's process
+    * figures and the graphics API's device figures, what a profiler would see. The gap between them
+    * is the point of collecting both.
+    * Free of any ImGui dependency, so the shutdown log dump and the unit tests use the same capture
+    * path the inspector window does.
     */
     struct VkmMemorySnapshot
     {
@@ -70,16 +68,14 @@ namespace vkm
     std::string formatMemoryTagName(const TaggedAllocationSummary& tag);
 
     /*
-    * @brief Symbolizes the call site of every address-tagged row in `tags`.
-    *
-    * Batched on purpose: symbolizing costs one child-process launch per loaded module, so
-    * resolving a whole snapshot at once is enormously cheaper than resolving row by row.
-    * Results are cached process-wide and code addresses never move, so repeat calls only pay
-    * for addresses seen for the first time -- a steady-state snapshot resolves nothing.
-    *
-    * Best-effort by nature: it yields "function (file.cpp:123)" where the platform's symbol
-    * tooling and the build's debug info allow it, degrades to the function name alone, and
-    * falls back to the raw address. Never fails, never throws.
+    * @brief Symbolizes the call site of every address-tagged row.
+    * @details Batched: symbolizing costs one child-process launch per loaded module, so resolving a
+    * whole snapshot at once is far cheaper than row by row. Results are cached process-wide and
+    * code addresses never move, so repeat calls only pay for addresses seen for the first time.
+    * Best-effort: it yields "function (file.cpp:123)" where the platform's symbol tooling and the
+    * build's debug info allow it, degrades to the function name alone, and falls back to the raw
+    * address. Never fails, never throws.
+    * @param tags Rows to resolve in place.
     */
     void resolveMemoryTagCallSites(const std::vector<TaggedAllocationSummary>& tags);
 } // namespace vkm
