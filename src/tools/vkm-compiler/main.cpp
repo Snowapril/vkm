@@ -163,21 +163,16 @@ namespace
         };
         if (desc.requiresRayQuery)
         {
-            // Raises the emitted module from SPIR-V 1.0 (dxc's default) to 1.5, the version
-            // Vulkan 1.2 mandates and the one the ray-tracing extensions are written against.
-            // A query-only module does validate as SPIR-V 1.0 + SPV_KHR_ray_query, but no driver
-            // exposing rayQuery predates Vulkan 1.2, so emitting 1.0 buys nothing and asks
-            // drivers to accept an unusual combination.
+            // Raises the emitted module from SPIR-V 1.0, dxc's default, to 1.5 -- the version
+            // Vulkan 1.2 mandates and the one the ray-tracing extensions are written against. No
+            // driver exposing rayQuery predates Vulkan 1.2, so emitting 1.0 buys nothing.
             //
-            // Deliberately no -fspv-extension: that flag is a *whitelist*, and naming
-            // SPV_KHR_ray_query alone makes dxc reject the engine's bindless unsized descriptor
-            // arrays ("SPV_EXT_descriptor_indexing required ... but not permitted to use"). dxc
-            // already emits both extensions on its own, so the flag is unnecessary as well as
-            // harmful.
+            // No -fspv-extension: that flag is a whitelist, and naming SPV_KHR_ray_query alone
+            // makes dxc reject the engine's bindless unsized descriptor arrays. dxc emits both
+            // extensions on its own.
             //
-            // Both targets take this path: the Metal target compiles its own SPIR-V and then
-            // feeds spirv-cross, which lowers OpRayQuery* to metal::raytracing intersection
-            // queries.
+            // Both targets take this path: the Metal target compiles its own SPIR-V and then feeds
+            // spirv-cross, which lowers OpRayQuery* to metal::raytracing intersection queries.
             args.push_back("-fspv-target-env=vulkan1.2");
         }
         if (!includeDir.empty())
@@ -474,22 +469,18 @@ namespace
                 }
 
                 /*
-                * The scene acceleration structure, after the singletons. This entry is what
-                * unblocked ray query on the Metal path: without it spirv-cross throws "Argument
-                * buffer resource base type could not be determined", the failure restir.md
-                * section 4.4 diagnosed.
-                *
-                * **Declared as a scalar, not as SPIRType::AccelerationStructure**, which does not
-                * work and is not a mistake to repeat: the basetype registered here only selects
-                * which *index category* the id belongs to and which padding member is synthesized
-                * when a shader steps over it, and the switch that does both accepts scalars,
-                * Image, Sampler and SampledImage only -- an AccelerationStructure basetype throws
-                * "Unexpected argument buffer resource base type" for EVERY shader, not just ray
-                * ones (spirv_msl.cpp:88-118 and 20245-20277). A scalar routes to msl_buffer, which
-                * is the category an acceleration structure genuinely uses -- spirv-cross emits it
-                * as `[[buffer(index)]]` (spirv_msl.cpp:15344) -- and its padding is one 8-byte
-                * member, the same width its argument-buffer entry occupies.
-                *
+                * The scene acceleration structure, after the singletons. Ray query on the Metal
+                * path needs this entry; without it spirv-cross throws "Argument buffer resource
+                * base type could not be determined".
+                * Declared as a scalar, not as SPIRType::AccelerationStructure. The basetype
+                * registered here selects only which index category the id belongs to and which
+                * padding member is synthesized when a shader steps over it, and the switch that
+                * does both accepts scalars, Image, Sampler and SampledImage only -- an
+                * AccelerationStructure basetype throws "Unexpected argument buffer resource base
+                * type" for every shader, not just ray ones. A scalar routes to msl_buffer, the
+                * category an acceleration structure genuinely uses, spirv-cross emitting it as
+                * `[[buffer(index)]]`, and its padding is one 8-byte member, the same width its
+                * argument-buffer entry occupies.
                 * Registered unconditionally, like every other set-0 binding: a shader that never
                 * declares it still has to agree with the runtime about the whole argument-buffer
                 * layout, and an unregistered binding would shift every id after it.

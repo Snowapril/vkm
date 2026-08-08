@@ -26,21 +26,17 @@ namespace vkm
         /*
         * @brief Whether this buffer's memory can be written by the CPU directly, as opposed to
         * through a staging buffer and a queue-submitted copy.
-        * @details Only ever true when the buffer asked for it with
-        * VkmMemoryAccessHint::HostWrite, and even then it reports the outcome rather than the
-        * intent -- Vulkan re-checks the allocation's real memory properties, and WebGPU cannot
-        * offer it at all (a WGPUBuffer's usage flags fix its map mode for life, and MapWrite
-        * only combines with CopySrc).
+        * @details Reports the outcome, not the request: true only when the buffer asked for
+        * VkmMemoryAccessHint::HostWrite and the backend could honor it. Vulkan re-checks the
+        * allocation's real memory properties, and WebGPU never honors it.
         */
         inline bool isHostWritable() const { return _isHostWritable; }
 
         /*
-        * @brief The CPU pointer to this buffer's memory, or nullptr when it is not
-        * host-writable. Only meaningful once isHostWritable() is true.
-        * @details Host-writable buffers stay mapped for their whole lifetime on every backend
-        * that supports them, so this is an accessor rather than a state change. Not pure -- a
-        * backend that never reports isHostWritable() has nothing to implement, and this default
-        * is the matching "should be unreachable" guard.
+        * @brief The CPU pointer to this buffer's memory. Only call this when isHostWritable().
+        * @details Host-writable buffers stay mapped for their whole lifetime, so this is an
+        * accessor rather than a state change.
+        * @return The mapped pointer, or nullptr when the buffer is not host-writable.
         */
         virtual void* map()
         {
@@ -49,24 +45,23 @@ namespace vkm
         }
 
         /*
-        * @brief Makes the CPU's writes to the mapped range visible to the GPU. The pointer
-        * map() returned stays valid afterwards -- this is the flush point, not a teardown.
+        * @brief Makes the CPU's writes to the mapped range visible to the GPU.
+        * @details A flush point, not a teardown: the pointer map() returned stays valid.
         */
         virtual void unmap() {}
 
         /*
-        * @brief This buffer's address in the GPU's address space, or 0 where there is no such
-        * concept: WebGPU always, and Vulkan without
+        * @brief This buffer's address in the GPU's address space.
+        * @return The address, or 0 on backends without one: WebGPU always, and Vulkan without
         * VkmDriverCapabilityFlags::BufferDeviceAddress.
         */
         virtual uint64_t getGPUVirtualAddress() const { return 0; }
 
         /*
-        * @brief Create a view of this buffer. This is the ONLY way to create a
-        * VkmBufferView -- VkmDriverBase::newBufferView() is protected and friended to
-        * this class specifically so callers cannot bypass ownership tracking. info._buffer
-        * is always overwritten with this buffer's own handle, regardless of what the
-        * caller passed in.
+        * @brief Creates a view of this buffer. The only supported way to obtain a VkmBufferView.
+        * @param info View description. Its _buffer field is always overwritten with this buffer's
+        * own handle, whatever the caller passed in.
+        * @return The new view, owned by this buffer.
         */
         VkmBufferView* createView(VkmBufferViewInfo info);
 
@@ -78,7 +73,6 @@ namespace vkm
     protected:
         VkmBufferInfo _bufferInfo;
         std::vector<VkmResourceHandle> _ownedViewHandles;
-        // Safe default: a backend that never opts in keeps the staging upload path.
         bool _isHostWritable = false;
     };
 } // namespace vkm

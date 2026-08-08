@@ -24,31 +24,32 @@ namespace vkm
         inline id<MTLResidencySet> getResidencySet(VkmResourcePoolType poolType) const { return _residencySets[(uint8_t)poolType]; }
 
         /*
-        * @brief Flush staged addAllocation/removeAllocation changes with a single commit per
-        * set. Called by VkmCommandQueueMetal::submit() right before command buffers are
-        * committed; no-op when nothing was staged since the last flush.
+        * @brief Flush staged addAllocation/removeAllocation changes with a single commit per set.
+        * @details Called by VkmCommandQueueMetal::submit() right before command buffers are
+        * committed. A no-op when nothing was staged since the last flush.
         */
         void commitPendingResidencyChanges();
 
         /*
-        * @brief Stage residency for an allocation that lives outside the resource pool's
-        * handle tracking -- e.g. an MTLHeap pool block (whose placed sub-allocations may
-        * not make the backing heap resident on their own) or the ImGui renderer's raw
-        * MTLBuffers/MTLTextures. Long-lived allocations (heap blocks) are simply never
-        * unregistered; allocations that get released and recreated (ImGui's growing
-        * buffers) must call unregisterExternalAllocation before release, since the
-        * residency set retains its members.
+        * @brief Stage residency for an allocation living outside the resource pool's handle
+        * tracking, such as an MTLHeap pool block or the ImGui renderer's raw MTLBuffers.
+        * @details A heap block's placed sub-allocations may not make the backing heap resident on
+        * their own. Long-lived allocations are never unregistered; allocations that get released
+        * and recreated, like ImGui's growing buffers, must call unregisterExternalAllocation before
+        * release, the residency set retaining its members.
+        * @param allocation Metal allocation to keep resident.
+        * @param poolType Which residency set to stage it into.
         */
         void registerExternalAllocation(id<MTLAllocation> allocation, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
 
         /*
-        * @brief Stage removal of a previously registered external allocation (mirror of
-        * registerExternalAllocation). The removal takes effect at the next
-        * commitPendingResidencyChanges(); like releaseResource, this only stages -- the
-        * deferred flush means the Metal object must stay valid until the pending change
-        * commits, which VkmDeferredResourceReclaimer-style delayed release already ensures
-        * for pool resources and callers must ensure for external ones (release after the
-        * frame's submit, or accept that the retained set reference keeps it alive).
+        * @brief Stage removal of a previously registered external allocation.
+        * @details Takes effect at the next commitPendingResidencyChanges(). The Metal object must
+        * stay valid until that commit; pool resources get this from the deferred reclaimer, and
+        * callers of this entry point must release after the frame's submit, or accept that the
+        * retained set reference keeps the object alive.
+        * @param allocation Metal allocation to drop.
+        * @param poolType Which residency set to stage the removal in.
         */
         void unregisterExternalAllocation(id<MTLAllocation> allocation, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
 
@@ -62,11 +63,10 @@ namespace vkm
         // Which allocations this pool actually added to each residency set. onResourceInitialized
         // bails out for a resource whose native object does not exist yet -- the swapchain
         // backbuffer, whose drawable arrives later via overrideExternalHandle -- so "the resource
-        // has an allocation now" is not evidence that the set ever contained it. Without this,
-        // releaseResource stages removeAllocation: for drawables that were never added.
+        // has an allocation now" is not evidence that the set ever contained it.
         // Guarded by _residencyMutex.
         std::array<std::unordered_set<const void*>, (uint8_t)VkmResourcePoolType::Count> _residentAllocations;
         std::mutex _residencyMutex;
-        bool _residencyDirty{false}; // guarded by _residencyMutex
+        bool _residencyDirty{false};  // guarded by _residencyMutex
     };
 } // namespace vkm

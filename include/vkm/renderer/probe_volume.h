@@ -17,51 +17,35 @@ namespace vkm
 
     /*
     * @brief A grid of irradiance probes: the low-spec GI tier's storage.
-    *
     * @details Layout follows DDGI, but the probes are refreshed by rasterizing the scene from each
-    * probe rather than by tracing rays, because this tier must run where there is no ray tracing
-    * (WebGPU, MoltenVK) and on mobile. Storage and sampling do not depend on how the probes were
-    * filled, so once acceleration structures exist the same volume can be refreshed with rays --
-    * and ReSTIR can query it for multi-bounce radiance -- without changing anything here.
-    *
-    * Two atlases, both 2D, with one octahedral map per probe:
+    * probe rather than by tracing rays, so the tier runs where there is no ray tracing. Storage and
+    * sampling do not depend on how the probes were filled.
+    * Two 2D atlases, one octahedral map per probe:
     *
     *   irradiance  RGBA16F  low-resolution (8x8 by default); the diffuse response per direction
     *   distance    RGBA16F  higher-resolution (16x16); r = mean distance, g = mean squared, ba unused
     *
-    * The distance atlas wants two channels and gets four, because the engine exposes no
-    * two-channel format -- the same constraint that made the G-buffer pack two normals into one
-    * RGBA16F target. Adding R16G16_SFLOAT would touch all three backends' format converters to
-    * save about 2.5 MB at the default grid, which is not the trade to make first.
-    *
-    * The distance atlas is what makes this usable indoors. Sampling irradiance alone leaks light
-    * through walls, because a probe inside a wall still contributes to a surface outside it. The
-    * mean and mean-square let a lookup run a Chebyshev test -- effectively a variance shadow map
-    * per probe -- and weight out probes the surface cannot see. It is stored at higher resolution
-    * than irradiance because that test is sensitive to angular precision in a way the diffuse
-    * response is not.
-    *
+    * The distance atlas wants two channels and gets four, the engine exposing no two-channel
+    * format. It is what makes the volume usable indoors: irradiance alone leaks light through
+    * walls, since a probe inside a wall still contributes to a surface outside it, while the mean
+    * and mean-square let a lookup run a Chebyshev test and weight out probes the surface cannot
+    * see. That test is sensitive to angular precision, hence the higher resolution.
     * Every probe's map carries a one-texel border replicating the opposite edge, so bilinear
-    * filtering near an octahedral seam reads the correct neighbour instead of the far side of the
-    * map. Without it the seams show as bright or dark crosses on every lit surface. The border is
-    * why an 8x8 probe occupies 10x10 texels, and why the addressing helpers below exist rather
-    * than callers multiplying by the resolution.
-    *
-    * One copy of each atlas, not two. An update blends new samples into the existing values with
-    * hysteresis, which reads like it needs a second copy to read while writing the first -- but the
-    * blend is per-texel and the raster hardware already does exactly that, so the update pass runs
-    * it as a SrcAlpha/OneMinusSrcAlpha blend against the atlas itself (see probe_blend.hlsl).
-    * That is not just cheaper; it is what makes a partial update correct. Probes are refreshed a
-    * few per frame (see VkmProbeVolumeUpdater), so most cells are not drawn on most frames, and
-    * "not drawn" has to mean "keeps its value". A swapped pair of copies would instead leave every
-    * un-refreshed probe alternating between two increasingly stale values.
+    * filtering near an octahedral seam reads the correct neighbour rather than the far side of the
+    * map; without it the seams show as bright or dark crosses. The border is why an 8x8 probe
+    * occupies 10x10 texels, and why the addressing helpers below exist.
+    * One copy of each atlas, not two. The update blends new samples in with hysteresis as a
+    * SrcAlpha/OneMinusSrcAlpha blend against the atlas itself, which is also what makes a partial
+    * update correct: probes are refreshed a few per frame, so most cells are not drawn on most
+    * frames and must keep their value. A swapped pair of copies would leave every un-refreshed
+    * probe alternating between two increasingly stale values.
     */
+
     /*
     * @brief The probe volume's parameters as a shader sees them.
-    *
-    * Mirrors VkmProbeVolumeConstants in shaders/vkm_probe_volume.hlsli byte for byte. Every member
-    * is 16-byte aligned so the glm layout matches HLSL cbuffer packing with no padding members,
-    * the same discipline VkmFrameConstants follows.
+    * @details Mirrors VkmProbeVolumeConstants in shaders/vkm_probe_volume.hlsli byte for byte.
+    * Every member is 16-byte aligned so the glm layout matches HLSL cbuffer packing with no
+    * padding members, as VkmFrameConstants also does.
     */
     struct VkmProbeVolumeConstants
     {
@@ -76,15 +60,11 @@ namespace vkm
 
     /*
     * @brief The six cube-face view-projections of a probe at the origin.
-    *
-    * @details One buffer serves every probe in the volume, because the probe's position provably
-    * drops out of both passes. vkmBuildProbeFaceViewProjections builds `P * lookAtRH(pos, ...)`,
-    * and `lookAtRH(eye, ...) = R * T(-eye)` with R depending only on the (constant) face direction
-    * and up vector -- so `faceVP(pos) = P * R * T(-pos)`. The capture pass evaluates it at a world
-    * position, which is therefore identical to evaluating the origin-built matrix at a
-    * probe-relative one; the blend pass evaluates it at `pos + direction`, where the translation
-    * cancels outright. What is genuinely per-probe is small enough to push (see the shaders).
-    *
+    * @details One buffer serves every probe, the probe's position dropping out of both passes:
+    * `faceVP(pos) = P * R * T(-pos)`, with R depending only on the constant face direction and up
+    * vector, so evaluating it at a world position is identical to evaluating the origin-built
+    * matrix at a probe-relative one, and the blend pass's `pos + direction` cancels the translation
+    * outright. What is genuinely per-probe is small enough to push.
     * Mirrors ProbeCaptureConstants in shaders/probe_capture.hlsl byte for byte.
     */
     struct VkmProbeCaptureConstants
@@ -96,8 +76,7 @@ namespace vkm
 
     /*
     * @brief What the blend pass needs to turn a probe's capture into atlas contents.
-    *
-    * Probe-independent for the reason above; the probe being blended arrives through push
+    * @details Probe-independent for the reason above; the probe being blended arrives through push
     * constants. Mirrors ProbeBlendConstants in shaders/probe_blend.hlsl byte for byte.
     */
     struct VkmProbeBlendConstants
@@ -126,13 +105,10 @@ namespace vkm
                   "VkmProbeCapturePushConstants must match FacePushConstants in probe_capture.hlsl");
 
     /*
-    * @brief The per-probe half of the blend pass's inputs (push constants, vertex stage).
-    *
-    * @details Pushed rather than bound because a fragment shader cannot read push constants on
-    * Vulkan, so the vertex shader forwards both as flat interpolants. `_hysteresis` is per probe,
-    * not per volume, so a probe's very first update can use 0 and land exactly on its capture
-    * instead of 97% of a cleared cell.
-    *
+    * @brief The per-probe half of the blend pass's inputs: push constants, vertex stage.
+    * @details A fragment shader cannot read push constants on Vulkan, so the vertex shader forwards
+    * both as flat interpolants. `_hysteresis` is per probe rather than per volume, so a probe's
+    * first update can use 0 and land exactly on its capture instead of 97% of a cleared cell.
     * Mirrors ProbePushConstants in shaders/probe_blend.hlsl.
     */
     struct VkmProbeBlendPushConstants
@@ -145,16 +121,17 @@ namespace vkm
                   "VkmProbeBlendPushConstants must match ProbePushConstants in probe_blend.hlsl");
 
     /*
-    * @brief Builds the six cube-face view-projections for a probe at `position`.
-    *
-    * @details Face order is +X, -X, +Y, -Y, +Z, -Z, matching the cubemap convention the engine
-    * already uses for skybox faces. The near plane is deliberately small and the far plane is the
-    * caller's: a probe's usable range is what the Chebyshev test will later compare against, so
-    * clipping geometry closer than the far plane would record a wall as "nothing there".
-    *
-    * Callers filling VkmProbeCaptureConstants/VkmProbeBlendConstants pass the origin: both passes
-    * are written against probe-relative positions, so the translation cancels and one set of
-    * matrices serves the whole volume (see VkmProbeCaptureConstants).
+    * @brief Builds the six cube-face view-projections for a probe.
+    * @details Face order is +X, -X, +Y, -Y, +Z, -Z, matching the cubemap convention the engine uses
+    * for skybox faces. The near plane is small and the far plane is the caller's: a probe's usable
+    * range is what the Chebyshev test compares against, so clipping geometry closer than the far
+    * plane would record a wall as "nothing there".
+    * @param position Probe position. Callers filling VkmProbeCaptureConstants or
+    * VkmProbeBlendConstants pass the origin, both passes being written against probe-relative
+    * positions so one set of matrices serves the whole volume.
+    * @param nearZ Near plane distance.
+    * @param farZ Far plane distance.
+    * @param outFaceViewProjections Receives the six matrices.
     */
     void vkmBuildProbeFaceViewProjections(const glm::vec3& position, float nearZ, float farZ,
                                           glm::mat4 outFaceViewProjections[6]);

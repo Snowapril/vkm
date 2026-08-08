@@ -40,8 +40,7 @@ namespace vkm
     *   - compile-time call site (VKM_NEW): file/line set
     *   - captured call site: callSite set -- the return address of whoever called global
     *     operator new, symbolized only when something asks to display it
-    * "Untagged" remains the sentinel label, but now only for allocations whose call site
-    * could not be captured at all (see the global operator new overrides in memory.cpp).
+    * "Untagged" is the sentinel label for allocations whose call site could not be captured.
     */
     struct TaggedAllocationSummary
     {

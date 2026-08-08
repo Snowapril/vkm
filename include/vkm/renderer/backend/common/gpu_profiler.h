@@ -21,19 +21,18 @@ namespace vkm
 
     /*
     * @brief One GPU-timed span that executed on one command queue.
-    * @details Timestamps are nanoseconds in the GPU's own clock domain -- deliberately not
-    * correlated to the CPU clock VkmProfileZone uses, so a GPU and a CPU trace cannot be
-    * overlaid on one timeline (see TODO.md). Within a frame that costs nothing: the viewer
-    * only ever shows offsets from the frame's own start.
+    * @details Timestamps are nanoseconds in the GPU's own clock domain, not correlated to the CPU
+    * clock VkmProfileZone uses, so a GPU and a CPU trace cannot be overlaid on one timeline. The
+    * viewer only ever shows offsets from the frame's own start.
     */
     struct VkmGpuProfileZone
     {
-        // Not owned. Interned via VkmCpuProfiler::internName() by whoever opened the zone, so
-        // it outlives the frame ring the same way a CPU zone's name does.
+        // Not owned. Interned via VkmCpuProfiler::internName() by whoever opened the zone, so it
+        // outlives the frame ring.
         const char* _name = nullptr;
         uint64_t _beginNs = 0;
         uint64_t _endNs = 0;
-        uint16_t _depth = 0; // 0 = the submission-wide zone, 1 = the subgraphs inside it
+        uint16_t _depth = 0;  // 0 = the submission-wide zone, 1 = the subgraphs inside it
         // The VkmRenderSubGraph this zone timed, or INVALID_VALUE32 for the depth-0 zone.
         uint32_t _subGraphId = INVALID_VALUE32;
 
@@ -86,28 +85,30 @@ namespace vkm
     };
 
     /*
-    * @brief Totals how long each zone was executing inside [beginNs, endNs], longest first.
-    *
-    * The GPU counterpart of vkmAggregateProfileRange, and deliberately identical in behaviour:
-    * zones are clipped to the range rather than counted whole, every depth contributes its own
-    * overlap (so a submission zone and the subgraphs inside it are all counted and the totals
-    * sum to more than the range), and grouping is by name text rather than by pointer.
+    * @brief Totals how long each zone was executing inside a time range, longest first.
+    * @details The GPU counterpart of vkmAggregateProfileRange, identical in behaviour: zones are
+    * clipped to the range rather than counted whole, every depth contributes its own overlap (so a
+    * submission zone and the subgraphs inside it are all counted and the totals sum to more than
+    * the range), and grouping is by name text rather than by pointer.
+    * @param frame Frame whose zones are totalled.
+    * @param beginNs Start of the range.
+    * @param endNs End of the range.
+    * @return One entry per zone name, longest first.
     */
     std::vector<VkmGpuProfileZoneTotal> vkmAggregateGpuProfileRange(const VkmGpuProfileFrame& frame,
                                                                    uint64_t beginNs, uint64_t endNs);
 
     /*
-    * @brief Writes `frames` to `path` in Chrome Trace Event Format, loadable in chrome://tracing
-    * or ui.perfetto.dev.
+    * @brief Writes frames in Chrome Trace Event Format, loadable in chrome://tracing or
+    * ui.perfetto.dev.
     * @details One complete event ("ph":"X") per zone plus one "thread_name" metadata event
     * ("ph":"M") per command queue. Timestamps are emitted in MICROSECONDS as the format requires,
     * converted from the nanoseconds VkmGpuProfileZone stores. Uses a different pid than the CPU
-    * export so both files can be loaded into one viewer without their rows colliding.
-    *
-    * A free function, like vkmAggregateGpuProfileRange, so the format is exercisable from frames
-    * built by hand -- the profiler itself cannot produce one without a device.
-    *
-    * Returns false if the file cannot be written, and unconditionally when the CHROME_TRACING
+    * export so both files can be loaded into one viewer without their rows colliding. A free
+    * function so the format is exercisable from frames built by hand.
+    * @param frames Frames to write.
+    * @param path Destination file.
+    * @return False if the file cannot be written, and unconditionally when the CHROME_TRACING
     * CMake option is off.
     */
     bool vkmWriteGpuChromeTrace(const std::vector<VkmGpuProfileFrame>& frames, const std::string& path);
@@ -115,23 +116,17 @@ namespace vkm
     /*
     * @brief Collects per-subgraph GPU execution times, grouped by the command queue they ran on,
     * and keeps a ring of the most recent frames for live inspection.
-    *
-    * Driven by VkmRenderGraph::execute(), which brackets the whole submission in a depth-0 zone
-    * and each subgraph in a depth-1 zone; collect() is called once per frame by
-    * VkmEngine::loopInner(). The ImGui front end is VkmGpuProfilerInspector, deliberately a
-    * separate type so this half stays ImGui-free and unit-testable -- the same split as
-    * cpu_profiler.h vs imgui/cpu_profiler_inspector.h.
-    *
-    * Owned by VkmDriverBase (getGpuProfiler()) rather than being a singleton like
-    * VkmCpuProfiler, because it owns backend query resources whose lifetime is the device's.
-    *
-    * Recording is always on where the backend supports timestamps -- that is what keeps
-    * getLastFrameGpuTimeMs() (the debug overlay's "GPU" stat) alive with the inspector closed.
-    * isCapturing() only gates whether resolved frames are kept in the history ring.
-    *
-    * Not thread-safe, and deliberately unlocked: every entry point is called from the thread
-    * driving the frame loop (render graph execution, collect(), and the ImGui inspector all run
-    * there).
+    * @details Driven by VkmRenderGraph::execute(), which brackets the whole submission in a depth-0
+    * zone and each subgraph in a depth-1 zone; collect() is called once per frame by
+    * VkmEngine::loopInner(). The ImGui front end is VkmGpuProfilerInspector, a separate type so
+    * this half stays ImGui-free and unit-testable.
+    * Owned by VkmDriverBase rather than being a singleton like VkmCpuProfiler, because it owns
+    * backend query resources whose lifetime is the device's.
+    * Recording is always on where the backend supports timestamps, which keeps
+    * getLastFrameGpuTimeMs() alive with the inspector closed; isCapturing() only gates whether
+    * resolved frames are kept in the history ring.
+    * Not thread-safe and unlocked: every entry point is called from the thread driving the frame
+    * loop.
     */
     class VkmGpuProfiler
     {
@@ -143,9 +138,9 @@ namespace vkm
         VkmGpuProfiler& operator=(const VkmGpuProfiler&) = delete;
 
         /*
-        * @brief Asks the driver for a timestamp pool. Returns true even when the backend has no
-        * timestamp support -- that is a capability, not a failure; isSupported() then reports
-        * false and every recording entry point below becomes a no-op.
+        * @brief Asks the driver for a timestamp pool.
+        * @return True even when the backend has no timestamp support -- that is a capability, not a
+        * failure. isSupported() then reports false and every recording entry point becomes a no-op.
         */
         bool initialize();
         void destroy();
@@ -153,45 +148,63 @@ namespace vkm
         inline bool isSupported() const { return _supported; }
 
         /*
-        * @brief Opens a timed submission on `queue`, recorded into `commandBuffer`.
-        * @details Must be called after beginCommandBuffer() and outside any render pass: it
-        * records the backend's reset for exactly the 2*zoneCount slots the submission will
-        * write, which Vulkan requires before any of them can be read back
-        * (VUID-vkGetQueryPoolResults-None-09401). Returns kInvalidSubmission when unsupported
-        * or when no slot bucket is free, in which case every zone call below no-ops.
+        * @brief Opens a timed submission on a queue.
+        * @details Must be called after beginCommandBuffer() and outside any render pass: it records
+        * the backend's reset for exactly the 2*zoneCount slots the submission will write, which
+        * Vulkan requires before any of them can be read back.
+        * @param queue Queue the submission runs on.
+        * @param commandBuffer Command buffer the reset is recorded into.
+        * @param zoneCount Zones the submission will time.
+        * @return The submission id, or kInvalidSubmission when unsupported or when no slot bucket
+        * is free, in which case every zone call below no-ops.
         */
         uint32_t beginSubmission(VkmCommandQueueBase* queue, VkmCommandBufferBase* commandBuffer,
                                  uint32_t zoneCount);
 
         /*
-        * @brief Opens a zone. `name` must outlive the frame ring -- pass a string literal or a
-        * pointer from VkmCpuProfiler::internName(). Zones nest; `depth` is what the chart lays
-        * rows out by.
+        * @brief Opens a zone. Zones nest.
+        * @param commandBuffer Command buffer the zone is recorded into.
+        * @param submission Submission id from beginSubmission().
+        * @param name Zone name. Must outlive the frame ring: a string literal or a pointer from
+        * VkmCpuProfiler::internName().
+        * @param subGraphId Subgraph this zone times, or INVALID_VALUE32.
+        * @param depth Nesting depth, which the chart lays rows out by.
         */
         void beginZone(VkmCommandBufferBase* commandBuffer, uint32_t submission, const char* name,
                        uint32_t subGraphId, uint16_t depth);
 
         /*
-        * @brief Closes the innermost open zone. Closing the outermost one also ends the
-        * submission's recording (the backend gets its chance to record a resolve into the same
-        * command buffer), so it must happen before endCommandBuffer().
+        * @brief Closes the innermost open zone.
+        * @details Closing the outermost one also ends the submission's recording, giving the
+        * backend its chance to record a resolve into the same command buffer, so it must happen
+        * before endCommandBuffer().
+        * @param commandBuffer Command buffer the zone was recorded into.
+        * @param submission Submission id from beginSubmission().
         */
         void endZone(VkmCommandBufferBase* commandBuffer, uint32_t submission);
 
-        // Hands over the timeline the submission was submitted with; collect() will not read a
-        // submission's timestamps until that timeline has completed. Call right after submit().
+        /*
+        * @brief Hands over the timeline the submission was submitted with. Call right after submit().
+        * @details collect() will not read a submission's timestamps until that timeline completes.
+        * @param submission Submission id from beginSubmission().
+        * @param timeline Timeline the submission signals.
+        */
         void endSubmission(uint32_t submission, const VkmGpuEventTimelineObject& timeline);
 
         /*
-        * @brief Resolves every submission the GPU has finished, appends them to the frame ring
-        * (only while capturing), and advances the frame number new submissions are stamped with.
-        * Call once per frame from the frame loop. Never blocks: a submission whose timeline has
-        * not completed is simply left for a later call.
+        * @brief Resolves every submission the GPU has finished and advances the frame number new
+        * submissions are stamped with. Call once per frame from the frame loop.
+        * @details Resolved frames are appended to the ring only while capturing. Never blocks: a
+        * submission whose timeline has not completed is left for a later call.
         */
         void collect();
 
-        // Turning capture on drops previously collected frames, so a capture never starts with
-        // the tail of the last one. Submissions already in flight still land in the ring.
+        /*
+        * @brief Starts or stops keeping resolved frames in the history ring.
+        * @details Turning capture on drops the frames already collected, so a capture never starts
+        * with the tail of the last one. Submissions already in flight still land in the ring.
+        * @param capturing Whether to keep resolved frames.
+        */
         void setCapturing(bool capturing);
         inline bool isCapturing() const { return _capturing; }
 
@@ -201,29 +214,36 @@ namespace vkm
         // Frame number + duration for every frame in the ring, oldest first.
         std::vector<VkmGpuProfileFrameSummary> copyFrameSummaries() const;
 
-        // Deep copy of one collected frame by ring index (0 = oldest). Returns false when
-        // `index` is out of range.
+        /*
+        * @brief Deep copy of one collected frame.
+        * @param index Ring index, 0 = oldest.
+        * @param outFrame Receives the frame.
+        * @return False when `index` is out of range.
+        */
         bool copyFrame(size_t index, VkmGpuProfileFrame& outFrame) const;
 
         /*
-        * @brief Drops every collected frame. Unlike VkmCpuProfiler::clear(), frame numbering is
-        * NOT restarted: submissions recorded before the clear are still in flight and already
-        * carry their numbers, and reusing those numbers would merge them into unrelated frames.
+        * @brief Drops every collected frame.
+        * @details Unlike VkmCpuProfiler::clear(), frame numbering is NOT restarted: submissions
+        * recorded before the clear are still in flight and already carry their numbers, and
+        * reusing those numbers would merge them into unrelated frames.
         */
         void clear();
 
         /*
-        * @brief GPU time the most recently resolved submission spanned, in milliseconds -- the
-        * union of its zones rather than specifically its depth-0 one, because WebGPU cannot time
-        * a zone that encloses no pass and so has no depth-0 zone at all.
-        *
-        * Latched on every resolve regardless of isCapturing(), because this backs the
-        * always-visible debug overlay stat. 0 where the backend has no timestamp support.
+        * @brief GPU time the most recently resolved submission spanned, in milliseconds.
+        * @details The union of its zones rather than its depth-0 one, because WebGPU cannot time a
+        * zone that encloses no pass and so has no depth-0 zone. Latched on every resolve regardless
+        * of isCapturing(), since it backs the always-visible debug overlay stat. 0 where the
+        * backend has no timestamp support.
         */
         inline double getLastFrameGpuTimeMs() const { return _lastFrameGpuTimeMs; }
 
-        // Writes every collected frame to `path` -- see vkmWriteGpuChromeTrace, which this
-        // hands the frame ring to.
+        /*
+        * @brief Writes every collected frame through vkmWriteGpuChromeTrace.
+        * @param path Destination file.
+        * @return False if the file cannot be written.
+        */
         bool exportChromeTrace(const std::string& path) const;
 
         // ~4 seconds of history at 60 fps, matching VkmCpuProfiler::kMaxFrameHistory.
@@ -232,8 +252,8 @@ namespace vkm
         // is generous; asking for more marks the frame's timeline as overflowed.
         static constexpr uint32_t kMaxZonesPerSubmission = 32;
         // Submissions that may be in flight at once (FRAME_COUNT slots x several windows, with
-        // headroom). Each owns a fixed bucket of timestamp slots, which is what keeps slot
-        // allocation to a bucket index instead of interval arithmetic.
+        // headroom). Each owns a fixed bucket of timestamp slots, so slot allocation is a bucket
+        // index rather than interval arithmetic.
         static constexpr uint32_t kMaxPendingSubmissions = 16;
         // Total timestamp slots the driver is asked for: a begin/end pair per zone per bucket.
         static constexpr uint32_t kTimestampSlotCount = 2 * kMaxZonesPerSubmission * kMaxPendingSubmissions;

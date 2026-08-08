@@ -76,15 +76,16 @@ namespace vkm
         void onWindowFocusChanged(uint32_t windowIndex, bool focused);
 
         /*
-        * @brief Reports that `windowIndex` changed to `width` x `height` pixels.
-        * @details Absolute cursor positions need no correction -- they are window-relative and
-        * this handler caches no window size -- but the *delta* does: resizing from the left or
-        * top edge moves the window origin, so the cursor's window-relative position jumps
-        * without the pointer having moved. The next move is treated as the first one so that
-        * jump never reaches a consumer as a delta. Same reasoning as onWindowFocusChanged().
-        *
-        * Goes through the same event queue as the cursor moves rather than being applied
-        * directly, so it stays correctly ordered against them.
+        * @brief Reports that a window changed size.
+        * @details Absolute cursor positions need no correction, being window-relative with no
+        * cached window size, but the delta does: resizing from the left or top edge moves the
+        * window origin, so the cursor's window-relative position jumps without the pointer having
+        * moved. The next move is treated as the first one, so that jump never reaches a consumer as
+        * a delta. Goes through the same event queue as the cursor moves, so it stays ordered
+        * against them.
+        * @param windowIndex Window that resized.
+        * @param width New width in pixels.
+        * @param height New height in pixels.
         */
         void onWindowResized(uint32_t windowIndex, uint32_t width, uint32_t height);
 

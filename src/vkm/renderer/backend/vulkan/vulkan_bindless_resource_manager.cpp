@@ -51,14 +51,12 @@ namespace vkm
         }
 
         // Bindings 0-2 are the runtime-sized arrays, 3 the immutable sampler,
-        // kVkmBindlessFirstSingletonBinding onwards the single-descriptor singleton buffers (one
-        // per VkmBindlessSingletonBuffer in that enum's order), and -- only on a device that
-        // reports ray tracing -- the scene acceleration structure after them.
-        //
-        // Conditional because VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR is not a legal
-        // descriptor type without VK_KHR_acceleration_structure enabled, and MoltenVK enables
-        // none of the RT extensions. Nothing is lost: the only shaders that declare the binding
-        // are ray-query shaders, which cannot be created on such a device either way.
+        // kVkmBindlessFirstSingletonBinding onwards the single-descriptor singleton buffers in
+        // VkmBindlessSingletonBuffer order, and the scene acceleration structure after them.
+        // The last is conditional: VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR is not a legal
+        // descriptor type without VK_KHR_acceleration_structure enabled, and MoltenVK enables none
+        // of the RT extensions. Nothing is lost, the only shaders declaring the binding being
+        // ray-query ones, which cannot be created on such a device either way.
         _hasAccelerationStructureBinding =
             (_driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::RayTracing) != 0;
 

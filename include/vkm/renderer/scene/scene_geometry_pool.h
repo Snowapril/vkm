@@ -14,24 +14,16 @@ namespace vkm
 
     /*
     * @brief One mega vertex buffer plus one mega index buffer for a single vertex layout preset.
-    *
-    * Meshes are appended CPU-side and the whole pool is uploaded and bindless-registered once, so
-    * a scene costs two bindless slots per layout instead of two per primitive. Both buffers are
-    * published as untyped u32 word arrays; shaders reach a vertex through the owning object's
-    * word offset (see VkmObjectData::_vertexWordOffset and the DATA_WORD macro in the scene
-    * shaders), which is what lets one pool hold any stride.
-    *
+    * @details Meshes are appended CPU-side and the whole pool is uploaded and bindless-registered
+    * once, so a scene costs two bindless slots per layout instead of two per primitive. Both
+    * buffers are published as untyped u32 word arrays, and shaders reach a vertex through the
+    * owning object's word offset, which is what lets one pool hold any stride.
     * Indices stay mesh-local rather than being rebased onto the pool: the per-object word offset
     * already supplies the base, so rebasing would double-count it.
-    *
-    * Append-then-upload rather than incremental upload is deliberate: the WebGPU bindless manager
-    * copies a registered buffer's contents into its emulated mega-buffer at registerBuffer() time,
-    * so a pool registered while still empty would publish stale bytes there. Registering only once
-    * the pool is complete keeps all three backends on one code path.
-    *
-    * Meshlets (future): clusterized geometry adds a third pool of meshlet descriptors registered
-    * as one more bindless slot here, and MeshRange gains _meshletOffset/_meshletCount. The
-    * pool-per-layout, range-per-mesh shape does not otherwise change.
+    * Append-then-upload rather than incremental upload, because the WebGPU bindless manager copies
+    * a registered buffer's contents into its emulated mega-buffer at registerBuffer() time, so a
+    * pool registered while still empty would publish stale bytes. Registering once the pool is
+    * complete keeps all three backends on one code path.
     */
     class VkmSceneGeometryPool
     {

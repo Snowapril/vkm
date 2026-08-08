@@ -72,31 +72,27 @@ namespace vkm
     };
 
     /*
-    * @brief Totals how long each scope was running inside [beginNs, endNs], longest first.
-    *
-    * Zones are clipped to the range rather than counted whole, so a scope straddling either
-    * edge contributes only the part inside -- which is what makes the numbers describe the
-    * range the caller asked about instead of the zones that happen to touch it.
-    *
-    * Nesting is counted at every level: a parent and its children each contribute their own
-    * overlap, so the totals deliberately sum to more than the range's duration (and more again
-    * per thread). Grouping is by name text, not by the interned pointer, so one scope compiled
-    * into two translation units still lands on a single row.
+    * @brief Totals how long each scope was running inside a time range, longest first.
+    * @details Zones are clipped to the range rather than counted whole, so a scope straddling
+    * either edge contributes only the part inside. Nesting is counted at every level: a parent and
+    * its children each contribute their own overlap, so the totals sum to more than the range's
+    * duration, and more again per thread. Grouping is by name text rather than by the interned
+    * pointer, so one scope compiled into two translation units lands on a single row.
+    * @param frame Frame whose zones are totalled.
+    * @param beginNs Start of the range.
+    * @param endNs End of the range.
+    * @return One entry per scope name, longest first.
     */
     std::vector<VkmProfileScopeTotal> vkmAggregateProfileRange(const VkmProfileFrame& frame,
                                                               uint64_t beginNs, uint64_t endNs);
 
     /*
-    * @brief Process-wide collector of nested per-thread CPU scopes, recorded only while
-    * capturing, and kept as a ring of the most recent frames for live inspection.
-    *
-    * Instrument code with VKM_PROFILE_SCOPE (see the macros at the bottom of this header);
-    * drive frame boundaries with beginFrame() from whichever thread runs the frame loop
-    * (VkmEngine::loopInner). The ImGui front end is VkmCpuProfilerInspector, deliberately a
-    * separate type so this half stays ImGui-free and unit-testable -- the same split as
-    * memory_report.h vs imgui/memory_inspector.h.
-    *
-    * While not capturing, a scope costs one relaxed atomic load and nothing else.
+    * @brief Process-wide collector of nested per-thread CPU scopes, recorded only while capturing
+    * and kept as a ring of the most recent frames for live inspection.
+    * @details Instrument code with VKM_PROFILE_SCOPE, and drive frame boundaries with beginFrame()
+    * from whichever thread runs the frame loop. The ImGui front end is VkmCpuProfilerInspector, a
+    * separate type so this half stays ImGui-free and unit-testable. While not capturing, a scope
+    * costs one relaxed atomic load and nothing else.
     */
     class VkmCpuProfiler
     {

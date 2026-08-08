@@ -11,14 +11,11 @@ namespace vkm
     /*
     * @brief WebGPU set 2: one WGPUBindGroup, created once from the pipeline's group-2 layout.
     *
-    * @details The most natural of the three backends -- a bind group is exactly this concept, and
-    * the base class's immutability matches WebGPU's own model, where a bind group is an immutable
-    * object you recreate rather than rewrite.
-    *
-    * Worth recording why this matters beyond per-pass resources: WebGPU cannot sample any texture
-    * through the engine's bindless path, because that path needs runtime-sized arrays and WGSL has
-    * none (see VkmBindlessResourceManagerWebGPU::registerTexture, which is a hard error). Group 2's
-    * fixed bindings are the only way a shader samples a texture on this backend.
+    * @details The base class's immutability matches WebGPU's own model, where a bind group is an
+    * immutable object you recreate rather than rewrite.
+    * This matters beyond per-pass resources: WebGPU cannot sample any texture through the engine's
+    * bindless path, which needs the runtime-sized arrays WGSL lacks, so group 2's fixed bindings
+    * are the only way a shader samples a texture on this backend.
     */
     class VkmResourceTableWebGPU : public VkmResourceTableBase
     {

@@ -12,12 +12,14 @@ namespace vkm
 {
     class VkmDriverVulkan;
 
-    // Owns the engine-wide "set 0" bindless descriptor set: a fixed-capacity, update-after-bind
-    // set of sampled-image and storage-buffer arrays that every Vulkan pipeline shares (see
-    // VkmPipelineStateVulkan::createInner). Implements the engine-global bindless convention
-    // declared in common/bindless_resource_manager.h; separate from VkmRenderResourcePool,
-    // which has no descriptor-set concept -- this class only tracks *slot* allocation
-    // (VkmBindlessSlotAllocator) and the descriptor writes that publish a resource at a slot.
+    /*
+    * @brief Owns the engine-wide "set 0" bindless descriptor set.
+    * @details A fixed-capacity, update-after-bind set of sampled-image and storage-buffer arrays
+    * every Vulkan pipeline shares, implementing the convention declared in
+    * common/bindless_resource_manager.h. Separate from VkmRenderResourcePool, which has no
+    * descriptor-set concept: this class tracks only slot allocation and the descriptor writes that
+    * publish a resource at a slot.
+    */
     class VkmBindlessResourceManagerVulkan : public VkmBindlessResourceManagerBase
     {
     public:
@@ -61,8 +63,8 @@ namespace vkm
         VkSampler _defaultSampler{VK_NULL_HANDLE};
 
         // Whether _setLayout carries kVkmBindlessAccelerationStructureBinding. False on a device
-        // without VkmDriverCapabilityFlags::RayTracing, where that descriptor type is not a legal
-        // thing to put in a layout at all.
+        // without VkmDriverCapabilityFlags::RayTracing, where that descriptor type is not legal in
+        // a layout at all.
         bool _hasAccelerationStructureBinding = false;
 
         VkmBindlessSlotAllocator _textureSlots{TEXTURE_CAPACITY};

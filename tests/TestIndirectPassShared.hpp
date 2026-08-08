@@ -287,11 +287,9 @@ namespace vkmtest
         const uint32_t pixelCount = detail::kCornellSize * detail::kCornellSize;
 
         /*
-        * Both sides have to be shown non-empty BEFORE the comparison, because
-        * vkmComputeImageMse returns 0 when nothing is comparable -- a reference that never ran
-        * scores a perfect match. That is not hypothetical: it is exactly what this test reported
-        * while VkmIndirectPass::initialize was still loading the PSO directory a second time and
-        * destroying the pipeline VkmPathTracer held.
+        * Both sides have to be shown non-empty BEFORE the comparison, because vkmComputeImageMse
+        * returns 0 when nothing is comparable, so a reference that never ran scores a perfect
+        * match.
         */
         const auto summarize = [&](const std::vector<float>& image, uint32_t* outCovered) {
             double brightness = 0.0;

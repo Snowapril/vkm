@@ -74,15 +74,10 @@ namespace vkmtest
     inline void runRayQueryTest(vkm::VkmDriverBase* driver)
     {
         /*
-         * Phase markers on stderr rather than doctest's INFO. INFO is printed with a test's
-         * context when an assertion FAILS; a SIGSEGV prints none of it, which is why the markers
-         * the scene structure test has carried since its first CI run have never appeared in a
-         * crash log. stderr is unbuffered, so a marker written before the faulting statement
-         * survives it.
-         *
-         * They cover the whole body, not just teardown: the teardown-only round proved the
-         * lavapipe segfault happens BEFORE the first teardown statement, which is not where the
-         * assertion count alone suggested.
+         * Phase markers on stderr rather than doctest's INFO. INFO is printed with a test's context
+         * when an assertion FAILS, and a SIGSEGV prints none of it. stderr is unbuffered, so a
+         * marker written before the faulting statement survives it. They cover the whole body
+         * rather than only teardown, a crash being able to land anywhere in it.
          */
         const auto mark = [](const char* what) { std::fprintf(stderr, "[rayquery] %s\n", what); std::fflush(stderr); };
 

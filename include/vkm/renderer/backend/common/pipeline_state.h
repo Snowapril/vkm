@@ -23,11 +23,10 @@ namespace vkm
         TriangleStrip = 4,
     };
 
-    // NOTE: Point is representable in Vulkan (VK_POLYGON_MODE_POINT, requires
-    // fillModeNonSolid) only. Metal's MTLTriangleFillMode has no point mode, and
-    // WebGPU's WGPUPrimitiveState has no polygon-mode concept at all. Parsing
-    // accepts all values; backend pipeline-creation code (out of scope here)
-    // must reject/approximate unsupported combinations.
+    // NOTE: Point is representable in Vulkan only (VK_POLYGON_MODE_POINT, requires
+    // fillModeNonSolid). Metal's MTLTriangleFillMode has no point mode, and WebGPU's
+    // WGPUPrimitiveState has no polygon-mode concept at all. Parsing accepts all values; backend
+    // pipeline-creation code must reject or approximate unsupported combinations.
     enum class VkmFillMode : uint8_t
     {
         Solid = 0,
@@ -154,26 +153,20 @@ namespace vkm
         // Stage uses inline ray tracing (an HLSL `RayQuery<>` against a bound acceleration
         // structure). Compile-time consequences only, applied by vkm-compiler: shader model 6.5
         // instead of 6.0, and a Vulkan 1.2 SPIR-V target env so the module is SPIR-V 1.5 rather
-        // than 1.0. Compute stages only -- the engine has no ray-tracing pipeline stages, and
-        // inline queries are the one form spirv-cross can translate to MSL.
-        //
-        // Nothing here gates *loading* such a PSO on the device actually supporting ray tracing;
-        // there is no acceleration-structure resource or capability flag yet.
+        // than 1.0. Compute stages only. Loading such a PSO is not gated on the device supporting
+        // ray tracing.
         bool requiresRayQuery = false;
     };
 
     /*
     * @brief One resource kind a PSO can declare at descriptor set 2 or set 3.
-    *
-    * Sets 2 (per-pass) and 3 (per-draw) are the PSO-declared sets (see common/frame_constants.h).
-    * Unlike set 0, their contents are declared by each PSO rather than being engine-global, and
-    * unlike set 0 the bindings are fixed rather than runtime-sized arrays. That is what makes them
-    * work on WebGPU: WGSL has no runtime-sized arrays, which is the whole reason the bindless
-    * texture path is Vulkan/Metal only (VkmDriverCapabilityFlags::TextureUpload), so a shader there
-    * can sample nothing at all through set 0. A fixed binding is an ordinary WGSL bind-group entry.
-    *
-    * The register space in the comments below is the set the declaration belongs to -- space2 for
-    * a per-pass binding, space3 for a per-draw one. Nothing else about the kinds differs.
+    * @details Sets 2 (per-pass) and 3 (per-draw) are the PSO-declared sets (see
+    * common/frame_constants.h). Unlike set 0, their contents are declared by each PSO rather than
+    * being engine-global, and their bindings are fixed rather than runtime-sized arrays -- which is
+    * what makes them work on WebGPU, where WGSL has no runtime-sized arrays and a shader can sample
+    * nothing through set 0. A fixed binding is an ordinary WGSL bind-group entry.
+    * The register space in the comments below is the set the declaration belongs to: space2 for a
+    * per-pass binding, space3 for a per-draw one. Nothing else about the kinds differs.
     */
     enum class VkmTableResourceType : uint8_t
     {
@@ -184,11 +177,9 @@ namespace vkm
         Sampler = 1,
         /*
         * RWStructuredBuffer at register(u#, spaceN).
-        *
-        * Compute-visible only, for the same reason set 0's two read-write singletons are
-        * (bindless_resource_manager.h): WebGPU forbids writable storage in the vertex stage, and
-        * a buffer used as writable storage inside a render pass's usage scope may not also be
-        * fetched as an indirect argument in that scope.
+        * Compute-visible only, as set 0's two read-write singletons are: WebGPU forbids writable
+        * storage in the vertex stage, and a buffer used as writable storage inside a render pass's
+        * usage scope may not also be fetched as an indirect argument in that scope.
         */
         StorageBuffer = 2,
         // ConstantBuffer at register(b#, spaceN): constants that outgrow the 128-byte vertex-only
@@ -198,9 +189,8 @@ namespace vkm
 
     /*
     * @brief One entry in a PSO's set-2 or set-3 declaration.
-    *
-    * Shader visibility is derived from `type` rather than declared, so a PSO cannot accidentally
-    * ask for a combination a backend rejects -- see the StorageBuffer note above.
+    * @details Shader visibility is derived from `type` rather than declared, so a PSO cannot ask
+    * for a combination a backend rejects -- see the StorageBuffer note above.
     */
     struct VkmTableResourceBinding
     {
@@ -323,40 +313,34 @@ namespace vkm
 
         /*
         * @brief This pipeline's descriptor set 2 (per-pass) declaration, in the order given in the
-        * JSON `per_pass_resources` array. Empty for a pipeline that reaches only sets 0 and 1,
-        * which is every pipeline that predates set 2.
-        *
-        * Sets 0 and 1 are engine-global and identical for every pipeline, which is what let bind
-        * sites stay free of per-PSO knowledge. Sets 2 and 3 are the genuinely per-PSO ones, so a
-        * pipeline declaring either is no longer layout-compatible with one that does not, and
-        * whatever binds its resources has to know this list.
+        * JSON `per_pass_resources` array. Empty for a pipeline that reaches only sets 0 and 1.
+        * @details Sets 0 and 1 are engine-global and identical for every pipeline, which keeps bind
+        * sites free of per-PSO knowledge. Sets 2 and 3 are the per-PSO ones, so a pipeline
+        * declaring either is not layout-compatible with one that does not, and whatever binds its
+        * resources has to know this list.
         */
         std::vector<VkmTableResourceBinding> perPassResources;
 
         /*
         * @brief This pipeline's descriptor set 3 (per-draw) declaration, from the JSON
-        * `per_draw_resources` array. Same shape and same rules as perPassResources; only the set
-        * index and the intended bind frequency differ.
-        *
-        * A PSO may declare this *without* declaring set 2 -- a G-buffer pass wants per-material
-        * textures and no per-pass resources at all. Backends must therefore keep set 3 at set index
-        * 3 rather than at "the next free slot", which means inserting an empty placeholder layout
-        * for set 2 (see VkmPipelineStateVulkan::createInner and its WebGPU counterpart).
+        * `per_draw_resources` array.
+        * @details Same shape and rules as perPassResources; only the set index and the intended
+        * bind frequency differ. A PSO may declare this without declaring set 2 -- a G-buffer pass
+        * wants per-material textures and no per-pass resources. Backends must therefore keep set 3
+        * at set index 3 rather than at the next free slot, inserting an empty placeholder layout
+        * for set 2.
         */
         std::vector<VkmTableResourceBinding> perDrawResources;
 
         /*
         * @brief Backends this pipeline's set-3 declaration applies to. Empty means all of them.
-        *
-        * @details Set 3 is the one declaration that is genuinely backend-specific rather than
-        * merely expressed differently: material textures reach a shader through the set-0 bindless
-        * array on Vulkan and Metal, and only WebGPU -- which has no array-of-handle type -- needs a
-        * per-draw table. Declaring it everywhere would put a set in two backends' pipeline layouts
-        * that their shaders never reference, so the JSON scopes it, mirroring the
-        * `#if defined(VKM_BACKEND_WEBGPU)` the shader already has.
-        *
-        * Resolved by expandPipelineStateOptions(), which is where the target backend is known;
-        * a pipeline built for a backend outside the list sees perDrawResources empty.
+        * @details Set 3 is the one genuinely backend-specific declaration: material textures reach
+        * a shader through the set-0 bindless array on Vulkan and Metal, and only WebGPU, having no
+        * array-of-handle type, needs a per-draw table. Declaring it everywhere would put a set in
+        * two backends' pipeline layouts that their shaders never reference, so the JSON scopes it,
+        * mirroring the `#if defined(VKM_BACKEND_WEBGPU)` the shader already has.
+        * Resolved by expandPipelineStateOptions(), where the target backend is known; a pipeline
+        * built for a backend outside the list sees perDrawResources empty.
         */
         std::vector<VkmShaderCacheBackend> perDrawResourceBackends;
 
@@ -377,10 +361,9 @@ namespace vkm
         // shader_cache_util.h) so variants sharing one HLSL source/stage/backend don't collide.
         std::string optionName;
 
-        // Parsed straight from the JSON "options" object; empty if absent. Only ever populated
-        // on the descriptor returned directly by parsePipelineStateFromFile/FromString -- always
-        // empty on the per-variant descriptors returned by expandPipelineStateOptions(), since
-        // expansion fully resolves and clears this.
+        // Parsed straight from the JSON "options" object; empty if absent. Populated only on the
+        // descriptor returned by parsePipelineStateFromFile/FromString -- expansion fully resolves
+        // and clears it, so the per-variant descriptors always have it empty.
         std::unordered_map<std::string, VkmPipelineStateOptionOverlay> options;
     };
 } // namespace vkm

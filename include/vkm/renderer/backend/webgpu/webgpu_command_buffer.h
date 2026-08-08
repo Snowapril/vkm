@@ -60,13 +60,13 @@ namespace vkm
 
     private:
         /*
-        * @brief Fills `outTimestampWrites` from the innermost GPU zone that has not yet been
-        * given a pass to write into, and returns whether there was one.
-        *
-        * WebGPU has no encoder-level timestamp write, so a zone's begin/end pair can only be
-        * carried by one render or compute pass descriptor. The innermost open zone wins, which
-        * is what makes a subgraph's zone -- rather than the outer submission-wide one -- the one
-        * that gets measured.
+        * @brief Fills a timestamp-write struct from the innermost GPU zone not yet given a pass to
+        * write into.
+        * @details WebGPU has no encoder-level timestamp write, so a zone's begin/end pair can only
+        * be carried by one render or compute pass descriptor. The innermost open zone wins, which
+        * makes a subgraph's zone the one measured rather than the outer submission-wide one.
+        * @param outTimestampWrites Receives the pass descriptor's timestamp writes.
+        * @return False when no open zone still needs a pass.
         */
         bool takePendingGpuZone(WGPUPassTimestampWrites* outTimestampWrites);
 
@@ -75,8 +75,7 @@ namespace vkm
         WGPUComputePassEncoder _computePassEncoder{nullptr};
 
         // GPU zones currently open, innermost last. `_attached` flips once a pass has taken the
-        // pair, which is what endGpuZone() reports back so the profiler can drop a zone that
-        // enclosed no pass at all.
+        // pair; endGpuZone() reports it back so the profiler can drop a zone that enclosed no pass.
         struct OpenGpuZone
         {
             uint32_t _beginSlot = 0;

@@ -32,14 +32,16 @@ namespace vkm
         }
 
         /*
-        * Decision policy for CPU-writable texture storage. Shared storage lets
-        * uploadToTexture write pixels straight in via replaceRegion:, skipping the staging
-        * buffer and the queue submit entirely -- but only pays off when the GPU reads that
-        * same memory at no extra cost, i.e. on a unified-memory device.
-        *
-        * Restricted to plain upload destinations: render targets and presentables are
-        * GPU-written and never CPU-written, so putting them in Shared storage would trade
-        * attachment bandwidth for a fast path they never take.
+        * @brief Decision policy for CPU-writable texture storage.
+        * @details Shared storage lets uploadToTexture write pixels straight in via replaceRegion:,
+        * skipping the staging buffer and the queue submit, but only pays off when the GPU reads
+        * that same memory at no extra cost, on a unified-memory device.
+        * Restricted to plain upload destinations: render targets and presentables are GPU-written
+        * and never CPU-written, so putting them in Shared storage would trade attachment bandwidth
+        * for a fast path they never take.
+        * @param driverMetal Driver whose unified-memory answer decides availability.
+        * @param info Texture being created.
+        * @return True when the texture should use Shared storage.
         */
         bool shouldUseHostWritableTexture(const VkmDriverMetal* driverMetal, const VkmTextureInfo& info)
         {

@@ -30,12 +30,8 @@ namespace vkm
 
         /*
         * @brief The preset table.
-        *
-        * StandardPBR reproduces the byte layout the engine used before vertex layouts existed
-        * (position@0, normal@16, uv0@32, tangent@48, stride 64): the padding is the std430-like
-        * layout DXC emits for storage-buffer structs on -spirv targets, and keeping it identical
-        * means existing shader permutations and captured .gputrace files stay valid.
-        *
+        * @details StandardPBR is position@0, normal@16, uv0@32, tangent@48, stride 64. The padding
+        * is the std430-like layout DXC emits for storage-buffer structs on -spirv targets.
         * PositionOnly pads to 16 so a position stays float4-aligned. Compact pads to 32 for the
         * same reason; its quantized attributes occupy the first 24 bytes.
         */

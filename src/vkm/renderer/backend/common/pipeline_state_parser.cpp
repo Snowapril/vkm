@@ -376,12 +376,15 @@ namespace vkm
         }
 
         /*
-        * @brief Parses a "per_pass_resources" JSON array (this PSO's descriptor set 2) into `out`.
-        *
-        * Binding indices are explicit rather than positional so the JSON reads the same way the
-        * shader does (register(t0, space2) and friends), and duplicates are rejected here: every
-        * backend would either reject or silently alias them, and a silent alias is the worse of
-        * the two to debug.
+        * @brief Parses a "per_pass_resources" JSON array, this PSO's descriptor set 2.
+        * @details Binding indices are explicit rather than positional, so the JSON reads the way
+        * the shader does -- register(t0, space2) and friends. Duplicates are rejected here rather
+        * than left to a backend that would silently alias them.
+        * @param state Parser state carrying the error sink.
+        * @param resources The JSON array to parse.
+        * @param fieldNamePrefix Prefix used when naming a field in an error message.
+        * @param out Receives one binding per array entry.
+        * @return False when an entry is malformed or a binding index repeats.
         */
         bool parseResourceTableArray(ParseState& state, const Json& resources,
             const std::string& fieldNamePrefix, std::vector<VkmTableResourceBinding>& out)
@@ -774,20 +777,18 @@ namespace vkm
             }
 
             /*
-            * Set 3 parses identically to set 2 -- same element shape, same binding cap, same
-            * duplicate rejection. A PSO may declare either, both, or neither; declaring set 3
-            * alone is legal and is what a G-buffer pass wanting only per-material textures does.
-            *
+            * Set 3 parses identically to set 2: same element shape, same binding cap, same
+            * duplicate rejection. A PSO may declare either, both, or neither; set 3 alone is legal
+            * and is what a G-buffer pass wanting only per-material textures declares.
             * It additionally accepts an object form scoping the declaration to some backends:
             *
             *     "per_draw_resources": [ ... ]                          every backend
             *     "per_draw_resources": { "backends": ["webgpu"],        those backends only
             *                             "bindings": [ ... ] }
             *
-            * because set 3 is the one declaration that is backend-specific in substance rather
-            * than in expression: only WebGPU, lacking an array-of-handle type, reaches material
-            * textures through a per-draw table. The scoping mirrors the shader's own
-            * `#if defined(VKM_BACKEND_WEBGPU)`.
+            * Set 3 is the one declaration that is backend-specific in substance: only WebGPU,
+            * lacking an array-of-handle type, reaches material textures through a per-draw table.
+            * The scoping mirrors the shader's own `#if defined(VKM_BACKEND_WEBGPU)`.
             */
             if (root.contains("per_draw_resources"))
             {

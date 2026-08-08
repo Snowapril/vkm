@@ -164,21 +164,15 @@ namespace vkm
     MemoryTracker& MemoryTracker::singleton()
     {
         // Intentionally never destroyed. mimalloc registers its own process-exit cleanup
-        // (mi_process_done, via __attribute__((destructor)) - see mimalloc's prim/prim.c)
-        // completely independently of the normal atexit/__cxa_atexit machinery that runs
-        // C++ static object destructors. There is no portable guarantee about the relative
-        // order of the two: if this tracker's own destructor ran and freed its bookkeeping
-        // map's nodes via mi_free after mimalloc's own shutdown had already run (or vice
-        // versa), that's a use-after-shutdown crash. Since the OS reclaims all process
-        // memory on exit regardless, there is nothing to gain from ever tearing this down -
-        // placement-new into static storage with no matching destructor call sidesteps the
-        // ordering question entirely.
+        // (mi_process_done, via __attribute__((destructor))) independently of the atexit machinery
+        // that runs C++ static destructors, and nothing orders the two. This tracker's destructor
+        // freeing its map's nodes via mi_free after mimalloc's shutdown, or the reverse, is a
+        // use-after-shutdown crash. The OS reclaims process memory on exit regardless, so
+        // placement-new into static storage with no matching destructor sidesteps the ordering.
         //
-        // Construction itself must never call operator new (directly or via a heap-
-        // allocated member) - that would recursively re-enter this function while it's
-        // still being initialized, which is undefined behavior. Placement new doesn't call
-        // operator new, and _tagStats/_rawResource are direct (non-heap) members, so
-        // construction here never does.
+        // Construction must never call operator new, directly or through a heap-allocated member:
+        // that would re-enter this function while it is still initializing. Placement new does not
+        // call operator new, and _tagStats/_rawResource are direct members.
         alignas(MemoryTracker) static unsigned char storage[sizeof(MemoryTracker)];
         static MemoryTracker* instance = ::new (storage) MemoryTracker();
         return *instance;
@@ -289,20 +283,18 @@ namespace
 
 /*
 * Global operator new/delete overrides: every allocation in the process routes through
-* vkm::MemoryTracker (and therefore mimalloc). Allocations that went through
-* VKM_NEW/VKM_NEW_TAGGED carry their own tag; everything else -- plain new, make_unique, STL
-* containers, third-party code -- is attributed to the machine address of whoever called
-* operator new, which the memory report symbolizes on demand.
+* vkm::MemoryTracker, and therefore mimalloc. Allocations that went through VKM_NEW or
+* VKM_NEW_TAGGED carry their own tag; everything else -- plain new, make_unique, STL containers,
+* third-party code -- is attributed to the machine address of whoever called operator new, which
+* the memory report symbolizes on demand.
 *
-* Capturing the return address here rather than inside trackedGlobalNew is deliberate: these
-* are replaceable global functions, so no caller can inline them away and frame 0 is always
-* the real allocation site. trackedGlobalNew, by contrast, is a static that the compiler is
-* free to inline, which would shift what frame 0 means.
+* The return address is captured here rather than inside trackedGlobalNew because these are
+* replaceable global functions no caller can inline away, so frame 0 is always the real allocation
+* site. trackedGlobalNew is a static the compiler may inline, which would shift what frame 0 means.
 *
-* operator new(std::nothrow_t) is intentionally not overridden - the standard-mandated default
-* nothrow wrapper already calls the (replaceable) throwing operator new(size_t) in a try/catch,
-* so it automatically routes through the override below with no functional loss, and nothing in
-* this codebase uses new(std::nothrow).
+* operator new(std::nothrow_t) is not overridden: the standard-mandated default nothrow wrapper
+* calls the replaceable throwing operator new(size_t) in a try/catch, so it routes through the
+* override below anyway.
 */
 void* operator new(std::size_t size)
 {

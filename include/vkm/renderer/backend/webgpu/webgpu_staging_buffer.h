@@ -11,22 +11,15 @@ namespace vkm
 {
     /*
     * @brief WebGPU staging buffers come in two shapes, and they cannot be one buffer.
-    *
-    * **Readback** (VkmResourceCreateInfo::AllowTransferDst) is `CopyDst | MapRead`: the GPU copies
-    * into it and the CPU maps it to read. Mapping is genuinely async, bridged with the same
+    * @details Readback, VkmResourceCreateInfo::AllowTransferDst, is `CopyDst | MapRead`: the GPU
+    * copies into it and the CPU maps it to read. Mapping is genuinely async, bridged with the same
     * Asyncify emscripten_sleep-spin VkmDriverWebGPU::initializeInner uses.
-    *
-    * **Upload** is `CopySrc | CopyDst` and is **not mappable at all**. It cannot be: a staging
-    * buffer is written both by map()+memcpy (uploadToBuffer) and by writeDirect(), which is a
-    * wgpuQueueWriteBuffer and therefore needs CopyDst -- and WebGPU allows MapWrite to combine
-    * only with CopySrc, so no single usage set satisfies both. Every writeDirect() against a
-    * MapWrite buffer was silently failing validation, once per call, which is what made the gi
-    * sample render nothing on this backend.
-    *
-    * So an upload buffer keeps a CPU shadow: map() hands back the shadow, unmap()/flush() push it
-    * with wgpuQueueWriteBuffer, and writeDirect() writes both. That also removes the async round
-    * trip from the upload path entirely -- it was only ever needed to re-map.
-    *
+    * Upload is `CopySrc | CopyDst` and is not mappable at all. It cannot be: a staging buffer is
+    * written both by map()+memcpy and by writeDirect(), which is a wgpuQueueWriteBuffer and so
+    * needs CopyDst, and WebGPU allows MapWrite to combine only with CopySrc. So an upload buffer
+    * keeps a CPU shadow: map() hands back the shadow, unmap()/flush() push it with
+    * wgpuQueueWriteBuffer, and writeDirect() writes both. That also keeps the async round trip out
+    * of the upload path.
     * unmap() invalidates the pointer a readback map() returned; callers must not cache it.
     */
     class VkmStagingBufferWebGPU final : public VkmStagingBuffer

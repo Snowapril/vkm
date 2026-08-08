@@ -7,10 +7,12 @@
 
 namespace vkm
 {
-    // Vulkan uses a single opaque VkPipeline handle type for both graphics and compute
-    // pipelines (unlike Metal's MTLRenderPipelineState/MTLComputePipelineState split).
-    // Graphics pipelines target dynamic rendering (VK_KHR_dynamic_rendering) -- no
-    // VkRenderPass/VkFramebuffer object is created or required.
+    /*
+    * @brief A Vulkan graphics or compute pipeline.
+    * @details Vulkan uses one opaque VkPipeline handle type for both, unlike Metal's
+    * MTLRenderPipelineState/MTLComputePipelineState split. Graphics pipelines target dynamic
+    * rendering, so no VkRenderPass or VkFramebuffer object is created or required.
+    */
     class VkmPipelineStateVulkan : public VkmPipelineStateBase
     {
     public:
@@ -21,13 +23,13 @@ namespace vkm
         inline VkPipelineLayout getPipelineLayout() const { return _pipelineLayout; }
 
         /*
-        * @brief This pipeline's layout for one PSO-declared set, or VK_NULL_HANDLE when it declares
-        * nothing there.
-        *
-        * Unlike sets 0 and 1 -- which every pipeline shares, and which therefore live on the
-        * bindless and frame-constant managers -- these are built from this pipeline's own
-        * `perPassResources` / `perDrawResources` declarations, so they are owned here.
-        * VkmResourceTableVulkan allocates its descriptor set from the matching one.
+        * @brief This pipeline's layout for one PSO-declared set.
+        * @details Sets 0 and 1 are shared by every pipeline and live on the bindless and
+        * frame-constant managers; these are built from this pipeline's own `perPassResources` /
+        * `perDrawResources` declarations, so they are owned here. VkmResourceTableVulkan allocates
+        * its descriptor set from the matching one.
+        * @param kind Which PSO-declared set to report.
+        * @return The layout, or VK_NULL_HANDLE when the pipeline declares nothing there.
         */
         inline VkDescriptorSetLayout getSetLayout(VkmResourceSetKind kind) const
         {

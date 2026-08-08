@@ -34,14 +34,11 @@ namespace vkm
         virtual void commit(VkmCommandBufferBase* commandBuffer) = 0;
 
     public:
-        // Method to get the type of the subgraph
         inline VkmRenderSubGraphType getSubGraphType() const { return _subGraphType; }
-        // Method to get the unique identifier for the subgraph
         inline uint32_t getSubGraphId() const { return _subGraphId; }
-        // Human-readable label used by debug tooling (e.g. render graph capture)
+        // Human-readable label used by debug tooling such as render graph capture.
         void setName(const char* name) { _name = name; }
         const std::string& getName() const { return _name; }
-        // List of subgraphs that this subgraph depends on
         const std::vector<uint32_t>& getDependentSubGraphIds() const { return _dependentSubGraphIds; }
         void addDependentSubGraphId(uint32_t subGraphId)
         {
@@ -52,41 +49,38 @@ namespace vkm
             _dependentSubGraphIds.insert(_dependentSubGraphIds.end(), subGraphIds.begin(), subGraphIds.end());
         }
 
-        // Resources this subgraph reads/writes, populated by descriptor-binding recording
-        // code; VkmRenderGraph::execute() tags each with the submit's timeline value once
-        // committed.
+        // Resources this subgraph reads/writes, populated by descriptor-binding recording code.
+        // VkmRenderGraph::execute() tags each with the submit's timeline value once committed.
         void addReferencedResource(VkmResourceHandle handle) { _referencedResources.push_back(handle); }
         const std::vector<VkmResourceHandle>& getReferencedResources() const { return _referencedResources; }
 
     private:
-        VkmRenderSubGraphType _subGraphType; // Type of the subgraph (Graphics, Compute, Transfer)
-        uint32_t _subGraphId; // Unique identifier for the subgraph
-        std::string _name; // Human-readable label for debug tooling
+        VkmRenderSubGraphType _subGraphType;
+        uint32_t _subGraphId;
+        std::string _name;
 
-        // List of command buffers associated with this subgraph
-        std::vector<uint32_t> _dependentSubGraphIds; // IDs of subgraphs that this subgraph depends on
+        std::vector<uint32_t> _dependentSubGraphIds;
         std::vector<VkmResourceHandle> _referencedResources;
     };
 
     class VkmRenderGraphicsSubGraph : public VkmRenderSubGraph
     {
     public:
-        // Frame buffer key for the graphics subgraph
-        VkmRenderGraphicsSubGraph(uint32_t subGraphId, const VkmFrameBufferDescriptor& desc) 
+        VkmRenderGraphicsSubGraph(uint32_t subGraphId, const VkmFrameBufferDescriptor& desc)
             : VkmRenderSubGraph(VkmRenderSubGraphType::Graphics, subGraphId), _frameBufferDesc(desc) {}
         ~VkmRenderGraphicsSubGraph() override = default;
 
         void commit(VkmCommandBufferBase* commandBuffer) override final;
 
         // Callback invoked between beginRenderPass/endRenderPass during commit(), letting
-        // app/engine code (e.g. the ImGui overlay) record draw commands into this subgraph.
+        // app/engine code such as the ImGui overlay record draw commands into this subgraph.
         using VkmRenderCallback = std::function<void(VkmCommandBufferBase*)>;
         void setRenderCallback(VkmRenderCallback callback) { _renderCallback = std::move(callback); }
 
         const VkmFrameBufferDescriptor& getFrameBufferDescriptor() const { return _frameBufferDesc; }
 
     private:
-        VkmFrameBufferDescriptor _frameBufferDesc; // Frame buffer descriptor for the graphics subgraph
+        VkmFrameBufferDescriptor _frameBufferDesc;
         VkmRenderCallback _renderCallback;
     };
     class VkmRenderComputeSubGraph : public VkmRenderSubGraph
@@ -98,12 +92,12 @@ namespace vkm
         void commit(VkmCommandBufferBase* commandBuffer) override final;
 
         /*
-        * @brief Callback invoked during commit(), with no render pass open, so it may bind a compute
-        * pipeline and dispatch. The backing compute pass is opened by that bindPipeline() and closed
-        * by unbindPipeline(), so a callback that dispatches must do both.
-        *
-        * Subgraphs commit in insertion order into one command buffer, so a compute subgraph added
-        * before a graphics subgraph publishes its writes ahead of the draws that read them.
+        * @brief Callback invoked during commit(), with no render pass open, so it may bind a
+        * compute pipeline and dispatch.
+        * @details The backing compute pass is opened by that bindPipeline() and closed by
+        * unbindPipeline(), so a callback that dispatches must do both. Subgraphs commit in
+        * insertion order into one command buffer, so a compute subgraph added before a graphics
+        * subgraph publishes its writes ahead of the draws that read them.
         */
         using VkmComputeCallback = std::function<void(VkmCommandBufferBase*)>;
         void setComputeCallback(VkmComputeCallback callback) { _computeCallback = std::move(callback); }
@@ -121,10 +115,10 @@ namespace vkm
 
         /*
         * @brief Callback invoked during commit(), with no render pass open, so it may record the
-        * copies that a render pass forbids (VkmCommandBufferBase::copyBuffer and friends).
-        *
-        * Subgraphs commit in insertion order into one command buffer, so a transfer subgraph added
-        * before a graphics subgraph publishes its writes ahead of the draws that read them.
+        * copies that a render pass forbids.
+        * @details Subgraphs commit in insertion order into one command buffer, so a transfer
+        * subgraph added before a graphics subgraph publishes its writes ahead of the draws that
+        * read them.
         */
         using VkmTransferCallback = std::function<void(VkmCommandBufferBase*)>;
         void setTransferCallback(VkmTransferCallback callback) { _transferCallback = std::move(callback); }
@@ -135,19 +129,17 @@ namespace vkm
     
     struct VkmRenderGraphCompileOptions
     {
-        // Options for compiling the render graph, such as whether to optimize or validate
-        bool optimize = true; // Default to optimizing the render graph
-        bool validate = true; // Default to validating the render graph
+        bool optimize = true;
+        bool validate = true;
     };
 
     struct VkmRenderGraphCommitOptions
     {
-        // Options for committing the render graph, such as whether to wait for completion
-        bool waitForCompletion = true; // Default to waiting for completion
+        bool waitForCompletion = true;
         // When non-null, the graph submit consumes this swapchain's present semaphores.
         VkmSwapChainBase* presentSwapChain = nullptr;
-        // When non-null (and armed), this frame's graph is recorded for debug inspection --
-        // see render_graph_capture.h for the full flow.
+        // When non-null and armed, this frame's graph is recorded for debug inspection; see
+        // render_graph_capture.h.
         VkmRenderGraphCapture* capture = nullptr;
     };
 
@@ -158,11 +150,8 @@ namespace vkm
             : _driver(driver), _frameIndex(frameIndex) {}
         ~VkmRenderGraph() = default;
 
-        // Method to add a subgraph to the render graph
         VkmRenderGraphicsSubGraph* beginGraphicsSubGraph(const VkmFrameBufferDescriptor& desc, const char* name = nullptr);
-        // Method to add a compute subgraph to the render graph
         VkmRenderComputeSubGraph* beginComputeSubGraph(const char* name = nullptr);
-        // Method to add a transfer subgraph to the render graph
         VkmRenderTransferSubGraph* beginTransferSubGraph(const char* name = nullptr);
 
         void compile(const VkmRenderGraphCompileOptions& options = {});
@@ -176,20 +165,17 @@ namespace vkm
         template <typename RenderSubGraphT, typename... Arg>
         RenderSubGraphT* beginSubGraph(Arg&&... arg)
         {
-            // Create a new subgraph of the specified type
             auto subGraph = std::make_unique<RenderSubGraphT>(_currentSubGraphId++, std::forward<Arg>(arg)...);
-            // Add the subgraph to the list of subgraphs
             _subGraphs.push_back(std::move(subGraph));
-            // Return a pointer to the newly created subgraph
             return static_cast<RenderSubGraphT*>(_subGraphs.back().get());
         }
 
     private:
-        VkmDriverBase* _driver; // Pointer to the driver managing this render graph
+        VkmDriverBase* _driver;
         uint32_t _frameIndex;
         std::vector<std::unique_ptr<VkmRenderSubGraph>> _subGraphs;
-        uint32_t _currentSubGraphId = 0; // Current subgraph ID for tracking
+        uint32_t _currentSubGraphId = 0;
 
-        VkmGpuEventTimelineObject _lastSubmitInfo; // GPU event timeline object for synchronization
+        VkmGpuEventTimelineObject _lastSubmitInfo;
     };
 }

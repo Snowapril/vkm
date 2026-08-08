@@ -39,9 +39,10 @@ namespace vkm
         VkmResourceHandle allocateBufferView(VkmBufferView* bufferView, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
         VkmResourceHandle allocateAccelerationStructure(VkmAccelerationStructure* accelerationStructure, VkmResourcePoolType poolType = VkmResourcePoolType::Default);
         /*
-        * @brief Backend setup that must not run before the driver's own device validation
-        * (initializeInner) has succeeded -- called from VkmDriverBase::initialize() right
-        * after it, before any command queue or resource is created.
+        * @brief Backend setup that must not run before the driver's own device validation has
+        * succeeded.
+        * @details Called from VkmDriverBase::initialize() right after initializeInner(), before any
+        * command queue or resource is created.
         */
         virtual bool initialize() { return true; }
 
@@ -49,21 +50,28 @@ namespace vkm
         virtual void releaseResource(VkmResourceHandle handle);
 
         /*
-        * @brief Attach memory bookkeeping to an already-allocated handle. Must be called at
-        * most once per handle's lifetime, right after a successful initialize() -- not
-        * enforced structurally, just an invariant every call site honors.
+        * @brief Attach memory bookkeeping to an already-allocated handle.
+        * @details Must be called at most once per handle's lifetime, right after a successful
+        * initialize(). Not enforced structurally.
+        * @param handle Handle to tag.
+        * @param tag Bookkeeping to attach.
         */
         void tagResource(VkmResourceHandle handle, VkmResourceMemoryTag tag);
 
         /*
-        * @brief Per-handle tag lookup. Returns nullopt once the handle is released (or if it
-        * was never tagged) -- unlike the persistent per-category totals below.
+        * @brief Per-handle tag lookup.
+        * @param handle Handle to look up.
+        * @return The tag, or nullopt once the handle is released or if it was never tagged --
+        * unlike the persistent per-category totals below.
         */
         std::optional<VkmResourceMemoryTag> getResourceMemoryTag(VkmResourceHandle handle) const;
 
         /*
-        * @brief Persistent running totals for one resource category, decremented (not reset)
-        * on release -- summed across every pool-type sub-pool.
+        * @brief Persistent running totals for one resource category, summed across every pool-type
+        * sub-pool.
+        * @details Decremented on release rather than reset.
+        * @param type Category to report.
+        * @return That category's totals.
         */
         VkmResourceCategoryUsage getCategoryMemoryUsage(VkmResourceType type) const;
 
@@ -78,11 +86,13 @@ namespace vkm
         std::vector<VkmResourceMemoryTag> getAllMemoryTags() const;
 
         /*
-        * @brief Snapshot of every currently-live handle of one resource category -- the
-        * companion to getAllMemoryTags(), which reports sizes but no handles. Returning
-        * handles rather than pointers is what keeps this safe across frames: the caller
-        * re-resolves through getResource(), and a slot recycled in the meantime is rejected
-        * by the generation check instead of dangling.
+        * @brief Snapshot of every currently-live handle of one resource category, the companion to
+        * getAllMemoryTags(), which reports sizes but no handles.
+        * @details Handles rather than pointers keep this safe across frames: the caller re-resolves
+        * through getResource(), and a slot recycled in the meantime is rejected by the generation
+        * check instead of dangling.
+        * @param type Category to enumerate.
+        * @return Every live handle of that category.
         */
         std::vector<VkmResourceHandle> getAllResourceHandles(VkmResourceType type) const;
 
@@ -93,7 +103,7 @@ namespace vkm
     public:
         class VkmDriverResourceSubPool
         {
-            static constexpr const uint32_t POOL_GRANURARITY = 1024; // Maximum number of resources in a subpool
+            static constexpr const uint32_t POOL_GRANURARITY = 1024;  // Resources per subpool
             friend class VkmRenderResourcePool;
         public:
             VkmDriverResourceSubPool();
@@ -105,9 +115,9 @@ namespace vkm
             std::array<std::vector<VkmResourceMemoryTag>, (uint8_t)VkmResourceType::Count> _memoryTags;
             std::array<VkmResourceCategoryUsage, (uint8_t)VkmResourceType::Count> _categoryTotals{};
             VkmResourceHandle::IdType _nextResourceId[(uint8_t)VkmResourceType::Count] = {0, };
-            // Ids freed by releaseResource(), reused by allocateResourceLocked() before growing
-            // the pool -- the slot's generation (bumped on release) is what still lets a
-            // stale pre-recycle handle be rejected by getResource().
+            // Ids freed by releaseResource(), reused by allocateResourceLocked() before growing the
+            // pool. The slot's generation, bumped on release, is what lets getResource() reject a
+            // stale pre-recycle handle.
             std::array<std::vector<VkmResourceHandle::IdType>, (uint8_t)VkmResourceType::Count> _freeIds;
         };
 

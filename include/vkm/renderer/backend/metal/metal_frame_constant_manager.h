@@ -12,12 +12,15 @@ namespace vkm
 {
     class VkmDriverMetal;
 
-    // Metal implementation of the engine-global "set 1" per-frame constant convention (see
-    // common/frame_constants.h). Metal has no descriptor sets, and vkm-compiler declares set 1
-    // discrete so the generated MSL takes it as a plain `constant VkmFrameConstants&` at
-    // [[buffer(kVkmMetalFrameConstantBufferIndex)]] -- exactly how push constants already
-    // reach [[buffer(3)]]. So all this owns is one Shared-storage buffer holding FRAME_COUNT
-    // regions, and binding is a single setAddress: of the active region.
+    /*
+    * @brief Metal implementation of the engine-global "set 1" per-frame constant convention (see
+    * common/frame_constants.h).
+    * @details Metal has no descriptor sets, and vkm-compiler declares set 1 discrete, so the
+    * generated MSL takes it as a plain `constant VkmFrameConstants&` at
+    * [[buffer(kVkmMetalFrameConstantBufferIndex)]] -- how push constants already reach
+    * [[buffer(3)]]. All this owns is one Shared-storage buffer holding FRAME_COUNT regions, and
+    * binding is a single setAddress: of the active region.
+    */
     class VkmFrameConstantManagerMetal : public VkmFrameConstantManagerBase
     {
     public:
