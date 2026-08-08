@@ -29,12 +29,29 @@ namespace vkm
         return _mtlHeap != nil;
     }
 
+    bool VkmGpuHeapPoolMetal::hasSpaceFor(uint64_t sizeBytes, uint64_t alignment) const
+    {
+        return [_mtlHeap maxAvailableSizeWithAlignment:(NSUInteger)alignment] >= sizeBytes;
+    }
+
     id<MTLBuffer> VkmGpuHeapPoolMetal::tryAllocateBuffer(uint64_t sizeBytes, uint64_t alignment, uint64_t options)
     {
-        if ([_mtlHeap maxAvailableSizeWithAlignment:(NSUInteger)alignment] < sizeBytes)
+        if (!hasSpaceFor(sizeBytes, alignment))
         {
             return nil;
         }
         return [_mtlHeap newBufferWithLength:(NSUInteger)sizeBytes options:(MTLResourceOptions)options];
+    }
+
+    id<MTLTexture> VkmGpuHeapPoolMetal::tryAllocateTexture(MTLTextureDescriptor* descriptor,
+                                                          uint64_t sizeBytes, uint64_t alignment)
+    {
+        if (!hasSpaceFor(sizeBytes, alignment))
+        {
+            return nil;
+        }
+        // The descriptor's storageMode must already match the heap's (MTLStorageModePrivate);
+        // VkmTextureMetal is what enforces that before calling here.
+        return [_mtlHeap newTextureWithDescriptor:descriptor];
     }
 } // namespace vkm

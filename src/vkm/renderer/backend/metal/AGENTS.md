@@ -42,22 +42,43 @@ not import — `id<MTLBuffer> _mtlBuffer{nil};` fails to compile with "use of un
 
 ## Memory Allocation
 
-Committed vs. pooled placement mirrors the Vulkan side's thresholds/flags (see
-`vulkan/AGENTS.md`), decided per-resource inside each concrete class's own `initialize()`.
-Committed = today's direct `[device newBufferWithLength:options:]` /
-`newTextureWithDescriptor:]` path. Pooled buffers come from `VkmGpuHeapPoolMetal`, one
-`MTLHeapTypeAutomatic` heap per 64 MiB block, owned by `VkmDriverMetal`. Unlike Vulkan's
-manual `VkmOffsetAllocator`-based pool, **freeing a pooled Metal buffer needs no explicit
-release call** — dropping the ARC-managed `id<MTLBuffer>` reference lets the heap reclaim
-that space internally. `MTLHeapTypePlacement` (manual caller-managed offsets) is deliberately
-not used — `MTLHeapTypeAutomatic` already does the placement work `VkmGpuHeapPoolMetal` would
-otherwise have to hand-roll, and this project has no need for the additional control
-`MTLHeapTypePlacement` offers. `VkmSamplerMetal` has no memory backing at all (mirrors Vulkan's
-`VkSampler`). `VkmStagingBufferMetal` is always committed + `MTLStorageModeShared` (persistently
-host-visible; no explicit map/unmap step exists in the Metal API at all). A
-`VkmMemoryAccessHint::HostWrite` `VkmBufferMetal` gets that same `MTLStorageModeShared` treatment
-and is therefore always committed too — the heap pool's `MTLHeap` is `MTLStorageModePrivate`, so a
-Shared buffer cannot be placed in it (combining it with `ForcePooled` warns).
+Committed vs. `Heap` placement mirrors the Vulkan side's policy (see `vulkan/AGENTS.md`),
+decided per-resource inside each concrete class's own `initialize()` —
+`shouldUseCommittedBuffer` in `metal_buffer.mm`, `shouldUseCommittedTexture` in
+`metal_texture.mm`. Committed = the direct `[device newBufferWithLength:options:]` /
+`newTextureWithDescriptor:]` path.
+
+**Buffers and textures share the same heap blocks.** `VkmGpuHeapPoolMetal` wraps one
+`MTLHeapTypeAutomatic` / `MTLStorageModePrivate` heap per 64 MiB block, owned by
+`VkmDriverMetal`; `acquireHeapWithSpace()` finds or grows a block and both
+`allocateFromHeapPool` (buffers) and `allocateTextureFromHeapPool` (textures) go through it.
+An Automatic heap holds both kinds interchangeably, so a second parallel list would be
+bookkeeping for nothing. Texture size/alignment **must** come from
+`heapTextureSizeAndAlignWithDescriptor:` — a texture's heap footprint is padded for tiling and
+is not derivable from its extent the way a buffer's length is. A zero footprint from that call
+means the descriptor cannot be heap-placed at all, and is also why `_memoryAlignment` is only
+overwritten when the footprint is non-zero.
+
+Unlike Vulkan's manual `VkmOffsetAllocator`-based pool, **freeing a heap-placed Metal resource
+needs no explicit release call** — dropping the ARC-managed `id<MTLBuffer>`/`id<MTLTexture>`
+reference lets the heap reclaim that space internally. `MTLHeapTypePlacement` (manual
+caller-managed offsets) is deliberately not used — `MTLHeapTypeAutomatic` already does the
+placement work `VkmGpuHeapPoolMetal` would otherwise have to hand-roll, and this project has no
+need for the additional control `MTLHeapTypePlacement` offers.
+
+`VkmSamplerMetal` has no memory backing at all (mirrors Vulkan's `VkSampler`).
+`VkmStagingBufferMetal` is always committed + `MTLStorageModeShared` (persistently
+host-visible; no explicit map/unmap step exists in the Metal API at all). Anything
+`MTLStorageModeShared` — a `VkmMemoryAccessHint::HostWrite` `VkmBufferMetal`, or a texture
+`shouldUseHostWritableTexture` picked — is therefore always committed too: Metal requires a
+placed resource's storage mode to match its heap's, and the pool heap is Private (combining it
+with `Heap` warns).
+
+Residency needs nothing extra for placed resources: `acquireHeapWithSpace` calls
+`registerExternalAllocation(heap)` when it grows a block, because placed sub-allocations do not
+make the backing heap resident on their own. `onResourceInitialized` additionally registers
+each resource's own allocation, so heap-placed resources are covered twice over — harmless, and
+`registerExternalAllocation` is idempotent.
 
 ## Class Override Map
 

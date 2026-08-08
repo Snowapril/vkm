@@ -195,9 +195,9 @@ namespace vkmtest
         // Committed, pooled and host-writable buffers take three different allocation paths;
         // the pooled one is the case where the address is the pool block's plus an offset.
         vkm::VkmBuffer* committed =
-            createTestBuffer(driver, vkm::VkmMemoryAccessHint::DeviceLocal, vkm::VkmMemoryPlacementHint::ForceCommitted);
+            createTestBuffer(driver, vkm::VkmMemoryAccessHint::DeviceLocal, vkm::VkmMemoryPlacementHint::Committed);
         vkm::VkmBuffer* pooled =
-            createTestBuffer(driver, vkm::VkmMemoryAccessHint::DeviceLocal, vkm::VkmMemoryPlacementHint::ForcePooled);
+            createTestBuffer(driver, vkm::VkmMemoryAccessHint::DeviceLocal, vkm::VkmMemoryPlacementHint::Heap);
         vkm::VkmBuffer* hostWrite = createTestBuffer(driver, vkm::VkmMemoryAccessHint::HostWrite);
         REQUIRE(committed != nullptr);
         REQUIRE(pooled != nullptr);

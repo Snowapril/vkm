@@ -58,11 +58,13 @@
 - Whether a texture is host-writable is decided entirely by the backend policy (unified memory + a plain upload destination); callers cannot request or refuse it at creation.
 - Host-copy texture upload is disabled on MoltenVK: it advertises `VK_EXT_host_image_copy` but enabling it hung the macOS Vulkan CI job during initialization, and the cause was never isolated (the hang produces no output and did not reproduce locally against the same MoltenVK build).
 - The Vulkan host-copy path therefore has no CI coverage at all: MoltenVK is excluded, and lavapipe on the Ubuntu runners does not advertise the extension, so every CI Vulkan job takes the staging path.
-- `VkmMemoryPlacementHint` is still ignored by the Metal texture path, and now sits alongside a second, separate memory decision (host-writable storage) rather than being unified with it.
 - WebGPU buffers can be neither host-written nor asked for a GPU address; `wgpuQueueWriteBuffer` could serve `uploadToBuffer`'s host path there but is a queue op with alignment rules, not a CPU write.
 - The frame-constant managers and the bindless argument/mega-buffers still hand-roll native host-visible allocations instead of a `VkmMemoryAccessHint::HostWrite` `VkmBuffer`, so they stay invisible to the memory tracker.
 - `VkmBuffer::map()` is write-only in practice: there is no `VkmMemoryAccessHint` for CPU readback, and no `readbackBuffer()` counterpart to `readbackTexture()`.
-- `kPoolBufferUsage` in `vulkan_gpu_buffer_pool.cpp` omits `VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT` while `toVkBufferUsageFlags` can produce it, so a sub-4 MiB `AllowIndirectBuffer` buffer would be pooled into a block lacking that usage.
+- The Vulkan test suite prints 72 `JSON parse error: malformed JSON text` lines; also present unchanged on `878f952`.
+- On a unified-memory Mac, any texture with `AllowTransferDst` is inferred host-writable and placed in `MTLStorageModeShared`, which also forces it committed — so an explicit `VkmMemoryPlacementHint::Heap` loses to an inference the caller never asked for, and heap placement reaches only device-private textures there.
+- Acceleration-structure storage and scratch buffers still force `VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT` unconditionally, bypassing the placement policy every `VkmBufferInfo` buffer now goes through.
+- `VkmOffsetAllocator` blocks cap out at `maxAllocs = 4096` per 64 MiB block, so a scene with more small buffers than that silently stops suballocating and falls back to committed.
 - `uploadToTexture` never returns its one-off command buffer to the pool, unlike `uploadToBuffer` and `readbackTexture`.
 - Input events carry no window index; only focus changes do, so a listener cannot tell which window an event came from (it is always the scene window today).
 - `VkmImGuiRendererMetal::newFrameInner` calls AppKit (`[NSApp keyWindow]`, `mouseLocationOutsideOfEventStream`) from the CAMetalDisplayLink render thread.

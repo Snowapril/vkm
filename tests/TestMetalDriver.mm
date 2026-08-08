@@ -94,7 +94,7 @@ TEST_CASE("VkmDriverMetal - getGpuMemoryStats reports device allocation that gro
     vkm::VkmBufferInfo bufferInfo{};
     bufferInfo._flags = vkm::VkmResourceCreateInfo::AllowShaderWrite | vkm::VkmResourceCreateInfo::AllowTransferDst;
     bufferInfo._size = kBufferSize;
-    bufferInfo._placementHint = vkm::VkmMemoryPlacementHint::ForceCommitted;
+    bufferInfo._placementHint = vkm::VkmMemoryPlacementHint::Committed;
     bufferInfo._debugName = "GpuMemoryStatsProbe";
     vkm::VkmBuffer* buffer = f.driver->newBuffer(bufferInfo);
     REQUIRE(buffer != nullptr);

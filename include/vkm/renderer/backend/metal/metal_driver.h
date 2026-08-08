@@ -12,8 +12,10 @@
 
 @protocol MTLDevice;
 @protocol MTLBuffer;
+@protocol MTLTexture;
 @protocol MTLCaptureScope;
 @protocol MTL4CounterHeap;
+@class MTLTextureDescriptor;
 namespace vkm
 {
     class VkmGpuHeapPoolMetal;
@@ -41,6 +43,13 @@ namespace vkm
         * @return The buffer, or nil when the allocation failed, e.g. the size exceeds one block.
         */
         id<MTLBuffer> allocateFromHeapPool(uint64_t sizeBytes, uint64_t alignment, uint64_t options);
+
+        /*
+        * @brief Place a texture in an existing (or newly grown) heap pool block.
+        * Returns nil if placement failed, in which case the caller falls back to a committed
+        * texture. `sizeBytes`/`alignment` must come from heapTextureSizeAndAlignWithDescriptor:.
+        */
+        id<MTLTexture> allocateTextureFromHeapPool(MTLTextureDescriptor* descriptor, uint64_t sizeBytes, uint64_t alignment);
 
         // Device-reported allocation size/budget plus the heap pool's reserved-vs-used split.
         virtual VkmGpuMemoryStats getGpuMemoryStats() const override final;
@@ -96,6 +105,10 @@ namespace vkm
         virtual VkmFormat selectSwapChainColorFormat(bool enableHdr) const override final;
 
     private:
+        // Returns a heap block with room for sizeBytes at alignment, growing the list by one
+        // block when none has room. Returns nullptr when the request cannot fit a block at all.
+        VkmGpuHeapPoolMetal* acquireHeapWithSpace(uint64_t sizeBytes, uint64_t alignment);
+
         id<MTLDevice> _mtlDevice;
         std::vector<std::unique_ptr<VkmGpuHeapPoolMetal>> _heapPools;
 

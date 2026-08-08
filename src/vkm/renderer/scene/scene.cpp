@@ -57,8 +57,6 @@ namespace vkm
             VkmBufferInfo bufferInfo{};
             bufferInfo._flags = kSceneStorageBufferFlags;
             bufferInfo._size = size;
-            // Dedicated allocation, so a bindless registration always sees offset 0.
-            bufferInfo._placementHint = VkmMemoryPlacementHint::ForceCommitted;
             bufferInfo._debugName = debugName;
             return driver->newBuffer(bufferInfo);
         }
@@ -586,7 +584,6 @@ namespace vkm
             static_cast<uint32_t>(kSceneStorageBufferFlags) |
             static_cast<uint32_t>(VkmResourceCreateInfo::AllowIndirectBuffer));
         argumentInfo._size = argumentSize;
-        argumentInfo._placementHint = VkmMemoryPlacementHint::ForceCommitted;
         argumentInfo._debugName = "SceneIndirectArguments";
         VkmBuffer* argumentBuffer = driver->newBuffer(argumentInfo);
         if (argumentBuffer == nullptr)

@@ -25,28 +25,45 @@ Use VMA for all GPU memory. Never call `vkAllocateMemory` directly:
 // VmaAllocator is owned by VkmDriverVulkan, created in initializeInner(), destroyed
 // last in destroyInner() (after all buffer/texture/pool teardown).
 ```
-Texture/Buffer placement (committed vs. pooled) is decided per-resource inside each
-concrete class's own `initialize()` (see `shouldUseDedicatedTexture`/`shouldUseCommittedBuffer`
-in `vulkan_texture.cpp`/`vulkan_buffer.cpp`): an explicit `VkmMemoryPlacementHint` always
-wins; `Auto` forces committed for large/attachment/read-write/externally-owned resources
-and otherwise pools. A `VkmMemoryAccessHint::HostWrite` buffer overrides even
-`ForcePooled` (with a warning) — the pool block is device-local, so it is allocated committed
-with `VMA_ALLOCATION_CREATE_MAPPED_BIT | HOST_ACCESS_SEQUENTIAL_WRITE_BIT` and re-checked with
+Texture/Buffer placement is decided per-resource inside each concrete class's own
+`initialize()` (see `shouldUseDedicatedTexture`/`shouldUseCommittedBuffer` in
+`vulkan_texture.cpp`/`vulkan_buffer.cpp`): an explicit `VkmMemoryPlacementHint` always wins.
+
+**`Auto` deliberately decides as little as possible, because VMA already decides it better.**
+For every resource allocated *without* `VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT`, VMA
+queries `VkMemoryDedicatedRequirements` itself (enabled by the allocator's
+`vulkanApiVersion = VK_API_VERSION_1_3`) and honours both `requiresDedicatedAllocation` and
+`prefersDedicatedAllocation`, then layers its own block-occupancy heuristic and a
+`maxMemoryAllocationCount` exhaustion guard on top. Forcing the bit *overrides* that
+driver-informed answer, so `Auto` sets it nowhere. The only thing `Auto` still forces is
+attachments → dedicated, which is a statement about how the texture is used rather than about
+the image, and is therefore the one call the allocator cannot make for itself.
+
+A `VkmMemoryAccessHint::HostWrite` buffer overrides even `Heap` (with a warning) — the pool
+block is device-local, so it is allocated committed with
+`VMA_ALLOCATION_CREATE_MAPPED_BIT | HOST_ACCESS_SEQUENTIAL_WRITE_BIT` and re-checked with
 `vmaGetAllocationMemoryProperties` before reporting `isHostWritable()`. Sampler has no memory
 backing at all (`vkCreateSampler` involves no VMA/`VkDeviceMemory`). StagingBuffer is always
-committed + persistently host-mapped (`VMA_ALLOCATION_CREATE_MAPPED_BIT`), never pooled.
+committed + persistently host-mapped (`VMA_ALLOCATION_CREATE_MAPPED_BIT`), never suballocated.
 
 Every buffer (pool block included) carries `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` and the
 allocator `VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT` when
 `VkmDriverVulkan::isBufferDeviceAddressEnabled()`; without that feature nothing carries either and
 `getGPUVirtualAddress()` reports 0.
 
-Pooled buffers are suballocated from `VkmGpuBufferPoolVulkan` (one shared 64 MiB `VkBuffer`
+`Heap` buffers are suballocated from `VkmGpuBufferPoolVulkan` (one shared 64 MiB `VkBuffer`
 + dedicated VMA allocation per block, carved up via the vendored `VkmOffsetAllocator`
 wrapper around OffsetAllocator — see `common/gpu_offset_allocator.h`). `VkmDriverVulkan`
-owns the growable list of pool blocks and creates a new one on exhaustion. Pooled textures
+owns the growable list of pool blocks and creates a new one on exhaustion. `Heap` textures
 are placed by VMA's own internal suballocator (plain `vmaCreateImage` without the dedicated
-bit) — no custom allocator involved for textures, since VMA already does this.
+bit) — no custom allocator involved for textures, since VMA already does this. So `Heap`
+means two different mechanisms here, and neither is an `MTLHeap`-style engine heap for images;
+the caller's question is "may this share its backing allocation", not "which API object".
+
+`kPoolBufferUsage` (`vulkan_gpu_buffer_pool.cpp`) must stay a superset of everything
+`toVkBufferUsageFlags()` can produce — a `VkBuffer`'s usage is fixed at creation, so a
+suballocation inheriting the block's usage fails validation naming the *block*, nowhere near
+the buffer that asked for it.
 
 ## Device Feature Chain Pattern
 

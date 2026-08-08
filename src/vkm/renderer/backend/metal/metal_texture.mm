@@ -57,6 +57,40 @@ namespace vkm
                    (info._flags & VkmResourceCreateInfo::AllowDepthStencilAttachment) == 0 &&
                    (info._flags & VkmResourceCreateInfo::AllowPresent) == 0;
         }
+
+        /*
+        * @brief Whether this texture is created directly rather than placed in the heap pool.
+        * @details Mirrors vulkan_texture.cpp's shouldUseDedicatedTexture: an explicit hint
+        * wins, and Auto commits only attachments. An explicit Heap on an attachment is
+        * honoured -- MTLTextureUsageRenderTarget is valid from an MTLHeapTypeAutomatic heap,
+        * which does not alias unless makeAliasable is called and inherits the heap's hazard
+        * tracking.
+        * @param isHostWritable Whether the descriptor's storage mode is MTLStorageModeShared.
+        */
+        bool shouldUseCommittedTexture(const VkmTextureInfo& info, bool isHostWritable)
+        {
+            // The heap pool's MTLHeap is MTLStorageModePrivate and Metal requires a placed
+            // resource's storage mode to match its heap's, so a Shared texture cannot go in it
+            // -- the same rule shouldUseCommittedBuffer applies to a Shared buffer.
+            if (isHostWritable)
+            {
+                if (info._placementHint == VkmMemoryPlacementHint::Heap)
+                {
+                    VKM_DEBUG_WARN("A host-writable texture cannot be heap-placed; texture will be committed");
+                }
+                return true;
+            }
+            if (info._placementHint == VkmMemoryPlacementHint::Committed)
+            {
+                return true;
+            }
+            if (info._placementHint == VkmMemoryPlacementHint::Heap)
+            {
+                return false;
+            }
+            return (info._flags & VkmResourceCreateInfo::AllowColorAttachment) != 0 ||
+                   (info._flags & VkmResourceCreateInfo::AllowDepthStencilAttachment) != 0;
+        }
     }
 
     VkmTextureMetal::VkmTextureMetal(VkmDriverBase* driver)
@@ -105,10 +139,25 @@ namespace vkm
             descriptor.storageMode = _isHostWritable ? MTLStorageModeShared : MTLStorageModePrivate;
 
             id<MTLDevice> device = driverMetal->getMTLDevice();
+            // Also the "can this be heap-placed at all" test: Metal reports a zero footprint
+            // for a descriptor it cannot place, and overwriting _memoryAlignment with that 0
+            // would break the non-zero-alignment invariant the memory tags report.
             MTLSizeAndAlign sizeAndAlign = [device heapTextureSizeAndAlignWithDescriptor:descriptor];
-            _memoryAlignment = (uint32_t)sizeAndAlign.align;
+            const bool isHeapPlaceable = (sizeAndAlign.size > 0 && sizeAndAlign.align > 0);
+            if (isHeapPlaceable)
+            {
+                _memoryAlignment = (uint32_t)sizeAndAlign.align;
+            }
 
-            _mtlTexture = [device newTextureWithDescriptor:descriptor];
+            if (isHeapPlaceable && !shouldUseCommittedTexture(info, _isHostWritable))
+            {
+                _mtlTexture = driverMetal->allocateTextureFromHeapPool(descriptor, sizeAndAlign.size, sizeAndAlign.align);
+            }
+            if (_mtlTexture == nil)
+            {
+                // Committed, or the heap had no room -- the same fall-through the buffer path takes.
+                _mtlTexture = [device newTextureWithDescriptor:descriptor];
+            }
             [descriptor release];
             if (_mtlTexture == nil)
             {

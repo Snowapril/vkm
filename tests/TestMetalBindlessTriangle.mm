@@ -84,7 +84,7 @@ TEST_CASE("Metal bindless - registerBuffer returns valid slots and draw path exe
                               vkm::VkmResourceCreateInfo::AllowTransferDst |
                               vkm::VkmResourceCreateInfo::AllowTransferSrc;
     vertexBufferInfo._size = sizeof(vertices);
-    vertexBufferInfo._placementHint = vkm::VkmMemoryPlacementHint::ForceCommitted;
+    vertexBufferInfo._placementHint = vkm::VkmMemoryPlacementHint::Committed;
     vertexBufferInfo._debugName = "TestTriangleVertexBuffer";
     vkm::VkmBuffer* vertexBuffer = driver->newBuffer(vertexBufferInfo);
     REQUIRE(vertexBuffer != nullptr);
@@ -96,7 +96,7 @@ TEST_CASE("Metal bindless - registerBuffer returns valid slots and draw path exe
                              vkm::VkmResourceCreateInfo::AllowTransferDst |
                              vkm::VkmResourceCreateInfo::AllowTransferSrc;
     indexBufferInfo._size = sizeof(indices);
-    indexBufferInfo._placementHint = vkm::VkmMemoryPlacementHint::ForceCommitted;
+    indexBufferInfo._placementHint = vkm::VkmMemoryPlacementHint::Committed;
     indexBufferInfo._debugName = "TestTriangleIndexBuffer";
     vkm::VkmBuffer* indexBuffer = driver->newBuffer(indexBufferInfo);
     REQUIRE(indexBuffer != nullptr);
@@ -191,7 +191,7 @@ TEST_CASE("Metal bindless - buffer upload/copy round-trip preserves bytes")
                         vkm::VkmResourceCreateInfo::AllowTransferDst |
                         vkm::VkmResourceCreateInfo::AllowTransferSrc;
     bufferInfo._size = pattern.size();
-    bufferInfo._placementHint = vkm::VkmMemoryPlacementHint::ForceCommitted;
+    bufferInfo._placementHint = vkm::VkmMemoryPlacementHint::Committed;
     bufferInfo._debugName = "RoundTripDeviceBuffer";
     vkm::VkmBuffer* deviceBuffer = driver->newBuffer(bufferInfo);
     REQUIRE(deviceBuffer != nullptr);
@@ -238,7 +238,7 @@ TEST_CASE("Metal bindless - slots are recycled after unregister")
                         vkm::VkmResourceCreateInfo::AllowTransferDst |
                         vkm::VkmResourceCreateInfo::AllowTransferSrc;
     bufferInfo._size = 64;
-    bufferInfo._placementHint = vkm::VkmMemoryPlacementHint::ForceCommitted;
+    bufferInfo._placementHint = vkm::VkmMemoryPlacementHint::Committed;
     bufferInfo._debugName = "TestSlotRecycleBuffer";
     vkm::VkmBuffer* buffer = driver->newBuffer(bufferInfo);
     REQUIRE(buffer != nullptr);

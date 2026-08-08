@@ -875,6 +875,35 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Why: <the edge case that forced it>
 ```
 
+### 2026-08-08 — Metal heap block selection tries one block, not every block
+
+- Planned: factor the shared "walk `_heapPools`, grow on exhaustion" loop out of
+  `allocateFromHeapPool` so the texture path could reuse it.
+- Did instead: `acquireHeapWithSpace()` returns the *first* block whose
+  `maxAvailableSizeWithAlignment:` reports room, and the caller allocates from that one block
+  only. The old buffer loop instead called `tryAllocateBuffer` on each block in turn, so it
+  would have moved on to the next block if an allocation unexpectedly failed.
+- Why: sharing the loop requires a fit predicate (`hasSpaceFor`) separate from the allocation,
+  and re-checking every block after a failed allocate would mean threading the allocation
+  itself back into the loop, which is what the refactor was removing. Apple documents
+  `maxAvailableSizeWithAlignment:` as the largest size that can be successfully allocated, so a
+  false positive is not expected; if one occurs the caller falls through to a committed
+  resource, which is correct and is the same fall-through the pool-exhausted path already took.
+
+### 2026-08-08 — No TestTexturePlacementShared.hpp, and no Vulkan texture placement assertion
+
+- Planned: `TestTexturePlacementShared.hpp` + a Vulkan and a Metal wrapper, per the usual
+  backend-agnostic test convention, with a Vulkan case asserting `Committed` vs `Heap`.
+- Did instead: `TestTexturePlacementMetal.mm` only, with a header comment saying why it is
+  Metal-only. The Vulkan buffer side is covered instead by a new assertion in
+  `TestEngineSetup.cpp` that two `Heap` buffers share one `VkBuffer` at distinct offsets.
+- Why: Metal is the only backend with an engine-owned texture heap. A Vulkan `Heap` texture is
+  placed by VMA's internal suballocator, which exposes nothing the engine can observe —
+  `getGpuMemoryStats()` cannot distinguish it from a dedicated image — and WebGPU has no
+  placement API at all. A shared body would have been an empty shell on two of three backends,
+  and a Vulkan "placement" assertion would have been a test that passes either way.
+
+
 ### 2026-07-30 — VkmDriverMetal's destructor releases the timestamp counter heap
 - Planned: the timestamp pool is created in `initializeGpuTimestampPool()` and released in
   `destroyGpuTimestampPool()`, which `VkmDriverBase::destroy()` calls -- the same lifetime every
@@ -3189,3 +3218,95 @@ tree; it now names the real `VKM_VK_CHECK_RESULT_MSG` pair.
   budget, so full-suite context tips it over; `VkmEngine - drives a frame, and
   publishes/suspends/applies a window resize` does the same on Vulkan. Both reproduce identically
   on the unmodified merge-base.
+## 2026-08-08 — Resource placement: Auto stops overriding the allocator, Metal textures get a heap
+
+`VkmMemoryPlacementHint` existed and was honoured by Vulkan buffers/textures and Metal buffers,
+but the choice was only half-wired, which is why resources looked committed in practice: Metal
+textures ignored the hint entirely, Vulkan's committed buffer path hardcoded
+`VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT`, and `Auto` was a pair of size constants that never
+asked anything. Enumerators are now `Auto` / `Committed` / `Heap`.
+
+- **The Vulkan half of this turned out to be a deletion, not an addition.** The task was framed as
+  "make `Auto` query whether the driver prefers a dedicated allocation" — but VMA already does
+  exactly that. `vk_mem_alloc.h:13843` queries `VkMemoryDedicatedRequirements` whenever
+  `m_VulkanApiVersion >= 1.1` (ours is 1.3, so it is on), `:14115` passes
+  `requiresDedicatedAllocation || prefersDedicatedAllocation` into the allocation decision, and
+  `:13549` layers on a `size > preferredBlockSize/2` rule plus a guard that *stops* preferring
+  dedicated past 3/4 of `maxMemoryAllocationCount`. Forcing the bit is precisely what threw that
+  away. So no query was written: `Auto` now sets the bit nowhere and `Committed` is the only thing
+  that sets it. Writing our own `vkGetDeviceImageMemoryRequirements` call would have duplicated
+  VMA's logic and lost the allocation-count guard.
+- Consequence worth stating plainly: on drivers that report no dedicated preference — the common
+  desktop case — `Auto` produces the same placement it did before for textures. What changed
+  materially is buffers, which were getting one `VkDeviceMemory` each and now do not.
+- The 16 MiB texture threshold and the 4 MiB-equivalent reasoning behind it are gone; VMA's block
+  heuristic subsumes them. `Auto` still forces attachments to dedicated, because that is a claim
+  about *usage* (few, long-lived, resize-churny) rather than about the image, and is the one call
+  the allocator cannot make for itself.
+- **Two `ExternalHandleOwner` clauses were dead code.** Both `vulkan_buffer.cpp` and
+  `vulkan_texture.cpp` return early on that flag before their policy helper ever runs. Deleted.
+  Removing the texture size heuristic also orphaned `vkFormatBytesPerTexel` (its only caller), so
+  that went too.
+- **Metal textures now share the buffer heap.** `VkmGpuHeapPoolMetal::tryAllocateTexture` +
+  `VkmDriverMetal::allocateTextureFromHeapPool`, both routed through a new
+  `acquireHeapWithSpace()` that the buffer path also uses — an `MTLHeapTypeAutomatic` heap holds
+  both kinds interchangeably, so a second block list would have been bookkeeping for nothing.
+  Sizes come from `heapTextureSizeAndAlignWithDescriptor:`, not from the extent: a texture's heap
+  footprint is padded for tiling.
+- That call was already being made for its alignment, and treating a zero result as "not
+  heap-placeable" fixed a latent bug on the way past — `_memoryAlignment` was being overwritten
+  with 0 unconditionally, contradicting the non-zero-alignment invariant the memory tags report.
+- **The stale rationale was the real blocker for the caller flips.** `scene.cpp`,
+  `scene_geometry_pool.cpp` and the triangle sample all pinned `ForceCommitted` for "a bindless
+  registration always sees offset 0". Every consumer of a `VkBuffer` in the tree is already
+  offset-aware — bindless (`vulkan_bindless_resource_manager.cpp:245,341`), resource tables,
+  buffer views, GPU addresses, and the command buffer's copy/indirect/barrier paths. All four
+  sites are now `Auto`. The geometry pool is where this pays: per-mesh vertex/index buffers are
+  numerous and small, and nothing binds them as vertex/index buffers (indices come from the
+  bindless storage array).
+- `kPoolBufferUsage` gained `VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT`, which was a latent bug made
+  reachable by flipping `SceneIndirectArguments` to `Auto` — a `VkBuffer`'s usage is fixed at
+  creation, so a suballocation inheriting a block without that bit fails validation naming the
+  *block*, nowhere near the buffer that asked for it.
+- **Testing the Vulkan side honestly.** Dedicated-vs-suballocated is not observable through the
+  engine API, so there is no test asserting it, and none pretending to. What *is* observable is
+  that two `Heap` buffers share one `VkBuffer` at distinct offsets while a `Committed` one does
+  not — that assertion pins the whole `Heap` semantics and is what would catch a silent
+  degradation. On Metal the equivalent is `getGpuMemoryStats()._hasPoolStats` /`_poolUsedBytes`,
+  which stayed false/flat for textures before this change; `TestTexturePlacementMetal.mm` is
+  Metal-only for that reason and says so in its header, so nobody "fixes" it into a
+  `TestXxxShared.hpp` that would be an empty shell on two of three backends.
+- Not touched, and now recorded in `TODO.md`: the acceleration-structure storage/scratch buffers
+  still force the dedicated bit unconditionally (they never carry a `VkmBufferInfo`), and
+  `VkmOffsetAllocator` caps at `maxAllocs = 4096` per 64 MiB block, so a scene with more small
+  buffers than that silently stops suballocating and falls back to committed.
+- **What the Metal heap path actually reaches on Apple Silicon is narrower than it looks**, and
+  the first run of the new test is what surfaced it. `shouldUseHostWritableTexture` infers
+  host-writability for *any* `AllowTransferDst` texture on a unified-memory device, which puts it
+  in `MTLStorageModeShared` — and a Shared texture cannot live in the Private heap, so it is
+  forced committed. That is the single most common texture shape in a real scene (an uploaded
+  material texture), so on this machine `Heap` reaches only device-private textures: storage
+  images, compute targets, anything not written from the CPU.
+- Left as-is rather than "fixed", deliberately. Making an explicit `Heap` win over the inference
+  would move uploadable textures out of Shared storage and cost them the direct `replaceRegion:`
+  upload path — a bandwidth trade, and the asymmetry is real: for buffers `HostWrite` is a caller
+  opt-in, for textures it is backend inference the caller cannot currently refuse (already noted
+  in `TODO.md`). Resolving it properly means letting callers request or refuse texture
+  host-writability, which is out of scope here. Recorded in `TODO.md` instead.
+- **Verified against the baseline rather than assumed.** The Vulkan suite emits 335 teardown
+  validation errors and 72 JSON parse errors. Rather than guess whether the placement change
+  caused them, `878f952` was built and run on the same machine: the VUID counts come out
+  byte-identical (140 / 67 / 65 / 63) and the JSON count identical (72). They predate this work
+  and are now recorded in `TODO.md`. They are real and CLAUDE.md §9 says validation errors are
+  must-fix — but they are a resource-destruction-ordering defect, unrelated to placement, and
+  fixing them here would have been scope creep.
+- Two test-quality defects the first green run hid, both fixed: a comma in a doctest test name
+  makes it unselectable by `--test-case=` (which splits on commas), and doctest stringifies every
+  `VkBuffer` as `1`, so the handle assertions would have failed with the useless
+  `CHECK( 1 != 1 )`. The handles are now compared as `uint64_t`, and a failure names them:
+  `CHECK( 21990232555540 != 19791209299986 )`.
+- Final evidence that Heap placement works, from the assertion values rather than a pass/fail:
+  two `Heap` buffers land in one `VkBuffer` at offsets 0 and 272, while a `Committed` buffer gets
+  a different `VkBuffer` at offset 0.
+- Pre-existing and deliberately left alone: `metal_gpu_heap_pool.mm` never releases its
+  `MTLHeapDescriptor`.

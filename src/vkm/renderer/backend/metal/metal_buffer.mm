@@ -19,17 +19,17 @@ namespace vkm
             // placed in it -- host-writable always means committed, whatever the hint says.
             if (info._accessHint == VkmMemoryAccessHint::HostWrite)
             {
-                if (info._placementHint == VkmMemoryPlacementHint::ForcePooled)
+                if (info._placementHint == VkmMemoryPlacementHint::Heap)
                 {
-                    VKM_DEBUG_WARN("VkmMemoryAccessHint::HostWrite cannot be pooled; buffer will be committed");
+                    VKM_DEBUG_WARN("VkmMemoryAccessHint::HostWrite cannot be heap-placed; buffer will be committed");
                 }
                 return true;
             }
-            if (info._placementHint == VkmMemoryPlacementHint::ForceCommitted)
+            if (info._placementHint == VkmMemoryPlacementHint::Committed)
             {
                 return true;
             }
-            if (info._placementHint == VkmMemoryPlacementHint::ForcePooled)
+            if (info._placementHint == VkmMemoryPlacementHint::Heap)
             {
                 return false;
             }

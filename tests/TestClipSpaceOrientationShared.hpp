@@ -73,7 +73,7 @@ namespace vkmtest
                                   vkm::VkmResourceCreateInfo::AllowTransferDst |
                                   vkm::VkmResourceCreateInfo::AllowTransferSrc;
         vertexBufferInfo._size = sizeof(vertices);
-        vertexBufferInfo._placementHint = vkm::VkmMemoryPlacementHint::ForceCommitted;
+        vertexBufferInfo._placementHint = vkm::VkmMemoryPlacementHint::Committed;
         vertexBufferInfo._debugName = "ClipSpaceVertexBuffer";
         vkm::VkmBuffer* vertexBuffer = driver->newBuffer(vertexBufferInfo);
         REQUIRE(vertexBuffer != nullptr);
@@ -84,7 +84,7 @@ namespace vkmtest
                                  vkm::VkmResourceCreateInfo::AllowTransferDst |
                                  vkm::VkmResourceCreateInfo::AllowTransferSrc;
         indexBufferInfo._size = sizeof(indices);
-        indexBufferInfo._placementHint = vkm::VkmMemoryPlacementHint::ForceCommitted;
+        indexBufferInfo._placementHint = vkm::VkmMemoryPlacementHint::Committed;
         indexBufferInfo._debugName = "ClipSpaceIndexBuffer";
         vkm::VkmBuffer* indexBuffer = driver->newBuffer(indexBufferInfo);
         REQUIRE(indexBuffer != nullptr);
@@ -188,7 +188,7 @@ namespace vkmtest
         // All GPU work above is already retired (ensureCompleted + readbackTexture's
         // waitIdle), so these are safe to free here. Required, not merely tidy: the Vulkan
         // fixture calls driver->destroy(), and VMA asserts "Unfreed dedicated allocations
-        // found!" if ForceCommitted resources outlive the allocator.
+        // found!" if Committed resources outlive the allocator.
         vkm::VkmRenderResourcePool* resourcePool = driver->getRenderResourcePool();
         resourcePool->releaseResource(offscreen->getHandle());
         resourcePool->releaseResource(indexBuffer->getHandle());

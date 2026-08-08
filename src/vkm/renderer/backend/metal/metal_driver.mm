@@ -306,37 +306,48 @@ namespace vkm
         return new VkmBufferViewMetal(this);
     }
 
-    id<MTLBuffer> VkmDriverMetal::allocateFromHeapPool(uint64_t sizeBytes, uint64_t alignment, uint64_t options)
+    VkmGpuHeapPoolMetal* VkmDriverMetal::acquireHeapWithSpace(uint64_t sizeBytes, uint64_t alignment)
     {
         for (auto& pool : _heapPools)
         {
-            id<MTLBuffer> buffer = pool->tryAllocateBuffer(sizeBytes, alignment, options);
-            if (buffer != nil)
+            if (pool->hasSpaceFor(sizeBytes, alignment))
             {
-                return buffer;
+                return pool.get();
             }
         }
 
         if (sizeBytes > VkmGpuHeapPoolMetal::POOL_BLOCK_SIZE_BYTES)
         {
-            VKM_DEBUG_ERROR("Buffer allocation exceeds heap pool block size; use a committed allocation instead");
-            return nil;
+            VKM_DEBUG_ERROR("Allocation exceeds heap pool block size; use a committed allocation instead");
+            return nullptr;
         }
 
         auto newPool = std::make_unique<VkmGpuHeapPoolMetal>(this);
         if (!newPool->initialize())
         {
-            return nil;
+            return nullptr;
         }
 
         // Placed sub-allocations may not make the backing heap resident on their own;
-        // register the whole heap block so every buffer placed in it is covered.
+        // register the whole heap block so every resource placed in it is covered.
         VkmRenderResourcePoolMetal* renderResourcePoolMetal = static_cast<VkmRenderResourcePoolMetal*>(getRenderResourcePool());
         renderResourcePoolMetal->registerExternalAllocation(newPool->getHeap());
 
-        id<MTLBuffer> buffer = newPool->tryAllocateBuffer(sizeBytes, alignment, options);
         _heapPools.push_back(std::move(newPool));
-        return buffer;
+        return _heapPools.back().get();
+    }
+
+    id<MTLBuffer> VkmDriverMetal::allocateFromHeapPool(uint64_t sizeBytes, uint64_t alignment, uint64_t options)
+    {
+        VkmGpuHeapPoolMetal* pool = acquireHeapWithSpace(sizeBytes, alignment);
+        return (pool != nullptr) ? pool->tryAllocateBuffer(sizeBytes, alignment, options) : nil;
+    }
+
+    id<MTLTexture> VkmDriverMetal::allocateTextureFromHeapPool(MTLTextureDescriptor* descriptor,
+                                                              uint64_t sizeBytes, uint64_t alignment)
+    {
+        VkmGpuHeapPoolMetal* pool = acquireHeapWithSpace(sizeBytes, alignment);
+        return (pool != nullptr) ? pool->tryAllocateTexture(descriptor, sizeBytes, alignment) : nil;
     }
 
     VkmGpuMemoryStats VkmDriverMetal::getGpuMemoryStats() const

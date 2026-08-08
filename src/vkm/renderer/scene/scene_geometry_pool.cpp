@@ -49,8 +49,6 @@ namespace vkm
             VkmBufferInfo bufferInfo{};
             bufferInfo._flags = poolBufferFlags(driver);
             bufferInfo._size = size;
-            // Dedicated allocation, so the bindless registration always sees offset 0.
-            bufferInfo._placementHint = VkmMemoryPlacementHint::ForceCommitted;
             bufferInfo._debugName = debugName.c_str();
 
             VkmBuffer* buffer = driver->newBuffer(bufferInfo);

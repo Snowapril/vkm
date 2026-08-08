@@ -92,7 +92,6 @@ public:
         VkmBufferInfo vertexBufferInfo{};
         vertexBufferInfo._flags = VkmResourceCreateInfo::AllowShaderWrite | VkmResourceCreateInfo::AllowTransferDst | VkmResourceCreateInfo::AllowTransferSrc;
         vertexBufferInfo._size = sizeof(vertices);
-        vertexBufferInfo._placementHint = VkmMemoryPlacementHint::ForceCommitted; // dedicated VkBuffer, offset always 0
         vertexBufferInfo._debugName = "TriangleVertexBuffer";
         VkmBuffer* vertexBuffer = driver->newBuffer(vertexBufferInfo);
         VKM_ASSERT(vertexBuffer != nullptr, "Failed to create triangle vertex buffer");
@@ -101,7 +100,6 @@ public:
         VkmBufferInfo indexBufferInfo{};
         indexBufferInfo._flags = VkmResourceCreateInfo::AllowShaderWrite | VkmResourceCreateInfo::AllowTransferDst | VkmResourceCreateInfo::AllowTransferSrc;
         indexBufferInfo._size = sizeof(indices);
-        indexBufferInfo._placementHint = VkmMemoryPlacementHint::ForceCommitted;
         indexBufferInfo._debugName = "TriangleIndexBuffer";
         VkmBuffer* indexBuffer = driver->newBuffer(indexBufferInfo);
         VKM_ASSERT(indexBuffer != nullptr, "Failed to create triangle index buffer");

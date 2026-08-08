@@ -252,29 +252,4 @@ VkCompareOp toVkCompareOp(VkmCompareOp compareOp)
         default: VKM_ASSERT(false, "Unsupported compare op for Vulkan backend"); return VK_COMPARE_OP_NEVER;
     }
 }
-
-uint32_t vkFormatBytesPerTexel(VkmFormat format)
-{
-    switch (format)
-    {
-        case VkmFormat::R8G8B8A8_UNORM:
-        case VkmFormat::R8G8B8A8_SRGB:
-        case VkmFormat::R8G8B8A8_UINT:
-        case VkmFormat::R8G8B8A8_SNORM:
-        case VkmFormat::R8G8B8A8_SINT:
-        case VkmFormat::D32_SFLOAT:
-        case VkmFormat::D24_UNORM_S8_UINT:
-        case VkmFormat::BGRA8_UNORM:
-        case VkmFormat::BGRA8_SRGB:
-            return 4;
-        case VkmFormat::R16G16B16A16_UNORM:
-        case VkmFormat::R16G16B16A16_SFLOAT:
-        case VkmFormat::D32_SFLOAT_S8_UINT:
-            return 8;
-        case VkmFormat::R32G32B32A32_SFLOAT:
-            return 16;
-        default:
-            return 4;
-    }
-}
 }

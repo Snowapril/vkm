@@ -75,7 +75,8 @@ The device-level preconditions:
   be CPU-write-mapped. `isHostWritable()` stays false there and uploads keep going through staging.
 - `HostWrite` always takes the *committed* allocation path. Both suballocation pools are backed by
   device-private memory (Vulkan's shared pool block, Metal's `MTLStorageModePrivate` heap), so a
-  host-writable buffer cannot be placed in one; combining it with `ForcePooled` warns.
+  host-writable buffer cannot be placed in one; combining it with `VkmMemoryPlacementHint::Heap`
+  warns. The same rule applies to a texture Metal placed in `MTLStorageModeShared`.
 
 Both paths leave the resource GPU-readable, so callers never branch on which one ran. A backend
 that offers neither needs no override; the base defaults are the unreachable-case guards.
@@ -237,7 +238,10 @@ struct VkmResourceHandle { uint64_t id; VkmResourcePoolType poolType; VkmResourc
 - Allocated by `VkmRenderResourcePool` — do not construct raw handles manually.
 - `id == (uint64_t)-1` means invalid. Use `handle.isValid()`.
 - `VkmResourceType`: Texture=0, Buffer=1, StagingBuffer=2, Sampler=3, TextureView=4, BufferView=5.
-- Pooled resources: `handle.isPooledResource()` true when `poolType != Undefined`.
+- Pooled resources: `handle.isPooledResource()` true when `poolType != Undefined`. This is about
+  the *render resource pool* (handle ownership) and has nothing to do with
+  `VkmMemoryPlacementHint::Heap` (memory suballocation) — the collision is why that enumerator is
+  spelled `Heap` rather than `Pooled`.
 - `generation` is bumped by the pool each time a slot is released; `getResource()` only
   returns a resource when the handle's `generation` still matches the slot's, giving views a
   weak-reference liveness check. `allocateResourceLocked()` recycles released ids from a
@@ -343,10 +347,12 @@ retained).
 `VkmRenderResource::getAllocatedSize()` / `getMemoryAlignment()` (`render_resource.h`) feed a
 tag's `allocatedSize`/`alignment`:
 - **Vulkan** = real numbers (`VmaAllocationInfo::size` + `vkGetBuffer/ImageMemoryRequirements`);
-  a pooled buffer sub-range reports its requested size and locally-computed alignment (no
+  a `Heap` buffer sub-range reports its requested size and locally-computed alignment (no
   distinct VMA allocation to introspect).
 - **Metal / WebGPU** = best-effort passthrough of the requested size (no allocation-introspection
-  API exists on either), with a `256`-byte conventional alignment.
+  API exists on either), with a `256`-byte conventional alignment. Metal textures are the
+  exception: `heapTextureSizeAndAlignWithDescriptor:` gives a real alignment, and the `256`
+  default survives only when that call reports no heap footprint.
 - **Sampler / TextureView / BufferView** = always `0` (no independent GPU memory allocation of
   their own), via the base-class default — no override.
 
