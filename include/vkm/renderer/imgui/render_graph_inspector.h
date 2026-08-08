@@ -21,8 +21,12 @@ namespace vkm
     *
     *   Capture   -- the VkmRenderGraphCapture: pass list, per-pass pipelines, dependencies,
     *                inputs and outputs with texture previews, and a captured-buffer hex view.
+    *   Graph     -- the same passes as a node-link diagram, laid out in dependency levels.
     *   Pipelines -- every loaded PSO json, with staleness marking and reload buttons.
     *   Textures  -- VkmTextureBrowser over every live texture in the resource pool.
+    *
+    * The Capture and Graph tabs share one selection, so a node picked in one is the pass detailed
+    * in the other.
     */
     class VkmRenderGraphInspector
     {
@@ -49,6 +53,14 @@ namespace vkm
     private:
         void drawCaptureTab(VkmRenderGraphCapture& capture, VkmImGuiRendererBase* imGuiRenderer,
                             VkmPipelineStateManager* pipelineStateManager);
+        /*
+        * @brief Draws the captured passes as a node-link diagram: one node per subgraph, one edge
+        * per dependency the render graph's analysis found.
+        * @details Nodes are placed in columns by dependency level -- level 0 depends on nothing,
+        * and a node sits one column right of its deepest producer -- so every edge points left to
+        * right and the columns read as "what can run at the same time".
+        */
+        void drawGraphTab(VkmRenderGraphCapture& capture);
         void drawPipelinesTab(VkmPipelineStateManager* pipelineStateManager);
         // Reloads `sourceIndex` and records the outcome for the Pipelines tab's error box.
         void reloadSource(VkmPipelineStateManager* pipelineStateManager, size_t sourceIndex);
@@ -57,6 +69,9 @@ namespace vkm
         bool _visible = true;
         int _selectedPass = 0;
         int _selectedBuffer = -1; // index into the selected pass's capturedBuffers, -1 = none
+        float _graphZoom = 1.0f;
+        // Draw only the selected node's own edges, for a frame with more edges than can be read.
+        bool _graphIsolateSelection = false;
         bool _recompileShadersOnReload = true;
         std::string _reloadStatus; // last reload's result, shown under the source table
         bool _reloadFailed = false;

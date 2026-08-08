@@ -3550,3 +3550,20 @@ pass's table: over-declaring would invent a dependency, under-declaring would lo
   until then those subgraphs are the only thing standing between a missing declaration and a
   rendering bug.
 - The `vkCmdSetEvent2` / `vkCmdWaitEvents2` split path behind a capability flag, as planned.
+
+### Subgraph dependency graph in the ImGui inspector
+
+`VkmRenderGraphInspector` gains a Graph tab drawing the captured passes as a node-link diagram:
+one node per subgraph, one edge per dependency the analysis found. Nodes are placed in columns by
+dependency level -- level 0 depends on nothing, and a node sits one column right of its deepest
+producer -- so every edge points left to right and a column reads as "these can run at the same
+time as far as resource hazards go". Producers always precede consumers in the pass list, so the
+levelling is a single forward sweep with no ordering pass and no cycle handling.
+
+Nodes are coloured by subgraph type, selection is shared with the Capture tab, and the selected
+node's edges are highlighted (with an isolate toggle for a frame with more edges than can be read
+at once).
+
+The rendering itself needs an interactive session to judge; what is testable is the data behind
+it, and `TestRenderGraphCapture.mm` now asserts it end to end: a producer/bystander/consumer graph
+gives the consumer exactly one edge, to the producer, and the other two none.
