@@ -261,7 +261,22 @@ namespace vkm
                 return;
             }
 
-            engine->getInputHandler().onCursorMove(x, y);
+            // GLFW reports the cursor in window coordinates, but everything downstream of the
+            // input handler works in framebuffer pixels (see framebufferSizeCallback), and the
+            // two differ on a HiDPI display. Scale by the per-axis framebuffer/window ratio
+            // rather than glfwGetWindowContentScale: on Windows that content scale is a UI
+            // scaling hint while window coordinates are already pixels, so only the ratio is
+            // right on every platform.
+            int windowWidth = 0;
+            int windowHeight = 0;
+            int framebufferWidth = 0;
+            int framebufferHeight = 0;
+            glfwGetWindowSize(window, &windowWidth, &windowHeight);
+            glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
+            const double scaleX = (windowWidth > 0) ? static_cast<double>(framebufferWidth) / windowWidth : 1.0;
+            const double scaleY = (windowHeight > 0) ? static_cast<double>(framebufferHeight) / windowHeight : 1.0;
+
+            engine->getInputHandler().onCursorMove(x * scaleX, y * scaleY);
         }
 
         void scrollCallback(GLFWwindow* window, double offsetX, double offsetY)

@@ -3038,3 +3038,46 @@ Nothing in it is ours: no validation error, no unfreed allocation, and every fil
 those tests passes. So the CI job runs the suite twice, reports the first as a warm-up and judges
 the second. The judged run executes every test, so a real regression still fails it; what the
 warm-up hides is precisely a failure that needs a cold shader cache, which is the driver defect.
+
+## The ImGui cursor was off by exactly the backing scale on macOS/Metal
+
+Clicking a widget in the GI sample's ImGui panel required putting the pointer roughly twice as far
+from the top-left as the widget was drawn. Nothing about GI: `VkmImGuiRendererMetal::newFrameInner`
+set `io.DisplaySize` from `metalLayer.drawableSize`, which the platform layer fills from
+`convertSizeToBacking:` and is therefore in pixels, while `io.AddMousePosEvent` was fed
+`mouseLocationOutsideOfEventStream` and `contentLayoutRect`, which are in points. On a 2x display
+ImGui hit-tested a cursor at half its real position. Vulkan and WebGPU were never affected --
+`imgui_impl_glfw` derives both numbers itself and keeps them in the same space.
+
+The fix converts the cursor rather than the display size: flip Y in points, then
+`convertPointToBacking:`, the point counterpart of the `convertSizeToBacking:` that produced the
+drawable. Rendering is untouched, so ImGui keeps laying out at one unit per pixel and its UI stays
+physically small on a Retina display. That is a separate problem and `TODO.md` now says so.
+
+### The same split existed one layer down, and only deltas hid it
+
+`VkmEngine::onWindowResized` publishes pixels on every platform, but both cursor paths --
+`forwardCursorMoveEvent:` on AppKit and `cursorPosCallback` on GLFW -- fed `onCursorMove` points.
+No sample showed it, because every consumer of that position uses only the delta between two
+events. `getCursorX/Y` is documented as an absolute position, though, and in points it indexes into
+nothing that exists. Both paths now convert, and the header says which space the result is in.
+
+GLFW gets the framebuffer/window ratio rather than `glfwGetWindowContentScale`: on Windows that
+content scale is a UI-scaling hint while window coordinates are already pixels, so only the ratio
+is right everywhere.
+
+### Pixels made rotation density-dependent, so rotation stopped counting pixels
+
+Unifying on pixels doubles every cursor delta on a Retina display, which would have doubled the
+orbit and fly controllers' rotation speed. `setRotateSensitivity`/`setLookSensitivity` were
+documented as radians per pixel, and that unit is the actual problem -- it ties the feel to the
+display's density and to the window's size. Both now divide the delta by the camera's viewport
+height and are documented as radians per full viewport height, defaulting to `3.6f`: the old
+`0.005` rad/pixel measured across the 720-pixel-high default window, so the feel at that size is
+unchanged. The skybox sample, the one sample that polls the deltas itself, uses the same constant.
+
+The engine only calls `setViewportSize` during `render()`, and input is drained before that, so the
+first frame's moves arrive with the height still zero. They re-establish the tracked cursor position
+and rotate nothing, which is the same shape as the existing stale-position guards. `TestCamera.cpp`
+pins both halves: the same pixel drag on a 1440-high viewport turns exactly half as far as on a
+720-high one, and a press-and-drag before any `setViewportSize` leaves yaw and pitch alone.

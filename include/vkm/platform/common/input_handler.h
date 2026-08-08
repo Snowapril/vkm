@@ -35,8 +35,8 @@ namespace vkm
         VkmMouseButton _button {VkmMouseButton::Left};
         VkmKeyAction _action {VkmKeyAction::Press};
         uint32_t _modifiers {0};
-        double _x {0.0}; // CursorMove: absolute position. Scroll: offset. WindowResize: new width.
-        double _y {0.0}; //                                               WindowResize: new height.
+        double _x {0.0}; // CursorMove: absolute position in pixels. Scroll: offset. WindowResize: new width.
+        double _y {0.0}; //                                                          WindowResize: new height.
         bool _isRepeat {false};
         // WindowFocus: which window gained or lost focus, and which way.
         // WindowResize: which window changed size (_focused is unused).
@@ -64,6 +64,8 @@ namespace vkm
 
         void onKeyEvent(VkmKeyCode key, VkmKeyAction action, uint32_t modifiers = 0, bool isRepeat = false);
         void onMouseButtonEvent(VkmMouseButton button, VkmKeyAction action, uint32_t modifiers = 0);
+        // x/y are in framebuffer pixels with a top-left origin; platform layers reporting
+        // points (AppKit, GLFW on HiDPI) must convert before calling this.
         void onCursorMove(double x, double y);
         void onScroll(double offsetX, double offsetY);
 
@@ -107,6 +109,9 @@ namespace vkm
         inline uint32_t getModifiers() const { return _modifiers; }
         inline bool hasModifier(VkmInputModifier modifier) const { return (_modifiers & static_cast<uint32_t>(modifier)) != 0; }
 
+        // Cursor positions and deltas are in framebuffer pixels with a top-left origin -- the
+        // same space as the window size published by onWindowResized() and as the swapchain
+        // extent, not the platform's point coordinates.
         inline double getCursorX() const { return _cursorX; }
         inline double getCursorY() const { return _cursorY; }
         inline double getCursorDeltaX() const { return _cursorDeltaX; }

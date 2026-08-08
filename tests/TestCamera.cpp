@@ -150,6 +150,9 @@ TEST_CASE("Orbit controller only rotates while the left button is held")
     vkm::VkmOrbitCameraController controller(&camera);
     controller.registerTo(input);
     controller.frame(glm::vec3(0.0f), 1.0f);
+    // Rotation is measured as a fraction of the viewport, so the controller stays put until
+    // the engine has published a viewport size.
+    camera.setViewportSize(1280, 720);
 
     const float yawBefore = controller.getYaw();
 
@@ -174,12 +177,67 @@ TEST_CASE("Orbit controller only rotates while the left button is held")
     CHECK(controller.getYaw() == doctest::Approx(yawWhileDragging));
 }
 
+namespace
+{
+    // Presses, drags `deltaPixels` horizontally, and reports how far the yaw moved.
+    float yawFromHorizontalDrag(uint32_t viewportHeight, double deltaPixels)
+    {
+        vkm::VkmCamera camera;
+        vkm::VkmInputHandler input;
+        vkm::VkmOrbitCameraController controller(&camera);
+        controller.registerTo(input);
+        camera.setViewportSize(1280, viewportHeight);
+
+        const float yawBefore = controller.getYaw();
+        input.onMouseButtonEvent(vkm::VkmMouseButton::Left, vkm::VkmKeyAction::Press);
+        input.onCursorMove(0.0, 0.0);          // re-establishes the tracked position
+        input.onCursorMove(deltaPixels, 0.0);  // the drag proper
+        pumpFrame(input);
+        return controller.getYaw() - yawBefore;
+    }
+}
+
+TEST_CASE("Orbit controller rotates by a fraction of the viewport, not by pixels")
+{
+    // Cursor deltas arrive in framebuffer pixels, so a Retina display doubles them for the
+    // same physical hand movement. Sensitivity is radians per full viewport height precisely
+    // so that doubling the pixel density does not double the rotation.
+    const float yawOnHalfHeight = yawFromHorizontalDrag(720, 100.0);
+    const float yawOnFullHeight = yawFromHorizontalDrag(1440, 100.0);
+    CHECK(yawOnHalfHeight == doctest::Approx(yawOnFullHeight * 2.0f));
+
+    // The same drag expressed as the same fraction of the viewport rotates identically.
+    CHECK(yawFromHorizontalDrag(1440, 200.0) == doctest::Approx(yawOnHalfHeight));
+}
+
+TEST_CASE("Orbit controller does not rotate before the viewport size is known")
+{
+    // The engine publishes the viewport during render(), but input is drained before that, so
+    // the very first frame's moves arrive with the height still zero.
+    vkm::VkmCamera camera;
+    vkm::VkmInputHandler input;
+    vkm::VkmOrbitCameraController controller(&camera);
+    controller.registerTo(input);
+
+    const float yawBefore = controller.getYaw();
+    const float pitchBefore = controller.getPitch();
+
+    input.onMouseButtonEvent(vkm::VkmMouseButton::Left, vkm::VkmKeyAction::Press);
+    input.onCursorMove(0.0, 0.0);
+    input.onCursorMove(200.0, 200.0);
+    pumpFrame(input);
+
+    CHECK(controller.getYaw() == doctest::Approx(yawBefore));
+    CHECK(controller.getPitch() == doctest::Approx(pitchBefore));
+}
+
 TEST_CASE("Orbit controller clamps pitch short of the poles")
 {
     vkm::VkmCamera camera;
     vkm::VkmInputHandler input;
     vkm::VkmOrbitCameraController controller(&camera);
     controller.registerTo(input);
+    camera.setViewportSize(1280, 720);
 
     input.onMouseButtonEvent(vkm::VkmMouseButton::Left, vkm::VkmKeyAction::Press);
     input.onCursorMove(0.0, 0.0);
@@ -340,6 +398,9 @@ TEST_CASE("Fly controller looks on left-drag only, and clamps pitch short of the
     vkm::VkmFlyCameraController controller(&camera);
     controller.registerTo(input);
     controller.setPosition(glm::vec3(1.0f, 2.0f, 3.0f));
+    // Looking is measured as a fraction of the viewport, so nothing turns until the engine has
+    // published a viewport size.
+    camera.setViewportSize(1280, 720);
 
     const float yawBefore = controller.getYaw();
     input.onCursorMove(100.0, 100.0);

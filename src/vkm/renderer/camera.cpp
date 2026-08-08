@@ -148,12 +148,20 @@ namespace vkm
                 _lastCursorX = event._x;
                 _lastCursorY = event._y;
                 _hasLastCursor = true;
-                if (!rotate)
+                // Cursor deltas are in pixels, so they scale with the display's density and
+                // the window's size; dividing by the viewport height turns them into a
+                // fraction of the screen and keeps the feel identical everywhere. The height
+                // is zero until the engine publishes it during the first render(), and input
+                // is drained before that -- rotating against an unknown viewport would be a
+                // divide by zero, so that first move only re-establishes the position.
+                const uint32_t viewportHeight = _camera->getViewportHeight();
+                if (!rotate || viewportHeight == 0)
                 {
                     return;
                 }
-                _yaw += static_cast<float>(deltaX) * _rotateSensitivity;
-                _pitch += static_cast<float>(deltaY) * _rotateSensitivity;
+                const float rotateScale = _rotateSensitivity / static_cast<float>(viewportHeight);
+                _yaw += static_cast<float>(deltaX) * rotateScale;
+                _pitch += static_cast<float>(deltaY) * rotateScale;
                 // Just short of the poles, where the up vector would degenerate.
                 _pitch = std::clamp(_pitch, -1.5f, 1.5f);
                 break;
@@ -327,12 +335,16 @@ namespace vkm
                 _lastCursorX = event._x;
                 _lastCursorY = event._y;
                 _hasLastCursor = true;
-                if (!look)
+                // Viewport-relative for the same reason as the orbit controller, including the
+                // zero-height guard for input drained before the first render().
+                const uint32_t viewportHeight = _camera->getViewportHeight();
+                if (!look || viewportHeight == 0)
                 {
                     return;
                 }
-                _yaw += static_cast<float>(deltaX) * _lookSensitivity;
-                _pitch = std::clamp(_pitch + static_cast<float>(deltaY) * _lookSensitivity,
+                const float lookScale = _lookSensitivity / static_cast<float>(viewportHeight);
+                _yaw += static_cast<float>(deltaX) * lookScale;
+                _pitch = std::clamp(_pitch + static_cast<float>(deltaY) * lookScale,
                                     -kMaxPitch, kMaxPitch);
                 break;
             }
