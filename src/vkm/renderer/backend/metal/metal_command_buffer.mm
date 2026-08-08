@@ -723,16 +723,6 @@ namespace vkm
         _pendingAcquireBeforeStages |= beforeStages;
     }
 
-    void VkmCommandBufferMetal::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)
-    {
-        (void)buffer;
-        // Metal 4 barriers are encoder-scoped rather than per-resource. A compute pass already
-        // brackets itself (onBindPipeline waits for prior queue stages, onUnbindPipeline publishes
-        // to later ones) and onCopyBuffer does the same, so every ordering this call exists to
-        // establish is already covered. Opening an encoder just to emit a barrier is exactly what
-        // caused the MTL4CommandQueueErrorTimeout documented in common/AGENTS.md.
-    }
-
     void VkmCommandBufferMetal::onBarrierTextureForShaderRead(VkmResourceHandle texture)
     {
         (void)texture;
@@ -742,7 +732,7 @@ namespace vkm
         // barrierAfterQueueStages:MTLStageAll (onBindPipeline) and closes with
         // barrierAfterStages:...beforeQueueStages:MTLStageAll (onUnbindPipeline), so a render
         // pass's writes are visible to a later pass's reads and vice versa. As with
-        // onBarrierIndirectArgumentBuffer, opening an encoder purely to emit a barrier stalls the
+        // Opening an encoder purely to emit a barrier stalls the
         // command queue, so this records nothing rather than forcing one.
     }
 

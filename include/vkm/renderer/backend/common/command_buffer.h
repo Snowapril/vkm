@@ -97,8 +97,9 @@ namespace vkm
         * `maxDrawCount` indirect draws and rely on all-zero records being no-ops. The producing
         * pass must therefore ALWAYS compact surviving draws to the front of the range and leave the
         * rest zeroed, or the backends disagree about what gets drawn.
-        * Callers must have recorded barrierIndirectArgumentBuffer() for `argumentBuffer` after the
-        * writing dispatch and before beginRenderPass().
+        * The subgraph producing `argumentBuffer` must declare it as a shader write and the one
+        * drawing from it as VkmResourceAccess::IndirectArgument, so the render graph orders the
+        * write against the fetch.
         * @param layout Record structure. The stride comes from it via vkmGetIndirectArgumentStride.
         * Only VkmIndirectArgumentLayout::NonIndexed is accepted -- an indexed draw needs a bound
         * index buffer, and this engine has none.
@@ -126,51 +127,30 @@ namespace vkm
         void dispatch(uint32_t groupCountX, uint32_t groupCountY = 1, uint32_t groupCountZ = 1);
 
         /*
-        * @brief Orders GPU-driven bookkeeping buffers.
-        * @details Transfer and compute writes recorded before this call become visible to compute
-        * reads and indirect-argument fetches recorded after it. Must be recorded outside a render
-        * pass.
-        * @param buffer Buffer whose writes become visible.
-        */
-        /*
-        * @brief Orders the dependencies in `barriers` as one batched barrier: everything each
-        * entry's source access did becomes visible to what its destination access is about to do.
-        * Must be recorded while recording and outside a render pass.
-        *
-        * @details Batched rather than one call per resource because that is what the underlying
-        * APIs want -- Vulkan takes arrays and issuing one vkCmdPipelineBarrier2 per texture at a
-        * subgraph boundary is pure waste -- and because a whole boundary's worth of dependencies
-        * is one decision, not N.
-        *
-        * "Outside a render pass" is not "outside an encoder": a compute encoder may well be open,
-        * which is the case VkmScene::recordCull uses this for. Backends that have an encoder-scoped
-        * barrier (Metal) put it on that encoder rather than opening one.
-        *
-        * A pointer and a count rather than a span, matching the rest of this header -- nothing in
-        * the engine uses std::span and this header is included nearly everywhere.
+        * @brief Orders a batch of resource dependencies as one barrier.
+        * @details Everything each entry's source access did becomes visible to what its destination
+        * access is about to do. Batched because that is what the underlying APIs take, and because
+        * a whole subgraph boundary's worth of dependencies is one decision rather than N. Must be
+        * recorded while recording and outside a render pass; that is not the same as outside an
+        * encoder, and a backend with an encoder-scoped barrier puts it on whichever encoder is
+        * already open rather than opening one.
+        * @param barriers Dependencies to order.
+        * @param count Number of entries in `barriers`.
         */
         void resourceBarrier(const VkmResourceBarrier* barriers, uint32_t count);
         void resourceBarrier(const std::vector<VkmResourceBarrier>& barriers);
 
         /*
-        * @brief The two halves of a subgraph's dependencies, both recorded immediately *before*
-        * that subgraph commits: what has to be made visible to it, and what it will publish.
-        *
-        * @details Both before, not one on each side, because Metal's release half has to be
-        * recorded inside the producing encoder and that encoder is already closed by the time
-        * commit() returns. Declaring both up front lets each backend place them where its own API
-        * needs them without the render graph knowing how.
-        *
-        * Vulkan folds the release into the acquire that consumes it -- one queue, one command
-        * buffer per frame, so a split buys nothing that a plain barrier does not already give --
-        * and WebGPU orders passes implicitly. Metal is the backend the pair exists for: its
-        * encoder-boundary barriers are a genuine split, and these are what narrow them from
-        * MTLStageAll to the stages a dependency actually names.
+        * @brief The two halves of a subgraph's dependencies: what must be made visible to it, and
+        * what it will publish.
+        * @details Both are recorded immediately before that subgraph commits, because a backend
+        * whose release must sit inside the producing encoder has no way back into it once the
+        * subgraph has run. Each backend places them where its own API needs them.
+        * @param barriers Dependencies to order.
+        * @param count Number of entries in `barriers`.
         */
         void barrierAcquire(const VkmResourceBarrier* barriers, uint32_t count);
         void barrierRelease(const VkmResourceBarrier* barriers, uint32_t count);
-
-        void barrierIndirectArgumentBuffer(VkmResourceHandle buffer);
 
         /*
         * @brief Makes earlier writes to a texture visible to shaders that sample it, and leaves it
@@ -354,7 +334,6 @@ namespace vkm
             (void)barriers;
             (void)count;
         }
-        virtual void onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer) = 0;
         virtual void onBuildAccelerationStructure(VkmResourceHandle accelerationStructure) = 0;
         virtual void onBarrierTextureForShaderRead(VkmResourceHandle texture) = 0;
         virtual void onBindResourceTable(VkmResourceTableBase* table) = 0;

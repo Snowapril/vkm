@@ -42,7 +42,6 @@ namespace vkm
                                          uint32_t maxDrawCount) override final;
         virtual void onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) override final;
         virtual void onResourceBarrier(const VkmResourceBarrier* barriers, uint32_t count) override final;
-        virtual void onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer) override final;
         virtual void onBuildAccelerationStructure(VkmResourceHandle accelerationStructure) override final;
         virtual void onBarrierTextureForShaderRead(VkmResourceHandle texture) override final;
         virtual void onBindResourceTable(VkmResourceTableBase* table) override final;

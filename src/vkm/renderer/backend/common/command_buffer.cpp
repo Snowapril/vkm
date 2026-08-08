@@ -272,16 +272,6 @@ namespace vkm
         onBarrierRelease(barriers, count);
     }
 
-    void VkmCommandBufferBase::barrierIndirectArgumentBuffer(VkmResourceHandle buffer)
-    {
-        if (!_isRecording || _isInRenderPass)
-        {
-            VKM_DEBUG_ERROR("barrierIndirectArgumentBuffer must be recorded while recording and outside a render pass");
-            return;
-        }
-        onBarrierIndirectArgumentBuffer(buffer);
-    }
-
     void VkmCommandBufferBase::buildAccelerationStructure(VkmResourceHandle accelerationStructure)
     {
         if (!_isRecording || _isInRenderPass)

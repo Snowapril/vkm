@@ -3620,3 +3620,16 @@ GI frame, and it put a self-edge on those nodes in the inspector's Graph tab.
 Fixed by returning from the emit lambda when the producer is the consumer, before anything is
 pushed. Under `validate` the case is reported when the two declarations also disagree about image
 layout, since no barrier can satisfy that and the guard would otherwise hide it.
+
+### Step 7a — `barrierIndirectArgumentBuffer` deleted
+
+Nothing called it any more: its three call sites in `VkmScene::recordCull` became typed
+`resourceBarrier` calls when the batched entry point landed. Removed the declaration, the base
+implementation, the pure virtual and all three backend overrides, plus the stale sentence in
+`drawIndirectCount`'s doc comment and the two backend contract paragraphs in `common/AGENTS.md`.
+
+The one buffer barrier the Vulkan backend still built with the pre-synchronization2
+`vkCmdPipelineBarrier` + `VkBufferMemoryBarrier` went with it; every barrier the backend records is
+now a `vkCmdPipelineBarrier2`.
+
+Metal 241/241, Vulkan 238/238, same four pre-existing VUIDs.

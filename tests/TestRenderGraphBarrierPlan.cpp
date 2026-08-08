@@ -104,7 +104,8 @@ struct GraphBuilder
 /*
 * The archetypal case the whole change exists for: a compute pass writes the indirect argument
 * buffer and the next pass fetches draws out of it. Before this analysis, the only thing ordering
-* those two was a hand-placed barrierIndirectArgumentBuffer() call inside VkmScene::recordCull.
+* those two is this dependency, declared by the cull subgraph as a shader write and by the draw
+* subgraph as an indirect-argument fetch.
 */
 TEST_CASE("VkmRenderGraphBarrierPlan - a write then a read produces one acquire on the reader") {
     const VkmResourceHandle argumentBuffer = makeHandle(1, VkmResourceType::Buffer);

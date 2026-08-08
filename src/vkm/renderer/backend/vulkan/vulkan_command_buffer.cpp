@@ -681,37 +681,6 @@ namespace vkm
         vkCmdPipelineBarrier2(_vkCommandBuffer, &dependencyInfo);
     }
 
-    void VkmCommandBufferVulkan::onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer)
-    {
-        VkmBufferVulkan* bufferVulkan =
-            static_cast<VkmBufferVulkan*>(_driver->getRenderResourcePool()->getResource<VkmBuffer>(buffer));
-        if (bufferVulkan == nullptr)
-        {
-            VKM_DEBUG_ERROR("barrierIndirectArgumentBuffer was given a handle that is not a live buffer");
-            return;
-        }
-
-        // Deliberately one coarse barrier used at both sites the scene needs (the clear copy before
-        // the culling dispatch, and that dispatch before the indirect fetch) rather than two
-        // narrower variants: this is the engine's only buffer barrier, and a per-frame handful of
-        // them is not worth splitting until something measures it.
-        const VkBufferMemoryBarrier barrier{
-            .sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-            .srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-            .dstAccessMask       = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
-                                   VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .buffer              = bufferVulkan->getBuffer(),
-            .offset              = bufferVulkan->getBufferOffset(),
-            .size                = bufferVulkan->getBufferInfo()._size,
-        };
-        vkCmdPipelineBarrier(_vkCommandBuffer,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
-                             0, 0, nullptr, 1, &barrier, 0, nullptr);
-    }
-
     void VkmCommandBufferVulkan::onBarrierTextureForShaderRead(VkmResourceHandle texture)
     {
         VkmTextureVulkan* textureVulkan =
