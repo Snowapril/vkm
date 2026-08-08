@@ -89,7 +89,6 @@ namespace vkm
         virtual void onResourceBarrier(const VkmResourceBarrier* barriers, uint32_t count) override final;
         virtual void onBarrierAcquire(const VkmResourceBarrier* barriers, uint32_t count) override final;
         virtual void onBuildAccelerationStructure(VkmResourceHandle accelerationStructure) override final;
-        virtual void onBarrierTextureForShaderRead(VkmResourceHandle texture) override final;
         virtual void onBindResourceTable(VkmResourceTableBase* table) override final;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) override final;
         virtual void onSetDebugName(const char* name) override final;

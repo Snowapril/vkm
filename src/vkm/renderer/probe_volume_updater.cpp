@@ -511,12 +511,6 @@ namespace vkm
             }
         });
 
-        VkmRenderComputeSubGraph* barrierSubGraph = renderGraph->beginComputeSubGraph("ProbeCaptureToShaderRead");
-        barrierSubGraph->addReferencedResource(_captureColor, VkmResourceAccess::ShaderSampledRead);
-        barrierSubGraph->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
-            commandBuffer->barrierTextureForShaderRead(_captureColor);
-        });
-
         // Two passes, not two attachments: the atlases have different extents, so a probe's cell is
         // at a different place in each.
         const auto recordBlend = [&](const char* name, VkmResourceHandle atlas, const glm::uvec2& atlasExtent,

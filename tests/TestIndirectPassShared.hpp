@@ -232,20 +232,6 @@ namespace vkmtest
                 });
             });
 
-            // Everything the estimators sample has to leave its attachment layout first. Without
-            // this the G-buffer is read while still in COLOR_ATTACHMENT_OPTIMAL, which Metal does
-            // not care about and Vulkan reports as VUID-vkCmdDraw-None-09600 -- and the reads come
-            // back as nothing, so the coverage REQUIRE below is what actually fails. Same shape as
-            // the gi sample's GiGBufferToShaderRead subgraph.
-            auto* barrierSubGraph = renderGraph.beginComputeSubGraph("CornellGBufferToShaderRead");
-            barrierSubGraph->setComputeCallback([&gbuffer](vkm::VkmCommandBufferBase* commandBuffer) {
-                for (uint32_t i = 0; i < vkm::VkmGBuffer::kTargetCount; ++i)
-                {
-                    commandBuffer->barrierTextureForShaderRead(
-                        gbuffer.getTexture(static_cast<vkm::VkmGBuffer::Target>(i)));
-                }
-            });
-
             renderGraph.compile();
             renderGraph.execute();
             renderGraph.ensureCompleted();
@@ -262,6 +248,13 @@ namespace vkmtest
             subGraph->addReferencedResources(referenced);
             subGraph->addReferencedResource(scene.getTopLevelAccelerationStructure(),
                                            vkm::VkmResourceAccess::AccelerationStructureShaderRead);
+            // The G-buffer pass in the graph above left these as attachments; the estimators sample
+            // them through set 0, which the render graph only knows about because of this.
+            for (uint32_t i = 0; i < vkm::VkmGBuffer::kTargetCount; ++i)
+            {
+                subGraph->addReferencedResource(gbuffer.getTexture(static_cast<vkm::VkmGBuffer::Target>(i)),
+                                                vkm::VkmResourceAccess::ShaderSampledRead);
+            }
             for (vkm::VkmResourceHandle accumulation : { reference.getAccumulationBuffer(),
                                                          indirect.getAccumulationBuffer(),
                                                          restir.getAccumulationBuffer(),

@@ -42,7 +42,7 @@ namespace vkm
     * The volume is referenced, not owned: it is also the read path's input and outlives any
     * particular updater.
     * This composites nothing. Whoever samples the atlases afterwards needs its own
-    * barrierTextureForShaderRead on them, this class not knowing when that read happens.
+    * ShaderSampledRead declaration on them, this class not knowing when that read happens.
     */
     class VkmProbeVolumeUpdater
     {

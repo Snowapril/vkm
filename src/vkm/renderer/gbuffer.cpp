@@ -198,8 +198,8 @@ namespace vkm
                 std::string("VkmGBuffer") + targetDebugName(target) + std::to_string(setIndex);
 
             VkmTextureInfo info{};
-            // Written as an attachment, then sampled by the lighting/GI passes -- which is what
-            // barrierTextureForShaderRead() exists to hand off. TransferSrc as well, so a channel
+            // Written as an attachment, then sampled by the lighting/GI passes. TransferSrc as
+            // well, so a channel
             // can be read back: the debug views this buffer exists to be inspected through, and
             // the render graph's capture snapshots, both copy out of it.
             info._flags = static_cast<VkmResourceCreateInfo>(

@@ -681,35 +681,6 @@ namespace vkm
         vkCmdPipelineBarrier2(_vkCommandBuffer, &dependencyInfo);
     }
 
-    void VkmCommandBufferVulkan::onBarrierTextureForShaderRead(VkmResourceHandle texture)
-    {
-        VkmTextureVulkan* textureVulkan =
-            static_cast<VkmTextureVulkan*>(_driver->getRenderResourcePool()->getResource<VkmTexture>(texture));
-        if (textureVulkan == nullptr)
-        {
-            VKM_DEBUG_ERROR("barrierTextureForShaderRead was given a handle that is not a live texture");
-            return;
-        }
-
-        // SHADER_READ_ONLY_OPTIMAL is the layout the bindless texture descriptors declare
-        // (VkmBindlessResourceManagerVulkan writes imageLayout = SHADER_READ_ONLY_OPTIMAL), so a
-        // texture sampled through set 0 has to actually be in it. Uploaded textures already end up
-        // here via copyBufferToTexture; a render target does not, which is the gap this closes.
-
-        // A sampled depth texture (a shadow map, or the G-buffer depth a GI pass reads) needs the
-        // depth/stencil aspects rather than the colour one.
-        const VkmFormat format = textureVulkan->getTextureInfo()._format;
-        const VkImageAspectFlags aspectMask =
-            (hasDepth(format) || hasStencil(format))
-                ? ((hasDepth(format) ? VK_IMAGE_ASPECT_DEPTH_BIT : 0u) |
-                   (hasStencil(format) ? VK_IMAGE_ASPECT_STENCIL_BIT : 0u))
-                : VK_IMAGE_ASPECT_COLOR_BIT;
-        // Records nothing when every subresource is already there, which is the case for a texture
-        // that arrived through copyBufferToTexture.
-        transitionWholeTexture(_vkCommandBuffer, textureVulkan, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                               aspectMask);
-    }
-
     void VkmCommandBufferVulkan::onBindResourceTable(VkmResourceTableBase* table)
     {
         VkmResourceTableVulkan* tableVulkan = static_cast<VkmResourceTableVulkan*>(table);

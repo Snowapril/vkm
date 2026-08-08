@@ -327,13 +327,6 @@ namespace vkm
         (void)count;
     }
 
-    void VkmCommandBufferWebGPU::onBarrierTextureForShaderRead(VkmResourceHandle texture)
-    {
-        (void)texture;
-        // WebGPU has no explicit barriers and no
-        // image layouts, and one pass's writes are visible to the next by specification.
-    }
-
     void VkmCommandBufferWebGPU::onBindResourceTable(VkmResourceTableBase* table)
     {
         // Group 2 carries no dynamic offset, unlike group 0's push-constant ring, so this is a

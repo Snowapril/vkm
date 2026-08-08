@@ -221,9 +221,8 @@ namespace vkm
         * compute pass and a render pass. Without this, a pass that samples what an earlier pass
         * rendered reads it while it is still being written.
         * The compute path brackets itself the same way (see onBindPipeline / onUnbindPipeline).
-        * barrierTextureForShaderRead() cannot do it instead -- it records nothing here, opening an
-        * encoder per barrier being what stalls the command queue -- so the barrier rides an
-        * encoder that exists anyway. One pair per pass, not one per barrier call.
+        * The barrier rides an encoder that exists anyway: opening one per barrier stalls the
+        * command queue. One pair per pass, not one per barrier call.
         */
         [_mtlRenderCommandEncoder barrierAfterQueueStages:static_cast<MTLStages>(acquireAfterQueueStages) ?: MTLStageAll
                                              beforeStages:static_cast<MTLStages>(acquireBeforeStages) ?: (MTLStageVertex | MTLStageFragment)
@@ -721,19 +720,6 @@ namespace vkm
 
         _pendingAcquireAfterQueueStages |= afterStages;
         _pendingAcquireBeforeStages |= beforeStages;
-    }
-
-    void VkmCommandBufferMetal::onBarrierTextureForShaderRead(VkmResourceHandle texture)
-    {
-        (void)texture;
-        // Metal has no image layouts to transition, and Metal 4's barriers are encoder-scoped
-        // rather than per-resource, so there is nothing to record for one texture. The ordering
-        // this call establishes is already covered: a compute pass opens with
-        // barrierAfterQueueStages:MTLStageAll (onBindPipeline) and closes with
-        // barrierAfterStages:...beforeQueueStages:MTLStageAll (onUnbindPipeline), so a render
-        // pass's writes are visible to a later pass's reads and vice versa. As with
-        // Opening an encoder purely to emit a barrier stalls the
-        // command queue, so this records nothing rather than forcing one.
     }
 
     void VkmCommandBufferMetal::onBindResourceTable(VkmResourceTableBase* table)

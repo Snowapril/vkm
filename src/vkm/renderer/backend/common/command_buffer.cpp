@@ -334,16 +334,6 @@ namespace vkm
         }
     }
 
-    void VkmCommandBufferBase::barrierTextureForShaderRead(VkmResourceHandle texture)
-    {
-        if (!_isRecording || _isInRenderPass)
-        {
-            VKM_DEBUG_ERROR("barrierTextureForShaderRead must be recorded while recording and outside a render pass");
-            return;
-        }
-        onBarrierTextureForShaderRead(texture);
-    }
-
     void VkmCommandBufferBase::bindResourceTable(VkmResourceTableBase* table)
     {
         if (!_isRecording || _boundPipelineState == nullptr)

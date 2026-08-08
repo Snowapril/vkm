@@ -153,22 +153,6 @@ namespace vkm
         void barrierRelease(const VkmResourceBarrier* barriers, uint32_t count);
 
         /*
-        * @brief Makes earlier writes to a texture visible to shaders that sample it, and leaves it
-        * in whatever state that sampling needs.
-        * @details The hand-off for a texture written as a render-pass attachment and then sampled
-        * by a later pass -- the G-buffer to lighting-pass dependency in particular. Every other
-        * texture operation manages its own destination state, which works because each both writes
-        * and finishes the texture; a render pass instead leaves an attachment state behind.
-        * Takes no source state, because Vulkan already tracks the texture's current layout and the
-        * other two backends need no layout at all. Must be recorded outside a render pass, so it
-        * sits between the pass that wrote the texture and the pass that reads it.
-        * Only Vulkan does real work here: Metal 4 brackets each compute pass with
-        * barrierAfterQueueStages:/barrierAfterStages:, and WebGPU orders passes implicitly.
-        * @param texture Texture whose writes become visible.
-        */
-        void barrierTextureForShaderRead(VkmResourceHandle texture);
-
-        /*
         * @brief Rebuilds an acceleration structure in place, from the descriptions it was created
         * with and whatever updateInstances last wrote.
         * @details The entry point dynamic objects need. A structure created without `_allowUpdate`
@@ -335,7 +319,6 @@ namespace vkm
             (void)count;
         }
         virtual void onBuildAccelerationStructure(VkmResourceHandle accelerationStructure) = 0;
-        virtual void onBarrierTextureForShaderRead(VkmResourceHandle texture) = 0;
         virtual void onBindResourceTable(VkmResourceTableBase* table) = 0;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) = 0;
         virtual void onSetDebugName(const char* name) = 0;

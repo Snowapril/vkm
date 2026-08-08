@@ -305,14 +305,12 @@ namespace vkmtest
             REQUIRE_MESSAGE(table != nullptr, tableError);
 
             vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
-            auto* barrierSubGraph = renderGraph.beginComputeSubGraph("ProbeInputsToShaderRead");
-            barrierSubGraph->setComputeCallback([&](vkm::VkmCommandBufferBase* commandBuffer) {
-                commandBuffer->barrierTextureForShaderRead(normalTexture->getHandle());
-                commandBuffer->barrierTextureForShaderRead(motionTexture->getHandle());
-                commandBuffer->barrierTextureForShaderRead(volume.getIrradianceTexture());
-                commandBuffer->barrierTextureForShaderRead(volume.getDistanceTexture());
-            });
             auto* subGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
+            for (vkm::VkmResourceHandle sampled : { normalTexture->getHandle(), motionTexture->getHandle(),
+                                                    volume.getIrradianceTexture(), volume.getDistanceTexture() })
+            {
+                subGraph->addReferencedResource(sampled, vkm::VkmResourceAccess::ShaderSampledRead);
+            }
             subGraph->setRenderCallback([pso, table](vkm::VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->bindPipeline(pso);
                 commandBuffer->bindResourceTable(table);
@@ -682,11 +680,9 @@ namespace vkmtest
         fbDesc._colorAttachments[0] = atlasTexture->getHandle();
 
         vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
-        auto* barrierSubGraph = renderGraph.beginComputeSubGraph("ProbeBlendInputs");
-        barrierSubGraph->setComputeCallback([&](vkm::VkmCommandBufferBase* commandBuffer) {
-            commandBuffer->barrierTextureForShaderRead(captureTexture->getHandle());
-        });
         auto* blendSubGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
+        blendSubGraph->addReferencedResource(captureTexture->getHandle(),
+                                             vkm::VkmResourceAccess::ShaderSampledRead);
         blendSubGraph->setRenderCallback([pso, table](vkm::VkmCommandBufferBase* commandBuffer) {
             commandBuffer->bindPipeline(pso);
             commandBuffer->bindResourceTable(table);

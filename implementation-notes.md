@@ -3633,3 +3633,34 @@ The one buffer barrier the Vulkan backend still built with the pre-synchronizati
 now a `vkCmdPipelineBarrier2`.
 
 Metal 241/241, Vulkan 238/238, same four pre-existing VUIDs.
+
+### Step 7b — `barrierTextureForShaderRead` and the barrier-only subgraphs deleted
+
+The audit that had to come first: a resource table binds textures the render graph cannot see, so
+a pass sampling one without declaring it is a pass the analysis believes reads nothing. Every live
+`barrierTextureForShaderRead` call named exactly such a hand-off, so each was checked against the
+consuming subgraph's declarations. The GI sample and the probe updater were already covered; three
+test harnesses were not, and their consuming subgraphs declared nothing at all:
+
+- `TestGBufferRenderShared.hpp` — the lighting pass samples three G-buffer targets through its table.
+- `TestIndirectPassShared.hpp` — the estimators sample them through set 0, and across a *submit*
+  boundary rather than a subgraph one, so the graph places it as a first-touch transition.
+- `TestProbeVolumeShared.hpp` — two sites, the probe lighting inputs and the blend's capture atlas.
+
+With those declared, the nine barrier-only subgraphs and both entry points are gone, along with
+`onBarrierTextureForShaderRead` in all three backends. `TestTextureShaderReadBarrier.cpp` became
+`TestTextureLayoutTracking.cpp`, keeping the per-subresource cubemap case and dropping the three
+that exercised the removed API.
+
+The proof that the graph now carries these dependencies is a negative one and it is specific:
+`VUID-vkCmdDraw-None-09600` does not appear. That is the VUID `TestIndirectPassShared` documented
+as firing when the G-buffer is sampled while still in `COLOR_ATTACHMENT_OPTIMAL`, which is exactly
+what a missing declaration would now produce.
+
+Vulkan 235/235 (4800 assertions), Metal 241/241 (25086), same four pre-existing VUIDs. Probe GI
+propagation still 16 frames to 90%.
+
+Closed in TODO.md: the Metal `MTLStageAll` serialization entry, the "records nothing on Metal"
+trap, and the acceleration-structure entry (`AccelerationStructureBuildWrite` /
+`AccelerationStructureShaderRead` are declared accesses now). One entry added for the remaining
+Metal queue-scoped acquire.

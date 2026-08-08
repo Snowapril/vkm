@@ -368,28 +368,13 @@ public:
                 kCameraCullView);
         });
 
-        // 4. Everything the fullscreen passes sample has to leave its attachment layout first.
-        VkmRenderComputeSubGraph* barrierSubGraph = renderGraph->beginComputeSubGraph("GiGBufferToShaderRead");
-        barrierSubGraph->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
-            for (uint32_t i = 0; i < VkmGBuffer::kTargetCount; ++i)
-            {
-                commandBuffer->barrierTextureForShaderRead(_gbuffer.getTexture(static_cast<VkmGBuffer::Target>(i)));
-            }
-            commandBuffer->barrierTextureForShaderRead(_volume.getIrradianceTexture());
-            commandBuffer->barrierTextureForShaderRead(_volume.getDistanceTexture());
-        });
-
+        // 4. The fullscreen passes, each declaring what it samples so the graph hands the
+        // attachments over.
         recordFullscreen(renderGraph, "GiDirectLighting", _directTarget, _lightingPipeline, _tables._lighting,
                          { _gbuffer.getTexture(VkmGBuffer::Target::Normal),
                            _gbuffer.getTexture(VkmGBuffer::Target::BaseColorRoughness),
                            _gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) });
 
-        // Before the probe and contact passes, not after: SSGI samples the direct lighting as the
-        // radiance that bounces, so it has to be readable by the time that pass runs.
-        VkmRenderComputeSubGraph* directBarrier = renderGraph->beginComputeSubGraph("GiDirectToShaderRead");
-        directBarrier->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
-            commandBuffer->barrierTextureForShaderRead(_directTarget);
-        });
         recordFullscreen(renderGraph, "GiProbeLighting", _indirectTarget, _probeLightingPipeline,
                          _tables._probeLighting,
                          { _gbuffer.getTexture(VkmGBuffer::Target::Normal),
@@ -420,21 +405,11 @@ public:
             });
         }
 
-        VkmRenderComputeSubGraph* lightingBarrier = renderGraph->beginComputeSubGraph("GiIndirectToShaderRead");
-        lightingBarrier->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
-            commandBuffer->barrierTextureForShaderRead(_indirectTarget);
-        });
-
         recordFullscreen(renderGraph, "GiComposite", _compositeTarget, _compositePipeline, _tables._composite,
                          { _directTarget, _indirectTarget,
                            _gbuffer.getTexture(VkmGBuffer::Target::BaseColorRoughness),
                            _gbuffer.getTexture(VkmGBuffer::Target::Normal),
                            _gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) });
-
-        VkmRenderComputeSubGraph* compositeBarrier = renderGraph->beginComputeSubGraph("GiCompositeToShaderRead");
-        compositeBarrier->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
-            commandBuffer->barrierTextureForShaderRead(_compositeTarget);
-        });
 
         // 5. Tone map into the backbuffer.
         VkmRenderGraphicsSubGraph* tonemapSubGraph =
