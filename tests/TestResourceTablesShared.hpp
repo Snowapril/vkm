@@ -236,6 +236,64 @@ namespace vkmtest
         resourcePool->releaseResource(drawConstants->getHandle());
     }
 
+    /*
+    * A table is the one place a subgraph's resources are named without the render graph seeing
+    * them, so it has to be able to declare itself: a pass that binds a table and does not declare
+    * its contents is a pass the dependency analysis believes reads nothing.
+    */
+    inline void runResourceTableDeclarationTest(vkm::VkmDriverBase* driver)
+    {
+        vkm::VkmPipelineStateManager manager(driver);
+        vkm::VkmPipelineStateBase* pso = detail::loadPso(manager, "resource_tables_pso[default]");
+        REQUIRE(pso != nullptr);
+
+        vkm::VkmBufferInfo uniformInfo{};
+        uniformInfo._flags = vkm::VkmResourceCreateInfo::AllowShaderRead;
+        uniformInfo._size = 256;
+        uniformInfo._debugName = "TableDeclarationUniform";
+        vkm::VkmBuffer* uniform = driver->newBuffer(uniformInfo);
+        REQUIRE(uniform != nullptr);
+
+        vkm::VkmBufferInfo storageInfo{};
+        storageInfo._flags = vkm::VkmResourceCreateInfo::AllowShaderReadWrite;
+        storageInfo._size = 256;
+        storageInfo._debugName = "TableDeclarationStorage";
+        vkm::VkmBuffer* storage = driver->newBuffer(storageInfo);
+        REQUIRE(storage != nullptr);
+
+        // Deliberately out of declaration order: initialize() reorders entries to match the
+        // declaration, and the collected accesses have to follow the declaration rather than the
+        // order the caller happened to pass.
+        const std::vector<vkm::VkmTableResourceEntry> entries{
+            { 1, storage->getHandle() },
+            { 0, uniform->getHandle() },
+        };
+        std::string tableError;
+        vkm::VkmResourceTableBase* table =
+            driver->newResourceTable(pso, vkm::VkmResourceSetKind::PerPass, entries, &tableError);
+        REQUIRE_MESSAGE(table != nullptr, tableError);
+
+        std::vector<vkm::VkmResourceAccessDeclaration> declarations;
+        table->collectReferencedResources(&declarations);
+
+        REQUIRE(declarations.size() == 2);
+        CHECK(declarations[0]._handle == uniform->getHandle());
+        CHECK(declarations[0]._access == vkm::VkmResourceAccess::ConstantBufferRead);
+        CHECK(declarations[1]._handle == storage->getHandle());
+        // RWStructuredBuffer: the declaration cannot say whether this shader only reads it, so the
+        // access has to be the one that cannot be too weak.
+        CHECK(declarations[1]._access == vkm::VkmResourceAccess::ShaderStorageReadWrite);
+
+        // Appends rather than replaces, so a subgraph can collect from several tables.
+        table->collectReferencedResources(&declarations);
+        CHECK(declarations.size() == 4);
+
+        table->destroy();
+        delete table;
+        driver->getRenderResourcePool()->releaseResource(uniform->getHandle());
+        driver->getRenderResourcePool()->releaseResource(storage->getHandle());
+    }
+
     inline void runResourceTableValidationTest(vkm::VkmDriverBase* driver)
     {
         vkm::VkmPipelineStateManager manager(driver);

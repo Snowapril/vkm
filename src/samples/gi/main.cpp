@@ -370,16 +370,10 @@ public:
 
         // 4. The fullscreen passes, each declaring what it samples so the graph hands the
         // attachments over.
-        recordFullscreen(renderGraph, "GiDirectLighting", _directTarget, _lightingPipeline, _tables._lighting,
-                         { _gbuffer.getTexture(VkmGBuffer::Target::Normal),
-                           _gbuffer.getTexture(VkmGBuffer::Target::BaseColorRoughness),
-                           _gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) });
+        recordFullscreen(renderGraph, "GiDirectLighting", _directTarget, _lightingPipeline, _tables._lighting);
 
         recordFullscreen(renderGraph, "GiProbeLighting", _indirectTarget, _probeLightingPipeline,
-                         _tables._probeLighting,
-                         { _gbuffer.getTexture(VkmGBuffer::Target::Normal),
-                           _gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic),
-                           _volume.getIrradianceTexture(), _volume.getDistanceTexture() });
+                         _tables._probeLighting);
 
         // The contact term is added on top of the probe result, in the same target: its PSO blends
         // one-to-one and the pass loads rather than discards, so it can only ever brighten what the
@@ -391,11 +385,9 @@ public:
             ssgiFb._renderPass._colorAttachments[0]._loadAction = VkmLoadAction::Load;
             VkmRenderGraphicsSubGraph* ssgiSubGraph = renderGraph->beginGraphicsSubGraph(ssgiFb, "GiSsgi");
             ssgiSubGraph->addReferencedResource(_indirectTarget, VkmResourceAccess::ColorAttachmentWrite);
-            ssgiSubGraph->addReferencedResource(_directTarget, VkmResourceAccess::ShaderSampledRead);
-            ssgiSubGraph->addReferencedResource(_gbuffer.getTexture(VkmGBuffer::Target::Normal),
-                                               VkmResourceAccess::ShaderSampledRead);
-            ssgiSubGraph->addReferencedResource(_gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic),
-                                               VkmResourceAccess::ShaderSampledRead);
+            std::vector<VkmResourceAccessDeclaration> ssgiBound;
+            _tables._ssgi->collectReferencedResources(&ssgiBound);
+            ssgiSubGraph->addReferencedResources(ssgiBound);
             VkmPipelineStateBase* ssgiPipeline = _ssgiPipeline;
             VkmResourceTableBase* ssgiTable = _tables._ssgi;
             ssgiSubGraph->setRenderCallback([ssgiPipeline, ssgiTable](VkmCommandBufferBase* commandBuffer) {
@@ -405,16 +397,14 @@ public:
             });
         }
 
-        recordFullscreen(renderGraph, "GiComposite", _compositeTarget, _compositePipeline, _tables._composite,
-                         { _directTarget, _indirectTarget,
-                           _gbuffer.getTexture(VkmGBuffer::Target::BaseColorRoughness),
-                           _gbuffer.getTexture(VkmGBuffer::Target::Normal),
-                           _gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) });
+        recordFullscreen(renderGraph, "GiComposite", _compositeTarget, _compositePipeline, _tables._composite);
 
         // 5. Tone map into the backbuffer.
         VkmRenderGraphicsSubGraph* tonemapSubGraph =
             renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_extent, backBuffer), "GiTonemap");
-        tonemapSubGraph->addReferencedResource(_compositeTarget, VkmResourceAccess::ShaderSampledRead);
+        std::vector<VkmResourceAccessDeclaration> tonemapBound;
+        _tables._tonemap->collectReferencedResources(&tonemapBound);
+        tonemapSubGraph->addReferencedResources(tonemapBound);
         VkmPipelineStateBase* tonemapPipeline = _tonemapPipeline;
         VkmResourceTableBase* tonemapTable = _tables._tonemap;
         tonemapSubGraph->setRenderCallback([tonemapPipeline, tonemapTable](VkmCommandBufferBase* commandBuffer) {
@@ -481,24 +471,21 @@ private:
     }
 
     /*
-    * @brief A fullscreen pass writing `target`, reading `sampled` through its resource table.
+    * @brief A fullscreen pass writing `target`, reading whatever its resource table binds.
     *
-    * The sampled list is not optional bookkeeping: a table binds textures the render graph cannot
-    * see, so a pass that does not declare what it samples is a pass the dependency analysis thinks
-    * reads nothing -- and the barrier handing the G-buffer over to be sampled is exactly what would
-    * go missing.
+    * The table declares itself: it is the one place a pass's resources are named without the
+    * render graph seeing them, so asking it is what keeps the sampled list and the bound list from
+    * drifting apart.
     */
     void recordFullscreen(VkmRenderGraph* renderGraph, const char* name, VkmResourceHandle target,
-                          VkmPipelineStateBase* pipeline, VkmResourceTableBase* table,
-                          const std::vector<VkmResourceHandle>& sampled)
+                          VkmPipelineStateBase* pipeline, VkmResourceTableBase* table)
     {
         VkmRenderGraphicsSubGraph* subGraph =
             renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_extent, target), name);
         subGraph->addReferencedResource(target, VkmResourceAccess::ColorAttachmentWrite);
-        for (VkmResourceHandle handle : sampled)
-        {
-            subGraph->addReferencedResource(handle, VkmResourceAccess::ShaderSampledRead);
-        }
+        std::vector<VkmResourceAccessDeclaration> bound;
+        table->collectReferencedResources(&bound);
+        subGraph->addReferencedResources(bound);
         subGraph->setRenderCallback([pipeline, table](VkmCommandBufferBase* commandBuffer) {
             commandBuffer->bindPipeline(pipeline);
             commandBuffer->bindResourceTable(table);

@@ -62,4 +62,10 @@ TEST_CASE("Metal resource tables - a table is rejected when it does not match th
     vkmtest::runResourceTableValidationTest(fixture.driver.get());
 }
 
+TEST_CASE("Metal resource tables - a table declares what it binds, in declaration order") {
+    MetalResourceTableFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runResourceTableDeclarationTest(fixture.driver.get());
+}
+
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE

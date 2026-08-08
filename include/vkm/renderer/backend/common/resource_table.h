@@ -81,6 +81,19 @@ namespace vkm
         */
         const std::vector<VkmTableResourceBinding>& getDeclaration() const;
 
+        /*
+        * @brief Appends what this table binds, tagged with how the shader accesses it, for
+        * VkmRenderSubGraph::addReferencedResources.
+        * @details A table is the one place a subgraph's resources are named without the render
+        * graph seeing them, so a pass that binds one and does not declare its contents is a pass
+        * the dependency analysis believes reads nothing. The access follows the declared binding
+        * type: a sampled texture is a shader read, a constant buffer a uniform read, an
+        * RWStructuredBuffer a shader read-write, and a sampler takes VkmResourceAccess::None
+        * because it takes part in no hazard.
+        * @param outDeclarations Receives one entry per binding. Not cleared first.
+        */
+        void collectReferencedResources(std::vector<VkmResourceAccessDeclaration>* outDeclarations) const;
+
     protected:
         // `entries` has already been validated against the pipeline's declaration and reordered to
         // match it, so a backend can walk the declaration and this array in lockstep.
@@ -91,5 +104,7 @@ namespace vkm
         VkmDriverBase* _driver;
         const VkmPipelineStateBase* _pipelineState = nullptr;
         VkmResourceSetKind _setKind = VkmResourceSetKind::PerPass;
+        // In declaration order, so this and getDeclaration() index in lockstep.
+        std::vector<VkmTableResourceEntry> _entries;
     };
 } // namespace vkm

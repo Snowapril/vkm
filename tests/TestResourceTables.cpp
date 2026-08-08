@@ -56,6 +56,12 @@ TEST_CASE("Vulkan resource tables - a table is rejected when it does not match t
     vkmtest::runResourceTableValidationTest(fixture.driver.get());
 }
 
+TEST_CASE("Vulkan resource tables - a table declares what it binds, in declaration order") {
+    VulkanResourceTableFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runResourceTableDeclarationTest(fixture.driver.get());
+}
+
 #endif // VKM_USE_VULKAN_API
 
 // Gated on the PSO directory rather than on the backend: that macro is only defined when a host
