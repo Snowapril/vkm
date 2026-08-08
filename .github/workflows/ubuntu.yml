@@ -158,7 +158,7 @@ jobs:
             echo "Using lavapipe ICD: $icd"
             export VK_DRIVER_FILES="$icd"
             export VK_ICD_FILENAMES="$icd"
-            # Run the suite twice and judge the second.
+            # Run the suite twice on the ray-query job and judge the second.
             #
             # lavapipe segfaults inside vkCmdBuildAccelerationStructuresKHR when Mesa's on-disk
             # shader cache is cold -- it compiles the internal shaders it builds acceleration
@@ -174,9 +174,15 @@ jobs:
             # and the second decides the job. It runs every test, so a real regression still
             # fails here -- the only thing this hides is a failure that needs a cold shader
             # cache to reproduce, which is the driver defect itself. TODO.md carries it.
-            echo "=== warm-up run (result ignored; populates Mesa's shader cache)"
-            xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }} \
-              && echo "=== warm-up exit: 0" || echo "=== warm-up exit: $?"
+            #
+            # Only the ray-query job needs it. The 22.04 Vulkan jobs run a lavapipe without
+            # VK_KHR_ray_query, so they never build an acceleration structure and cannot reach
+            # the crash; running the suite twice there would only cost CI time.
+            if [ "${{ matrix.os }}" = "ubuntu-24.04" ]; then
+              echo "=== warm-up run (result ignored; populates Mesa's shader cache)"
+              xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }} \
+                && echo "=== warm-up exit: 0" || echo "=== warm-up exit: $?"
+            fi
             echo "=== judged run"
             xvfb-run -a python3 scripts/run_tests.py --no-bootstrap --build-type ${{env.build_type}} --backend ${{ matrix.backend }}
           else
