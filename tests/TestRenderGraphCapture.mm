@@ -95,7 +95,7 @@ TEST_CASE("Render graph capture - clear pass metadata, snapshot pixels, and buff
 
     vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
     vkm::VkmRenderGraphicsSubGraph* subGraph = renderGraph.beginGraphicsSubGraph(fbDesc, "CaptureTestPass");
-    subGraph->addReferencedResource(buffer->getHandle());
+    subGraph->addReferencedResource(buffer->getHandle(), vkm::VkmResourceAccess::ShaderStorageRead);
     renderGraph.compile();
     renderGraph.execute(vkm::VkmRenderGraphCommitOptions{ .capture = &capture });
     renderGraph.ensureCompleted();
@@ -185,7 +185,7 @@ namespace
         run.capture.arm();
         vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
         vkm::VkmRenderGraphicsSubGraph* subGraph = renderGraph.beginGraphicsSubGraph(fbDesc, "InputCapturePass");
-        subGraph->addReferencedResource(input);
+        subGraph->addReferencedResource(input, vkm::VkmResourceAccess::ShaderSampledRead);
         renderGraph.compile();
         renderGraph.execute(vkm::VkmRenderGraphCommitOptions{ .capture = &run.capture });
         renderGraph.ensureCompleted();

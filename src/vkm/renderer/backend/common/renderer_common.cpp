@@ -29,6 +29,56 @@ namespace vkm
         }
     }
 
+    bool vkmIsWriteAccess(VkmResourceAccess access)
+    {
+        switch (access)
+        {
+            case VkmResourceAccess::ShaderStorageWrite:
+            case VkmResourceAccess::ShaderStorageReadWrite:
+            case VkmResourceAccess::ColorAttachmentWrite:
+            case VkmResourceAccess::DepthStencilAttachmentWrite:
+            case VkmResourceAccess::TransferWrite:
+            case VkmResourceAccess::AccelerationStructureBuildWrite:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    const char* vkmResourceAccessName(VkmResourceAccess access)
+    {
+        switch (access)
+        {
+            case VkmResourceAccess::None:                            return "None";
+            case VkmResourceAccess::IndirectArgument:                return "IndirectArgument";
+            case VkmResourceAccess::ConstantBufferRead:              return "ConstantBufferRead";
+            case VkmResourceAccess::ShaderSampledRead:               return "ShaderSampledRead";
+            case VkmResourceAccess::ShaderStorageRead:               return "ShaderStorageRead";
+            case VkmResourceAccess::ShaderStorageWrite:              return "ShaderStorageWrite";
+            case VkmResourceAccess::ShaderStorageReadWrite:          return "ShaderStorageReadWrite";
+            case VkmResourceAccess::ColorAttachmentWrite:            return "ColorAttachmentWrite";
+            case VkmResourceAccess::DepthStencilAttachmentWrite:     return "DepthStencilAttachmentWrite";
+            case VkmResourceAccess::DepthStencilAttachmentRead:      return "DepthStencilAttachmentRead";
+            case VkmResourceAccess::TransferRead:                    return "TransferRead";
+            case VkmResourceAccess::TransferWrite:                   return "TransferWrite";
+            case VkmResourceAccess::AccelerationStructureBuildRead:  return "AccelerationStructureBuildRead";
+            case VkmResourceAccess::AccelerationStructureBuildWrite: return "AccelerationStructureBuildWrite";
+            case VkmResourceAccess::AccelerationStructureShaderRead: return "AccelerationStructureShaderRead";
+            case VkmResourceAccess::Present:                         return "Present";
+            default:                                                 return "Unknown";
+        }
+    }
+
+    bool VkmSubresourceRange::coversAll(uint32_t numMipLevels, uint32_t numArrayLayers) const
+    {
+        const uint32_t mipCount = (_mipLevelCount == VKM_ALL_REMAINING_SUBRESOURCES)
+                                      ? (numMipLevels - _baseMipLevel) : _mipLevelCount;
+        const uint32_t layerCount = (_arrayLayerCount == VKM_ALL_REMAINING_SUBRESOURCES)
+                                        ? (numArrayLayers - _baseArrayLayer) : _arrayLayerCount;
+        return _baseMipLevel == 0 && mipCount >= numMipLevels &&
+               _baseArrayLayer == 0 && layerCount >= numArrayLayers;
+    }
+
     uint32_t vkmGetIndirectArgumentStride(VkmIndirectArgumentLayout layout)
     {
         switch (layout)

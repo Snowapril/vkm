@@ -63,8 +63,7 @@ namespace vkmtest
                                                      const vkm::VkmFrameData& frameData,
                                                      const vkm::VkmFrameBufferDescriptor& fbDesc)
     {
-        std::vector<vkm::VkmResourceHandle> referenced;
-        scene.collectReferencedResources(&referenced);
+        std::vector<vkm::VkmResourceAccessDeclaration> referenced;
 
         // Frame slot 0, matching the render graph below. Only _viewProjection is read by this
         // PSO; the rest stay identity.
@@ -75,28 +74,25 @@ namespace vkmtest
         vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
 
         auto* updateSubGraph = renderGraph.beginTransferSubGraph("SceneUpdate");
-        for (vkm::VkmResourceHandle handle : referenced)
-        {
-            updateSubGraph->addReferencedResource(handle);
-        }
+        referenced.clear();
+        scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Update, &referenced);
+        updateSubGraph->addReferencedResources(referenced);
         updateSubGraph->setTransferCallback([&scene, &frameData](vkm::VkmCommandBufferBase* commandBuffer) {
             scene.recordUpdate(commandBuffer, /*frameIndex=*/0, frameData);
         });
 
         auto* cullSubGraph = renderGraph.beginComputeSubGraph("SceneCull");
-        for (vkm::VkmResourceHandle handle : referenced)
-        {
-            cullSubGraph->addReferencedResource(handle);
-        }
+        referenced.clear();
+        scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Cull, &referenced);
+        cullSubGraph->addReferencedResources(referenced);
         cullSubGraph->setComputeCallback([&scene](vkm::VkmCommandBufferBase* commandBuffer) {
             scene.recordCull(commandBuffer);
         });
 
         auto* subGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
-        for (vkm::VkmResourceHandle handle : referenced)
-        {
-            subGraph->addReferencedResource(handle);
-        }
+        referenced.clear();
+        scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Draw, &referenced);
+        subGraph->addReferencedResources(referenced);
         subGraph->setRenderCallback([&scene, pso](vkm::VkmCommandBufferBase* commandBuffer) {
             scene.recordDrawBatches(commandBuffer, [pso](const vkm::VkmScene::DrawBatch&) { return pso; });
         });
@@ -177,7 +173,7 @@ namespace vkmtest
 
         vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
         auto* subGraph = renderGraph.beginTransferSubGraph("VisibleCountReadback");
-        subGraph->addReferencedResource(argumentBuffer);
+        subGraph->addReferencedResource(argumentBuffer, vkm::VkmResourceAccess::TransferRead);
         subGraph->setTransferCallback([=](vkm::VkmCommandBufferBase* commandBuffer) {
             commandBuffer->copyBuffer(argumentBuffer, destination, countOffset, 0, sizeof(uint32_t));
         });

@@ -16,6 +16,7 @@ set(SRCS
     ${SRC_DIR}/TestMemoryTracker.cpp
     ${SRC_DIR}/TestShaderCacheUtil.cpp
     ${SRC_DIR}/TestTextureShaderReadBarrier.cpp
+    ${SRC_DIR}/TestRenderGraphBarrierPlan.cpp
     ${SRC_DIR}/TestResourceTables.cpp
     ${SRC_DIR}/TestGBuffer.cpp
     ${SRC_DIR}/TestProbeVolume.cpp

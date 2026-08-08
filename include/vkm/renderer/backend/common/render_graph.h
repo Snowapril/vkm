@@ -7,6 +7,7 @@
 #include <vkm/renderer/backend/common/render_pass.h>
 #include <vkm/renderer/backend/common/driver_resource.h>
 #include <vkm/renderer/backend/common/command_queue.h>
+#include <vkm/renderer/backend/common/render_graph_barrier.h>
 #include <functional>
 #include <string>
 
@@ -48,11 +49,34 @@ namespace vkm
         {
             _dependentSubGraphIds.insert(_dependentSubGraphIds.end(), subGraphIds.begin(), subGraphIds.end());
         }
+        // Replaces rather than appends, so a graph compiled twice lists each edge once.
+        void setDependentSubGraphIds(std::vector<uint32_t> subGraphIds)
+        {
+            _dependentSubGraphIds = std::move(subGraphIds);
+        }
 
-        // Resources this subgraph reads/writes, populated by descriptor-binding recording code.
-        // VkmRenderGraph::execute() tags each with the submit's timeline value once committed.
-        void addReferencedResource(VkmResourceHandle handle) { _referencedResources.push_back(handle); }
-        const std::vector<VkmResourceHandle>& getReferencedResources() const { return _referencedResources; }
+        /*
+        * @brief Declares how this subgraph touches a resource.
+        * @details Serves two purposes. VkmRenderGraph::execute() tags the handle with the submit's
+        * timeline value once committed, which keeps the resource alive while the GPU still reads
+        * it; VkmRenderGraph::compile() derives the dependencies between subgraphs from the
+        * accesses and places the barriers for them. A graphics subgraph's attachments are derived
+        * from its frame buffer descriptor and must not be declared here.
+        * @param handle Resource this subgraph touches.
+        * @param access How it touches it. VkmResourceAccess::None declares lifetime only and takes
+        * part in no hazard.
+        * @param range Subresources covered; ignored for anything but a texture.
+        */
+        void addReferencedResource(VkmResourceHandle handle, VkmResourceAccess access,
+                                   const VkmSubresourceRange& range = {})
+        {
+            _referencedResources.push_back(VkmResourceAccessDeclaration{ handle, access, range });
+        }
+        void addReferencedResources(const std::vector<VkmResourceAccessDeclaration>& declarations)
+        {
+            _referencedResources.insert(_referencedResources.end(), declarations.begin(), declarations.end());
+        }
+        const std::vector<VkmResourceAccessDeclaration>& getReferencedResources() const { return _referencedResources; }
 
     private:
         VkmRenderSubGraphType _subGraphType;
@@ -60,7 +84,7 @@ namespace vkm
         std::string _name;
 
         std::vector<uint32_t> _dependentSubGraphIds;
-        std::vector<VkmResourceHandle> _referencedResources;
+        std::vector<VkmResourceAccessDeclaration> _referencedResources;
     };
 
     class VkmRenderGraphicsSubGraph : public VkmRenderSubGraph
@@ -175,6 +199,9 @@ namespace vkm
         uint32_t _frameIndex;
         std::vector<std::unique_ptr<VkmRenderSubGraph>> _subGraphs;
         uint32_t _currentSubGraphId = 0;
+
+        // Built by compile() from the subgraphs' declared accesses; cleared by reset().
+        VkmRenderGraphBarrierPlan _barrierPlan;
 
         VkmGpuEventTimelineObject _lastSubmitInfo;
     };

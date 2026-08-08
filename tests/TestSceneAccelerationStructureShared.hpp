@@ -101,7 +101,7 @@ namespace vkmtest
 
             vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
             auto* subGraph = renderGraph.beginComputeSubGraph("SceneAccelerationStructureRebuild");
-            subGraph->addReferencedResource(tlasHandle);
+            subGraph->addReferencedResource(tlasHandle, vkm::VkmResourceAccess::AccelerationStructureBuildWrite);
             subGraph->setComputeCallback([&scene](vkm::VkmCommandBufferBase* commandBuffer) {
                 scene.recordAccelerationStructureUpdate(commandBuffer);
             });

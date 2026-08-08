@@ -107,35 +107,31 @@ namespace vkmtest
         frameConstants._prevViewProjection = viewProjection;
         driver->getFrameConstantManager()->update(/*frameIndex=*/0, frameConstants);
 
-        std::vector<vkm::VkmResourceHandle> referenced;
-        scene.collectReferencedResources(&referenced);
+        std::vector<vkm::VkmResourceAccessDeclaration> referenced;
 
         const vkm::VkmFrameBufferDescriptor fbDesc = gbuffer.makeFrameBufferDescriptor();
 
         vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
         auto* updateSubGraph = renderGraph.beginTransferSubGraph("SceneUpdate");
-        for (vkm::VkmResourceHandle handle : referenced)
-        {
-            updateSubGraph->addReferencedResource(handle);
-        }
+        referenced.clear();
+        scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Update, &referenced);
+        updateSubGraph->addReferencedResources(referenced);
         updateSubGraph->setTransferCallback([&scene, &frameData](vkm::VkmCommandBufferBase* commandBuffer) {
             scene.recordUpdate(commandBuffer, /*frameIndex=*/0, frameData);
         });
 
         auto* cullSubGraph = renderGraph.beginComputeSubGraph("SceneCull");
-        for (vkm::VkmResourceHandle handle : referenced)
-        {
-            cullSubGraph->addReferencedResource(handle);
-        }
+        referenced.clear();
+        scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Cull, &referenced);
+        cullSubGraph->addReferencedResources(referenced);
         cullSubGraph->setComputeCallback([&scene](vkm::VkmCommandBufferBase* commandBuffer) {
             scene.recordCull(commandBuffer);
         });
 
         auto* drawSubGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
-        for (vkm::VkmResourceHandle handle : referenced)
-        {
-            drawSubGraph->addReferencedResource(handle);
-        }
+        referenced.clear();
+        scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Draw, &referenced);
+        drawSubGraph->addReferencedResources(referenced);
         drawSubGraph->setRenderCallback([&scene, pso](vkm::VkmCommandBufferBase* commandBuffer) {
             scene.recordDrawBatches(commandBuffer, [pso](const vkm::VkmScene::DrawBatch&) { return pso; });
         });

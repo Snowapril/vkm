@@ -417,8 +417,7 @@ namespace vkm
         const uint32_t faceSize = _descriptor._captureFaceSize;
         const glm::uvec2 captureExtent = getCaptureAtlasExtent();
 
-        std::vector<VkmResourceHandle> sceneResources;
-        scene->collectReferencedResources(&sceneResources);
+        std::vector<VkmResourceAccessDeclaration> sceneResources;
 
         // Cull against the box the refreshed probes can see, not against a camera: a probe looks in
         // all six directions and they share one visible list.
@@ -437,22 +436,22 @@ namespace vkm
         buildBoxPlanes(boxMin, boxMax, probeFrameData._frustumPlanes);
 
         const uint32_t frameIndex = renderGraph->frameIndex();
-        const auto referenceScene = [&sceneResources](VkmRenderSubGraph* subGraph) {
-            for (VkmResourceHandle handle : sceneResources)
-            {
-                subGraph->addReferencedResource(handle);
-            }
+        const auto referenceScene = [&sceneResources, scene](VkmRenderSubGraph* subGraph,
+                                                             VkmScene::ReferencePhase phase) {
+            sceneResources.clear();
+            scene->collectReferencedResources(phase, &sceneResources);
+            subGraph->addReferencedResources(sceneResources);
         };
 
         VkmRenderTransferSubGraph* updateSubGraph = renderGraph->beginTransferSubGraph("ProbeSceneUpdate");
-        referenceScene(updateSubGraph);
+        referenceScene(updateSubGraph, VkmScene::ReferencePhase::Update);
         const uint32_t cullView = _descriptor._cullViewIndex;
         updateSubGraph->setTransferCallback([scene, frameIndex, probeFrameData, cullView](VkmCommandBufferBase* commandBuffer) {
             scene->recordUpdate(commandBuffer, frameIndex, probeFrameData, cullView);
         });
 
         VkmRenderComputeSubGraph* cullSubGraph = renderGraph->beginComputeSubGraph("ProbeSceneCull");
-        referenceScene(cullSubGraph);
+        referenceScene(cullSubGraph, VkmScene::ReferencePhase::Cull);
         cullSubGraph->setComputeCallback([scene, cullView](VkmCommandBufferBase* commandBuffer) {
             scene->recordCull(commandBuffer, cullView);
         });
@@ -475,10 +474,10 @@ namespace vkm
 
         VkmRenderGraphicsSubGraph* captureSubGraph =
             renderGraph->beginGraphicsSubGraph(captureFb, "ProbeCapture");
-        referenceScene(captureSubGraph);
-        captureSubGraph->addReferencedResource(_captureColor);
-        captureSubGraph->addReferencedResource(_captureDepth);
-        captureSubGraph->addReferencedResource(_captureConstants);
+        referenceScene(captureSubGraph, VkmScene::ReferencePhase::Draw);
+        captureSubGraph->addReferencedResource(_captureColor, VkmResourceAccess::ColorAttachmentWrite);
+        captureSubGraph->addReferencedResource(_captureDepth, VkmResourceAccess::DepthStencilAttachmentWrite);
+        captureSubGraph->addReferencedResource(_captureConstants, VkmResourceAccess::ConstantBufferRead);
         captureSubGraph->setRenderCallback([this, faceSize, scene](VkmCommandBufferBase* commandBuffer) {
             for (uint32_t slot = 0; slot < _slice.size(); ++slot)
             {
@@ -513,7 +512,7 @@ namespace vkm
         });
 
         VkmRenderComputeSubGraph* barrierSubGraph = renderGraph->beginComputeSubGraph("ProbeCaptureToShaderRead");
-        barrierSubGraph->addReferencedResource(_captureColor);
+        barrierSubGraph->addReferencedResource(_captureColor, VkmResourceAccess::ShaderSampledRead);
         barrierSubGraph->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
             commandBuffer->barrierTextureForShaderRead(_captureColor);
         });
@@ -538,10 +537,10 @@ namespace vkm
             fb._colorAttachments[0] = atlas;
 
             VkmRenderGraphicsSubGraph* subGraph = renderGraph->beginGraphicsSubGraph(fb, name);
-            subGraph->addReferencedResource(atlas);
-            subGraph->addReferencedResource(_captureColor);
-            subGraph->addReferencedResource(_sampler);
-            subGraph->addReferencedResource(constants);
+            subGraph->addReferencedResource(atlas, VkmResourceAccess::ColorAttachmentWrite);
+            subGraph->addReferencedResource(_captureColor, VkmResourceAccess::ShaderSampledRead);
+            subGraph->addReferencedResource(_sampler, VkmResourceAccess::None);
+            subGraph->addReferencedResource(constants, VkmResourceAccess::ConstantBufferRead);
             subGraph->setRenderCallback([this, pipeline, table, cellSize, distanceAtlas](
                                             VkmCommandBufferBase* commandBuffer) {
                 commandBuffer->bindPipeline(pipeline);

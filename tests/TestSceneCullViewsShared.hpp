@@ -48,7 +48,7 @@ namespace vkmtest
 
         vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
         auto* subGraph = renderGraph.beginTransferSubGraph("CullViewCountReadback");
-        subGraph->addReferencedResource(argumentBuffer);
+        subGraph->addReferencedResource(argumentBuffer, vkm::VkmResourceAccess::TransferRead);
         subGraph->setTransferCallback([=](vkm::VkmCommandBufferBase* commandBuffer) {
             commandBuffer->copyBuffer(argumentBuffer, destination, countOffset, 0, sizeof(uint32_t));
         });
@@ -116,12 +116,12 @@ namespace vkmtest
         vkm::VkmFrameData blind;
         vkm::vkmExtractFrustumPlanes(lookingAway, blind._frustumPlanes);
 
-        std::vector<vkm::VkmResourceHandle> referenced;
-        scene.collectReferencedResources(&referenced);
+        std::vector<vkm::VkmResourceAccessDeclaration> referenced;
 
         vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
         auto* updateSubGraph = renderGraph.beginTransferSubGraph("CullViewsUpdate");
-        for (vkm::VkmResourceHandle handle : referenced) { updateSubGraph->addReferencedResource(handle); }
+        scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Update, &referenced);
+        updateSubGraph->addReferencedResources(referenced);
         // Both views published in one subgraph, which is the arrangement a GI frame uses: it means
         // neither cull ever writes frame data the other has already read.
         updateSubGraph->setTransferCallback([&scene, seeing, blind](vkm::VkmCommandBufferBase* commandBuffer) {
@@ -130,7 +130,9 @@ namespace vkmtest
         });
 
         auto* cullSubGraph = renderGraph.beginComputeSubGraph("CullViewsCull");
-        for (vkm::VkmResourceHandle handle : referenced) { cullSubGraph->addReferencedResource(handle); }
+        referenced.clear();
+        scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Cull, &referenced);
+        cullSubGraph->addReferencedResources(referenced);
         cullSubGraph->setComputeCallback([&scene](vkm::VkmCommandBufferBase* commandBuffer) {
             scene.recordCull(commandBuffer, /*viewIndex=*/0);
             scene.recordCull(commandBuffer, /*viewIndex=*/1);

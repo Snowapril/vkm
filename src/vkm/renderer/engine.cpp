@@ -713,14 +713,14 @@ namespace vkm
                 {
                     for (VkmResourceHandle snapshotHandle : _renderGraphCapture->getSnapshotTextureHandles())
                     {
-                        imGuiSubGraph->addReferencedResource(snapshotHandle);
+                        imGuiSubGraph->addReferencedResource(snapshotHandle, VkmResourceAccess::ShaderSampledRead);
                     }
                 }
                 // Same reasoning for the textures the inspector previewed directly out of the
                 // resource pool (the texture browser, and live input previews in a capture).
                 for (VkmResourceHandle sampledHandle : _renderGraphInspector->getTexturesSampledLastDraw())
                 {
-                    imGuiSubGraph->addReferencedResource(sampledHandle);
+                    imGuiSubGraph->addReferencedResource(sampledHandle, VkmResourceAccess::ShaderSampledRead);
                 }
             }
 #endif

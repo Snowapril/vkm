@@ -141,6 +141,132 @@ namespace vkm
     {
     };
 
+    /*
+    * @brief How one render subgraph touches one resource, declared alongside the resource so
+    * VkmRenderGraph::compile() can derive the dependencies between subgraphs and place barriers
+    * for them.
+    *
+    * @details A closed enum rather than a bitfield, deliberately. A bitfield would let a caller
+    * write ShaderSampledRead | ColorAttachmentWrite, which has no single valid Vulkan image
+    * layout -- exactly the impossible state that forced the engine's earlier barrier entry
+    * points to be single-purpose. Combinations that *are* representable get their own entry
+    * (ShaderStorageReadWrite); a subgraph that genuinely needs two accesses on one resource
+    * declares it twice, and the analysis rejects the pair if their layouts disagree.
+    *
+    * Each backend maps these to its own vocabulary in its own translation unit: Vulkan to
+    * (VkPipelineStageFlags2, VkAccessFlags2, VkImageLayout), Metal to MTLStages, WebGPU to
+    * nothing at all.
+    */
+    enum class VkmResourceAccess : uint8_t
+    {
+        // No access. Used as the source of a resource's first access in a frame, where the real
+        // prior state is backend knowledge rather than something the graph declared.
+        None = 0,
+
+        // Fetched as draw or dispatch arguments (VkmCommandBufferBase::drawIndirectCount).
+        IndirectArgument,
+
+        // Read as a uniform/constant buffer. Distinct from ShaderStorageRead because Vulkan
+        // scopes the two with different access bits, and a barrier naming the storage one does
+        // not make a write visible to a uniform read.
+        ConstantBufferRead,
+
+        // Read through a sampler.
+        ShaderSampledRead,
+        // Read, written, or both through a storage buffer/image binding.
+        ShaderStorageRead,
+        ShaderStorageWrite,
+        ShaderStorageReadWrite,
+
+        // Written as a render pass attachment. Derived from a graphics subgraph's
+        // VkmFrameBufferDescriptor rather than declared by hand.
+        ColorAttachmentWrite,
+        DepthStencilAttachmentWrite,
+        // Depth bound read-only, so it can be sampled by the same pass that tests against it.
+        DepthStencilAttachmentRead,
+
+        // Source or destination of a copy.
+        TransferRead,
+        TransferWrite,
+
+        // Read as build input (vertex/index/instance data), or written as the built structure.
+        AccelerationStructureBuildRead,
+        AccelerationStructureBuildWrite,
+        // Traversed by a ray query.
+        AccelerationStructureShaderRead,
+
+        // Handed to the swapchain.
+        Present,
+
+        Count,
+    };
+
+    /*
+    * @brief Which pipeline the work doing the access runs on.
+    *
+    * @details A shader read does not say by itself whether it happens in a draw or in a
+    * dispatch, and naming every stage in the access enum would double it. The declaring
+    * subgraph already knows -- a graphics subgraph can only draw, a compute one can only
+    * dispatch, a transfer one can only copy -- so the scope is derived from the subgraph type
+    * and paired with the access. Accesses that carry their own stage regardless (attachments,
+    * indirect fetch, transfers, acceleration structure builds) ignore it.
+    */
+    enum class VkmPipelineScope : uint8_t
+    {
+        Graphics,
+        Compute,
+        Transfer,
+        All, // unknown, or work outside the render graph -- the conservative answer
+    };
+
+    // Whether an access writes the resource. Read-after-read needs no barrier; everything else
+    // does, which is what makes this the core of the dependency analysis.
+    bool vkmIsWriteAccess(VkmResourceAccess access);
+
+    // Display name, for the render graph inspector and for validation messages.
+    const char* vkmResourceAccessName(VkmResourceAccess access);
+
+    // Every mip level / array layer of a texture, the default a declaration carries unless it
+    // names a narrower range.
+    constexpr const uint32_t VKM_ALL_REMAINING_SUBRESOURCES = ~0u;
+
+    /*
+    * @brief The mip levels and array layers of a texture a declaration covers. Ignored for
+    * buffers and acceleration structures, which have no subresources.
+    *
+    * @details A probe atlas updated one cell at a time and a cubemap uploaded one face at a
+    * time both leave the rest of the texture in whatever state it already had, so a barrier
+    * that covered the whole image would either transition layers it must not or record a state
+    * the tracker cannot honour.
+    */
+    struct VkmSubresourceRange
+    {
+        uint32_t _baseMipLevel = 0;
+        uint32_t _mipLevelCount = VKM_ALL_REMAINING_SUBRESOURCES;
+        uint32_t _baseArrayLayer = 0;
+        uint32_t _arrayLayerCount = VKM_ALL_REMAINING_SUBRESOURCES;
+
+        inline bool operator==(const VkmSubresourceRange& other) const noexcept
+        {
+            return _baseMipLevel == other._baseMipLevel && _mipLevelCount == other._mipLevelCount &&
+                   _baseArrayLayer == other._baseArrayLayer && _arrayLayerCount == other._arrayLayerCount;
+        }
+        inline bool operator!=(const VkmSubresourceRange& other) const noexcept { return !(*this == other); }
+
+        // Whether this range names every subresource a texture of these dimensions has -- the
+        // case a backend can serve with one whole-image barrier.
+        bool coversAll(uint32_t numMipLevels, uint32_t numArrayLayers) const;
+    };
+
+    // One "this subgraph touches that resource this way" statement, the unit
+    // VkmRenderSubGraph::addReferencedResource records and the barrier analysis consumes.
+    struct VkmResourceAccessDeclaration
+    {
+        VkmResourceHandle _handle = VKM_INVALID_RESOURCE_HANDLE;
+        VkmResourceAccess _access = VkmResourceAccess::None;
+        VkmSubresourceRange _range;
+    };
+
     // Threadgroup width the engine's own 1D scene compute passes declare as [numthreads(N, 1, 1)],
     // so their dispatch sites can derive a group count from an item count (see VkmScene::recordCull).
     // A convention for those passes, not a constraint on compute shaders in general: a shader's real

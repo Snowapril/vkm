@@ -157,8 +157,8 @@ public:
         // The triangle reads its vertex/index data through the bindless set, so declare
         // those buffers as referenced resources for GPU-usage tracking and debug tooling
         // (e.g. the render graph capture's inputs list / buffer viewer).
-        graphicsSubGraph->addReferencedResource(_vertexBufferHandle);
-        graphicsSubGraph->addReferencedResource(_indexBufferHandle);
+        graphicsSubGraph->addReferencedResource(_vertexBufferHandle, VkmResourceAccess::ShaderStorageRead);
+        graphicsSubGraph->addReferencedResource(_indexBufferHandle, VkmResourceAccess::ShaderStorageRead);
 
         VkmPipelineStateBase* pso = _pso;
         const uint32_t pushConstants[2] = {_vertexBufferSlot, _indexBufferSlot};

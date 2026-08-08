@@ -1067,34 +1067,62 @@ namespace vkm
         }
     }
 
-    void VkmScene::collectReferencedResources(std::vector<VkmResourceHandle>* outHandles) const
+    void VkmScene::collectReferencedResources(ReferencePhase phase,
+                                              std::vector<VkmResourceAccessDeclaration>* outDeclarations) const
     {
-        VKM_ASSERT(outHandles != nullptr, "VkmScene::collectReferencedResources requires an output vector");
+        VKM_ASSERT(outDeclarations != nullptr, "VkmScene::collectReferencedResources requires an output vector");
 
-        const auto append = [outHandles](VkmResourceHandle handle) {
+        const auto append = [outDeclarations](VkmResourceHandle handle, VkmResourceAccess access) {
             if (handle != VKM_INVALID_RESOURCE_HANDLE)
             {
-                outHandles->push_back(handle);
+                outDeclarations->push_back(VkmResourceAccessDeclaration{ handle, access, {} });
             }
         };
 
-        for (const std::unique_ptr<VkmSceneGeometryPool>& pool : _pools)
+        switch (phase)
         {
-            if (pool != nullptr)
-            {
-                append(pool->getVertexBuffer());
-                append(pool->getIndexBuffer());
-            }
-        }
-        append(_materialBuffer);
-        append(_objectDataBuffer);
-        append(_frameDataBuffer);
-        append(_visibleListBuffer);
-        append(_argumentBuffer);
-        append(_countClearBuffer);
-        for (VkmResourceHandle staging : _stagingBuffers)
-        {
-            append(staging);
+            case ReferencePhase::Update:
+                // recordUpdate copies one frame slot's staging buffer into the two buffers whose
+                // contents change every frame. Every slot is declared rather than just the one
+                // this frame uses: the caller has the frame index and this method does not, and
+                // over-declaring a read costs one redundant handle, not a wrong barrier.
+                for (VkmResourceHandle staging : _stagingBuffers)
+                {
+                    append(staging, VkmResourceAccess::TransferRead);
+                }
+                append(_frameDataBuffer, VkmResourceAccess::TransferWrite);
+                append(_objectDataBuffer, VkmResourceAccess::TransferWrite);
+                break;
+
+            case ReferencePhase::Cull:
+                // The count clear is a copy, and both dispatches then read-modify-write the
+                // lists. The hazards *between* those three are intra-subgraph and are ordered by
+                // recordCull's own barriers; what is declared here is what the subgraph as a
+                // whole consumes and publishes.
+                append(_countClearBuffer, VkmResourceAccess::TransferRead);
+                append(_visibleListBuffer, VkmResourceAccess::TransferWrite);
+                append(_visibleListBuffer, VkmResourceAccess::ShaderStorageReadWrite);
+                append(_argumentBuffer, VkmResourceAccess::ShaderStorageReadWrite);
+                append(_objectDataBuffer, VkmResourceAccess::ShaderStorageRead);
+                append(_frameDataBuffer, VkmResourceAccess::ShaderStorageRead);
+                break;
+
+            case ReferencePhase::Draw:
+                // Geometry and material data are pulled in-shader out of the bindless set; the
+                // draw count and the argument records come out of the one argument buffer.
+                for (const std::unique_ptr<VkmSceneGeometryPool>& pool : _pools)
+                {
+                    if (pool != nullptr)
+                    {
+                        append(pool->getVertexBuffer(), VkmResourceAccess::ShaderStorageRead);
+                        append(pool->getIndexBuffer(), VkmResourceAccess::ShaderStorageRead);
+                    }
+                }
+                append(_materialBuffer, VkmResourceAccess::ShaderStorageRead);
+                append(_objectDataBuffer, VkmResourceAccess::ShaderStorageRead);
+                append(_frameDataBuffer, VkmResourceAccess::ShaderStorageRead);
+                append(_argumentBuffer, VkmResourceAccess::IndirectArgument);
+                break;
         }
     }
 
