@@ -3063,3 +3063,11 @@ in a comment-only commit.
   **Why:** wrapping a one-line comment in a five-line tag block makes the file longer, which is the
   opposite of what the rule exists for. §12 forbids "free prose paragraphs", and one line is not a
   paragraph.
+
+- **Planned:** strip VUID codes, §12 listing them under "bug or CI post-mortems".
+  **Done instead:** four references were kept -- two Vulkan spec citations in
+  `vulkan_driver.cpp` and `vulkan_command_buffer.cpp`, one in `TestIndirectPassShared.hpp`
+  naming the validation error the test avoids, and `UnitTests.cpp`'s note that the default
+  timeout has headroom for a loaded machine.
+  **Why:** each names a live constraint rather than a past incident, which is the distinction
+  §12 is actually drawing. Everything that recounted a failure was removed.
