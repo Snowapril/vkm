@@ -50,8 +50,10 @@ decided per-resource inside each concrete class's own `initialize()` —
 
 **Buffers and textures share the same heap blocks.** `VkmGpuHeapPoolMetal` wraps one
 `MTLHeapTypeAutomatic` / `MTLStorageModePrivate` heap per 64 MiB block, owned by
-`VkmDriverMetal`; `acquireHeapWithSpace()` finds or grows a block and both
-`allocateFromHeapPool` (buffers) and `allocateTextureFromHeapPool` (textures) go through it.
+`VkmGpuHeapAllocatorMetal`, which the driver owns but whose policy it does not implement --
+resources reach it through `VkmDriverMetal::getHeapAllocator()`. Its private
+`acquireBlockWithSpace()` finds or grows a block, and both `allocateBuffer` and
+`allocateTexture` go through it.
 An Automatic heap holds both kinds interchangeably, so a second parallel list would be
 bookkeeping for nothing. Texture size/alignment **must** come from
 `heapTextureSizeAndAlignWithDescriptor:` — a texture's heap footprint is padded for tiling and
@@ -74,7 +76,7 @@ host-visible; no explicit map/unmap step exists in the Metal API at all). Anythi
 placed resource's storage mode to match its heap's, and the pool heap is Private (combining it
 with `Heap` warns).
 
-Residency needs nothing extra for placed resources: `acquireHeapWithSpace` calls
+Residency needs nothing extra for placed resources: `acquireBlockWithSpace` calls
 `registerExternalAllocation(heap)` when it grows a block, because placed sub-allocations do not
 make the backing heap resident on their own. `onResourceInitialized` additionally registers
 each resource's own allocation, so heap-placed resources are covered twice over — harmless, and
@@ -101,7 +103,7 @@ Overrides all 7 `VkmDriverBase` pure virtuals:
 - Sets are created in `initialize()` (called after `initializeInner()`'s device validation), never in the constructor — residency-set APIs hang inside the Metal framework on unsupported (e.g. paravirtualized CI) GPUs instead of returning nil
 - `onResourceInitialized` / `releaseResource` — stage `addAllocation:`/`removeAllocation:` for Buffer/Texture/StagingBuffer native handles (samplers/views own no distinct `MTLAllocation`); guarded by a dedicated mutex because the deferred reclaimer releases from a background thread
 - `commitPendingResidencyChanges` — flushes staged changes with one `commit` per set; called from `VkmCommandQueueMetal::submit()` before command-buffer commit, no-op when nothing staged
-- `registerExternalAllocation` — residency for allocations outside handle tracking (e.g. `MTLHeap` pool blocks, registered in `allocateFromHeapPool`)
+- `registerExternalAllocation` — residency for allocations outside handle tracking (e.g. `MTLHeap` pool blocks, registered in `VkmGpuHeapAllocatorMetal`)
 - Swapchain backbuffers are exempt: they bypass `newTexture()` and swap their drawable-provided native handle every frame
 
 ### VkmCommandQueueMetal

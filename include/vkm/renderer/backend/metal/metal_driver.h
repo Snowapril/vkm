@@ -18,7 +18,7 @@
 @class MTLTextureDescriptor;
 namespace vkm
 {
-    class VkmGpuHeapPoolMetal;
+    class VkmGpuHeapAllocatorMetal;
 
     /*
     * @brief Metal renderer backend driver.
@@ -36,22 +36,14 @@ namespace vkm
 
 
         /*
-        * @brief Suballocate a buffer from an existing, or newly grown, heap pool block.
-        * @param sizeBytes Size to allocate.
-        * @param alignment Required alignment.
-        * @param options MTLResourceOptions for the allocation.
-        * @return The buffer, or nil when the allocation failed, e.g. the size exceeds one block.
+        * @brief The MTLHeap blocks backing VkmMemoryPlacementHint::Heap resources.
+        * @details Non-owning; valid between initializeInner() and destroyInner(). Resources
+        * place themselves through this rather than through the driver, which owns the
+        * allocator but implements none of its policy.
         */
-        id<MTLBuffer> allocateFromHeapPool(uint64_t sizeBytes, uint64_t alignment, uint64_t options);
+        inline VkmGpuHeapAllocatorMetal* getHeapAllocator() const { return _heapAllocator.get(); }
 
-        /*
-        * @brief Place a texture in an existing (or newly grown) heap pool block.
-        * Returns nil if placement failed, in which case the caller falls back to a committed
-        * texture. `sizeBytes`/`alignment` must come from heapTextureSizeAndAlignWithDescriptor:.
-        */
-        id<MTLTexture> allocateTextureFromHeapPool(MTLTextureDescriptor* descriptor, uint64_t sizeBytes, uint64_t alignment);
-
-        // Device-reported allocation size/budget plus the heap pool's reserved-vs-used split.
+        // Device-reported allocation size/budget plus the heap allocator's reserved-vs-used split.
         virtual VkmGpuMemoryStats getGpuMemoryStats() const override final;
 
         // GPU timestamp pool backing VkmGpuProfiler: one MTL4CounterHeap of `slotCount`
@@ -105,12 +97,8 @@ namespace vkm
         virtual VkmFormat selectSwapChainColorFormat(bool enableHdr) const override final;
 
     private:
-        // Returns a heap block with room for sizeBytes at alignment, growing the list by one
-        // block when none has room. Returns nullptr when the request cannot fit a block at all.
-        VkmGpuHeapPoolMetal* acquireHeapWithSpace(uint64_t sizeBytes, uint64_t alignment);
-
         id<MTLDevice> _mtlDevice;
-        std::vector<std::unique_ptr<VkmGpuHeapPoolMetal>> _heapPools;
+        std::unique_ptr<VkmGpuHeapAllocatorMetal> _heapAllocator;
 
         // Owned +1 under MRC, like _captureScope below.
         id<MTL4CounterHeap> _timestampCounterHeap {nullptr};

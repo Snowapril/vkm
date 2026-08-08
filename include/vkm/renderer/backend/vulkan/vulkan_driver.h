@@ -14,7 +14,7 @@ typedef struct VmaAllocator_T* VmaAllocator;
 
 namespace vkm
 {
-    class VkmGpuBufferPoolVulkan;
+    class VkmGpuHeapAllocatorVulkan;
 
     /*
     * @brief Vulkan renderer backend driver.
@@ -103,17 +103,13 @@ namespace vkm
 
         uint32_t getQueueFamilyIndex(VkmCommandQueueType queueType) const;
 
-        struct PooledBufferAllocation
-        {
-            VkBuffer buffer{VK_NULL_HANDLE};
-            VkmGpuMemoryAllocation allocation{};
-            VkmGpuBufferPoolVulkan* ownerPool{nullptr};
-        };
-
         /*
-        * @brief Suballocate a sub-range from an existing (or newly grown) buffer pool block.
+        * @brief The shared VkBuffer blocks backing VkmMemoryPlacementHint::Heap buffers.
+        * @details Non-owning; valid between initializeInner() and destroyInner(). Buffers
+        * suballocate through this rather than through the driver, which owns the allocator but
+        * implements none of its policy.
         */
-        bool allocateFromBufferPool(uint64_t sizeBytes, uint32_t alignment, PooledBufferAllocation* outResult);
+        inline VkmGpuHeapAllocatorVulkan* getHeapAllocator() const { return _heapAllocator.get(); }
 
     protected:
         virtual VkmInitResult initializeInner(const VkmEngineLaunchOptions* options) override final;
@@ -131,7 +127,7 @@ namespace vkm
 
     private:
         VmaAllocator _vmaAllocator{VK_NULL_HANDLE};
-        std::vector<std::unique_ptr<VkmGpuBufferPoolVulkan>> _bufferPools;
+        std::unique_ptr<VkmGpuHeapAllocatorVulkan> _heapAllocator;
 
         VkQueryPool _timestampQueryPool{VK_NULL_HANDLE};
         double _timestampPeriodNs{1.0};

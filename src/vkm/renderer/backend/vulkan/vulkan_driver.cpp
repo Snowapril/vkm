@@ -75,7 +75,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_acceleration_structure.h>
 #include <vkm/renderer/backend/vulkan/vulkan_texture_view.h>
 #include <vkm/renderer/backend/vulkan/vulkan_buffer_view.h>
-#include <vkm/renderer/backend/vulkan/vulkan_gpu_buffer_pool.h>
+#include <vkm/renderer/backend/vulkan/vulkan_gpu_heap_allocator.h>
 #include <vkm/renderer/backend/vulkan/vulkan_command_queue.h>
 #include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
 #include <vkm/renderer/backend/vulkan/vulkan_command_buffer.h>
@@ -861,6 +861,10 @@ namespace vkm
         };
         VKM_VK_CHECK_RESULT_MSG_RETURN(vmaCreateAllocator(&allocatorCreateInfo, &_vmaAllocator), "Failed to create VMA allocator");
 
+        // Needs _vmaAllocator, since every block it grows is a VMA-backed VkBuffer. Allocates
+        // no block yet -- the first Heap buffer grows the first one.
+        _heapAllocator = std::make_unique<VkmGpuHeapAllocatorVulkan>(this);
+
         // Only now, after volkLoadDevice, do the device entry points exist. The core-1.4
         // names (vkCopyMemoryToImage) are loaded only on a 1.4+ device, so on 1.3 +
         // VK_EXT_host_image_copy only the EXT names are non-null -- checking the exact
@@ -943,11 +947,14 @@ namespace vkm
             _bindlessResourceManager.reset();
         }
 
-        // _bufferPools must be torn down explicitly here (not left to the class destructor)
-        // since each pool's VMA-backed VkBuffer must be destroyed while _vmaAllocator is
-        // still valid; destroyInner() runs before ~VkmDriverVulkan()'s automatic member
-        // destruction, so this ordering is required, not incidental.
-        _bufferPools.clear();
+        // Torn down explicitly here, not left to the class destructor: each block holds a
+        // VMA-backed VkBuffer that must be destroyed while _vmaAllocator is still valid, and
+        // destroyInner() runs before ~VkmDriverVulkan()'s automatic member destruction.
+        if (_heapAllocator)
+        {
+            _heapAllocator->destroy();
+            _heapAllocator.reset();
+        }
 
         // VMA allocations must be freed before the VmaAllocator is destroyed; this must
         // remain the last step here as other resource teardown is added.
@@ -958,42 +965,4 @@ namespace vkm
         }
     }
 
-    bool VkmDriverVulkan::allocateFromBufferPool(uint64_t sizeBytes, uint32_t alignment, PooledBufferAllocation* outResult)
-    {
-        for (auto& pool : _bufferPools)
-        {
-            VkmGpuMemoryAllocation allocation{};
-            if (pool->tryAllocate(sizeBytes, alignment, &allocation))
-            {
-                outResult->buffer = pool->getBuffer();
-                outResult->allocation = allocation;
-                outResult->ownerPool = pool.get();
-                return true;
-            }
-        }
-
-        if (sizeBytes > VkmGpuBufferPoolVulkan::POOL_BLOCK_SIZE_BYTES)
-        {
-            VKM_DEBUG_ERROR("Buffer allocation exceeds pool block size; use a committed allocation instead");
-            return false;
-        }
-
-        auto newPool = std::make_unique<VkmGpuBufferPoolVulkan>(this);
-        if (!newPool->initialize())
-        {
-            return false;
-        }
-
-        VkmGpuMemoryAllocation allocation{};
-        if (!newPool->tryAllocate(sizeBytes, alignment, &allocation))
-        {
-            return false;
-        }
-
-        outResult->buffer = newPool->getBuffer();
-        outResult->allocation = allocation;
-        outResult->ownerPool = newPool.get();
-        _bufferPools.push_back(std::move(newPool));
-        return true;
-    }
 }

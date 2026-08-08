@@ -54,7 +54,8 @@ allocator `VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT` when
 `Heap` buffers are suballocated from `VkmGpuBufferPoolVulkan` (one shared 64 MiB `VkBuffer`
 + dedicated VMA allocation per block, carved up via the vendored `VkmOffsetAllocator`
 wrapper around OffsetAllocator — see `common/gpu_offset_allocator.h`). `VkmDriverVulkan`
-owns the growable list of pool blocks and creates a new one on exhaustion. `Heap` textures
+owns `VkmGpuHeapAllocatorVulkan`, which owns the growable list of blocks and creates a new
+one on exhaustion; buffers reach it through `VkmDriverVulkan::getHeapAllocator()`. `Heap` textures
 are placed by VMA's own internal suballocator (plain `vmaCreateImage` without the dedicated
 bit) — no custom allocator involved for textures, since VMA already does this. So `Heap`
 means two different mechanisms here, and neither is an `MTLHeap`-style engine heap for images;

@@ -2,6 +2,7 @@
 
 #include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
+#include <vkm/renderer/backend/metal/metal_gpu_heap_allocator.h>
 #include <vkm/renderer/backend/metal/metal_util.h>
 #include <Metal/MTLTexture.h>
 #include <Metal/MTLDevice.h>
@@ -151,7 +152,7 @@ namespace vkm
 
             if (isHeapPlaceable && !shouldUseCommittedTexture(info, _isHostWritable))
             {
-                _mtlTexture = driverMetal->allocateTextureFromHeapPool(descriptor, sizeAndAlign.size, sizeAndAlign.align);
+                _mtlTexture = driverMetal->getHeapAllocator()->allocateTexture(descriptor, sizeAndAlign.size, sizeAndAlign.align);
             }
             if (_mtlTexture == nil)
             {

@@ -3,6 +3,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_gpu_buffer_pool.h>
+#include <vkm/renderer/backend/vulkan/vulkan_gpu_heap_allocator.h>
 #include <vkm/renderer/backend/vulkan/vulkan_util.h>
 
 #include <vk_mem_alloc.h>
@@ -124,18 +125,18 @@ namespace vkm
                 alignment = std::max(alignment, (uint32_t)properties.limits.minStorageBufferOffsetAlignment);
             }
 
-            VkmDriverVulkan::PooledBufferAllocation poolResult{};
-            if (driverVulkan->allocateFromBufferPool(info._size, alignment, &poolResult))
+            VkmGpuHeapAllocatorVulkan::Allocation heapAllocation{};
+            if (driverVulkan->getHeapAllocator()->allocate(info._size, alignment, &heapAllocation))
             {
-                _vkBuffer = poolResult.buffer;
-                _poolAllocation = poolResult.allocation;
-                _ownerPool = poolResult.ownerPool;
-                _allocatedSize = info._size; // no distinct VMA allocation to introspect for a pool sub-range
+                _vkBuffer = heapAllocation.buffer;
+                _poolAllocation = heapAllocation.range;
+                _ownerPool = heapAllocation.ownerBlock;
+                _allocatedSize = info._size; // no distinct VMA allocation to introspect for a sub-range
                 _alignment = alignment;
                 return true;
             }
-            // Fall through to the committed path if pooling failed (e.g. size exceeds a
-            // single pool block).
+            // Fall through to the committed path when the allocator cannot serve the request
+            // (e.g. the size exceeds a single block).
         }
 
         VkBufferUsageFlags usage = toVkBufferUsageFlags(info._flags);
