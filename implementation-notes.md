@@ -887,6 +887,20 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
   `scene_geometry_pool.cpp:52` (geometry buffers); those names are not on the Graph tab's path
   and were left alone.
 
+### 2026-08-09 — Trackpad zoom: fixed the ImGui wheel scaling, left the camera's alone
+
+- Planned: nothing; the canvas' wheel zoom was assumed to work on any pointing device.
+- Did instead: swapped the precise/non-precise branch in the ImGui Metal renderer's scroll
+  handler, added `NSEventMaskMagnify` so pinch arrives as a wheel delta, and made the canvas'
+  zoom proportional to the delta rather than a fixed step per event. Deliberately did **not**
+  apply the same swap to `application.mm`, whose scroll feeds the cameras.
+- Why: measured deltas reaching ImGui were 0.1 per mouse notch and 10 per trackpad event -- the
+  scaling was inverted against `imgui_impl_osx`, so one two-finger swipe was worth a hundred
+  notches and pinned the canvas at its zoom limit. `application.mm` was written to mirror that
+  same (inverted) scaling, but `VkmOrbitCameraController::_zoomFactor` is tuned per scroll unit
+  against it, so correcting it there re-tunes every sample's camera. Its comment now says the
+  divergence is intentional rather than claiming the two match.
+
 ### 2026-08-09 — Subgraph averages are keyed by name, not by subgraph id
 
 - Planned: `VkmGpuProfiler::getSubGraphAverageMs(subGraphId)`.

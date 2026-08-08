@@ -503,8 +503,10 @@ namespace
         return;
     }
 
-    // Line-based wheels report far larger deltas than trackpads; scale them the same way the
-    // ImGui Metal renderer does so magnitudes match across devices and backends.
+    // Line-based wheels report far larger deltas than trackpads, so they are scaled down to the
+    // range VkmOrbitCameraController's per-scroll-unit zoom factor is tuned for. Deliberately not
+    // the scaling the ImGui Metal renderer applies: that one targets ImGui's own convention of
+    // 1.0 per notch, and matching it here would re-tune every camera in every sample.
     double wheelDeltaX = event.scrollingDeltaX;
     double wheelDeltaY = event.scrollingDeltaY;
     if ([event hasPreciseScrollingDeltas] == NO)

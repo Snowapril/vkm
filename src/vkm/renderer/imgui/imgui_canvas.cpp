@@ -3,12 +3,18 @@
 #include <vkm/renderer/imgui/imgui_canvas.h>
 
 #include <algorithm>
+#include <cmath>
 
 namespace vkm
 {
     namespace
     {
-        constexpr float kWheelZoomStep = 1.15f;
+        // Zoom per unit of wheel delta: one notch of a line-based wheel is 1.0 and scales by this.
+        // Proportional rather than a fixed step per event, because a trackpad delivers a stream of
+        // small deltas per gesture and a fixed step would run the scale into its limit at once.
+        // Kept mild so that one two-finger swipe, worth a couple of dozen units, crosses a useful
+        // part of the range rather than all of it.
+        constexpr float kWheelZoomStep = 1.10f;
     }
 
     bool VkmImGuiCanvas::begin(const char* id, const ImVec2& size)
@@ -51,8 +57,7 @@ namespace vkm
         if (ImGui::IsWindowHovered() && io.MouseWheel != 0.0f)
         {
             const ImVec2 anchor = toCanvas(io.MousePos);
-            _scale = std::clamp(_scale * ((io.MouseWheel > 0.0f) ? kWheelZoomStep : 1.0f / kWheelZoomStep),
-                                kMinScale, kMaxScale);
+            _scale = std::clamp(_scale * std::pow(kWheelZoomStep, io.MouseWheel), kMinScale, kMaxScale);
             // Re-anchor so the canvas point under the cursor stays under the cursor.
             _origin = ImVec2(anchor.x - (io.MousePos.x - _screenMin.x) / _scale,
                              anchor.y - (io.MousePos.y - _screenMin.y) / _scale);

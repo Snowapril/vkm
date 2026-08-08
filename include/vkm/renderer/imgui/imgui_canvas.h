@@ -10,7 +10,9 @@ namespace vkm
     * @brief Pan-and-zoom viewport for ImGui content drawn in its own coordinate space.
     * @details Content is laid out in unscaled canvas units and mapped to the screen through
     * toScreen(); lengths and font sizes are multiplied by getScale(). The wheel zooms about the
-    * cursor and a drag that starts on empty space pans, so the region carries no scrollbars.
+    * cursor and a drag that starts on empty space pans, so the region carries no scrollbars. Zoom
+    * is proportional to the wheel delta, so a trackpad's two-finger scroll and its pinch gesture
+    * (which the platform layer forwards as a wheel delta) both work as well as a mouse notch.
     * Items submitted between begin() and end() are hit-tested as usual: the canvas submits its own
     * background button first, so anything drawn afterwards takes hover and click priority over it
     * and only a drag that misses every item pans the view.
