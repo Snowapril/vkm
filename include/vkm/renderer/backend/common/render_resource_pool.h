@@ -7,6 +7,7 @@
 #include <vkm/renderer/backend/common/driver_resource.h>
 
 #include <array>
+#include <atomic>
 #include <vector>
 #include <mutex>
 #include <optional>
@@ -96,6 +97,15 @@ namespace vkm
         */
         std::vector<VkmResourceHandle> getAllResourceHandles(VkmResourceType type) const;
 
+        /*
+        * @brief Whether a transient texture has ever been allocated from this pool.
+        * @details A one-way latch, not a live count: its only consumer is
+        * VkmCommandBufferBase::beginRenderPass, whose per-attachment guard is a no-op when no
+        * attachment is transient, so an exact count would buy nothing over a lock-free load.
+        * False means every render pass can skip that guard entirely.
+        */
+        inline bool hasTransientTextures() const { return _hasTransientTextures.load(std::memory_order_relaxed); }
+
     private:
         // Caller must already hold _mutex.
         VkmResourceHandle allocateResourceLocked(VkmResourceType type, VkmResourcePoolType poolType);
@@ -127,6 +137,7 @@ namespace vkm
     private:
         VkmDriverBase* _driver;
         std::array<VkmDriverResourceSubPool, (uint8_t)VkmResourcePoolType::Count> _subPools;
+        std::atomic<bool> _hasTransientTextures{false};
         mutable std::mutex _mutex;
     };
 }

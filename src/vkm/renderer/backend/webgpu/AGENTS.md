@@ -44,8 +44,11 @@ WebGPU has no pre-allocated "command buffer" step the way Vulkan/Metal do. `VKM_
 unconditionally — Dawn/emdawnwebgpu exposes no placement/suballocation API at all. A
 `VkmMemoryPlacementHint::Heap` hint on `VkmBufferInfo`/`VkmTextureInfo` is accepted
 (so the same info struct works unmodified across all three backends) but silently downgraded
-to committed, with a `VKM_DEBUG_WARN` logged each time it's requested. `VkmSamplerWebGPU` has
-no memory backing at all (mirrors Vulkan's `VkSampler`/Metal's `MTLSamplerState`).
+to committed, with a `VKM_DEBUG_WARN` logged each time it's requested. `VkmResourceCreateInfo::Transient`
+is accepted and warned about the same way — WebGPU has no memoryless/lazily-allocated concept at
+all, so `isTransient()` stays false and the texture is device-backed like any other.
+`VkmSamplerWebGPU` has no memory backing at all (mirrors Vulkan's `VkSampler`/Metal's
+`MTLSamplerState`).
 
 ## StagingBuffer Mapping — the One Non-Trivial Backend
 

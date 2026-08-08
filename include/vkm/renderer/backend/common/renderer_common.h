@@ -36,7 +36,17 @@ namespace vkm
     enum class VkmResourcePoolType : uint8_t
     {
         Default = 0,
-        Count = 1,
+        /*
+        * Textures asked for by VkmResourceCreateInfo::Transient -- attachments whose contents
+        * are meant to stay in on-chip tile memory. Textures only; no other resource category
+        * ever lands here.
+        *
+        * Membership follows the *request*, not the grant: a device with no lazily-allocated
+        * memory type still places its ordinary fallback allocation in this sub-pool, and
+        * VkmTexture::isTransient() is what reports whether the request was honored.
+        */
+        Transient = 1,
+        Count = 2,
         Undefined = Count,
     };
 
@@ -130,6 +140,25 @@ namespace vkm
         * reads, and a sub-allocated buffer inherits the pool block's usage instead.
         */
         AllowAccelerationStructureInput = 0x00000400,
+        /*
+        * Tile-memory-only backing: an attachment written and consumed inside one render pass
+        * that never needs to reach device memory. Vulkan asks for
+        * VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT behind a
+        * VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT image; Metal uses MTLStorageModeMemoryless;
+        * WebGPU has no equivalent and warns.
+        *
+        * Textures only -- neither API has a transient buffer -- and only pure attachments:
+        * both forbid sampling, storage writes and blits on such a resource, so this may be
+        * combined only with AllowColorAttachment and/or AllowDepthStencilAttachment, at least
+        * one of which is required. Any other combination, and the flag on a buffer, is dropped
+        * with a warning by VkmDriverBase rather than failing creation, so one info struct still
+        * works unmodified on every backend.
+        *
+        * A request, not a guarantee: VkmTexture::isTransient() reports what was allocated. Every
+        * pass writing such an attachment must use VkmStoreAction::DontCare and must not use
+        * VkmLoadAction::Load -- VkmCommandBufferBase::beginRenderPass coerces both.
+        */
+        Transient = 0x00000800,
 
         AllowShaderReadWrite = AllowShaderRead | AllowShaderWrite,
     };

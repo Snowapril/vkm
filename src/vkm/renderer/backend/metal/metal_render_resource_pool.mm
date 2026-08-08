@@ -33,7 +33,15 @@ namespace vkm
             case VkmResourceType::Texture:
             {
                 VkmTextureMetal* texture = pool->getResource<VkmTextureMetal>(handle);
-                return texture != nullptr ? texture->getInternalHandle() : nil;
+                if (texture == nullptr || texture->isTransient())
+                {
+                    // MTLStorageModeMemoryless has no allocation to make resident, and
+                    // -[MTLResidencySet addAllocation:] asserts on one outright
+                    // ("residency sets do not support memoryless resources"). Excluded here
+                    // rather than at the two call sites so add and remove cannot disagree.
+                    return nil;
+                }
+                return texture->getInternalHandle();
             }
             case VkmResourceType::StagingBuffer:
             {

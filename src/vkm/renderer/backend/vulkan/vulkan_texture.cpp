@@ -130,6 +130,20 @@ namespace vkm
         allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
         allocCreateInfo.flags = shouldUseDedicatedTexture(info) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;
 
+        // Requested, not granted -- like the host-writable path above. preferredFlags rather
+        // than requiredFlags: a device offering no lazily-allocated memory type would make
+        // requiredFlags fail vmaCreateImage outright, while an ordinary device-local
+        // attachment is still correct, just not lazy. TRANSIENT_ATTACHMENT usage is what puts
+        // such a type into the image's memoryTypeBits at all, so this is only ever scored
+        // where the driver offers one. shouldUseDedicatedTexture already returns true for
+        // every attachment, which matters here: suballocating into a shared VMA block would
+        // defeat the lazy commitment.
+        const bool requestTransient = (info._flags & VkmResourceCreateInfo::Transient) != 0;
+        if (requestTransient)
+        {
+            allocCreateInfo.preferredFlags = VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
+        }
+
         VmaAllocationInfo vmaAllocationInfo{};
         const VkResult vkResult = vmaCreateImage(driverVulkan->getVmaAllocator(), &imageCreateInfo, &allocCreateInfo, &_vkTexture, &_vmaAllocation, &vmaAllocationInfo);
         if (!VKM_VK_CHECK_RESULT_MSG(vkResult, "Failed to create image via VMA"))
@@ -151,6 +165,20 @@ namespace vkm
             VkMemoryPropertyFlags memoryProperties = 0;
             vmaGetAllocationMemoryProperties(driverVulkan->getVmaAllocator(), _vmaAllocation, &memoryProperties);
             _isHostWritable = (memoryProperties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+        }
+
+        if (requestTransient)
+        {
+            VkMemoryPropertyFlags memoryProperties = 0;
+            vmaGetAllocationMemoryProperties(driverVulkan->getVmaAllocator(), _vmaAllocation, &memoryProperties);
+            _isTransient = (memoryProperties & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0;
+            if (_isTransient)
+            {
+                // VmaAllocationInfo::size is the *virtual* size; lazily-allocated memory commits
+                // pages on demand and normally commits none, so reporting it would inflate the
+                // memory report by the attachment's whole footprint. Metal reports 0 natively.
+                _allocatedSize = 0;
+            }
         }
 
         _uniformLayout = VK_IMAGE_LAYOUT_UNDEFINED;

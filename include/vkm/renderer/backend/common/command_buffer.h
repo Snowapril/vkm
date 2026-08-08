@@ -283,6 +283,12 @@ namespace vkm
         */
         inline VkmPipelineStateBase* getBoundPipelineState() const { return _boundPipelineState; }
 
+        /*
+        * Rewrites _currentFrameBufferDesc's load/store actions so no transient attachment is
+        * loaded or stored, before any backend translates them. See the definition for why.
+        */
+        void coerceTransientAttachmentActions();
+
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) = 0;
         virtual void onEndRenderPass() = 0;
         virtual void onSetViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height) = 0;

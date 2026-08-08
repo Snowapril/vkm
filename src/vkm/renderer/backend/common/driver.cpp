@@ -24,6 +24,75 @@
 
 namespace vkm
 {
+    namespace
+    {
+        /*
+        * Vulkan (VUID-VkImageCreateInfo-usage-00963/00966) and Metal's memoryless contract
+        * agree: a tile-memory-only resource may carry attachment usage and nothing else, and
+        * must carry at least one. Enforced once here so no backend can hand an illegal
+        * descriptor to a validation layer, and downgraded rather than rejected -- the same way
+        * VkmMemoryPlacementHint::ForcePooled falls back instead of failing.
+        */
+        // Spelled through uint32_t rather than operator|: that operator is defined out-of-line
+        // in renderer_common.cpp and so cannot seed a constexpr.
+        constexpr VkmResourceCreateInfo kTransientIncompatibleFlags = (VkmResourceCreateInfo)(
+            (uint32_t)VkmResourceCreateInfo::AllowTransferSrc | (uint32_t)VkmResourceCreateInfo::AllowTransferDst |
+            (uint32_t)VkmResourceCreateInfo::AllowShaderRead | (uint32_t)VkmResourceCreateInfo::AllowShaderWrite |
+            (uint32_t)VkmResourceCreateInfo::AllowPresent | (uint32_t)VkmResourceCreateInfo::ExternalHandleOwner |
+            (uint32_t)VkmResourceCreateInfo::DeferredCreation);
+
+        constexpr VkmResourceCreateInfo kTransientAttachmentFlags = (VkmResourceCreateInfo)(
+            (uint32_t)VkmResourceCreateInfo::AllowColorAttachment |
+            (uint32_t)VkmResourceCreateInfo::AllowDepthStencilAttachment);
+
+        // VkmResourceCreateInfo has no operator~ or operator&=, and one local helper is less
+        // surface than adding them for a single call site each.
+        VkmResourceCreateInfo clearTransient(VkmResourceCreateInfo flags)
+        {
+            return (VkmResourceCreateInfo)((uint32_t)flags & ~(uint32_t)VkmResourceCreateInfo::Transient);
+        }
+
+        VkmResourceCreateInfo sanitizeTransientTextureFlags(VkmResourceCreateInfo flags, const char* debugName)
+        {
+            if ((flags & VkmResourceCreateInfo::Transient) == 0)
+            {
+                return flags;
+            }
+
+            const char* name = debugName != nullptr ? debugName : "<unnamed>";
+            if ((flags & kTransientIncompatibleFlags) != 0)
+            {
+                VKM_DEBUG_WARN(fmt::format("VkmResourceCreateInfo::Transient on texture '{}' is combined with a "
+                                           "non-attachment usage; the texture will be device-backed", name).c_str());
+                return clearTransient(flags);
+            }
+            // Such a texture carries no image usage at all and vkCreateImage rejects it on that
+            // ground alone; clearing the bit here only keeps it from failing on the more
+            // confusing TRANSIENT_ATTACHMENT VUID instead.
+            if ((flags & kTransientAttachmentFlags) == 0)
+            {
+                VKM_DEBUG_WARN(fmt::format("VkmResourceCreateInfo::Transient on texture '{}' carries no attachment "
+                                           "usage; the texture will be device-backed", name).c_str());
+                return clearTransient(flags);
+            }
+            return flags;
+        }
+
+        VkmResourceCreateInfo sanitizeTransientBufferFlags(VkmResourceCreateInfo flags, const char* debugName)
+        {
+            if ((flags & VkmResourceCreateInfo::Transient) == 0)
+            {
+                return flags;
+            }
+
+            // Neither Vulkan nor Metal has a transient buffer; dropped loudly rather than
+            // silently, so a discarded memory request never costs a bisect.
+            VKM_DEBUG_WARN(fmt::format("VkmResourceCreateInfo::Transient is texture-only; ignored on buffer '{}'",
+                                       debugName != nullptr ? debugName : "<unnamed>").c_str());
+            return clearTransient(flags);
+        }
+    }
+
     VkmDriverBase::VkmDriverBase()
     {
     }
@@ -120,10 +189,19 @@ namespace vkm
         destroyInner();
     }
 
-    VkmTexture* VkmDriverBase::newTexture(const VkmTextureInfo& info)
+    VkmTexture* VkmDriverBase::newTexture(const VkmTextureInfo& textureInfo)
     {
+        // Sanitized before anything else sees it, so the backends, getTextureInfo() and the
+        // render-pass guard all read the same, legal flag set.
+        VkmTextureInfo info = textureInfo;
+        info._flags = sanitizeTransientTextureFlags(info._flags, info._debugName);
+
+        const VkmResourcePoolType poolType = ((info._flags & VkmResourceCreateInfo::Transient) != 0)
+            ? VkmResourcePoolType::Transient
+            : VkmResourcePoolType::Default;
+
         VkmTexture* texture = newTextureInner();
-        VkmResourceHandle handle = _renderResourcePool->allocateTexture(texture, VkmResourcePoolType::Default);
+        VkmResourceHandle handle = _renderResourcePool->allocateTexture(texture, poolType);
         if (texture->initialize(handle, info) == false)
         {
             VKM_DEBUG_ERROR("Failed to initialize texture");
@@ -139,6 +217,9 @@ namespace vkm
         tag.allocatedSize = texture->getAllocatedSize();
         tag.alignment = texture->getMemoryAlignment();
         tag.name = info._debugName != nullptr ? info._debugName : "";
+        // Distinguishes "0 bytes because the allocation is tile-only" from "0 bytes because
+        // nothing reported a size" in the memory report.
+        tag.metadata = texture->isTransient() ? "transient" : "";
         tag.type = texture->getResourceType();
         _renderResourcePool->tagResource(handle, tag);
         _renderResourcePool->onResourceInitialized(handle);
@@ -151,8 +232,11 @@ namespace vkm
         return texture;
     }
 
-    VkmBuffer* VkmDriverBase::newBuffer(const VkmBufferInfo& info)
+    VkmBuffer* VkmDriverBase::newBuffer(const VkmBufferInfo& bufferInfo)
     {
+        VkmBufferInfo info = bufferInfo;
+        info._flags = sanitizeTransientBufferFlags(info._flags, info._debugName);
+
         VkmBuffer* buffer = newBufferInner();
         VkmResourceHandle handle = _renderResourcePool->allocateBuffer(buffer, VkmResourcePoolType::Default);
         if (buffer->initialize(handle, info) == false)
@@ -182,8 +266,11 @@ namespace vkm
         return buffer;
     }
 
-    VkmStagingBuffer* VkmDriverBase::newStagingBuffer(const VkmStagingBufferInfo& info)
+    VkmStagingBuffer* VkmDriverBase::newStagingBuffer(const VkmStagingBufferInfo& stagingBufferInfo)
     {
+        VkmStagingBufferInfo info = stagingBufferInfo;
+        info._flags = sanitizeTransientBufferFlags(info._flags, info._debugName);
+
         VkmStagingBuffer* stagingBuffer = newStagingBufferInner();
         VkmResourceHandle handle = _renderResourcePool->allocateStagingBuffer(stagingBuffer, VkmResourcePoolType::Default);
         if (stagingBuffer->initialize(handle, info) == false)

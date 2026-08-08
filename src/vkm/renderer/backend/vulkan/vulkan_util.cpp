@@ -180,6 +180,10 @@ VkImageUsageFlags toVkImageUsageFlags(VkmResourceCreateInfo flags)
     if ((flags & VkmResourceCreateInfo::AllowShaderWrite) != 0)             usage |= VK_IMAGE_USAGE_STORAGE_BIT;
     if ((flags & VkmResourceCreateInfo::AllowColorAttachment) != 0)         usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     if ((flags & VkmResourceCreateInfo::AllowDepthStencilAttachment) != 0)  usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    // VUID-VkImageCreateInfo-usage-00963/00966: legal only alongside attachment usage, and at
+    // least one attachment bit is required -- which VkmDriverBase::newTexture has already
+    // guaranteed by dropping Transient from every other combination.
+    if ((flags & VkmResourceCreateInfo::Transient) != 0)                    usage |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
     return usage;
 }
 

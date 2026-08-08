@@ -38,7 +38,7 @@ namespace vkm
         }
 
         // Compact one-letter summary of the usage bitmask, so the column stays narrow:
-        // Sampled, Storage, Color, Depth, Present, transfer Src, transfer Dst.
+        // Sampled, Storage, Color, Depth, Present, transfer Src, transfer Dst, Transient.
         std::string usageLabel(const VkmTextureInfo& info)
         {
             std::string label;
@@ -50,6 +50,7 @@ namespace vkm
             append((info._flags & VkmResourceCreateInfo::AllowPresent) != 0, 'P');
             append((info._flags & VkmResourceCreateInfo::AllowTransferSrc) != 0, 's');
             append((info._flags & VkmResourceCreateInfo::AllowTransferDst) != 0, 'd');
+            append((info._flags & VkmResourceCreateInfo::Transient) != 0, 'T');
             return label;
         }
 

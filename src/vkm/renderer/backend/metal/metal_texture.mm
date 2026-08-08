@@ -140,6 +140,11 @@ namespace vkm
             const bool isCube = (info._type == VkmTextureType::Cube);
             VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
             _isHostWritable = shouldUseHostWritableTexture(driverMetal, info);
+            // Always granted: the backend already refuses to initialize below MTLGPUFamilyApple9,
+            // where memoryless is unconditional. Cannot collide with Shared storage either --
+            // VkmDriverBase::newTexture strips Transient from anything carrying AllowTransferDst,
+            // which shouldUseHostWritableTexture requires.
+            _isTransient = (info._flags & VkmResourceCreateInfo::Transient) != 0;
 
             MTLTextureDescriptor* descriptor = [[MTLTextureDescriptor alloc] init];
             descriptor.textureType = isCube ? MTLTextureTypeCube
@@ -153,13 +158,16 @@ namespace vkm
             descriptor.arrayLength = isCube ? 1 : info._numArrayLayers;
             descriptor.usage = getMTLTextureUsage(info._flags);
             // Shared is what makes replaceRegion: legal; on a Private texture it is invalid.
-            descriptor.storageMode = _isHostWritable ? MTLStorageModeShared : MTLStorageModePrivate;
+            descriptor.storageMode = _isTransient ? MTLStorageModeMemoryless
+                                                  : (_isHostWritable ? MTLStorageModeShared : MTLStorageModePrivate);
 
             id<MTLDevice> device = driverMetal->getMTLDevice();
             // Also the "can this be heap-placed at all" test: Metal reports a zero footprint
             // for a descriptor it cannot place, and overwriting _memoryAlignment with that 0
-            // would break the non-zero-alignment invariant the memory tags report.
-            MTLSizeAndAlign sizeAndAlign = [device heapTextureSizeAndAlignWithDescriptor:descriptor];
+            // would break the non-zero-alignment invariant the memory tags report. A memoryless
+            // descriptor is one of those -- MTLHeap has no memoryless storage mode.
+            MTLSizeAndAlign sizeAndAlign = _isTransient ? MTLSizeAndAlign{0, 0}
+                                                        : [device heapTextureSizeAndAlignWithDescriptor:descriptor];
             const bool isHeapPlaceable = (sizeAndAlign.size > 0 && sizeAndAlign.align > 0);
             if (isHeapPlaceable)
             {
@@ -182,7 +190,9 @@ namespace vkm
                 VKM_DEBUG_ERROR("Failed to create MTLTexture");
                 return false;
             }
-            _allocatedSize = [_mtlTexture allocatedSize];
+            // A memoryless texture has no IOAccelResource at any point in its lifetime, so this
+            // is the size it occupies -- stated rather than queried, matching the Vulkan path.
+            _allocatedSize = _isTransient ? 0 : [_mtlTexture allocatedSize];
         }
 
         return true;

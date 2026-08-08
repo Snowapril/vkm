@@ -79,6 +79,19 @@ TEST_CASE("VkmResourceHandle - std::hash is consistent and distinguishes distinc
     CHECK(hasher(a) != hasher(b));
 }
 
+TEST_CASE("VkmResourceHandle - the pool type participates in equality and hash") {
+    vkm::VkmResourceHandle defaultPool{42, vkm::VkmResourcePoolType::Default, vkm::VkmResourceType::Texture};
+    vkm::VkmResourceHandle transientPool{42, vkm::VkmResourcePoolType::Transient, vkm::VkmResourceType::Texture};
+    CHECK(defaultPool != transientPool);
+    CHECK(transientPool.isValid());
+    CHECK(transientPool.isPooledResource());
+    std::hash<vkm::VkmResourceHandle> hasher;
+    CHECK(hasher(defaultPool) != hasher(transientPool));
+    // Undefined tracks Count, which the bounds checks in VkmRenderResourcePool rely on.
+    CHECK(vkm::VKM_INVALID_RESOURCE_HANDLE.poolType == vkm::VkmResourcePoolType::Undefined);
+    CHECK_FALSE(vkm::VKM_INVALID_RESOURCE_HANDLE.isPooledResource());
+}
+
 TEST_CASE("VkmResourceHandle - generation participates in equality and hash") {
     vkm::VkmResourceHandle a{5, vkm::VkmResourcePoolType::Default, vkm::VkmResourceType::Texture, 0};
     vkm::VkmResourceHandle b{5, vkm::VkmResourcePoolType::Default, vkm::VkmResourceType::Texture, 1};
@@ -378,6 +391,62 @@ TEST_CASE("VkmRenderResourcePool - tagResource tracks per-category memory usage 
     CHECK(usageAfterRelease.liveCount == 1);
 
     pool->releaseResource(h2);
+    driver.destroy();
+}
+
+TEST_CASE("VkmRenderResourcePool - the Transient sub-pool is tracked independently of Default") {
+    FakeDriver driver;
+    REQUIRE(driver.initialize(nullptr).code == vkm::VkmInitResultCode::Success);
+    vkm::VkmRenderResourcePool* pool = driver.getRenderResourcePool();
+
+    vkm::VkmResourceHandle defaultHandle = pool->allocateTexture(new MockTexture(&driver));
+    vkm::VkmResourceHandle transientHandle =
+        pool->allocateTexture(new MockTexture(&driver), vkm::VkmResourcePoolType::Transient);
+    REQUIRE(defaultHandle.isValid());
+    REQUIRE(transientHandle.isValid());
+
+    CHECK(transientHandle.poolType == vkm::VkmResourcePoolType::Transient);
+    CHECK(transientHandle.isPooledResource());
+    // Each sub-pool has its own id space, so the two collide on id and are still distinct
+    // handles -- which is the property the pool-type field exists to provide.
+    CHECK(defaultHandle.id == transientHandle.id);
+    CHECK(defaultHandle != transientHandle);
+    CHECK(std::hash<vkm::VkmResourceHandle>()(defaultHandle) != std::hash<vkm::VkmResourceHandle>()(transientHandle));
+
+    vkm::VkmResourceMemoryTag defaultTag{};
+    defaultTag.requestedSize = 100;
+    defaultTag.allocatedSize = 128;
+    defaultTag.type = vkm::VkmResourceType::Texture;
+    pool->tagResource(defaultHandle, defaultTag);
+
+    vkm::VkmResourceMemoryTag transientTag{};
+    transientTag.requestedSize = 200;
+    transientTag.allocatedSize = 0;
+    transientTag.metadata = "transient";
+    transientTag.type = vkm::VkmResourceType::Texture;
+    pool->tagResource(transientHandle, transientTag);
+
+    auto queried = pool->getResourceMemoryTag(transientHandle);
+    REQUIRE(queried.has_value());
+    CHECK(queried->metadata == "transient");
+    CHECK(queried->allocatedSize == 0);
+
+    // Category totals and handle enumeration sum across every sub-pool, so both show up here.
+    auto usage = pool->getCategoryMemoryUsage(vkm::VkmResourceType::Texture);
+    CHECK(usage.totalRequestedBytes == 300);
+    CHECK(usage.totalAllocatedBytes == 128);
+    CHECK(usage.liveCount == 2);
+
+    std::vector<vkm::VkmResourceHandle> handles = pool->getAllResourceHandles(vkm::VkmResourceType::Texture);
+    CHECK(std::find(handles.begin(), handles.end(), defaultHandle) != handles.end());
+    CHECK(std::find(handles.begin(), handles.end(), transientHandle) != handles.end());
+
+    pool->releaseResource(transientHandle);
+    CHECK(pool->getResource<vkm::VkmTexture>(transientHandle) == nullptr);
+    CHECK(pool->getResource<vkm::VkmTexture>(defaultHandle) != nullptr);
+    CHECK(pool->getCategoryMemoryUsage(vkm::VkmResourceType::Texture).liveCount == 1);
+
+    pool->releaseResource(defaultHandle);
     driver.destroy();
 }
 

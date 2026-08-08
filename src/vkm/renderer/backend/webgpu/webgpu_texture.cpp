@@ -53,6 +53,12 @@ namespace vkm
                 // Dawn/emdawnwebgpu exposes no placement/suballocation API -- always committed.
                 VKM_DEBUG_WARN("VkmMemoryPlacementHint::Heap is not supported by WebGPU; texture will be committed");
             }
+            if ((info._flags & VkmResourceCreateInfo::Transient) != 0)
+            {
+                // WebGPU has no memoryless/lazily-allocated concept at all; _isTransient stays
+                // false, so the render-pass guard leaves this texture's store action alone.
+                VKM_DEBUG_WARN("VkmResourceCreateInfo::Transient is not supported by WebGPU; texture will be device-backed");
+            }
 
             VkmDriverWebGPU* driverWebGPU = static_cast<VkmDriverWebGPU*>(_driver);
 

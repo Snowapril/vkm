@@ -23,7 +23,8 @@
 - The Metal/WebGPU push-constant ring gives each frame slot 1024 entries and rewinds them per frame, so a single frame pushing more than 1024 times still overwrites entries it is using.
 - The push-constant ring's per-slot region is rewound by window 0 only, so a second scene-rendering window would share that region unsynchronized (the same caveat descriptor set 1 carries).
 - wasm.yml CI builds no WebGPU shader caches: `scripts/run_tests.py` does it now, but CI has no actions cache for the ~30-minute Dawn/tint build.
-- Extend `VkmResourcePoolType` with Graphics/Compute categories for narrower Metal residency sets.
+- Extend `VkmResourcePoolType` with Graphics/Compute categories for narrower Metal residency sets (`Transient` exists; Graphics/Compute do not).
+- Nothing in the engine creates a `VkmResourceCreateInfo::Transient` texture yet; `VkmProbeCaptureDepth` is the only existing flag-legal candidate.
 - Metal resources bound via `overrideExternalHandle()` rely on the caller registering them (`VkmRenderResourcePoolMetal::registerExternalAllocation`); the swapchain deliberately opts out because `CAMetalLayer.residencySet` already covers its drawables.
 - `VkmGpuCrashHandler` breadcrumbs are per-submission only; `VK_NV_device_diagnostic_checkpoints` (per-draw-call attribution on NVIDIA) was deliberately not implemented.
 - Sporadic `MTL4CommandQueueErrorTimeout` feedback errors observed on the Metal4 triangle sample even without the crash-dump flag; frequency environment-dependent, root cause not yet investigated.

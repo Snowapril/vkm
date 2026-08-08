@@ -940,6 +940,16 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
   placement API at all. A shared body would have been an empty shell on two of three backends,
   and a Vulkan "placement" assertion would have been a test that passes either way.
 
+### 2026-08-08 — The transient-texture Metal fixture tears its driver down
+- Planned: copy the Metal fixture from `TestBufferHostWriteMetal.mm`, which constructs a
+  `VkmDriverMetal` and lets the `unique_ptr` drop it without calling `destroy()`.
+- Did instead: `MetalTransientTextureFixture` gained a destructor that calls `driver->destroy()`
+  before resetting the pointer, matching `MetalGBufferRenderFixture` rather than the buffer one.
+- Why: the buffer test never records a render pass, so what it leaks is cheap. Two of the five
+  transient cases build a `VkmRenderGraph`, submit it and read a texture back, and five leaked
+  drivers' command queues and deferred reclaimers were enough to hang a *later* test — the whole
+  suite blew its 600 s watchdog while every transient case passed in isolation. Same failure shape
+  as the counter-heap entry above: leak something scarce and the symptom lands somewhere else.
 
 ### 2026-07-30 — VkmDriverMetal's destructor releases the timestamp counter heap
 - Planned: the timestamp pool is created in `initializeGpuTimestampPool()` and released in

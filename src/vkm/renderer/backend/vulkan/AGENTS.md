@@ -46,6 +46,18 @@ block is device-local, so it is allocated committed with
 backing at all (`vkCreateSampler` involves no VMA/`VkDeviceMemory`). StagingBuffer is always
 committed + persistently host-mapped (`VMA_ALLOCATION_CREATE_MAPPED_BIT`), never suballocated.
 
+A `VkmResourceCreateInfo::Transient` texture adds `VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT` (legal
+only alongside attachment usage, which `VkmDriverBase` has already guaranteed) and asks VMA for
+`VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT` through `preferredFlags`, **not** `requiredFlags`: a
+device offering no such memory type would make `requiredFlags` fail `vmaCreateImage` outright,
+while an ordinary device-local attachment is still correct — just not lazy. `shouldUseDedicatedTexture`
+already returns true for every attachment, which matters here, since suballocating into a shared VMA
+block would defeat the lazy commitment. The grant is read back with `vmaGetAllocationMemoryProperties`
+into `isTransient()`, and a granted allocation reports `getAllocatedSize() == 0` (VMA's size is the
+*virtual* one; lazily-allocated memory normally commits no pages). There is deliberately no device
+capability probe — nothing needs the answer before allocating — but one modelled on
+`hasUnifiedMemory()` would be the natural follow-up if a caller ever has to choose an algorithm up front.
+
 Every buffer (pool block included) carries `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` and the
 allocator `VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT` when
 `VkmDriverVulkan::isBufferDeviceAddressEnabled()`; without that feature nothing carries either and
