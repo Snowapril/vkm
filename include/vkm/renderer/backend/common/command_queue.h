@@ -5,7 +5,6 @@
 #include <vkm/base/common.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/backend/common/driver_resource.h>
-#include <algorithm>
 #include <memory>
 #include <array>
 
@@ -109,7 +108,11 @@ namespace vkm
         // segmentation fault on the first CI run that had a real ray-tracing driver.
         inline void markTimelineSubmitted(const uint64_t timelineValue)
         {
-            _lastSubmittedTimeline = std::max(_lastSubmittedTimeline, timelineValue);
+            // Compared rather than std::max'd so this header does not pull in <algorithm>.
+            if (timelineValue > _lastSubmittedTimeline)
+            {
+                _lastSubmittedTimeline = timelineValue;
+            }
         }
 
     protected:
