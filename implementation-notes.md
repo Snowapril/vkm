@@ -3019,3 +3019,22 @@ fraction of the image. Unexplained beyond that, and recorded in TODO.md.
 So the sample count goes back to 1536 (the increase bought 14% for eight times the runtime) and the
 threshold becomes a parameter: 6.0e-4 on Metal, 1.0e-3 on Vulkan. Both still separate the error the
 gate exists for -- a one-bounce sabotage adds ~4.9e-4, which reads ~1.28e-3 on lavapipe.
+
+### The lavapipe crash is a cold shader cache
+
+Only the first invocation after a build that actually compiled crashed; a second invocation through
+the same wrapper passed 222 of 222, and so did a direct one. Memory, disk and dmesg were clean --
+14.7 GB available, no swap touched, no OOM kill, no recent kernel message at all -- and the first
+run emitted no engine log, no validation message and no vkm-compiler output, so nothing was being
+recompiled at our level either.
+
+What is cold exactly once is Mesa's own on-disk shader cache. lavapipe compiles the internal
+shaders it builds acceleration structures with on first use and reuses them from `~/.cache`
+afterwards. Setting `MESA_SHADER_CACHE_DISABLE=true` makes every run the cold one, and every run
+then crashed -- including a direct invocation, and now in the *first* acceleration structure test
+rather than the third. That is the path.
+
+Nothing in it is ours: no validation error, no unfreed allocation, and every filtered ordering of
+those tests passes. So the CI job runs the suite twice, reports the first as a warm-up and judges
+the second. The judged run executes every test, so a real regression still fails it; what the
+warm-up hides is precisely a failure that needs a cold shader cache, which is the driver defect.
