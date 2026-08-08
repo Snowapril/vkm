@@ -252,11 +252,26 @@ namespace vkm
         bool _hasPoolStats = false;
     };
 
+    /*
+    * @brief Whether a resource gets its own allocation or is suballocated from a shared one.
+    * @details A request, not a guarantee. Heap downgrades to Committed where the backend cannot
+    * honour it: WebGPU exposes no placement API, a host-writable resource cannot enter a
+    * device-private pool, and Vulkan falls back when no pool block has room.
+    *
+    * Auto leaves the choice to the backend's allocator, which has information a call site does
+    * not: on Vulkan, VMA queries VkMemoryDedicatedRequirements per resource and weighs it
+    * against block occupancy and maxMemoryAllocationCount. Name a placement explicitly only
+    * when the resource's use -- not its size -- requires it.
+    *
+    * What the shared allocation is differs per backend and resource kind: a sub-range of one
+    * VkBuffer, a VMA-suballocated VkDeviceMemory, or an MTLHeap. Heap asks "may this share its
+    * backing allocation", not "which API object backs it".
+    */
     enum class VkmMemoryPlacementHint : uint8_t
     {
-        Auto = 0,
-        ForceCommitted = 1,
-        ForcePooled = 2,
+        Auto = 0,      // let the backend's allocator decide
+        Committed = 1, // its own allocation, never suballocated from an engine pool/heap
+        Heap = 2,      // suballocate from the engine's shared pool/heap where one exists
     };
 
     /*

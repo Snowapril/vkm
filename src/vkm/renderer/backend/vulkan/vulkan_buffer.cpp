@@ -3,6 +3,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_gpu_buffer_pool.h>
+#include <vkm/renderer/backend/vulkan/vulkan_gpu_heap_allocator.h>
 #include <vkm/renderer/backend/vulkan/vulkan_util.h>
 
 #include <vk_mem_alloc.h>
@@ -13,9 +14,10 @@ namespace vkm
 {
     namespace
     {
-        // Decision policy: explicit hint always wins; Auto falls back to a size/usage
-        // heuristic. Pooling is skipped for anything large, read-write, or externally owned
-        // -- those are few, long-lived, and gain nothing from suballocation.
+        // Decision policy: whether this buffer is suballocated from VkmGpuBufferPoolVulkan's
+        // shared VkBuffer. Some usages cannot be, whatever the hint says; past those, Auto
+        // falls back to a size/usage heuristic. Which VkDeviceMemory backs a non-suballocated
+        // buffer is a separate question -- see shouldUseDedicatedMemory below.
         constexpr uint64_t POOLING_SIZE_THRESHOLD_BYTES = 4ull * 1024 * 1024;
 
         bool shouldUseCommittedBuffer(const VkmBufferInfo& info)
@@ -24,13 +26,13 @@ namespace vkm
             // suballocated from it -- host-writable always means committed, whatever the hint says.
             if (info._accessHint == VkmMemoryAccessHint::HostWrite)
             {
-                if (info._placementHint == VkmMemoryPlacementHint::ForcePooled)
+                if (info._placementHint == VkmMemoryPlacementHint::Heap)
                 {
-                    VKM_DEBUG_WARN("VkmMemoryAccessHint::HostWrite cannot be pooled; buffer will be committed");
+                    VKM_DEBUG_WARN("VkmMemoryAccessHint::HostWrite cannot be suballocated; buffer will be committed");
                 }
                 return true;
             }
-            if (info._placementHint == VkmMemoryPlacementHint::ForceCommitted)
+            if (info._placementHint == VkmMemoryPlacementHint::Committed)
             {
                 return true;
             }
@@ -42,7 +44,7 @@ namespace vkm
             {
                 return true;
             }
-            if (info._placementHint == VkmMemoryPlacementHint::ForcePooled)
+            if (info._placementHint == VkmMemoryPlacementHint::Heap)
             {
                 return false;
             }
@@ -56,11 +58,19 @@ namespace vkm
             {
                 return true;
             }
-            if ((info._flags & VkmResourceCreateInfo::ExternalHandleOwner) != 0)
-            {
-                return true;
-            }
             return false;
+        }
+
+        /*
+        * @brief Whether this buffer gets its own VkDeviceMemory rather than a VMA block.
+        * @details Only an explicit Committed asks for that. Under Auto the choice belongs to
+        * VMA, which queries VkMemoryDedicatedRequirements per buffer (the allocator's
+        * vulkanApiVersion 1.3 enables that path) and weighs it against block occupancy and
+        * maxMemoryAllocationCount; setting the bit here overrides that.
+        */
+        bool shouldUseDedicatedMemory(const VkmBufferInfo& info)
+        {
+            return info._placementHint == VkmMemoryPlacementHint::Committed;
         }
     }
 
@@ -115,18 +125,18 @@ namespace vkm
                 alignment = std::max(alignment, (uint32_t)properties.limits.minStorageBufferOffsetAlignment);
             }
 
-            VkmDriverVulkan::PooledBufferAllocation poolResult{};
-            if (driverVulkan->allocateFromBufferPool(info._size, alignment, &poolResult))
+            VkmGpuHeapAllocatorVulkan::Allocation heapAllocation{};
+            if (driverVulkan->getHeapAllocator()->allocate(info._size, alignment, &heapAllocation))
             {
-                _vkBuffer = poolResult.buffer;
-                _poolAllocation = poolResult.allocation;
-                _ownerPool = poolResult.ownerPool;
-                _allocatedSize = info._size; // no distinct VMA allocation to introspect for a pool sub-range
+                _vkBuffer = heapAllocation.buffer;
+                _poolAllocation = heapAllocation.range;
+                _ownerPool = heapAllocation.ownerBlock;
+                _allocatedSize = info._size; // no distinct VMA allocation to introspect for a sub-range
                 _alignment = alignment;
                 return true;
             }
-            // Fall through to the committed path if pooling failed (e.g. size exceeds a
-            // single pool block).
+            // Fall through to the committed path when the allocator cannot serve the request
+            // (e.g. the size exceeds a single block).
         }
 
         VkBufferUsageFlags usage = toVkBufferUsageFlags(info._flags);
@@ -147,7 +157,7 @@ namespace vkm
         const bool requestHostWrite = (info._accessHint == VkmMemoryAccessHint::HostWrite);
         VmaAllocationCreateInfo allocCreateInfo{};
         allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
-        allocCreateInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        allocCreateInfo.flags = shouldUseDedicatedMemory(info) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;
         if (requestHostWrite)
         {
             // Same allocation shape staging buffers use, minus the readback case: the CPU only

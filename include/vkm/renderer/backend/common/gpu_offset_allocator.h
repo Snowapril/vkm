@@ -20,8 +20,9 @@ namespace vkm
     /*
     * @brief CPU-side offset allocator packing many small sub-allocations into a single large
     * backing buffer, bound at draw/dispatch/copy time via offset+range.
-    * @details Not used for texture or dedicated-memory placement, which VMA on Vulkan and MTLHeap
-    * on Metal already provide.
+    * @details Backs the Vulkan shared-buffer pool and the Metal placement heap, which is why
+    * offsets are plain integers rather than an API-specific handle. Not used for Vulkan image
+    * memory, which VMA's own suballocator already places.
     */
     class VkmOffsetAllocator
     {

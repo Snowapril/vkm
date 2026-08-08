@@ -2,6 +2,7 @@
 
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
+#include <vkm/renderer/backend/metal/metal_gpu_heap_allocator.h>
 
 #import <Metal/Metal.h>
 
@@ -19,17 +20,17 @@ namespace vkm
             // placed in it -- host-writable always means committed, whatever the hint says.
             if (info._accessHint == VkmMemoryAccessHint::HostWrite)
             {
-                if (info._placementHint == VkmMemoryPlacementHint::ForcePooled)
+                if (info._placementHint == VkmMemoryPlacementHint::Heap)
                 {
-                    VKM_DEBUG_WARN("VkmMemoryAccessHint::HostWrite cannot be pooled; buffer will be committed");
+                    VKM_DEBUG_WARN("VkmMemoryAccessHint::HostWrite cannot be heap-placed; buffer will be committed");
                 }
                 return true;
             }
-            if (info._placementHint == VkmMemoryPlacementHint::ForceCommitted)
+            if (info._placementHint == VkmMemoryPlacementHint::Committed)
             {
                 return true;
             }
-            if (info._placementHint == VkmMemoryPlacementHint::ForcePooled)
+            if (info._placementHint == VkmMemoryPlacementHint::Heap)
             {
                 return false;
             }
@@ -58,7 +59,22 @@ namespace vkm
 
     VkmBufferMetal::~VkmBufferMetal()
     {
-        _mtlBuffer = nil; // ARC releases; heap (if pooled) reclaims the space automatically
+        _mtlBuffer = nil; // ARC releases the Metal object
+        // A placement heap reclaims nothing on its own, so the range has to go back by hand.
+        // Ordered after the release above: the range must not be reusable while the object
+        // placed there is still alive.
+        if (_heapPlacement.isValid())
+        {
+            // Skipped when the allocator is already gone: destroyInner() releases every block
+            // before ~VkmDriverBase destroys the resource pool, so a resource outliving it has
+            // nothing left to hand the range back to -- and its ownerBlock would dangle.
+            VkmGpuHeapAllocatorMetal* heapAllocator = static_cast<VkmDriverMetal*>(_driver)->getHeapAllocator();
+            if (heapAllocator != nullptr)
+            {
+                heapAllocator->release(_heapPlacement);
+            }
+            _heapPlacement = VkmGpuHeapAllocatorMetal::Placement{};
+        }
     }
 
     bool VkmBufferMetal::initialize(VkmResourceHandle handle, const VkmBufferInfo& info)
@@ -84,10 +100,8 @@ namespace vkm
 
         if (!shouldUseCommittedBuffer(info))
         {
-            // Pass the device-queried alignment (not a hardcoded constant) as the capacity hint
-            // for the heap's maxAvailableSizeWithAlignment: check; the heap sub-allocates and
-            // aligns placed buffers internally, so this only affects the capacity estimate.
-            _mtlBuffer = driverMetal->allocateFromHeapPool(info._size, sizeAndAlign.align, MTLResourceStorageModePrivate);
+            _mtlBuffer = driverMetal->getHeapAllocator()->allocateBuffer(
+                info._size, sizeAndAlign.size, sizeAndAlign.align, MTLResourceStorageModePrivate, &_heapPlacement);
             if (_mtlBuffer != nil)
             {
                 _allocatedSize = [_mtlBuffer allocatedSize];

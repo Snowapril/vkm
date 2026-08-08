@@ -3,6 +3,7 @@
 #pragma once
 
 #include <vkm/renderer/backend/common/buffer.h>
+#include <vkm/renderer/backend/metal/metal_gpu_heap_allocator.h>
 
 @protocol MTLBuffer;
 
@@ -28,9 +29,10 @@ namespace vkm
         inline id<MTLBuffer> getBuffer() const { return _mtlBuffer; }
 
     private:
-        // Committed and pooled buffers are both independent id<MTLBuffer> objects on Metal
-        // (unlike Vulkan's shared-pool-buffer-plus-offset model) -- no offset concept needed.
         id<MTLBuffer> _mtlBuffer{nullptr};
+        // Valid only on the heap-placed path; a placement heap reclaims nothing on its own, so
+        // the destructor must hand this range back.
+        VkmGpuHeapAllocatorMetal::Placement _heapPlacement{};
         uint64_t _allocatedSize{0};
         uint32_t _memoryAlignment{256}; // sane default; overwritten with a real value at creation time
     };

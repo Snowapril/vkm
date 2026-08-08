@@ -59,6 +59,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestSceneModelRenderMetal.mm
         ${SRC_DIR}/TestCubemapTextureMetal.mm
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
+        ${SRC_DIR}/TestTexturePlacementMetal.mm
         ${SRC_DIR}/TestResourceTablesMetal.mm
         ${SRC_DIR}/TestGBufferMetal.mm
         ${SRC_DIR}/TestGBufferRenderMetal.mm
@@ -82,6 +83,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestSceneModelRenderMetal.mm
         ${SRC_DIR}/TestCubemapTextureMetal.mm
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
+        ${SRC_DIR}/TestTexturePlacementMetal.mm
         ${SRC_DIR}/TestResourceTablesMetal.mm
         ${SRC_DIR}/TestGBufferMetal.mm
         ${SRC_DIR}/TestGBufferRenderMetal.mm

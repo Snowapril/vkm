@@ -33,10 +33,10 @@ namespace vkm
             return true;
         }
 
-        if (info._placementHint == VkmMemoryPlacementHint::ForcePooled)
+        if (info._placementHint == VkmMemoryPlacementHint::Heap)
         {
             // Dawn/emdawnwebgpu exposes no placement/suballocation API -- always committed.
-            VKM_DEBUG_WARN("VkmMemoryPlacementHint::ForcePooled is not supported by WebGPU; buffer will be committed");
+            VKM_DEBUG_WARN("VkmMemoryPlacementHint::Heap is not supported by WebGPU; buffer will be committed");
         }
         if (info._accessHint == VkmMemoryAccessHint::HostWrite)
         {

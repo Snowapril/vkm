@@ -12,40 +12,27 @@ namespace vkm
 {
     namespace
     {
-        // Decision policy: explicit hint always wins; Auto forces a dedicated allocation for
-        // large or attachment/external textures (few, long-lived, resize-churny -- VMA's own
-        // guidance recommends dedicated for render targets) and otherwise leaves the dedicated
-        // bit unset, letting VMA's internal suballocator place it (VMA still respects
-        // driver-reported dedicated-allocation requirements even when we don't force the bit).
-        constexpr uint64_t POOLING_SIZE_THRESHOLD_BYTES = 16ull * 1024 * 1024;
-
+        /*
+        * @brief Whether this image gets VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT.
+        * @details An explicit hint wins. Auto forces the bit only for attachments -- an engine
+        * policy about how the texture is used, which VMA cannot infer from the image alone.
+        * Everything else is left to VMA, which queries VkMemoryDedicatedRequirements per image
+        * (the allocator's vulkanApiVersion 1.3 enables that path), honours both
+        * requiresDedicatedAllocation and prefersDedicatedAllocation, and weighs them against
+        * block occupancy and maxMemoryAllocationCount. Setting the bit here overrides all of it.
+        */
         bool shouldUseDedicatedTexture(const VkmTextureInfo& info)
         {
-            if (info._placementHint == VkmMemoryPlacementHint::ForceCommitted)
+            if (info._placementHint == VkmMemoryPlacementHint::Committed)
             {
                 return true;
             }
-            if (info._placementHint == VkmMemoryPlacementHint::ForcePooled)
+            if (info._placementHint == VkmMemoryPlacementHint::Heap)
             {
                 return false;
             }
-
-            const uint64_t approxBytes = (uint64_t)info._extent.x * info._extent.y * info._extent.z *
-                info._numArrayLayers * vkFormatBytesPerTexel(info._format);
-            if (approxBytes >= POOLING_SIZE_THRESHOLD_BYTES)
-            {
-                return true;
-            }
-            if ((info._flags & VkmResourceCreateInfo::AllowColorAttachment) != 0 ||
-                (info._flags & VkmResourceCreateInfo::AllowDepthStencilAttachment) != 0)
-            {
-                return true;
-            }
-            if ((info._flags & VkmResourceCreateInfo::ExternalHandleOwner) != 0)
-            {
-                return true;
-            }
-            return false;
+            return (info._flags & VkmResourceCreateInfo::AllowColorAttachment) != 0 ||
+                   (info._flags & VkmResourceCreateInfo::AllowDepthStencilAttachment) != 0;
         }
 
         /*

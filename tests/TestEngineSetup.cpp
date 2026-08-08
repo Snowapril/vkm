@@ -657,7 +657,7 @@ TEST_CASE("VkmDriverVulkan - newBuffer/newStagingBuffer/newSampler create valid 
         vkm::VkmBufferInfo info{};
         info._flags = vkm::VkmResourceCreateInfo::AllowShaderRead;
         info._size = 256;
-        info._placementHint = vkm::VkmMemoryPlacementHint::ForceCommitted;
+        info._placementHint = vkm::VkmMemoryPlacementHint::Committed;
         vkm::VkmBuffer* buffer = f.driver->newBuffer(info);
         REQUIRE(buffer != nullptr);
         CHECK(buffer->getHandle().isValid());
@@ -669,11 +669,11 @@ TEST_CASE("VkmDriverVulkan - newBuffer/newStagingBuffer/newSampler create valid 
         f.driver->getRenderResourcePool()->releaseResource(buffer->getHandle());
     }
 
-    SUBCASE("pooled buffer") {
+    SUBCASE("heap-placed buffer") {
         vkm::VkmBufferInfo info{};
         info._flags = vkm::VkmResourceCreateInfo::AllowShaderRead;
         info._size = 256;
-        info._placementHint = vkm::VkmMemoryPlacementHint::ForcePooled;
+        info._placementHint = vkm::VkmMemoryPlacementHint::Heap;
         vkm::VkmBuffer* buffer = f.driver->newBuffer(info);
         REQUIRE(buffer != nullptr);
         auto* vkBuffer = f.driver->getRenderResourcePool()->getResource<vkm::VkmBufferVulkan>(buffer->getHandle());
@@ -710,7 +710,7 @@ TEST_CASE("VkmDriverVulkan - committed buffer allocation is tagged with real VMA
     vkm::VkmBufferInfo info{};
     info._flags = vkm::VkmResourceCreateInfo::AllowShaderRead;
     info._size = 250; // deliberately unaligned, so VMA padding is observable
-    info._placementHint = vkm::VkmMemoryPlacementHint::ForceCommitted;
+    info._placementHint = vkm::VkmMemoryPlacementHint::Committed;
     info._debugName = "TaggedTestBuffer";
     vkm::VkmBuffer* buffer = f.driver->newBuffer(info);
     REQUIRE(buffer != nullptr);
@@ -724,6 +724,61 @@ TEST_CASE("VkmDriverVulkan - committed buffer allocation is tagged with real VMA
     CHECK(tag->name == "TaggedTestBuffer");
 
     f.driver->getRenderResourcePool()->releaseResource(buffer->getHandle());
+}
+
+/*
+* The assertion that actually pins what Heap means on the Vulkan buffer path. Everything else
+* about placement is invisible from the engine API -- two buffers being suballocated from one
+* shared VkBuffer is not. If Heap ever silently degraded to a committed allocation, each buffer
+* would get its own VkBuffer at offset 0 and the first two CHECKs would fire.
+*/
+// No comma in the name on purpose: doctest's --test-case= filter splits on commas, so a comma
+// here would make this the one test the re-run workflow in tests/CLAUDE.md cannot select.
+TEST_CASE("VkmDriverVulkan - Heap buffers share one VkBuffer but Committed buffers do not") {
+    VulkanDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+
+    vkm::VkmRenderResourcePool* resourcePool = f.driver->getRenderResourcePool();
+
+    auto makeBuffer = [&](vkm::VkmMemoryPlacementHint placementHint) {
+        vkm::VkmBufferInfo info{};
+        info._flags = vkm::VkmResourceCreateInfo::AllowShaderRead;
+        info._size = 256;
+        info._placementHint = placementHint;
+        vkm::VkmBuffer* buffer = f.driver->newBuffer(info);
+        REQUIRE(buffer != nullptr);
+        return buffer;
+    };
+
+    vkm::VkmBuffer* heapFirst = makeBuffer(vkm::VkmMemoryPlacementHint::Heap);
+    vkm::VkmBuffer* heapSecond = makeBuffer(vkm::VkmMemoryPlacementHint::Heap);
+    vkm::VkmBuffer* committed = makeBuffer(vkm::VkmMemoryPlacementHint::Committed);
+
+    auto* vkHeapFirst = resourcePool->getResource<vkm::VkmBufferVulkan>(heapFirst->getHandle());
+    auto* vkHeapSecond = resourcePool->getResource<vkm::VkmBufferVulkan>(heapSecond->getHandle());
+    auto* vkCommitted = resourcePool->getResource<vkm::VkmBufferVulkan>(committed->getHandle());
+    REQUIRE(vkHeapFirst != nullptr);
+    REQUIRE(vkHeapSecond != nullptr);
+    REQUIRE(vkCommitted != nullptr);
+
+    // Compared as integers, not as VkBuffer: doctest cannot stringify a Vulkan handle and
+    // renders every one of them as "1", so a failure on the raw handles would report the
+    // useless "CHECK( 1 != 1 )" instead of naming the two buffers that collided.
+    const uint64_t heapFirstBuffer = (uint64_t)vkHeapFirst->getBuffer();
+    const uint64_t heapSecondBuffer = (uint64_t)vkHeapSecond->getBuffer();
+    const uint64_t committedBuffer = (uint64_t)vkCommitted->getBuffer();
+
+    CHECK(heapFirstBuffer == heapSecondBuffer);
+    CHECK(vkHeapFirst->getBufferOffset() != vkHeapSecond->getBufferOffset());
+
+    // A committed buffer owns its VkBuffer outright, so it is a different object and its
+    // contents start at 0 -- which is what every getBufferOffset() consumer relies on.
+    CHECK(committedBuffer != heapFirstBuffer);
+    CHECK(vkCommitted->getBufferOffset() == 0);
+
+    resourcePool->releaseResource(committed->getHandle());
+    resourcePool->releaseResource(heapSecond->getHandle());
+    resourcePool->releaseResource(heapFirst->getHandle());
 }
 
 TEST_CASE("VkmDriverVulkan - resource creation succeeds with enableGpuCapture enabled") {

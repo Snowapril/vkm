@@ -9,7 +9,7 @@
 #include <vkm/renderer/backend/metal/metal_acceleration_structure.h>
 #include <vkm/renderer/backend/metal/metal_texture_view.h>
 #include <vkm/renderer/backend/metal/metal_buffer_view.h>
-#include <vkm/renderer/backend/metal/metal_gpu_heap_pool.h>
+#include <vkm/renderer/backend/metal/metal_gpu_heap_allocator.h>
 #include <vkm/renderer/backend/metal/metal_swapchain.h>
 #include <vkm/renderer/backend/metal/metal_command_queue.h>
 #include <vkm/renderer/backend/metal/metal_pipeline_state.h>
@@ -95,6 +95,9 @@ namespace vkm
         {
             _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::RayTracing;
         }
+
+        // Allocates no heap block yet -- the first Heap resource grows the first one.
+        _heapAllocator = std::make_unique<VkmGpuHeapAllocatorMetal>(this);
         return VkmInitResult{VkmInitResultCode::Success, ""};
     }
 
@@ -273,6 +276,14 @@ namespace vkm
             _bindlessResourceManager->destroy();
             _bindlessResourceManager.reset();
         }
+
+        // After the resource teardown above: a heap block outlives the resources placed in it,
+        // and releasing it first would drop the memory they still reference.
+        if (_heapAllocator)
+        {
+            _heapAllocator->destroy();
+            _heapAllocator.reset();
+        }
     }
 
     VkmTexture* VkmDriverMetal::newTextureInner()
@@ -306,39 +317,6 @@ namespace vkm
         return new VkmBufferViewMetal(this);
     }
 
-    id<MTLBuffer> VkmDriverMetal::allocateFromHeapPool(uint64_t sizeBytes, uint64_t alignment, uint64_t options)
-    {
-        for (auto& pool : _heapPools)
-        {
-            id<MTLBuffer> buffer = pool->tryAllocateBuffer(sizeBytes, alignment, options);
-            if (buffer != nil)
-            {
-                return buffer;
-            }
-        }
-
-        if (sizeBytes > VkmGpuHeapPoolMetal::POOL_BLOCK_SIZE_BYTES)
-        {
-            VKM_DEBUG_ERROR("Buffer allocation exceeds heap pool block size; use a committed allocation instead");
-            return nil;
-        }
-
-        auto newPool = std::make_unique<VkmGpuHeapPoolMetal>(this);
-        if (!newPool->initialize())
-        {
-            return nil;
-        }
-
-        // Placed sub-allocations may not make the backing heap resident on their own;
-        // register the whole heap block so every buffer placed in it is covered.
-        VkmRenderResourcePoolMetal* renderResourcePoolMetal = static_cast<VkmRenderResourcePoolMetal*>(getRenderResourcePool());
-        renderResourcePoolMetal->registerExternalAllocation(newPool->getHeap());
-
-        id<MTLBuffer> buffer = newPool->tryAllocateBuffer(sizeBytes, alignment, options);
-        _heapPools.push_back(std::move(newPool));
-        return buffer;
-    }
-
     VkmGpuMemoryStats VkmDriverMetal::getGpuMemoryStats() const
     {
         VkmGpuMemoryStats stats{};
@@ -351,18 +329,9 @@ namespace vkm
         stats._deviceBudgetBytes = static_cast<uint64_t>([_mtlDevice recommendedMaxWorkingSetSize]);
         stats._hasDeviceStats = true;
 
-        // Heap pools are the engine's own suballocator: currentAllocatedSize is what each
-        // block reserved from the device, usedSize what has been placed inside it.
-        for (const auto& pool : _heapPools)
+        if (_heapAllocator)
         {
-            id<MTLHeap> heap = pool->getHeap();
-            if (heap == nil)
-            {
-                continue;
-            }
-            stats._poolReservedBytes += static_cast<uint64_t>([heap currentAllocatedSize]);
-            stats._poolUsedBytes += static_cast<uint64_t>([heap usedSize]);
-            stats._hasPoolStats = true;
+            _heapAllocator->accumulateMemoryStats(&stats);
         }
 
         return stats;

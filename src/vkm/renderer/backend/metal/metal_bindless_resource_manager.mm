@@ -92,7 +92,7 @@ namespace vkm
 
         // Neither buffer goes through newBuffer(), so neither joins a residency set on its
         // own; register them explicitly (same pattern as heap pool blocks in
-        // VkmDriverMetal::allocateFromHeapPool).
+        // VkmGpuHeapAllocatorMetal).
         VkmRenderResourcePoolMetal* renderResourcePoolMetal =
             static_cast<VkmRenderResourcePoolMetal*>(_driver->getRenderResourcePool());
         renderResourcePoolMetal->registerExternalAllocation(_argumentBuffer);
