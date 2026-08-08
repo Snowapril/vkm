@@ -3038,3 +3038,80 @@ Nothing in it is ours: no validation error, no unfreed allocation, and every fil
 those tests passes. So the CI job runs the suite twice, reports the first as a warm-up and judges
 the second. The judged run executes every test, so a real regression still fails it; what the
 warm-up hides is precisely a failure that needs a cold shader cache, which is the driver defect.
+
+## 2026-08-08 — Every Vulkan/Metal API result is handled
+
+`CLAUDE.md` gained §12: never discard a `VkResult`, a Metal `nil` return or `NSError**`, or a
+WebGPU status enum. Unrecoverable failures log the API's own reason and stop that path;
+recoverable ones (`VK_INCOMPLETE`, `VK_ERROR_OUT_OF_DATE_KHR`, …) are handled explicitly. The
+Vulkan backend's checklist cited `VKM_LOG_ERROR`, a macro that has never existed anywhere in the
+tree; it now names the real `VKM_VK_CHECK_RESULT_MSG` pair.
+
+- **New Metal helper** (`metal_util.{h,mm}`): `mtlErrorToString(NSError*)` and
+  `mtlCheckObject`/`VKM_MTL_CHECK`, mirroring the existing `vkCheckResult` /
+  `VKM_VK_CHECK_RESULT_MSG` shape. It replaces five copies of the
+  `err != nil ? err.localizedDescription.UTF8String : "unknown error"` idiom, and guards
+  `localizedDescription` itself being nil — the old idiom checked only the `NSError`, so a Metal
+  failure that populated the error but not the description handed `fmt::format` a null `const
+  char*`.
+- **Vulkan, silent-corruption tier.** `vulkan_command_queue.cpp` was unchecked end to end:
+  `vkCreateCommandPool`, `vkAllocateCommandBuffers`, `vkBeginCommandBuffer`, `vkCreateSemaphore`,
+  `vkEndCommandBuffer`, `vkGetSemaphoreCounterValue`. The counter query was the worst — on failure
+  it left `value` at 0 and cached that as the last-completed timeline, which is exactly the
+  condition under which the pool recycles command buffers the GPU is still reading. It now keeps
+  the previous cached value. Both teardown `vkDeviceWaitIdle` calls are checked, so a
+  `VK_ERROR_DEVICE_LOST` reaches the crash handler before resources are destroyed.
+- **Vulkan, enumerate/query tier.** The count/data pairs in `vulkan_swapchain.cpp` and
+  `vkEnumeratePhysicalDevices` discarded both results, and `formatCount` / `presentModeCount` /
+  `imageCount` were uninitialized — a failed count query would have sized a vector from a stack
+  value. All initialized to 0 and checked.
+- **Metal.** `newCommandBuffer` was bridged out unchecked, so a nil buffer became a handle every
+  caller treated as valid (messaging nil is a silent no-op in ObjC, so the missing
+  `beginCommandBufferWithAllocator:` would not have surfaced either). `newMTL4CommandQueue` is now
+  checked *before* `addResidencySet:` is sent to it rather than only at the return.
+  `newResidencySetWithDescriptor:error:` and `newArgumentTableWithDescriptor:error:` both requested
+  an `NSError` and dropped it; they now log it.
+- **ImGui Metal renderer** shared one `NSError*` across four calls and dereferenced it with no nil
+  guard, so a failure could report a stale reason from an earlier step or crash formatting a null
+  description. Each call has its own error now.
+
+### Deviations
+
+- **Planned:** check each unchecked call and respond. **Did instead**, at three sites, something
+  the plan did not spell out:
+  - `vkEndCommandBuffer` failing now *drops that buffer from the submit batch* rather than
+    submitting it. Submitting a buffer that is not in the executable state is a validation error
+    and can lose the device; skipping it loses that frame's work, which is the conservative side.
+  - `ensureBufferCapacity` in the ImGui renderer can now return nil, and `renderDrawData` returns
+    early when any of the three per-frame buffers is nil. Without that, the existing
+    `frame.vertexBuffer.contents` would be null and the following `memcpy` would crash — checking
+    the allocation without also guarding its one consumer would have been a half-fix.
+  - Added `[compiler release]` on the ImGui shader-library failure path. That branch is one I
+    rewrote, and this file is non-ARC; the pre-existing early return leaked the compiler. Strictly
+    adjacent-code cleanup under `CLAUDE.md` §3, kept because it sits on the error path being
+    rewritten.
+- **Surfaced, not fixed** (`CLAUDE.md` §3): `VKM_ASSERT` (`base/common.h:14`) is not
+  `NDEBUG`-guarded, so it fires `DEBUG_BREAK` in release builds too, and it lacks a
+  `do { } while(0)` wrapper, so it dangles in an `if`/`else`. Both are repo-wide and predate this
+  work. `vulkan_driver.cpp` still has a commented-out `vkGetPhysicalDeviceSurfaceSupportKHR`;
+  the equivalent check exists in `vulkan_swapchain.cpp` and is now result-checked, so the
+  commented line was left alone rather than revived.
+- **WebGPU was left alone**: it already checks every status enum and routes device loss through
+  `VkmGpuCrashHandler`. §12 governs it going forward.
+
+### Pre-existing state found while verifying, NOT introduced here
+
+- **The Vulkan suite emits 335 validation errors on `main`**, across four VUIDs, all of the
+  "destroyed while still in use" family: `VUID-vkDestroyBuffer-buffer-00922` (140),
+  `VUID-vkFreeDescriptorSets-pDescriptorSets-00309` (67), `VUID-vkDestroySampler-sampler-01082`
+  (65), `VUID-vkDestroyPipeline-pipeline-00765` (63). Measured by building the merge-base
+  (`878f952`) and this branch in the same tree and diffing the VUID histograms — **the two are
+  identical**, so this change neither causes nor fixes any of them. `CLAUDE.md` §9 makes these
+  must-fix, and earlier notes record the Vulkan suite as validation-clean, so this is a
+  regression on `main` that predates this work and needs its own task.
+- **Two test-time-budget overruns are load-dependent flakes**, not failures of this change:
+  `captureMemorySnapshot aggregates the CPU tracker and the GPU pool into one sample`
+  (TestEngineSetup.cpp:386) takes 4.1 s alone on Metal and 9.3 s alone on Vulkan against a 10 s
+  budget, so full-suite context tips it over; `VkmEngine - drives a frame, and
+  publishes/suspends/applies a window resize` does the same on Vulkan. Both reproduce identically
+  on the unmodified merge-base.

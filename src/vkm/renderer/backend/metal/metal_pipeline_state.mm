@@ -211,7 +211,7 @@ namespace vkm
                 library = [device newLibraryWithData:libraryData error:&nsError];
                 if (library == nil)
                 {
-                    std::string reason = nsError != nil ? std::string(nsError.localizedDescription.UTF8String) : std::string("unknown error");
+                    std::string reason = mtlErrorToString(nsError);
                     *outError = "Failed to load metallib for '" + fullPath + "': " + reason;
                     return nil;
                 }
@@ -240,7 +240,7 @@ namespace vkm
                 }
                 if (library == nil)
                 {
-                    std::string reason = nsError != nil ? std::string(nsError.localizedDescription.UTF8String) : std::string("unknown error");
+                    std::string reason = mtlErrorToString(nsError);
                     *outError = "Failed to compile MSL library for '" + fullPath + "': " + reason;
                     return nil;
                 }
@@ -365,7 +365,7 @@ namespace vkm
             compiler = [device newCompilerWithDescriptor:compilerDescriptor error:&compilerError];
             if (compiler == nil)
             {
-                std::string reason = compilerError != nil ? std::string(compilerError.localizedDescription.UTF8String) : std::string("unknown error");
+                std::string reason = mtlErrorToString(compilerError);
                 setError("Failed to create MTL4Compiler: " + reason);
                 return false;
             }
@@ -405,7 +405,7 @@ namespace vkm
             }
             if (_computePipelineState == nil)
             {
-                std::string reason = pipelineError != nil ? std::string(pipelineError.localizedDescription.UTF8String) : std::string("unknown error");
+                std::string reason = mtlErrorToString(pipelineError);
                 setError("Failed to create compute pipeline state: " + reason);
                 return false;
             }
@@ -552,7 +552,7 @@ namespace vkm
 
         if (_renderPipelineState == nil)
         {
-            std::string reason = pipelineError != nil ? std::string(pipelineError.localizedDescription.UTF8String) : std::string("unknown error");
+            std::string reason = mtlErrorToString(pipelineError);
             setError("Failed to create render pipeline state: " + reason);
             return false;
         }

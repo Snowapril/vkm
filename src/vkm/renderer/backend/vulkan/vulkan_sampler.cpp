@@ -63,7 +63,8 @@ namespace vkm
             .objectHandle = reinterpret_cast<uint64_t>(_vkSampler),
             .pObjectName  = name,
         };
-        vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo);
+        VKM_VK_CHECK_RESULT_MSG(vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo),
+            "Failed to set debug name on sampler");
 #else
         (void)name;
 #endif

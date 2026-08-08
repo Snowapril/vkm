@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
+#include <vkm/renderer/backend/metal/metal_util.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 
 #import <Metal/MTLDevice.h>
@@ -111,9 +112,8 @@ namespace vkm
         NSError* error = nil;
         _argumentTable = [device newArgumentTableWithDescriptor:argTableDesc error:&error];
         [argTableDesc release];
-        if (_argumentTable == nil)
+        if (!VKM_MTL_CHECK(_argumentTable, error, "Failed to create bindless argument table"))
         {
-            VKM_DEBUG_ERROR("Failed to create bindless argument table");
             return false;
         }
 

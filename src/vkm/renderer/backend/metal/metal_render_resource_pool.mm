@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/metal/metal_buffer.h>
 #include <vkm/renderer/backend/metal/metal_texture.h>
 #include <vkm/renderer/backend/metal/metal_staging_buffer.h>
+#include <vkm/renderer/backend/metal/metal_util.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 
 #import <Metal/MTLDevice.h>
@@ -75,9 +76,8 @@ namespace vkm
 
             NSError* error = nil;
             _residencySets[poolType] = [device newResidencySetWithDescriptor:descriptor error:&error];
-            if (_residencySets[poolType] == nil)
+            if (!VKM_MTL_CHECK(_residencySets[poolType], error, "Failed to create MTLResidencySet"))
             {
-                VKM_DEBUG_ERROR("Failed to create MTLResidencySet");
                 return false;
             }
         }

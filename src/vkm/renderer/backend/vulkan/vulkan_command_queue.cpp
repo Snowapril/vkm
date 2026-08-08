@@ -24,7 +24,10 @@ namespace vkm
             .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
             .queueFamilyIndex = queueFamilyIndex,
         };
-        vkCreateCommandPool(driverVulkan->getDevice(), &poolCreateInfo, nullptr, &_vkCommandPool);
+        // Nothing downstream can proceed without a pool: every command buffer this queue ever
+        // records is allocated from it.
+        VKM_VK_ASSERT(vkCreateCommandPool(driverVulkan->getDevice(), &poolCreateInfo, nullptr, &_vkCommandPool),
+            "Failed to create command pool");
     }
 
     VkmCommandBufferPoolVulkan::~VkmCommandBufferPoolVulkan()
@@ -89,7 +92,11 @@ namespace vkm
                 .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
                 .commandBufferCount = 1,
             };
-            vkAllocateCommandBuffers(driverVulkan->getDevice(), &allocInfo, &vkCommandBuffer);
+            if (!VKM_VK_CHECK_RESULT_MSG(vkAllocateCommandBuffers(driverVulkan->getDevice(), &allocInfo, &vkCommandBuffer),
+                    "Failed to allocate command buffer"))
+            {
+                return static_cast<VKM_COMMAND_BUFFER_HANDLE>(nullptr);
+            }
         }
         else
         {
@@ -104,7 +111,14 @@ namespace vkm
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
             .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
         };
-        vkBeginCommandBuffer(vkCommandBuffer, &beginInfo);
+        // A buffer that never entered the recording state cannot be recorded into or submitted, so
+        // hand back a null handle rather than one that will fail at every later vkCmd* call.
+        if (!VKM_VK_CHECK_RESULT_MSG(vkBeginCommandBuffer(vkCommandBuffer, &beginInfo),
+                "Failed to begin command buffer recording"))
+        {
+            _availableCommandBuffers.push_back(vkCommandBuffer);
+            return static_cast<VKM_COMMAND_BUFFER_HANDLE>(nullptr);
+        }
 
         return static_cast<VKM_COMMAND_BUFFER_HANDLE>(vkCommandBuffer);
     }
@@ -125,7 +139,10 @@ namespace vkm
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
             .pNext = &timelineCreateInfo,
         };
-        vkCreateSemaphore(driverVulkan->getDevice(), &semaphoreCreateInfo, nullptr, &_timelineSemaphore);
+        // Without the timeline semaphore every wait and every completion query below is
+        // meaningless, and retired command buffers would be recycled while still in flight.
+        VKM_VK_ASSERT(vkCreateSemaphore(driverVulkan->getDevice(), &semaphoreCreateInfo, nullptr, &_timelineSemaphore),
+            "Failed to create timeline semaphore");
     }
 
     VkmGpuEventTimelineVulkan::~VkmGpuEventTimelineVulkan()
@@ -142,8 +159,13 @@ namespace vkm
     {
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
         uint64_t value = 0;
-        vkGetSemaphoreCounterValue(driverVulkan->getDevice(), _timelineSemaphore, &value);
-        _lastCompletedCachedTimeline = value;
+        // On failure `value` is untouched, so publishing it would report "nothing completed" and
+        // let callers recycle command buffers the GPU is still reading. Keep the last known value.
+        if (VKM_VK_CHECK_RESULT_MSG(vkGetSemaphoreCounterValue(driverVulkan->getDevice(), _timelineSemaphore, &value),
+                "Failed to query timeline semaphore counter"))
+        {
+            _lastCompletedCachedTimeline = value;
+        }
         return _lastCompletedCachedTimeline;
     }
 
@@ -205,7 +227,12 @@ namespace vkm
         {
             VkmCommandBufferVulkan* cmdBuffer = static_cast<VkmCommandBufferVulkan*>(submitInfos.commandBuffers[i]);
             VkCommandBuffer vkCmd = cmdBuffer->getVkCommandBuffer();
-            vkEndCommandBuffer(vkCmd);
+            // A buffer that failed to end is not in the executable state; submitting it is a
+            // validation error and can lose the device. Drop it from this batch instead.
+            if (!VKM_VK_CHECK_RESULT_MSG(vkEndCommandBuffer(vkCmd), "Failed to end command buffer recording"))
+            {
+                continue;
+            }
             cmdBufferInfos.push_back(VkCommandBufferSubmitInfo{
                 .sType         = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
                 .commandBuffer = vkCmd,
@@ -283,7 +310,8 @@ namespace vkm
             .objectHandle = reinterpret_cast<uint64_t>(_vkQueue),
             .pObjectName  = name,
         };
-        vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo);
+        VKM_VK_CHECK_RESULT_MSG(vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo),
+            "Failed to set debug name on command queue");
 #else
         (void)name;
 #endif

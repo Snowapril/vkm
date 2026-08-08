@@ -180,7 +180,8 @@ namespace vkm
         const VkDeviceSize offset = static_cast<VkDeviceSize>(frameIndex) * kVkmFrameConstantStride;
         std::memcpy(static_cast<uint8_t*>(_mappedPointer) + offset, &constants, sizeof(VkmFrameConstants));
         // No-op on coherent memory, required on the rest.
-        vmaFlushAllocation(_driver->getVmaAllocator(), static_cast<VmaAllocation>(_allocation),
-                           offset, sizeof(VkmFrameConstants));
+        VKM_VK_CHECK_RESULT_MSG(vmaFlushAllocation(_driver->getVmaAllocator(), static_cast<VmaAllocation>(_allocation),
+                           offset, sizeof(VkmFrameConstants)),
+            "Failed to flush frame-constant buffer");
     }
 } // namespace vkm

@@ -437,7 +437,8 @@ namespace vkm
             .objectHandle = reinterpret_cast<uint64_t>(_accelerationStructure),
             .pObjectName  = name,
         };
-        vkSetDebugUtilsObjectNameEXT(_driverVulkan->getDevice(), &nameInfo);
+        VKM_VK_CHECK_RESULT_MSG(vkSetDebugUtilsObjectNameEXT(_driverVulkan->getDevice(), &nameInfo),
+            "Failed to set debug name on acceleration structure");
 #else
         (void)name;
 #endif

@@ -10,6 +10,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_acceleration_structure.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
 #include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
+#include <vkm/renderer/backend/vulkan/vulkan_util.h>
 #include <vkm/renderer/backend/vulkan/vulkan_frame_constant_manager.h>
 #include <vkm/renderer/backend/common/render_pass.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
@@ -617,7 +618,8 @@ namespace vkm
             .objectHandle = reinterpret_cast<uint64_t>(_vkCommandBuffer),
             .pObjectName  = name,
         };
-        vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo);
+        VKM_VK_CHECK_RESULT_MSG(vkSetDebugUtilsObjectNameEXT(driverVulkan->getDevice(), &nameInfo),
+            "Failed to set debug name on command buffer");
 #else
         (void)name;
 #endif

@@ -138,3 +138,4 @@ Metal encoders are single-use. The pattern in `VkmCommandBufferMetal`:
 - [ ] `TARGET_OS_IPHONE` / `TARGET_OS_OSX` used for platform branching (not `IOS` macro)
 - [ ] Shared event signaled after command buffer commit in `VkmCommandQueueMetal::submit`
 - [ ] ARC enabled (no manual `retain`/`release` in `.mm` files)
+- [ ] Every `nil`-returning factory call checked, and every `NSError**` out-param logged, via `VKM_MTL_CHECK`
