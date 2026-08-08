@@ -45,21 +45,17 @@ namespace vkm
     };
 
     /*
-    * @brief Phase 7's 1-spp indirect pass: one ray per pixel, no reservoirs, deliberately noisy.
-    *
-    * @details The baseline ReSTIR has to beat, and the thing that shows the sampling and the BRDF
-    * are right before reservoirs make a bias hard to see. It differs from `VkmPathTracer` in its
-    * primary hit and nothing else -- taken from the rasterized G-buffer instead of a traced ray --
-    * so accumulating it has to converge to what the reference converges to.
-    *
-    * It computes radiance leaving the G-buffer surface **excluding that surface's own emission**,
-    * because the G-buffer has no emissive channel. That is the quantity a deferred GI pass can
-    * compute; a scene whose camera-visible surfaces emit is outside what this can reproduce.
-    *
-    * The accumulation buffer has the same layout `VkmPathTracer`'s does (rgb summed, a = sample
-    * count), so `vkmComputeImageMse` compares the two directly. A pixel the G-buffer did not cover
-    * is left unaccumulated rather than written black, which is what keeps background out of the
-    * comparison.
+    * @brief A 1-spp indirect pass: one ray per pixel, no reservoirs, deliberately noisy.
+    * @details The baseline ReSTIR has to beat, and what shows the sampling and the BRDF are right
+    * before reservoirs make a bias hard to see. It differs from `VkmPathTracer` only in its primary
+    * hit, taken from the rasterized G-buffer instead of a traced ray, so accumulating it converges
+    * to what the reference converges to.
+    * It computes radiance leaving the G-buffer surface excluding that surface's own emission, the
+    * G-buffer having no emissive channel. A scene whose camera-visible surfaces emit is outside
+    * what this can reproduce.
+    * The accumulation buffer has the same layout `VkmPathTracer`'s does -- rgb summed, a = sample
+    * count -- so `vkmComputeImageMse` compares the two directly. A pixel the G-buffer did not cover
+    * is left unaccumulated rather than written black, keeping background out of the comparison.
     */
     class VkmIndirectPass
     {

@@ -21,17 +21,13 @@ namespace vkm
     };
 
     /*
-    * @brief Import a glTF 2.0 asset (.gltf or .glb) into a VkmSceneModel.
-    *
-    * Only triangle primitives are imported; other primitive modes are skipped with a
+    * @brief Import a glTF 2.0 asset, .gltf or .glb, into a VkmSceneModel.
+    * @details Only triangle primitives are imported; other primitive modes are skipped with a
     * warning. Attributes are packed into the layout named by `options._vertexLayout`: missing
-    * normals are generated (when that layout carries a normal), missing UVs/tangents are left
-    * zeroed.
-    *
-    * Exception-free by design (emscripten builds compile without -fexceptions): every
-    * failure is reported through the return value and `outError`.
-    *
-    * @return true on success; false leaves `outModel` untouched and fills `outError`.
+    * normals are generated when that layout carries a normal, and missing UVs and tangents are left
+    * zeroed. Exception-free, emscripten builds compiling without -fexceptions, so every failure is
+    * reported through the return value.
+    * @return False on failure, leaving `outModel` untouched and filling `outError`.
     */
     bool importGltfModel(const std::string& filePath,
                          VkmSceneModel* outModel,

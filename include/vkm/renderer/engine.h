@@ -46,17 +46,15 @@ namespace vkm
 
         /*
         * @brief Resize handoff from the window thread to the engine loop.
-        *
-        * Resize events always arrive on the platform's window thread, which on the macOS Metal
-        * path is not the thread running loopInner(). Rather than let that thread touch the
-        * driver, it only publishes here; VkmEngine::render() consumes it and does every GPU
-        * call. Same split as VkmInputHandler's event queue, with atomics instead of a mutex
-        * since there is exactly one word of state per direction.
-        *
-        * _pendingExtent is a packed extent plus a marker bit, or 0 for "no pending change" --
-        * the marker is what keeps a genuine 0x0 (a minimized window) from reading as "nothing
-        * pending". See packPendingExtent() in engine.cpp for the layout. Publishing overwrites
-        * rather than queues: only the newest size matters.
+        * @details Resize events arrive on the platform's window thread, which on the macOS Metal
+        * path is not the thread running loopInner(). Rather than let that thread touch the driver,
+        * it only publishes here, and VkmEngine::render() consumes it and does every GPU call. Same
+        * split as VkmInputHandler's event queue, with atomics instead of a mutex, there being one
+        * word of state per direction.
+        * _pendingExtent is a packed extent plus a marker bit, or 0 for no pending change; the
+        * marker keeps a genuine 0x0, a minimized window, from reading as nothing pending. See
+        * packPendingExtent() in engine.cpp for the layout. Publishing overwrites rather than
+        * queues, only the newest size mattering.
         */
         std::atomic<uint64_t> _pendingExtent {0};
         // Set between a live-resize begin and end (AppKit's windowWillStartLiveResize /

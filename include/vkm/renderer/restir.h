@@ -24,18 +24,13 @@ namespace vkm
 
     /*
     * @brief How many screen-sized reservoir slices the buffer holds.
-    *
-    * Two, because that is what resampling needs: a pass reads one slice and writes another, and
-    * making that a slice index rather than a second buffer is what keeps a bypass or validation
-    * mode a change of index (restir.md section 8.1).
-    *
-    * **Deliberately not FRAME_COUNT.** With `FRAME_COUNT = 3`, frames N-1 and N-2 may still be
-    * executing when N is recorded, so a naive per-frame slice would need three. It does not,
-    * because `VkmRenderGraph` already calls `ensureCompleted()` on a frame slot before recording
-    * into it again: by the time frame N records, the frame that last wrote these slices has been
-    * waited on. That is the same guarantee descriptor set 1's per-slot region and the
-    * push-constant ring both rely on, and it is why the reservoir buffer is sized by what the
-    * resampling passes need rather than by how many frames are in flight.
+    * @details Two, which is what resampling needs: a pass reads one slice and writes another, and
+    * making that a slice index rather than a second buffer keeps a bypass or validation mode a
+    * change of index.
+    * Not FRAME_COUNT. A naive per-frame slice would need three, but `VkmRenderGraph` calls
+    * `ensureCompleted()` on a frame slot before recording into it again, so by the time frame N
+    * records, the frame that last wrote these slices has been waited on. The buffer is therefore
+    * sized by what the resampling passes need rather than by how many frames are in flight.
     */
     inline constexpr uint32_t kVkmReservoirSliceCount = 2;
 
@@ -71,16 +66,15 @@ namespace vkm
     inline constexpr uint32_t kVkmNeighbourOffsetCount = 256;
 
     /*
-    * @brief Fills `outOffsets` with `kVkmNeighbourOffsetCount` low-discrepancy points in the unit
-    * disk.
-    *
+    * @brief Fills a buffer with low-discrepancy points in the unit disk.
     * @details The R2 sequence mapped through Shirley-Chiu's concentric square-to-disk map. R2
-    * rather than a golden-angle spiral because the spatial pass takes a *run* of consecutive
-    * entries: a spiral's consecutive points share almost the same radius, so a run of them would
-    * sample a ring rather than a disk. Concentric rather than the polar map because the latter
-    * bunches points towards the centre, which is where a neighbour is least useful.
-    *
-    * Free-standing and driver-free, so the distribution is testable without a GPU.
+    * rather than a golden-angle spiral because the spatial pass takes a run of consecutive entries,
+    * and a spiral's consecutive points share almost the same radius, so a run would sample a ring
+    * rather than a disk. Concentric rather than the polar map, which bunches points towards the
+    * centre where a neighbour is least useful. Free-standing and driver-free, so the distribution
+    * is testable without a GPU.
+    * @param outOffsets Receives `offsetCount` xy pairs.
+    * @param offsetCount Points to generate, normally kVkmNeighbourOffsetCount.
     */
     void vkmBuildNeighbourOffsets(float* outOffsets, uint32_t offsetCount);
 
@@ -115,16 +109,13 @@ namespace vkm
     };
 
     /*
-    * @brief Phase 8's ReSTIR GI passes. Currently sub-steps 8.1, 8.3 and the resolve half of 8.6:
-    * a reservoir buffer, one traced sample per pixel written into it, and shading from it.
-    *
-    * @details **No resampling yet, and that is what makes this step checkable.** With a single
-    * candidate, RIS reduces to the estimator it resamples -- `W = 1/p_source` -- so resolving a
-    * freshly generated reservoir must reproduce `VkmIndirectPass` sample for sample. The only
-    * thing that can separate them is the reservoir round trip, which is exactly what this
-    * sub-step exists to validate before spatial and temporal reuse make a bias hard to attribute.
-    *
-    * Its accumulation buffer has the same layout `VkmPathTracer` and `VkmIndirectPass` use (rgb
+    * @brief The ReSTIR GI passes: a reservoir buffer, one traced sample per pixel written into it,
+    * and shading from it.
+    * @details No resampling yet, which is what makes this step checkable. With a single candidate,
+    * RIS reduces to the estimator it resamples -- `W = 1/p_source` -- so resolving a freshly
+    * generated reservoir must reproduce `VkmIndirectPass` sample for sample. The only thing that
+    * can separate them is the reservoir round trip.
+    * The accumulation buffer has the same layout `VkmPathTracer` and `VkmIndirectPass` use (rgb
     * summed, a = sample count), so `vkmComputeImageMse` compares all three directly.
     */
     class VkmRestirPass

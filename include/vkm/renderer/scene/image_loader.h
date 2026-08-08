@@ -26,13 +26,14 @@ namespace vkm
     };
 
     /*
-    * @brief Decode an image file (PNG, JPEG, TGA, BMP, ... -- whatever stb_image supports)
-    * into 8-bit RGBA pixels.
-    *
-    * Exception-free by design (emscripten builds compile without -fexceptions), matching
-    * importGltfModel: every failure is reported through the return value and `outError`.
-    *
-    * @return true on success; false leaves `outImage` untouched and fills `outError`.
+    * @brief Decode an image file into 8-bit RGBA pixels: PNG, JPEG, TGA, BMP, whatever stb_image
+    * supports.
+    * @details Exception-free, emscripten builds compiling without -fexceptions, so every failure is
+    * reported through the return value.
+    * @param filePath File to decode.
+    * @param outImage Receives the decoded pixels. Untouched on failure.
+    * @param outError Receives the failure reason.
+    * @return False when the file could not be read or decoded.
     */
     bool loadImageFromFile(const std::string& filePath, VkmImageData* outImage, std::string* outError);
 
@@ -40,20 +41,16 @@ namespace vkm
     uint32_t vkmMipLevelCount(uint32_t width, uint32_t height);
 
     /*
-    * @brief Builds the mip chain below `base` by repeated 2x2 box filtering.
-    *
-    * @details `outLevels` receives levels 1..N-1 -- the base is the caller's and is not copied.
-    * Level k has dimensions max(1, w >> k) x max(1, h >> k), which is what every backend's
+    * @brief Builds the mip chain below a base level by repeated 2x2 box filtering.
+    * @details Level k has dimensions max(1, w >> k) x max(1, h >> k), which is what every backend's
     * copyBufferToTexture/writeRegion computes for that level.
-    *
-    * **`srgb` is not cosmetic.** An sRGB texture stores gamma-encoded values, and averaging those
-    * directly is averaging the wrong quantity: half-black/half-white averages to 128, where the
-    * correct answer is the encoding of linear 0.5, which is about 188. Getting this backwards makes
-    * every mip chain visibly too dark, worst at the coarsest levels, and it is exactly the bug a
-    * solid-colour test cannot see. Pass true for base colour and emissive, false for the linear
-    * data (metallic-roughness, normal maps).
-    *
-    * Alpha is always averaged linearly -- sRGB encodes only the colour channels.
+    * @param base Level 0. Not copied into the output.
+    * @param srgb Whether the colour channels are gamma-encoded. Not cosmetic: averaging encoded
+    * values averages the wrong quantity -- half-black/half-white averages to 128 where the correct
+    * answer is the encoding of linear 0.5, about 188 -- which makes the whole chain too dark. True
+    * for base colour and emissive, false for metallic-roughness and normal maps. Alpha is always
+    * averaged linearly, sRGB encoding only the colour channels.
+    * @param outLevels Receives levels 1..N-1.
     */
     void vkmBuildMipChain(const VkmImageData& base, bool srgb, std::vector<VkmImageData>* outLevels);
 } // namespace vkm

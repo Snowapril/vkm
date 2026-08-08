@@ -12,16 +12,14 @@ namespace vkm
     /*
     * @brief Engine-owned ImGui window showing what VkmCpuProfiler collected: a frame-time
     * history strip on top, and below it a per-thread flame chart of the selected frame.
-    * Toggled with F7; drawn from VkmEngine::update(), before the frame's first ImGui::Render()
-    * call.
-    *
-    * Capture follows visibility -- the engine starts the profiler when this window opens and
-    * stops it when it closes -- so an application that never opens the window pays nothing but
-    * one relaxed atomic load per instrumented scope.
-    *
-    * With no frame pinned the newest collected frame is shown and the chart updates live every
-    * frame. Clicking a bar in the history strip pins that frame and stops capture, which is
-    * what keeps the ring (and therefore the pinned frame) still while it is being read.
+    * @details Toggled with F7; drawn from VkmEngine::update(), before the frame's first
+    * ImGui::Render() call.
+    * Capture follows visibility -- the engine starts the profiler when this window opens and stops
+    * it when it closes -- so an application that never opens the window pays nothing but one
+    * relaxed atomic load per instrumented scope.
+    * With no frame pinned the newest collected frame is shown and the chart updates live. Clicking
+    * a bar in the history strip pins that frame and stops capture, which keeps the ring, and
+    * therefore the pinned frame, still while it is being read.
     */
     class VkmCpuProfilerInspector
     {

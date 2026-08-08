@@ -71,14 +71,11 @@ namespace vkm
 
     /*
     * @brief Turntable controller for a VkmCamera: left-drag orbits, scroll dollies in and out.
-    *
-    * Registers a listener on VkmInputHandler rather than polling it, so a sample only has to
-    * hand it the engine's input handler once. Listeners are dispatched from
-    * VkmInputHandler::beginFrame(), which VkmEngine::loopInner() runs before update() and
-    * render(), so the camera is already current by the time app code reads it -- there is no
-    * per-frame tick to call. ImGui capture needs no handling here either: the platform layer
-    * already drops events while ImGui owns the mouse.
-    *
+    * @details Registers a listener on VkmInputHandler rather than polling it, so a sample hands it
+    * the engine's input handler once. Listeners are dispatched from VkmInputHandler::beginFrame(),
+    * which VkmEngine::loopInner() runs before update() and render(), so the camera is current by
+    * the time app code reads it and there is no per-frame tick to call. ImGui capture needs no
+    * handling here: the platform layer drops events while ImGui owns the mouse.
     * The camera pointer is borrowed and must outlive the controller.
     */
     class VkmOrbitCameraController
@@ -138,17 +135,13 @@ namespace vkm
 
     /*
     * @brief Free-fly controller for a VkmCamera: WASD moves, left-drag looks around.
-    *
-    * W/S move along the view direction, A/D strafe, Q/E rise and fall along world up, and
-    * holding LeftShift multiplies the speed. Unlike VkmOrbitCameraController this one cannot be
-    * purely event-driven -- "held" is a duration, so tick(deltaTime) must be called once per
-    * frame (from AppDelegate::update, which already receives the frame's delta). Held keys are
-    * polled from the handler rather than integrated from key events, because auto-repeat rate is
-    * an OS setting and would otherwise decide how fast the camera flies.
-    *
-    * Leaves the camera's projection alone: a fly camera has no orbit distance to scale near and
-    * far by, so whatever the caller set stays.
-    *
+    * @details W/S move along the view direction, A/D strafe, Q/E rise and fall along world up, and
+    * holding LeftShift multiplies the speed. Unlike VkmOrbitCameraController this cannot be purely
+    * event-driven -- "held" is a duration, so tick(deltaTime) must be called once per frame. Held
+    * keys are polled from the handler rather than integrated from key events, auto-repeat rate
+    * being an OS setting that would otherwise decide how fast the camera flies.
+    * Leaves the camera's projection alone: a fly camera has no orbit distance to scale near and far
+    * by, so whatever the caller set stays.
     * The camera pointer is borrowed and must outlive the controller.
     */
     class VkmFlyCameraController

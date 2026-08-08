@@ -12,10 +12,8 @@ namespace vkm
     * @brief What the shared GI composite writes.
     *
     * @details The composite is the one pass that knows how a technique's output is combined, so it
-    * is also the natural home for the engine's view into the G-buffer -- these are the channels the
-    * deferred path produces, and having them selectable here is what Phase 3's gate asks for
-    * without every sample growing its own visualiser.
-    *
+    * is also the engine's view into the G-buffer: these are the channels the deferred path
+    * produces, selectable here rather than in every sample's own visualiser.
     * Must match the VKM_GI_DEBUG_* defines in shaders/gi_composite.hlsl.
     */
     enum class VkmGiDebugView : uint32_t
@@ -54,11 +52,10 @@ namespace vkm
     /*
     * @brief The screen-space contact term's parameters.
     *
-    * @details Rays are deliberately short: this pass exists for what the probe grid is too coarse
-    * to hold -- contact darkening, near-field bounce -- and everything beyond that range is the
-    * probe volume's job. Lengthening them does not make it a general GI solution, it just makes a
-    * screen-space one, with all the view dependence that implies.
-    *
+    * @details Rays are short: this pass exists for what the probe grid is too coarse to hold --
+    * contact darkening, near-field bounce -- and everything beyond that range is the probe volume's
+    * job. Lengthening them makes it a screen-space GI solution, with the view dependence that
+    * implies, not a general one.
     * Mirrors SsgiConstants in shaders/ssgi.hlsl.
     */
     struct VkmSsgiConstants
