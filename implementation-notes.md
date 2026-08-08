@@ -3602,3 +3602,21 @@ today; the fence is what would let two independent render passes overlap.
 Metal 240/240 (25080 assertions), no `MTL4CommandQueueError`. The probe GI propagation test still
 measures 16 frames to 90%, which is the direct regression test for the NaN-atlas failure that
 missing Metal barriers produced before. Vulkan 237/237.
+
+### Self-dependencies in the analysis
+
+A subgraph that declares one resource twice was becoming its own producer on the second
+declaration: the plan gained a barrier in `_acquire`, a matching one in `_release`, and the
+subgraph's own id in `_dependencies`. Both halves are recorded before the subgraph runs, so such a
+barrier can only order it against itself.
+
+Two declarations are the normal way to say a subgraph touches something two ways --
+`VkmScene::collectReferencedResources` declares `_visibleListBuffer` as `TransferWrite` and then
+`ShaderStorageReadWrite` for the cull pass, which fires in every graph that culls -- and it is also
+what `compile()` produces when it derives an attachment a caller had already declared by hand,
+which covers every fullscreen pass in the GI sample. So this was firing on roughly ten barriers per
+GI frame, and it put a self-edge on those nodes in the inspector's Graph tab.
+
+Fixed by returning from the emit lambda when the producer is the consumer, before anything is
+pushed. Under `validate` the case is reported when the two declarations also disagree about image
+layout, since no barrier can satisfy that and the guard would otherwise hide it.

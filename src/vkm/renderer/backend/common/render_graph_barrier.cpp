@@ -203,6 +203,28 @@ namespace vkm
                         // Records one half-pair into the plan and notes the dependency edge.
                         const auto emit = [&](VkmResourceAccess srcAccess, VkmPipelineScope srcScope,
                                               uint32_t producer, bool executionOnly) {
+                            /*
+                            * A subgraph that declares one resource twice is its own prior access on
+                            * the second declaration. Both halves are recorded before that subgraph
+                            * runs, so such a barrier could only order it against itself. Two
+                            * declarations are how a subgraph says it touches something two ways --
+                            * the scene's cull pass clears its visible list and then
+                            * read-modify-writes it -- and how an attachment a caller also declared
+                            * by hand meets the one derived from the frame buffer descriptor.
+                            */
+                            if (producer == index)
+                            {
+                                if (validate && layoutChange)
+                                {
+                                    plan._validationErrors.push_back(
+                                        "SubGraph#" + std::to_string(subGraph._subGraphId) +
+                                        " declares " + vkmResourceAccessName(declared._access) +
+                                        " on a subresource it already declared in a different image"
+                                        " layout; no barrier can satisfy both");
+                                }
+                                return;
+                            }
+
                             VkmResourceBarrier barrier{};
                             barrier._handle = declared._handle;
                             barrier._srcAccess = srcAccess;

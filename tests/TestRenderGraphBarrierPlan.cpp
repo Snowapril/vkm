@@ -423,6 +423,39 @@ TEST_CASE("VkmRenderGraphBarrierPlan - optimize=false emits every barrier separa
     CHECK(conservative._release[write].empty() == false);
 }
 
+/*
+* A subgraph declaring one resource twice must not end up depending on itself. Two declarations are
+* how a subgraph says it touches something two ways -- the scene's cull pass clears its visible
+* list and then read-modify-writes it -- and how compile() derives an attachment a caller also
+* declared by hand. A barrier recorded before a subgraph cannot order that subgraph against itself.
+*/
+TEST_CASE("VkmRenderGraphBarrierPlan - a subgraph declaring one resource twice depends on nothing") {
+    const VkmResourceHandle buffer = makeHandle(1, VkmResourceType::Buffer);
+    const VkmResourceHandle target = makeHandle(2, VkmResourceType::Texture);
+    FakeLookup lookup;
+    lookup.add(buffer);
+    lookup.add(target);
+
+    GraphBuilder graph;
+    const uint32_t cull = graph.addSubGraph(VkmPipelineScope::Compute);
+    graph.declare(cull, buffer, VkmResourceAccess::TransferWrite);
+    graph.declare(cull, buffer, VkmResourceAccess::ShaderStorageReadWrite);
+
+    const uint32_t fullscreen = graph.addSubGraph(VkmPipelineScope::Graphics);
+    graph.declare(fullscreen, target, VkmResourceAccess::ColorAttachmentWrite);
+    graph.declare(fullscreen, target, VkmResourceAccess::ColorAttachmentWrite);
+
+    const vkm::VkmRenderGraphBarrierPlan plan = graph.build(lookup);
+
+    CHECK(plan._dependencies[cull].empty());
+    CHECK(plan._dependencies[fullscreen].empty());
+    CHECK(plan._release[cull].empty());
+    CHECK(plan._release[fullscreen].empty());
+    // A buffer's first touch needs nothing; the texture pays only its first-touch layout change.
+    CHECK(plan._acquire[cull].size() == 0);
+    CHECK(plan._acquire[fullscreen].size() == 1);
+}
+
 // The scope a subgraph runs in is exactly its type: a graphics subgraph can only draw, a compute
 // one can only dispatch, a transfer one can only copy.
 TEST_CASE("VkmRenderGraphBarrierPlan - the pipeline scope follows the subgraph type") {
