@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 
 namespace vkm
 {
@@ -110,6 +111,10 @@ namespace vkm
         {
             std::array<VkmResourceHandle, kTargetCount> _targets{};
             VkmResourceHandle _depth{};
+            // VkmTextureInfo keeps a raw const char* to its debug name, so the names live here
+            // rather than in createSet(): they have to outlive the textures that point at them.
+            std::array<std::string, kTargetCount> _targetNames;
+            std::string _depthName;
         };
 
         bool createSet(TextureSet& set, const glm::uvec2& extent, uint32_t setIndex);

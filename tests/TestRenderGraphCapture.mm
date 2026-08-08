@@ -119,6 +119,7 @@ TEST_CASE("Render graph capture - clear pass metadata, snapshot pixels, and buff
     CHECK(attachment.info.extent.x == kWidth);
     CHECK(attachment.info.extent.y == kHeight);
     CHECK(attachment.info.debugName == "CaptureTestOffscreen");
+    CHECK(attachment.info.access == vkm::VkmResourceAccess::ColorAttachmentWrite);
     CHECK_FALSE(attachment.isPresentTarget);
     REQUIRE(attachment.info.snapshotTexture.isValid());
 
@@ -430,6 +431,13 @@ TEST_CASE("Render graph capture - dependency edges follow the declared accesses"
     CHECK(capturedBystander.dependencies.empty());
     REQUIRE(capturedConsumer.dependencies.size() == 1);
     CHECK(capturedConsumer.dependencies[0] == capturedProducer.subGraphId);
+
+    // The declared access rides along with each referenced resource: it is what tells the Graph
+    // tab a pass reads a render target rather than producing it.
+    REQUIRE(capturedProducer.referencedResources.size() == 1);
+    CHECK(capturedProducer.referencedResources[0].access == vkm::VkmResourceAccess::ShaderStorageWrite);
+    REQUIRE(capturedConsumer.referencedResources.size() == 1);
+    CHECK(capturedConsumer.referencedResources[0].access == vkm::VkmResourceAccess::ShaderStorageRead);
 
     driver->getRenderResourcePool()->releaseResource(shared->getHandle());
     driver->getRenderResourcePool()->releaseResource(unrelated->getHandle());

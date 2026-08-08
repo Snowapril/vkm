@@ -168,6 +168,7 @@ namespace vkm
             {
                 VkmCapturedAttachment attachment{};
                 attachment.info = makeTextureResourceInfo(pool, frameBufferDesc._colorAttachments[i]);
+                attachment.info.access = VkmResourceAccess::ColorAttachmentWrite;
                 attachment.loadAction = frameBufferDesc._renderPass._colorAttachments[i]._loadAction;
                 attachment.storeAction = frameBufferDesc._renderPass._colorAttachments[i]._storeAction;
 
@@ -184,6 +185,7 @@ namespace vkm
             {
                 VkmCapturedAttachment depthAttachment{};
                 depthAttachment.info = makeTextureResourceInfo(pool, *frameBufferDesc._depthStencilAttachment);
+                depthAttachment.info.access = VkmResourceAccess::DepthStencilAttachmentWrite;
                 if (frameBufferDesc._renderPass._depthStencilAttachment.has_value())
                 {
                     depthAttachment.loadAction = frameBufferDesc._renderPass._depthStencilAttachment->_loadAction;
@@ -200,6 +202,7 @@ namespace vkm
             {
                 VkmCapturedBuffer capturedBuffer{};
                 capturedBuffer.info = makeBufferResourceInfo(pool, handle);
+                capturedBuffer.info.access = declaration._access;
                 if (_hasContentCapture && capturedBuffer.info.size > 0)
                 {
                     const uint64_t cappedSize = std::min(capturedBuffer.info.size, kMaxCapturedBufferBytes);
@@ -218,12 +221,13 @@ namespace vkm
                         VKM_DEBUG_ERROR("Render graph capture: failed to allocate buffer readback staging");
                     }
                 }
+                pass.referencedResources.push_back(capturedBuffer.info);
                 pass.capturedBuffers.push_back(std::move(capturedBuffer));
-                pass.referencedResources.push_back(makeBufferResourceInfo(pool, handle));
             }
             else if (handle.type == VkmResourceType::Texture)
             {
                 VkmCapturedResourceInfo info = makeTextureResourceInfo(pool, handle);
+                info.access = declaration._access;
                 info.snapshotTexture = takeTextureSnapshot(driver, commandBuffer, handle,
                     "GraphCapture." + pass.name + ".input" + std::to_string(pass.referencedResources.size()));
                 pass.referencedResources.push_back(std::move(info));
@@ -233,6 +237,7 @@ namespace vkm
                 VkmCapturedResourceInfo info{};
                 info.handle = handle;
                 info.type = handle.type;
+                info.access = declaration._access;
                 pass.referencedResources.push_back(std::move(info));
             }
         }

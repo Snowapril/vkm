@@ -484,7 +484,7 @@ namespace vkm
             {
                 VKM_PROFILE_SCOPE("Inspectors::draw");
                 _renderGraphInspector->draw(*_renderGraphCapture, _driver, _imGuiRenderer.get(),
-                                            _pipelineStateManager.get());
+                                            _pipelineStateManager.get(), _driver->getGpuProfiler());
                 _memoryInspector->draw();
                 _cpuProfilerInspector->draw();
                 _gpuProfilerInspector->draw(_driver->getGpuProfiler());

@@ -875,6 +875,28 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
 - Why: <the edge case that forced it>
 ```
 
+### 2026-08-09 — Render graph viewer: fixed the G-buffer's dangling debug names
+
+- Planned: enhance the Graph tab only — averages, render-target rows, load/store, pan/zoom.
+- Did instead: also fixed `VkmGBuffer::createSet()`, which built each target's debug name in a
+  local `std::string` and stored `debugName.c_str()` in `VkmTextureInfo::_debugName`. That field
+  is a raw `const char*` the texture keeps, so every read of a G-buffer target's name was a
+  use-after-free. The names now live in `TextureSet`, whose lifetime matches the textures'.
+- Why: the new node rows read exactly those names, and rendered `??` / `0 (` / `?` instead of
+  `VkmGBufferNormal1` and friends. The same pattern still exists in `scene.cpp:728` (BLAS) and
+  `scene_geometry_pool.cpp:52` (geometry buffers); those names are not on the Graph tab's path
+  and were left alone.
+
+### 2026-08-09 — Subgraph averages are keyed by name, not by subgraph id
+
+- Planned: `VkmGpuProfiler::getSubGraphAverageMs(subGraphId)`.
+- Did instead: `VkmGpuSubGraphAverages`, keyed by the subgraph's name.
+- Why: `VkmRenderGraph` restarts `_currentSubGraphId` at 0 for every graph, so two windows
+  submitting in one frame reuse the same ids, and a graph that changes shape moves a pass onto
+  another id — either would silently average unrelated passes together. The name is stable and
+  is what `VkmCapturedPass` carries anyway. Passes sharing a name are averaged together, which
+  is the intended reading of "this pass costs x ms".
+
 ### 2026-08-08 — Metal heap block selection tries one block, not every block
 
 - Planned: factor the shared "walk `_heapPools`, grow on exhaustion" loop out of
@@ -3567,6 +3589,36 @@ at once).
 The rendering itself needs an interactive session to judge; what is testable is the data behind
 it, and `TestRenderGraphCapture.mm` now asserts it end to end: a producer/bystander/consumer graph
 gives the consumer exactly one edge, to the producer, and the other two none.
+
+### Graph tab: timings, resource flow, and a reusable pan/zoom canvas
+
+Four additions, in the order the data flows.
+
+**`VkmGpuSubGraphAverages`** (`gpu_profiler.h`) keeps a 64-sample sliding window per subgraph,
+fed from `VkmGpuProfiler::retireSubmission()` next to `_lastFrameGpuTimeMs` and *before* its
+`!_capturing` early-out -- averages must survive with the GPU profiler window closed and no
+capture armed, which is the normal state while reading the Graph tab. Keyed by subgraph name; see
+the deviation entry for why not by id. A separate type so it is testable from zones built by hand,
+the same reason `vkmAggregateGpuProfileRange` is a free function.
+
+**`VkmCapturedResourceInfo::access`** carries what the subgraph declared, which the capture
+previously dropped. It is what lets the viewer separate a read from a write without guessing, and
+it finally gives `vkmResourceAccessName()` -- added for this inspector -- data to name.
+
+**Node rows.** A texture counts as a render target of the graph when *some* pass writes it, as an
+attachment or through a declared write access. A texture only ever sampled is a material texture
+reached through the bindless table, and is left out: on Sponza that is the difference between four
+rows and four hundred. Load/store is appended to a graphics subgraph's attachments only, since
+compute and transfer subgraphs have no frame buffer descriptor. Nodes are as tall as their rows, so
+a column stacks them with a running Y cursor rather than on a fixed row pitch.
+
+**`VkmImGuiCanvas`** (`imgui_canvas.h`) is the pan/zoom viewport, kept general rather than folded
+into the inspector so other tools can lay content out in their own units and let the canvas map it.
+Two details are load-bearing: the background `InvisibleButton` needs `SetNextItemAllowOverlap()` or
+it claims the hovered id for the whole region and no node can ever be clicked; and the child needs
+`NoScrollWithMouse` so the wheel reaches the zoom instead of scrolling the region. Below 0.6 scale
+the rows are dropped -- they are unreadable there, and the header alone is what a fitted 13-pass
+graph has room for.
 
 ### Step 6 — Metal actually records barriers
 

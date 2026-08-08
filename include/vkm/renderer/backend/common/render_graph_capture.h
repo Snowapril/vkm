@@ -23,6 +23,10 @@ namespace vkm
         VkmResourceHandle handle = VKM_INVALID_RESOURCE_HANDLE;
         VkmResourceType type = VkmResourceType::Undefined;
         std::string debugName;
+        // How the pass touched it. Declared accesses come from the subgraph; an attachment's is
+        // synthesized from the frame buffer descriptor, the same way VkmRenderGraph::compile()
+        // derives it.
+        VkmResourceAccess access = VkmResourceAccess::None;
         // Texture-only fields
         VkmFormat format = VkmFormat::Undefined;
         glm::uvec3 extent{0, 0, 0};

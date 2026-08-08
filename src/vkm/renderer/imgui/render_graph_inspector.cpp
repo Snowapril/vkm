@@ -2,6 +2,7 @@
 
 #include <vkm/renderer/imgui/render_graph_inspector.h>
 #include <vkm/renderer/imgui/imgui_renderer.h>
+#include <vkm/renderer/backend/common/gpu_profiler.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/render_graph_capture.h>
 #include <vkm/renderer/backend/common/render_graph.h>
@@ -12,6 +13,8 @@
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace vkm
 {
@@ -47,6 +50,142 @@ namespace vkm
                 case VkmRenderSubGraphType::Transfer: return "T";
             }
             return "?";
+        }
+
+        // Node geometry, in the graph canvas' own units. Everything reaching the screen is
+        // multiplied by VkmImGuiCanvas::getScale().
+        constexpr float kNodeWidth = 280.0f;
+        constexpr float kNodePadding = 8.0f;
+        constexpr float kColumnGap = 72.0f;
+        constexpr float kNodeGap = 20.0f;
+        constexpr float kGraphMargin = 16.0f;
+        // Below this the resource rows are too small to read, so nodes fall back to their header.
+        constexpr float kResourceRowMinScale = 0.6f;
+
+        // One render-target row of a graph node.
+        struct GraphResourceRow
+        {
+            bool isOutput = false;
+            std::string label;
+            std::string actions; // load/store, filled for a graphics subgraph's attachments only
+        };
+
+        std::string resourceLabel(const VkmCapturedResourceInfo& info)
+        {
+            return info.debugName.empty() ? ("#" + std::to_string(info.handle.id)) : info.debugName;
+        }
+
+        std::string attachmentActions(const VkmCapturedAttachment& attachment)
+        {
+            return std::string(loadActionToString(attachment.loadAction)) + "/" +
+                   storeActionToString(attachment.storeAction);
+        }
+
+        bool isAttachmentOf(const VkmCapturedPass& pass, VkmResourceHandle handle)
+        {
+            for (const VkmCapturedAttachment& attachment : pass.colorAttachments)
+            {
+                if (attachment.info.handle == handle)
+                {
+                    return true;
+                }
+            }
+            return pass.depthStencilAttachment.has_value() &&
+                   pass.depthStencilAttachment->info.handle == handle;
+        }
+
+        /*
+        * @brief Textures the captured graph produces, as opposed to those it only ever samples.
+        * @details A texture is a render target when some pass writes it, as an attachment or
+        * through a declared write access. One that is only ever read is a material texture reached
+        * through the bindless table, which the diagram leaves out.
+        * @param passes Captured passes.
+        * @return Handles of every render target in the capture.
+        */
+        std::unordered_set<VkmResourceHandle> collectRenderTargets(const std::vector<VkmCapturedPass>& passes)
+        {
+            std::unordered_set<VkmResourceHandle> renderTargets;
+            for (const VkmCapturedPass& pass : passes)
+            {
+                for (const VkmCapturedAttachment& attachment : pass.colorAttachments)
+                {
+                    renderTargets.insert(attachment.info.handle);
+                }
+                if (pass.depthStencilAttachment.has_value())
+                {
+                    renderTargets.insert(pass.depthStencilAttachment->info.handle);
+                }
+                for (const VkmCapturedResourceInfo& resource : pass.referencedResources)
+                {
+                    if (resource.type == VkmResourceType::Texture && vkmIsWriteAccess(resource.access))
+                    {
+                        renderTargets.insert(resource.handle);
+                    }
+                }
+            }
+            return renderTargets;
+        }
+
+        /*
+        * @brief The render targets one pass reads and writes, inputs first.
+        * @details A graphics subgraph's attachments come from its frame buffer descriptor, but
+        * several callers also declare them by hand; each handle is listed once, as the attachment.
+        * @param pass Pass to describe.
+        * @param renderTargets Handles collectRenderTargets() found.
+        * @return Rows in the order they are drawn.
+        */
+        std::vector<GraphResourceRow> collectResourceRows(const VkmCapturedPass& pass,
+                                                          const std::unordered_set<VkmResourceHandle>& renderTargets)
+        {
+            std::vector<GraphResourceRow> rows;
+            std::unordered_set<VkmResourceHandle> listed;
+
+            for (const VkmCapturedResourceInfo& resource : pass.referencedResources)
+            {
+                if (resource.type != VkmResourceType::Texture || vkmIsWriteAccess(resource.access) ||
+                    renderTargets.count(resource.handle) == 0 || isAttachmentOf(pass, resource.handle) ||
+                    !listed.insert(resource.handle).second)
+                {
+                    continue;
+                }
+                rows.push_back(GraphResourceRow{ false, resourceLabel(resource), std::string() });
+            }
+
+            for (const VkmCapturedAttachment& attachment : pass.colorAttachments)
+            {
+                listed.insert(attachment.info.handle);
+                rows.push_back(GraphResourceRow{ true, resourceLabel(attachment.info),
+                                                 attachmentActions(attachment) });
+            }
+            if (pass.depthStencilAttachment.has_value())
+            {
+                listed.insert(pass.depthStencilAttachment->info.handle);
+                rows.push_back(GraphResourceRow{ true, resourceLabel(pass.depthStencilAttachment->info),
+                                                 attachmentActions(*pass.depthStencilAttachment) });
+            }
+
+            for (const VkmCapturedResourceInfo& resource : pass.referencedResources)
+            {
+                if (resource.type != VkmResourceType::Texture || !vkmIsWriteAccess(resource.access) ||
+                    !listed.insert(resource.handle).second)
+                {
+                    continue;
+                }
+                rows.push_back(GraphResourceRow{ true, resourceLabel(resource), std::string() });
+            }
+            return rows;
+        }
+
+        std::string subGraphAverageText(const VkmGpuProfiler* gpuProfiler, const std::string& passName)
+        {
+            if (gpuProfiler == nullptr || gpuProfiler->getSubGraphAverages().getSampleCount(passName) == 0)
+            {
+                return "avg --";
+            }
+            char text[32];
+            std::snprintf(text, sizeof(text), "avg %.2f ms",
+                          gpuProfiler->getSubGraphAverages().getAverageMs(passName));
+            return text;
         }
 
         /*
@@ -126,7 +265,8 @@ namespace vkm
 
     void VkmRenderGraphInspector::draw(VkmRenderGraphCapture& capture, VkmDriverBase* driver,
                                        VkmImGuiRendererBase* imGuiRenderer,
-                                       VkmPipelineStateManager* pipelineStateManager)
+                                       VkmPipelineStateManager* pipelineStateManager,
+                                       const VkmGpuProfiler* gpuProfiler)
     {
         if (!_visible)
         {
@@ -134,7 +274,7 @@ namespace vkm
         }
 
         ImGui::SetNextWindowSize(ImVec2(820, 560), ImGuiCond_FirstUseEver);
-        if (!ImGui::Begin("Render Graph Inspector (F7)", &_visible))
+        if (!ImGui::Begin("Render Graph Inspector (F5)", &_visible))
         {
             ImGui::End();
             return;
@@ -156,7 +296,7 @@ namespace vkm
             }
             if (ImGui::BeginTabItem("Graph"))
             {
-                drawGraphTab(capture);
+                drawGraphTab(capture, gpuProfiler);
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Pipelines"))
@@ -324,9 +464,10 @@ namespace vkm
                     const VkmCapturedResourceInfo& resource = pass.referencedResources[i];
                     if (resource.type != VkmResourceType::Texture)
                     {
-                        ImGui::BulletText("%s '%s' (%llu bytes)", vkmResourceTypeName(resource.type),
+                        ImGui::BulletText("%s '%s' (%llu bytes, %s)", vkmResourceTypeName(resource.type),
                                           resource.debugName.c_str(),
-                                          static_cast<unsigned long long>(resource.size));
+                                          static_cast<unsigned long long>(resource.size),
+                                          vkmResourceAccessName(resource.access));
                         continue;
                     }
 
@@ -338,8 +479,9 @@ namespace vkm
                         const std::string layers = resource.numArrayLayers > 1
                             ? " x " + std::to_string(resource.numArrayLayers) + " layers"
                             : std::string();
-                        ImGui::Text("%s, %ux%u%s", vkmFormatName(resource.format),
-                                    resource.extent.x, resource.extent.y, layers.c_str());
+                        ImGui::Text("%s, %ux%u%s, %s", vkmFormatName(resource.format),
+                                    resource.extent.x, resource.extent.y, layers.c_str(),
+                                    vkmResourceAccessName(resource.access));
                         drawTexturePreview(resource, imGuiRenderer,
                                            "(content preview unavailable on this backend)");
                         ImGui::TreePop();
@@ -388,7 +530,7 @@ namespace vkm
         _reloadStatus = error.empty() ? (_reloadFailed ? "Reload failed." : "Reloaded.") : error;
     }
 
-    void VkmRenderGraphInspector::drawGraphTab(VkmRenderGraphCapture& capture)
+    void VkmRenderGraphInspector::drawGraphTab(VkmRenderGraphCapture& capture, const VkmGpuProfiler* gpuProfiler)
     {
         const std::vector<VkmCapturedPass>& passes = capture.getPasses();
         if (passes.empty())
@@ -398,8 +540,16 @@ namespace vkm
         }
         _selectedPass = std::clamp(_selectedPass, 0, static_cast<int>(passes.size()) - 1);
 
-        ImGui::SetNextItemWidth(160.0f);
-        ImGui::SliderFloat("Zoom", &_graphZoom, 0.4f, 2.0f, "%.2fx");
+        bool fitRequested = ImGui::Button("Fit");
+        ImGui::SameLine();
+        if (ImGui::Button("Reset view"))
+        {
+            _graphCanvas.resetView();
+        }
+        ImGui::SameLine();
+        ImGui::Text("Zoom %.0f%%", _graphCanvas.getScale() * 100.0f);
+        ImGui::SameLine();
+        ImGui::Checkbox("Show resources", &_graphShowResources);
         ImGui::SameLine();
         ImGui::Checkbox("Isolate selection", &_graphIsolateSelection);
         ImGui::SameLine();
@@ -409,8 +559,20 @@ namespace vkm
             ImGui::TextUnformatted("One node per subgraph, one edge per dependency the render graph found.\n"
                                    "Columns are dependency levels: everything in a column can run at the\n"
                                    "same time as far as resource hazards are concerned.\n"
+                                   "A node lists the render targets it reads and writes, with a graphics\n"
+                                   "attachment's load/store action; textures only ever sampled, such as the\n"
+                                   "bindless material set, are left out.\n"
+                                   "The wheel zooms about the cursor and dragging empty space pans.\n"
                                    "Click a node to select it; the Capture tab details that pass.");
             ImGui::EndTooltip();
+        }
+
+        // A capture of a differently shaped graph is framed rather than left wherever the last
+        // one was panned to.
+        if (_graphFittedPassCount != passes.size())
+        {
+            _graphFittedPassCount = passes.size();
+            fitRequested = true;
         }
 
         // Dependency level: a pass sits one column right of its deepest producer. Producers always
@@ -436,32 +598,44 @@ namespace vkm
             levelCount = std::max(levelCount, levelOf[i] + 1);
         }
 
-        // Row within a column, so nodes at one level stack instead of overlapping.
-        std::vector<uint32_t> rowOf(passes.size(), 0);
-        std::vector<uint32_t> nextRow(levelCount, 0);
-        uint32_t rowCount = 1;
-        for (size_t i = 0; i < passes.size(); ++i)
+        if (!_graphCanvas.begin("GraphCanvas"))
         {
-            rowOf[i] = nextRow[levelOf[i]]++;
-            rowCount = std::max(rowCount, rowOf[i] + 1);
+            _graphCanvas.end();
+            return;
         }
 
-        const float nodeWidth = 168.0f * _graphZoom;
-        const float nodeHeight = 44.0f * _graphZoom;
-        const float columnStride = nodeWidth + 64.0f * _graphZoom;
-        const float rowStride = nodeHeight + 20.0f * _graphZoom;
-        const float margin = 16.0f * _graphZoom;
+        const float scale = _graphCanvas.getScale();
+        const bool showRows = _graphShowResources && scale >= kResourceRowMinScale;
+        const float lineHeight = ImGui::GetTextLineHeight();
+        const std::unordered_set<VkmResourceHandle> renderTargets =
+            showRows ? collectRenderTargets(passes) : std::unordered_set<VkmResourceHandle>();
 
-        ImGui::BeginChild("GraphCanvas", ImVec2(0, 0), ImGuiChildFlags_Borders,
-                          ImGuiWindowFlags_HorizontalScrollbar);
+        // Nodes are as tall as their rows make them, so a column stacks them with a running cursor
+        // rather than on a fixed row pitch.
+        std::vector<std::vector<GraphResourceRow>> rowsOf(passes.size());
+        std::vector<float> heightOf(passes.size(), 0.0f);
+        std::vector<ImVec2> positionOf(passes.size());
+        std::vector<float> columnCursor(levelCount, kGraphMargin);
+        float contentBottom = kGraphMargin;
+        for (size_t i = 0; i < passes.size(); ++i)
+        {
+            if (showRows)
+            {
+                rowsOf[i] = collectResourceRows(passes[i], renderTargets);
+            }
+            heightOf[i] = kNodePadding * 2.0f + (2.0f + static_cast<float>(rowsOf[i].size())) * lineHeight;
+            positionOf[i] = ImVec2(kGraphMargin + levelOf[i] * (kNodeWidth + kColumnGap),
+                                   columnCursor[levelOf[i]]);
+            columnCursor[levelOf[i]] += heightOf[i] + kNodeGap;
+            contentBottom = std::max(contentBottom, columnCursor[levelOf[i]]);
+        }
+        if (fitRequested)
+        {
+            _graphCanvas.requestFit(ImVec2(kGraphMargin + levelCount * (kNodeWidth + kColumnGap),
+                                           contentBottom + kGraphMargin));
+        }
 
-        const ImVec2 origin = ImGui::GetCursorScreenPos();
-        const auto nodeMin = [&](size_t i) {
-            return ImVec2(origin.x + margin + levelOf[i] * columnStride,
-                          origin.y + margin + rowOf[i] * rowStride);
-        };
-
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImDrawList* drawList = _graphCanvas.getDrawList();
 
         // Edges first so nodes paint over them.
         for (size_t consumer = 0; consumer < passes.size(); ++consumer)
@@ -481,31 +655,36 @@ namespace vkm
                     continue;
                 }
 
-                const ImVec2 producerMin = nodeMin(producer);
-                const ImVec2 consumerMin = nodeMin(consumer);
-                const ImVec2 from(producerMin.x + nodeWidth, producerMin.y + nodeHeight * 0.5f);
-                const ImVec2 to(consumerMin.x, consumerMin.y + nodeHeight * 0.5f);
-                const float slack = std::max(24.0f, (to.x - from.x) * 0.5f);
+                const ImVec2 from = _graphCanvas.toScreen(
+                    ImVec2(positionOf[producer].x + kNodeWidth, positionOf[producer].y + heightOf[producer] * 0.5f));
+                const ImVec2 to = _graphCanvas.toScreen(
+                    ImVec2(positionOf[consumer].x, positionOf[consumer].y + heightOf[consumer] * 0.5f));
+                const float slack = std::max(24.0f * scale, (to.x - from.x) * 0.5f);
                 const ImU32 colour = touchesSelection ? IM_COL32(255, 200, 90, 255) : IM_COL32(130, 130, 145, 160);
                 drawList->AddBezierCubic(from, ImVec2(from.x + slack, from.y), ImVec2(to.x - slack, to.y), to,
                                          colour, touchesSelection ? 2.5f : 1.5f);
                 // Arrow head, so the direction of the dependency is readable without tracing the
                 // curve back to its ends.
-                const float head = 5.0f * _graphZoom;
+                const float head = 5.0f * scale;
                 drawList->AddTriangleFilled(ImVec2(to.x, to.y), ImVec2(to.x - head * 1.6f, to.y - head),
                                             ImVec2(to.x - head * 1.6f, to.y + head), colour);
             }
         }
 
+        ImFont* const font = ImGui::GetFont();
+        const float fontSize = ImGui::GetFontSize() * scale;
+        const float padding = kNodePadding * scale;
+        const float lineStride = lineHeight * scale;
+
         for (size_t i = 0; i < passes.size(); ++i)
         {
             const VkmCapturedPass& pass = passes[i];
-            const ImVec2 min = nodeMin(i);
-            const ImVec2 max(min.x + nodeWidth, min.y + nodeHeight);
+            const ImVec2 min = _graphCanvas.toScreen(positionOf[i]);
+            const ImVec2 max(min.x + kNodeWidth * scale, min.y + heightOf[i] * scale);
 
             ImGui::SetCursorScreenPos(min);
             ImGui::InvisibleButton(("node" + std::to_string(pass.subGraphId)).c_str(),
-                                   ImVec2(nodeWidth, nodeHeight));
+                                   ImVec2(max.x - min.x, max.y - min.y));
             if (ImGui::IsItemClicked())
             {
                 _selectedPass = static_cast<int>(i);
@@ -534,15 +713,44 @@ namespace vkm
             const std::string title = "[" + std::string(subGraphTypeTag(pass.type)) + "] " + pass.name;
             const std::string subtitle = "#" + std::to_string(pass.subGraphId) +
                                          "  deps " + std::to_string(pass.dependencies.size());
+            const std::string average = subGraphAverageText(gpuProfiler, pass.name);
+
+            const float textLeft = min.x + padding;
+            const float textRight = max.x - padding;
+            float textY = min.y + padding;
             drawList->PushClipRect(min, max, true);
-            drawList->AddText(ImVec2(min.x + 8.0f, min.y + 6.0f), IM_COL32(236, 236, 240, 255), title.c_str());
-            drawList->AddText(ImVec2(min.x + 8.0f, min.y + 6.0f + ImGui::GetTextLineHeight()),
-                              IM_COL32(176, 176, 190, 255), subtitle.c_str());
+            // A resource name longer than the row is cut off at the right-aligned text rather than
+            // drawn through it, which is what a G-buffer target's full name would otherwise do.
+            const auto drawRow = [&](const char* left, ImU32 leftColour, const char* right, ImU32 rightColour) {
+                float leftLimit = textRight;
+                if (right != nullptr)
+                {
+                    const float rightX = textRight - ImGui::CalcTextSize(right).x * scale;
+                    leftLimit = rightX - padding;
+                    drawList->AddText(font, fontSize, ImVec2(rightX, textY), rightColour, right);
+                }
+                drawList->PushClipRect(ImVec2(min.x, min.y), ImVec2(leftLimit, max.y), true);
+                drawList->AddText(font, fontSize, ImVec2(textLeft, textY), leftColour, left);
+                drawList->PopClipRect();
+            };
+
+            drawRow(title.c_str(), IM_COL32(236, 236, 240, 255), average.c_str(), IM_COL32(226, 214, 160, 255));
+            textY += lineStride;
+            drawRow(subtitle.c_str(), IM_COL32(176, 176, 190, 255), nullptr, 0);
+
+            for (const GraphResourceRow& row : rowsOf[i])
+            {
+                textY += lineStride;
+                const std::string label = (row.isOutput ? "out " : "in  ") + row.label;
+                drawRow(label.c_str(),
+                        row.isOutput ? IM_COL32(214, 224, 236, 255) : IM_COL32(166, 190, 176, 255),
+                        row.actions.empty() ? nullptr : row.actions.c_str(), IM_COL32(150, 150, 164, 255));
+            }
             drawList->PopClipRect();
 
             if (ImGui::IsItemHovered() && ImGui::BeginTooltip())
             {
-                ImGui::Text("%s (#%u)", pass.name.c_str(), pass.subGraphId);
+                ImGui::Text("%s (#%u) -- %s", pass.name.c_str(), pass.subGraphId, average.c_str());
                 if (pass.dependencies.empty())
                 {
                     ImGui::TextDisabled("depends on nothing");
@@ -557,10 +765,7 @@ namespace vkm
             }
         }
 
-        // Claim the laid-out area so the child scrolls to fit the whole diagram.
-        ImGui::SetCursorScreenPos(origin);
-        ImGui::Dummy(ImVec2(margin * 2.0f + levelCount * columnStride, margin * 2.0f + rowCount * rowStride));
-        ImGui::EndChild();
+        _graphCanvas.end();
     }
 
     void VkmRenderGraphInspector::drawPipelinesTab(VkmPipelineStateManager* pipelineStateManager)
