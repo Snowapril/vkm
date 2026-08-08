@@ -389,6 +389,21 @@ namespace vkm
             _heapAllocator->accumulateMemoryStats(&stats);
         }
 
+        // Aliasing blocks are the engine's suballocator too, and counting them here is what makes
+        // the trade visible: the per-texture tags of an aliased texture report zero, so without
+        // this the bytes a block reserves would appear nowhere at all.
+        for (const auto& imageHeap : _imageHeaps)
+        {
+            id<MTLHeap> heap = imageHeap != nullptr ? imageHeap->getHeap() : nil;
+            if (heap == nil)
+            {
+                continue;
+            }
+            stats._poolReservedBytes += static_cast<uint64_t>([heap currentAllocatedSize]);
+            stats._poolUsedBytes += static_cast<uint64_t>([heap usedSize]);
+            stats._hasPoolStats = true;
+        }
+
         return stats;
     }
 

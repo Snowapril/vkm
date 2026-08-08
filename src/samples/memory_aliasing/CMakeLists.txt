@@ -1,0 +1,134 @@
+set(target memory_aliasing)
+set(ROOT_DIR ${PROJECT_SOURCE_DIR})
+set(PUBLIC_HDR_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Includes
+set(PUBLIC_HDRS 
+)
+
+# Sources
+set(SRCS
+    ${SRC_DIR}/main.cpp
+)
+
+if (VKM_PLATFORM_APPLE)
+    # Compile source/headers as objective-c++
+    set_source_files_properties(${SRCS} PROPERTIES
+        COMPILE_FLAGS "-x objective-c++")
+endif()
+
+# Build executable
+add_executable(${target} ${SRCS} ${BACKWARD_ENABLE})
+
+if (NOT EMSCRIPTEN)
+    # backward-cpp has no Emscripten/WASM stack-trace backend.
+    add_backward(${target})
+endif()
+
+# Project options
+set_target_properties(${target}
+    PROPERTIES
+    ${DEFAULT_PROJECT_OPTIONS}
+    PUBLIC_HEADER "${PUBLIC_HDRS}"
+)
+
+# macOS GUI apps have to be .app bundles (see buildscripts/AppBundle.cmake).
+vkm_configure_macos_app_bundle(${target})
+
+#Include directories
+target_include_directories(${target}
+    PUBLIC
+    $<BUILD_INTERFACE:${PUBLIC_HDR_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_PREFIX}/include>
+    PRIVATE
+    ${ROOT_DIR}/dependencies/src/cxxopts/include
+    ${ROOT_DIR}/include
+)
+
+# Compile options
+target_compile_options(${target}
+    PRIVATE
+    ${DEFAULT_COMPILE_OPTIONS}
+)
+
+# Compile definitions
+if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
+    # Inside the WASM sandbox the on-disk paths don't exist; the sample dir (renderpass
+    # JSON) and the generated shader caches are preloaded into MEMFS instead (see the
+    # --preload-file link options below).
+    set(MEMORY_ALIASING_SAMPLE_DIR "/SampleData/memory_aliasing/")
+    set(MEMORY_ALIASING_SHADER_CACHE_DIR "/ShaderCache/memory_aliasing/")
+else()
+    set(MEMORY_ALIASING_SAMPLE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/")
+    set(MEMORY_ALIASING_SHADER_CACHE_DIR "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache/")
+endif()
+
+target_compile_definitions(${target}
+    PRIVATE
+    RESOURCES_DIR="${RESOURCES_DIR}"
+    SAMPLE_DIR="${MEMORY_ALIASING_SAMPLE_DIR}"
+    SAMPLE_SHADER_CACHE_DIR="${MEMORY_ALIASING_SHADER_CACHE_DIR}"
+    ${DEFAULT_COMPILE_DEFINITIONS}
+)
+
+# Link libraries
+target_link_libraries(${target}
+    PUBLIC
+    ${DEFAULT_LINKER_OPTIONS}
+	${DEFAULT_LIBRARIES}
+    vkmcore
+)
+
+if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
+    target_compile_options(${target} PRIVATE ${VKM_EMSCRIPTEN_COMPILE_FLAGS})
+    target_link_options(${target} PRIVATE ${VKM_EMSCRIPTEN_PORT_FLAGS})
+
+    # Same V8 TextDecoder-vs-resizable-ArrayBuffer workaround as tests/CMakeLists.txt:
+    # ALLOW_MEMORY_GROWTH=1 breaks WebGPU adapter negotiation under current Chrome, and
+    # this sample's heap usage is small and known, so fix a generous initial size instead.
+    # Must come after VKM_EMSCRIPTEN_PORT_FLAGS so the last-specified `-s` value wins.
+    target_link_options(${target} PRIVATE
+        "SHELL:-s ALLOW_MEMORY_GROWTH=0"
+        "SHELL:-s INITIAL_MEMORY=134217728"
+    )
+
+    # Mount the sample dir (renderpass.json) and the generated shader caches into MEMFS
+    # at the paths baked into SAMPLE_DIR/SAMPLE_SHADER_CACHE_DIR above. The ShaderCache
+    # dir is produced by memory_aliasing_shaders (requires VKM_HOST_VKM_COMPILER; see
+    # buildscripts/ShaderCompile.cmake) before this target links.
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache")
+    target_link_options(${target} PRIVATE
+        "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}@/SampleData/memory_aliasing"
+        "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/ShaderCache@/ShaderCache/memory_aliasing"
+        # VkmEngine loads its own PSO cache from RESOURCES_DIR, which is /resources/ under
+        # Emscripten (see src/vkm/CMakeLists.txt).
+        ${VKM_WASM_ENGINE_RESOURCE_PRELOAD}
+    )
+endif()
+
+# Compile this sample's HLSL through vkm-compiler at build time.
+vkm_add_shader_cache_target(
+    TARGET_NAME memory_aliasing_shaders
+    OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/ShaderCache"
+    PSO_JSON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/mem_generate.json"
+                   "${CMAKE_CURRENT_SOURCE_DIR}/mem_process.json"
+                   "${CMAKE_CURRENT_SOURCE_DIR}/mem_present.json"
+    EXTRA_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/mem_generate.hlsl"
+                  "${CMAKE_CURRENT_SOURCE_DIR}/mem_process.hlsl"
+                  "${CMAKE_CURRENT_SOURCE_DIR}/mem_present.hlsl")
+if (TARGET memory_aliasing_shaders)
+    add_dependencies(${target} memory_aliasing_shaders)
+endif()
+if (TARGET vkm_engine_shaders)
+    add_dependencies(${target} vkm_engine_shaders)
+    if (EMSCRIPTEN AND VKM_USE_WEBGPU_API)
+        # Repack the .data bundle when regenerated caches change (the stamp path
+        # matches vkm_add_shader_cache_target's naming for this target's single
+        # PSO json). Only when the shader-cache rule exists: without
+        # VKM_HOST_VKM_COMPILER the stamp has no producing rule and make would
+        # fail with "No rule to make target".
+        set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS
+            "${CMAKE_CURRENT_BINARY_DIR}/memory_aliasing_shaders.stamps/mem_generate.0.stamp")
+    endif()
+endif()

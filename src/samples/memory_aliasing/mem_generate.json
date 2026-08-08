@@ -1,0 +1,26 @@
+{
+    "name": "mem_generate_pso",
+    "primitive_topology": "triangle_list",
+    "rasterization_state": {
+        "fill_mode": "solid",
+        "cull_mode": "none",
+        "front_face": "counter_clockwise"
+    },
+    "depth_stencil_state": {
+        "depth_test_enable": true,
+        "depth_write_enable": true,
+        "depth_compare_op": "less_or_equal",
+        "depth_stencil_format": "d32_sfloat",
+        "stencil_test_enable": false
+    },
+    "color_attachments": [
+        { "format": "swapchain" }
+    ],
+    "per_pass_resources": [
+        { "binding": 0, "type": "uniform_buffer" }
+    ],
+    "shaders": {
+        "vertex": { "filepath": "mem_generate.hlsl", "entry_point": "VSMain" },
+        "fragment": { "filepath": "mem_generate.hlsl", "entry_point": "PSMain" }
+    }
+}
