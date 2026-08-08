@@ -73,6 +73,10 @@ namespace vkm
 
                 id<MTLTexture> texture = [device newTextureWithDescriptor:texDesc];
                 [texDesc release];
+                if (!VKM_MTL_CHECK(texture, nil, "Failed to create ImGui font texture"))
+                {
+                    return;
+                }
                 resourcePool->registerExternalAllocation(texture);
 
                 const MTLRegion region = MTLRegionMake2D(0, 0, (NSUInteger)tex->Width, (NSUInteger)tex->Height);
@@ -117,6 +121,10 @@ namespace vkm
             resourcePool->unregisterExternalAllocation(buffer);
             [buffer release];
             id<MTLBuffer> grown = [device newBufferWithLength:requiredSize options:MTLResourceStorageModeShared];
+            if (!VKM_MTL_CHECK(grown, nil, "Failed to grow ImGui vertex/index buffer"))
+            {
+                return nil;
+            }
             resourcePool->registerExternalAllocation(grown);
             return grown;
         }
@@ -355,14 +363,14 @@ namespace vkm
         io.BackendRendererName = "vkm_metal4";
         io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures;
 
-        NSError* error = nil;
-
+        // Each call gets its own NSError: Metal may fail without populating one, and a shared
+        // variable would report a stale reason from an earlier step.
+        NSError* compilerError = nil;
         MTL4CompilerDescriptor* compilerDesc = [[MTL4CompilerDescriptor alloc] init];
-        id<MTL4Compiler> compiler = [_impl->device newCompilerWithDescriptor:compilerDesc error:&error];
+        id<MTL4Compiler> compiler = [_impl->device newCompilerWithDescriptor:compilerDesc error:&compilerError];
         [compilerDesc release];
-        if (compiler == nil)
+        if (!VKM_MTL_CHECK(compiler, compilerError, "Failed to create MTL4Compiler"))
         {
-            VKM_DEBUG_ERROR(fmt::format("Failed to create MTL4Compiler: {}", error.localizedDescription.UTF8String).c_str());
             return false;
         }
 
@@ -372,10 +380,11 @@ namespace vkm
         // the static embedded array needs no lifetime management.
         dispatch_data_t libraryData = dispatch_data_create(kVkmImGuiShaderMetallib,
             kVkmImGuiShaderMetallibLen, dispatch_get_main_queue(), DISPATCH_DATA_DESTRUCTOR_DEFAULT);
-        id<MTLLibrary> library = [_impl->device newLibraryWithData:libraryData error:&error];
-        if (library == nil)
+        NSError* libraryError = nil;
+        id<MTLLibrary> library = [_impl->device newLibraryWithData:libraryData error:&libraryError];
+        if (!VKM_MTL_CHECK(library, libraryError, "Failed to load ImGui Metal4 shader library"))
         {
-            VKM_DEBUG_ERROR(fmt::format("Failed to load ImGui Metal4 shader library: {}", error.localizedDescription.UTF8String).c_str());
+            [compiler release];
             return false;
         }
 
@@ -399,7 +408,8 @@ namespace vkm
         pipelineDesc.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
         pipelineDesc.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
 
-        _impl->pipelineState = [compiler newRenderPipelineStateWithDescriptor:pipelineDesc compilerTaskOptions:nil error:&error];
+        NSError* pipelineError = nil;
+        _impl->pipelineState = [compiler newRenderPipelineStateWithDescriptor:pipelineDesc compilerTaskOptions:nil error:&pipelineError];
 
         [pipelineDesc release];
         [fragmentFuncDesc release];
@@ -407,9 +417,8 @@ namespace vkm
         [library release];
         [compiler release];
 
-        if (_impl->pipelineState == nil)
+        if (!VKM_MTL_CHECK(_impl->pipelineState, pipelineError, "Failed to create ImGui Metal4 pipeline state"))
         {
-            VKM_DEBUG_ERROR(fmt::format("Failed to create ImGui Metal4 pipeline state: {}", error.localizedDescription.UTF8String).c_str());
             return false;
         }
 
@@ -417,11 +426,11 @@ namespace vkm
         argTableDesc.maxBufferBindCount = 2;
         argTableDesc.maxTextureBindCount = 1;
         argTableDesc.maxSamplerStateBindCount = 1;
-        _impl->argumentTable = [_impl->device newArgumentTableWithDescriptor:argTableDesc error:&error];
+        NSError* argTableError = nil;
+        _impl->argumentTable = [_impl->device newArgumentTableWithDescriptor:argTableDesc error:&argTableError];
         [argTableDesc release];
-        if (_impl->argumentTable == nil)
+        if (!VKM_MTL_CHECK(_impl->argumentTable, argTableError, "Failed to create ImGui Metal4 argument table"))
         {
-            VKM_DEBUG_ERROR(fmt::format("Failed to create ImGui Metal4 argument table: {}", error.localizedDescription.UTF8String).c_str());
             return false;
         }
 
@@ -432,6 +441,11 @@ namespace vkm
         samplerDesc.tAddressMode = MTLSamplerAddressModeClampToEdge;
         _impl->sampler = [_impl->device newSamplerStateWithDescriptor:samplerDesc];
         [samplerDesc release];
+        // Checked before .gpuResourceID below, which would dereference nil otherwise.
+        if (!VKM_MTL_CHECK(_impl->sampler, nil, "Failed to create ImGui sampler state"))
+        {
+            return false;
+        }
         [_impl->argumentTable setSamplerState:_impl->sampler.gpuResourceID atIndex:0];
 
         const NSEventMask keyEventMask = NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskFlagsChanged | NSEventMaskScrollWheel;
@@ -580,6 +594,13 @@ namespace vkm
         frame.vertexBuffer = ensureBufferCapacity(_impl->device, _impl->resourcePool, frame.vertexBuffer, vertexBufferSize);
         frame.indexBuffer = ensureBufferCapacity(_impl->device, _impl->resourcePool, frame.indexBuffer, indexBufferSize);
         frame.uniformBuffer = ensureBufferCapacity(_impl->device, _impl->resourcePool, frame.uniformBuffer, sizeof(Uniforms));
+
+        // A failed allocation leaves a nil buffer whose .contents is null, so skip this frame's
+        // draw rather than memcpy'ing into it. ensureBufferCapacity has already logged the reason.
+        if (frame.vertexBuffer == nil || frame.indexBuffer == nil || frame.uniformBuffer == nil)
+        {
+            return;
+        }
 
         ImDrawVert* vtxDst = (ImDrawVert*)frame.vertexBuffer.contents;
         ImDrawIdx* idxDst = (ImDrawIdx*)frame.indexBuffer.contents;

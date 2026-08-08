@@ -250,7 +250,9 @@ namespace vkm
         VkmDriverBase::waitIdle(timeoutMs);
         if (_device != VK_NULL_HANDLE)
         {
-            vkDeviceWaitIdle(_device);
+            // Callers destroy resources on the assumption the GPU is done with them, so a
+            // VK_ERROR_DEVICE_LOST here must surface (vkCheckResult routes it to the crash handler).
+            VKM_VK_CHECK_RESULT_MSG(vkDeviceWaitIdle(_device), "Failed to wait for device idle");
         }
     }
 
@@ -527,7 +529,7 @@ namespace vkm
         size_t chosenDevice = 0;
 
         uint32_t deviceCount = 0;
-        vkEnumeratePhysicalDevices(_instance, &deviceCount, nullptr);
+        VKM_VK_CHECK_RESULT_MSG_RETURN(vkEnumeratePhysicalDevices(_instance, &deviceCount, nullptr), "Failed to get physical device count");
         if (deviceCount == 0)
         {
             VKM_DEBUG_ERROR("No Vulkan GPU found");
@@ -535,7 +537,7 @@ namespace vkm
         }
         
         std::vector<VkPhysicalDevice> physicalDevices(deviceCount);
-        vkEnumeratePhysicalDevices(_instance, &deviceCount, physicalDevices.data());
+        VKM_VK_CHECK_RESULT_MSG_RETURN(vkEnumeratePhysicalDevices(_instance, &deviceCount, physicalDevices.data()), "Failed to enumerate physical devices");
 
         VkPhysicalDeviceProperties2 properties2{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         for(size_t i = 0; i < physicalDevices.size(); i++)

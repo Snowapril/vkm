@@ -121,7 +121,7 @@ Validation layers active in Debug builds. Do not suppress validation errors by c
 ## Implementation Checklist
 
 - [ ] New Vulkan objects have debug names (when `VKM_DEBUG_NAME_ENABLED`)
-- [ ] All `VkResult` values checked; log failures with `VKM_LOG_ERROR`
+- [ ] All `VkResult` values checked via `VKM_VK_CHECK_RESULT_MSG` / `VKM_VK_CHECK_RESULT_MSG_RETURN`
 - [ ] Destroy order is reverse of creation order
 - [ ] VMA allocations freed before VmaAllocator destruction
 - [ ] No `vulkan.h` include (use volk)

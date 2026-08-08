@@ -4,6 +4,25 @@
 
 namespace vkm
 {
+    std::string mtlErrorToString(NSError* error)
+    {
+        if (error == nil || error.localizedDescription == nil || error.localizedDescription.UTF8String == nullptr)
+        {
+            return "unknown error";
+        }
+        return std::string(error.localizedDescription.UTF8String);
+    }
+
+    bool mtlCheckObject(id object, NSError* error, const char* msg)
+    {
+        if (object == nil)
+        {
+            VKM_DEBUG_ERROR(fmt::format("{}: {}", msg, mtlErrorToString(error)).c_str());
+            return false;
+        }
+        return true;
+    }
+
     MTLPixelFormat getMTLPixelFormat(VkmFormat format)
     {
         switch (format)
