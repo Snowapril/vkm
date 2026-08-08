@@ -244,6 +244,34 @@ namespace vkm
         resourceBarrier(barriers.data(), static_cast<uint32_t>(barriers.size()));
     }
 
+    void VkmCommandBufferBase::barrierAcquire(const VkmResourceBarrier* barriers, uint32_t count)
+    {
+        if (!_isRecording || _isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("barrierAcquire must be recorded while recording and outside a render pass");
+            return;
+        }
+        if (barriers == nullptr || count == 0)
+        {
+            return;
+        }
+        onBarrierAcquire(barriers, count);
+    }
+
+    void VkmCommandBufferBase::barrierRelease(const VkmResourceBarrier* barriers, uint32_t count)
+    {
+        if (!_isRecording || _isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("barrierRelease must be recorded while recording and outside a render pass");
+            return;
+        }
+        if (barriers == nullptr || count == 0)
+        {
+            return;
+        }
+        onBarrierRelease(barriers, count);
+    }
+
     void VkmCommandBufferBase::barrierIndirectArgumentBuffer(VkmResourceHandle buffer)
     {
         if (!_isRecording || _isInRenderPass)

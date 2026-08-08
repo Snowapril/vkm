@@ -3498,3 +3498,32 @@ boundary has no encoder open, and opening one is the documented cause of
 `MTL4CommandQueueErrorTimeout`, so the encoder-scope plumbing is its own step.
 
 Vulkan 237/237 (5577 assertions), Metal 237/237 (25038), same four pre-existing VUIDs.
+
+### Step 5 — `execute()` emits the plan
+
+`barrierAcquire` / `barrierRelease` on the command buffer, called for each subgraph immediately
+*before* `commit()` -- both halves before, never one on each side, because Metal's release must be
+recorded inside the producing encoder and that encoder is closed by the time `commit()` returns.
+The base class defaults make the acquire behave as an ordinary batched barrier and the release do
+nothing, which is exactly right for Vulkan (one queue, one command buffer per frame, so a split
+buys nothing) and for WebGPU.
+
+`compile()` now also derives a graphics subgraph's attachments from its `VkmFrameBufferDescriptor`
+rather than requiring them to be declared. They are the one thing the graph can read directly, and
+declaring them as well would write every render target down twice and silently lose a writer
+whenever the two drifted apart. A caller that also declares its target costs a duplicate the
+analysis folds away, not a conflict.
+
+Verified the plan is not silently empty: temporary instrumentation over the Vulkan suite shows
+`SceneCull` acquiring 3 barriers and the draw subgraph 7. The `SceneCull` ones are pre-existing bug
+1 from the step-1 notes actually being fixed -- the transfer writes into `_frameDataBuffer` and
+`_objectDataBuffer` finally get a memory dependency naming those buffers before the cull dispatch
+reads them.
+
+The old barrier entry points still record as well, so every dependency is currently covered twice.
+That is deliberate for this step: it means a missing declaration cannot break rendering yet, and
+deleting the old path (step 7) is what will actually put the analysis under load.
+
+Vulkan 237/237, Metal 237/237, WebGPU PASS. The Vulkan run's VUID set is unchanged -- still only
+the four pre-existing ImGui-teardown ones, with the graph now emitting real image layout
+transitions of its own.

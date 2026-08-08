@@ -152,6 +152,24 @@ namespace vkm
         void resourceBarrier(const VkmResourceBarrier* barriers, uint32_t count);
         void resourceBarrier(const std::vector<VkmResourceBarrier>& barriers);
 
+        /*
+        * @brief The two halves of a subgraph's dependencies, both recorded immediately *before*
+        * that subgraph commits: what has to be made visible to it, and what it will publish.
+        *
+        * @details Both before, not one on each side, because Metal's release half has to be
+        * recorded inside the producing encoder and that encoder is already closed by the time
+        * commit() returns. Declaring both up front lets each backend place them where its own API
+        * needs them without the render graph knowing how.
+        *
+        * Vulkan folds the release into the acquire that consumes it -- one queue, one command
+        * buffer per frame, so a split buys nothing that a plain barrier does not already give --
+        * and WebGPU orders passes implicitly. Metal is the backend the pair exists for: its
+        * encoder-boundary barriers are a genuine split, and these are what narrow them from
+        * MTLStageAll to the stages a dependency actually names.
+        */
+        void barrierAcquire(const VkmResourceBarrier* barriers, uint32_t count);
+        void barrierRelease(const VkmResourceBarrier* barriers, uint32_t count);
+
         void barrierIndirectArgumentBuffer(VkmResourceHandle buffer);
 
         /*
@@ -322,6 +340,20 @@ namespace vkm
         // `barriers` is non-empty and every entry names a live resource -- the base class drops
         // the degenerate cases before this is reached.
         virtual void onResourceBarrier(const VkmResourceBarrier* barriers, uint32_t count) = 0;
+        /*
+        * Empty defaults rather than pure virtuals: a backend with nothing to split (Vulkan by
+        * default, WebGPU always) wants the acquire to behave exactly like onResourceBarrier and
+        * the release to do nothing at all, which is what the base class does for them.
+        */
+        virtual void onBarrierAcquire(const VkmResourceBarrier* barriers, uint32_t count)
+        {
+            onResourceBarrier(barriers, count);
+        }
+        virtual void onBarrierRelease(const VkmResourceBarrier* barriers, uint32_t count)
+        {
+            (void)barriers;
+            (void)count;
+        }
         virtual void onBarrierIndirectArgumentBuffer(VkmResourceHandle buffer) = 0;
         virtual void onBuildAccelerationStructure(VkmResourceHandle accelerationStructure) = 0;
         virtual void onBarrierTextureForShaderRead(VkmResourceHandle texture) = 0;

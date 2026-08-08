@@ -136,6 +136,34 @@ namespace vkm
                 accesses.push_back(
                     VkmSubGraphAccess{ declaration._handle, declaration._access, declaration._range });
             }
+
+            /*
+            * A graphics subgraph's attachments are derived from its frame buffer descriptor rather
+            * than declared. They are the one thing the graph can read directly, and requiring them
+            * to be declared as well would mean every render target were written down twice and the
+            * analysis would silently lose a writer whenever one of the two drifted.
+            *
+            * Appended after the explicit declarations, so a caller that also declares its target
+            * (agreeing with what is derived here) costs a duplicate the analysis folds away rather
+            * than a conflict.
+            */
+            if (subGraph->getSubGraphType() != VkmRenderSubGraphType::Graphics)
+            {
+                continue;
+            }
+            const VkmFrameBufferDescriptor& frameBufferDesc =
+                static_cast<VkmRenderGraphicsSubGraph*>(subGraph.get())->getFrameBufferDescriptor();
+            for (uint32_t i = 0; i < frameBufferDesc._renderPass._colorAttachmentCount; ++i)
+            {
+                accesses.push_back(VkmSubGraphAccess{ frameBufferDesc._colorAttachments[i],
+                                                      VkmResourceAccess::ColorAttachmentWrite, {} });
+            }
+            if (frameBufferDesc._depthStencilAttachment.has_value() &&
+                frameBufferDesc._renderPass._depthStencilAttachment.has_value())
+            {
+                accesses.push_back(VkmSubGraphAccess{ frameBufferDesc._depthStencilAttachment.value(),
+                                                      VkmResourceAccess::DepthStencilAttachmentWrite, {} });
+            }
         }
         accessOffsets.push_back(static_cast<uint32_t>(accesses.size()));
 
@@ -210,9 +238,26 @@ namespace vkm
             options.capture->beginCapture(_driver, _frameIndex);
         }
 
-        for (auto& subGraph : _subGraphs)
+        for (size_t subGraphIndex = 0; subGraphIndex < _subGraphs.size(); ++subGraphIndex)
         {
+            auto& subGraph = _subGraphs[subGraphIndex];
             const size_t pipelineHistoryBegin = commandBuffer->getBoundPipelineHistory().size();
+
+            /*
+            * Both halves before commit(), never one on each side. Metal has to record its release
+            * inside the producing encoder, and that encoder is closed by the time commit() returns
+            * -- so declaring what this subgraph publishes has to happen while the encoder it will
+            * open is still ahead of us. Each backend places them where its own API needs them.
+            *
+            * Empty for a subgraph nothing depends on, and the call returns immediately for that.
+            */
+            if (subGraphIndex < _barrierPlan._acquire.size())
+            {
+                const std::vector<VkmResourceBarrier>& acquire = _barrierPlan._acquire[subGraphIndex];
+                commandBuffer->barrierAcquire(acquire.data(), static_cast<uint32_t>(acquire.size()));
+                const std::vector<VkmResourceBarrier>& release = _barrierPlan._release[subGraphIndex];
+                commandBuffer->barrierRelease(release.data(), static_cast<uint32_t>(release.size()));
+            }
 
             // Bracket each subgraph in a named GPU debug group so a capture shows it as a
             // collapsible scope (e.g. "TrianglePass", "EngineImGuiOverlay"). Self-gated on
