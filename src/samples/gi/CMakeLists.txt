@@ -113,3 +113,9 @@ if (TARGET vkm_engine_shaders)
     # composite and the tone map are all engine PSOs.
     add_dependencies(${target} vkm_engine_shaders)
 endif()
+if (TARGET vkm_ray_tracing_shaders)
+    # The ReSTIR technique's PSOs. The target exists only where a backend can carry ray query
+    # (Vulkan/Metal); WebGPU builds skip it and the sample's capability gate keeps ReSTIR
+    # unselectable there.
+    add_dependencies(${target} vkm_ray_tracing_shaders)
+endif()

@@ -188,17 +188,22 @@ namespace vkm
         /*
         * @brief Records generation, then temporal and spatial resampling as the options ask.
         * Compute subgraph, after the G-buffer pass and outside any render pass.
-        * @details Advances the sample index; the slice the frame's result lands in is readable
-        * afterwards through getResolvedSlice().
+        * @details Advances the sample index. `gbufferParity` selects which of the two table sets
+        * the passes bind: the G-buffer's current/previous roles swap on every advanceFrame(),
+        * while a resource table is immutable, so the pass keeps one table per role assignment
+        * and the caller says which is live -- the number of advanceFrame() calls since this
+        * pass's initialize, modulo 2. A caller that never flips passes 0.
         */
-        void recordResample(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options);
+        void recordResample(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options,
+                            uint32_t gbufferParity = 0);
 
         /*
         * @brief Records the compute resolve: shades the resampled reservoirs into the
         * accumulation buffer (rgb summed, a = sample count). Same subgraph rules as
         * recordResample, and must follow it in the frame.
         */
-        void recordResolveAccumulate(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options);
+        void recordResolveAccumulate(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options,
+                                     uint32_t gbufferParity = 0);
 
         // recordResample then recordResolveAccumulate: the accumulating shape the MSE gates use.
         void recordAccumulate(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options);
@@ -218,7 +223,7 @@ namespace vkm
         * subgraph whose color attachment is the indirect-radiance target; writes incoming
         * irradiance, with albedo and 1/pi left to the composite.
         */
-        void recordLighting(VkmCommandBufferBase* commandBuffer);
+        void recordLighting(VkmCommandBufferBase* commandBuffer, uint32_t gbufferParity = 0);
 
         /*
         * @brief Slice the next recordResample will leave the frame's result in, given `options`.
@@ -256,10 +261,12 @@ namespace vkm
         VkmPipelineStateBase* _spatialPipeline = nullptr;
         VkmPipelineStateBase* _resolvePipeline = nullptr;
         VkmPipelineStateBase* _lightingPipeline = nullptr;
-        VkmResourceTableBase* _generateTable = nullptr;
-        VkmResourceTableBase* _temporalTable = nullptr;
-        VkmResourceTableBase* _spatialTable = nullptr;
-        VkmResourceTableBase* _resolveTable = nullptr;
-        VkmResourceTableBase* _lightingTable = nullptr;
+        // [parity]: which of the G-buffer's two texture sets currently plays "current". Index 0
+        // is the assignment at initialize; index 1 is the same bindings with the sets swapped.
+        VkmResourceTableBase* _generateTables[2] = { nullptr, nullptr };
+        VkmResourceTableBase* _temporalTables[2] = { nullptr, nullptr };
+        VkmResourceTableBase* _spatialTables[2] = { nullptr, nullptr };
+        VkmResourceTableBase* _resolveTables[2] = { nullptr, nullptr };
+        VkmResourceTableBase* _lightingTables[2] = { nullptr, nullptr };
     };
 } // namespace vkm

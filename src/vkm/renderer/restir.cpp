@@ -163,62 +163,59 @@ namespace vkm
         }
         _neighbourOffsetBuffer = neighbourOffsets->getHandle();
 
-        // Binding orders mirror the PSO jsons.
-        _generateTable = driver->newResourceTable(
-            _generatePipeline, VkmResourceSetKind::PerPass,
-            {{ 0, gbuffer.getTexture(VkmGBuffer::Target::Normal) },
-             { 1, gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) },
-             { 2, _reservoirBuffer }},
-            &psoError);
-        if (_generateTable == nullptr)
+        /*
+        * Binding orders mirror the PSO jsons. Every pass that binds G-buffer textures gets one
+        * table per parity: the G-buffer's current/previous roles swap on advanceFrame() while a
+        * table is immutable, so parity 0 binds the roles as they are at initialize and parity 1
+        * binds them swapped -- recordResample selects by the caller's flip count. The temporal
+        * table also binds the previous set for history-tap validation; before the first
+        * advanceFrame() that set holds nothing rendered, whose zero camera distance reads as a
+        * disocclusion -- the right answer for "there is no history yet".
+        */
+        for (uint32_t parity = 0; parity < 2; ++parity)
         {
-            destroy(driver);
-            return fail(outError, "Failed to build the reservoir generation table: " + psoError);
-        }
+            const auto current = [&](VkmGBuffer::Target target) {
+                return parity == 0 ? gbuffer.getTexture(target) : gbuffer.getPrevTexture(target);
+            };
+            const auto previous = [&](VkmGBuffer::Target target) {
+                return parity == 0 ? gbuffer.getPrevTexture(target) : gbuffer.getTexture(target);
+            };
 
-        // History-tap validation reads last frame's G-buffer, so this is the one table that binds
-        // the previous set. Before the first advanceFrame() those textures exist but hold nothing
-        // rendered; the temporal pass's per-tap validation reads their zero camera distance as a
-        // disocclusion, which is the right answer for "there is no history yet".
-        _temporalTable = driver->newResourceTable(
-            _temporalPipeline, VkmResourceSetKind::PerPass,
-            {{ 0, gbuffer.getTexture(VkmGBuffer::Target::Normal) },
-             { 1, gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) },
-             { 2, gbuffer.getPrevTexture(VkmGBuffer::Target::Normal) },
-             { 3, gbuffer.getPrevTexture(VkmGBuffer::Target::MotionMetallic) },
-             { 4, _reservoirBuffer }},
-            &psoError);
-        if (_temporalTable == nullptr)
-        {
-            destroy(driver);
-            return fail(outError, "Failed to build the temporal resampling table: " + psoError);
-        }
-
-        _spatialTable = driver->newResourceTable(
-            _spatialPipeline, VkmResourceSetKind::PerPass,
-            {{ 0, gbuffer.getTexture(VkmGBuffer::Target::Normal) },
-             { 1, gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) },
-             { 2, _neighbourOffsetBuffer },
-             { 3, _reservoirBuffer }},
-            &psoError);
-        if (_spatialTable == nullptr)
-        {
-            destroy(driver);
-            return fail(outError, "Failed to build the spatial resampling table: " + psoError);
-        }
-
-        _resolveTable = driver->newResourceTable(
-            _resolvePipeline, VkmResourceSetKind::PerPass,
-            {{ 0, gbuffer.getTexture(VkmGBuffer::Target::Normal) },
-             { 1, gbuffer.getTexture(VkmGBuffer::Target::BaseColorRoughness) },
-             { 2, gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) },
-             { 3, _reservoirBuffer },
-             { 4, _accumulationBuffer }},
-            &psoError);
-        if (_resolveTable == nullptr)
-        {
-            destroy(driver);
-            return fail(outError, "Failed to build the reservoir resolve table: " + psoError);
+            _generateTables[parity] = driver->newResourceTable(
+                _generatePipeline, VkmResourceSetKind::PerPass,
+                {{ 0, current(VkmGBuffer::Target::Normal) },
+                 { 1, current(VkmGBuffer::Target::MotionMetallic) },
+                 { 2, _reservoirBuffer }},
+                &psoError);
+            _temporalTables[parity] = driver->newResourceTable(
+                _temporalPipeline, VkmResourceSetKind::PerPass,
+                {{ 0, current(VkmGBuffer::Target::Normal) },
+                 { 1, current(VkmGBuffer::Target::MotionMetallic) },
+                 { 2, previous(VkmGBuffer::Target::Normal) },
+                 { 3, previous(VkmGBuffer::Target::MotionMetallic) },
+                 { 4, _reservoirBuffer }},
+                &psoError);
+            _spatialTables[parity] = driver->newResourceTable(
+                _spatialPipeline, VkmResourceSetKind::PerPass,
+                {{ 0, current(VkmGBuffer::Target::Normal) },
+                 { 1, current(VkmGBuffer::Target::MotionMetallic) },
+                 { 2, _neighbourOffsetBuffer },
+                 { 3, _reservoirBuffer }},
+                &psoError);
+            _resolveTables[parity] = driver->newResourceTable(
+                _resolvePipeline, VkmResourceSetKind::PerPass,
+                {{ 0, current(VkmGBuffer::Target::Normal) },
+                 { 1, current(VkmGBuffer::Target::BaseColorRoughness) },
+                 { 2, current(VkmGBuffer::Target::MotionMetallic) },
+                 { 3, _reservoirBuffer },
+                 { 4, _accumulationBuffer }},
+                &psoError);
+            if (_generateTables[parity] == nullptr || _temporalTables[parity] == nullptr ||
+                _spatialTables[parity] == nullptr || _resolveTables[parity] == nullptr)
+            {
+                destroy(driver);
+                return fail(outError, "Failed to build the reservoir pass tables: " + psoError);
+            }
         }
 
         // The lighting constants change per frame (parity-dependent slice indices) while the
@@ -254,18 +251,24 @@ namespace vkm
             _lightingStagingPointers[frame] = staging;
         }
 
-        _lightingTable = driver->newResourceTable(
-            _lightingPipeline, VkmResourceSetKind::PerPass,
-            {{ 0, gbuffer.getTexture(VkmGBuffer::Target::Normal) },
-             { 1, gbuffer.getTexture(VkmGBuffer::Target::BaseColorRoughness) },
-             { 2, gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) },
-             { 3, _reservoirBuffer },
-             { 4, _lightingConstantBuffer }},
-            &psoError);
-        if (_lightingTable == nullptr)
+        for (uint32_t parity = 0; parity < 2; ++parity)
         {
-            destroy(driver);
-            return fail(outError, "Failed to build the ReSTIR lighting table: " + psoError);
+            const auto current = [&](VkmGBuffer::Target target) {
+                return parity == 0 ? gbuffer.getTexture(target) : gbuffer.getPrevTexture(target);
+            };
+            _lightingTables[parity] = driver->newResourceTable(
+                _lightingPipeline, VkmResourceSetKind::PerPass,
+                {{ 0, current(VkmGBuffer::Target::Normal) },
+                 { 1, current(VkmGBuffer::Target::BaseColorRoughness) },
+                 { 2, current(VkmGBuffer::Target::MotionMetallic) },
+                 { 3, _reservoirBuffer },
+                 { 4, _lightingConstantBuffer }},
+                &psoError);
+            if (_lightingTables[parity] == nullptr)
+            {
+                destroy(driver);
+                return fail(outError, "Failed to build the ReSTIR lighting table: " + psoError);
+            }
         }
         return true;
     }
@@ -282,11 +285,14 @@ namespace vkm
                 table = nullptr;
             }
         };
-        releaseTable(_generateTable);
-        releaseTable(_temporalTable);
-        releaseTable(_spatialTable);
-        releaseTable(_resolveTable);
-        releaseTable(_lightingTable);
+        for (uint32_t parity = 0; parity < 2; ++parity)
+        {
+            releaseTable(_generateTables[parity]);
+            releaseTable(_temporalTables[parity]);
+            releaseTable(_spatialTables[parity]);
+            releaseTable(_resolveTables[parity]);
+            releaseTable(_lightingTables[parity]);
+        }
 
         VkmDeferredResourceReclaimer* reclaimer = driver->getDeferredReclaimer();
         const auto release = [reclaimer](VkmResourceHandle& handle) {
@@ -327,7 +333,8 @@ namespace vkm
         return options._spatialResampling ? parity : (1u - parity);
     }
 
-    void VkmRestirPass::recordResample(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options)
+    void VkmRestirPass::recordResample(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options,
+                                       uint32_t gbufferParity)
     {
         VKM_ASSERT(commandBuffer != nullptr, "VkmRestirPass::recordResample requires a command buffer");
 
@@ -391,7 +398,7 @@ namespace vkm
         generateConstants._outputSlice = options._temporalResampling ? kFreshSlice : options._inputSlice;
 
         commandBuffer->bindPipeline(_generatePipeline);
-        commandBuffer->bindResourceTable(_generateTable);
+        commandBuffer->bindResourceTable(_generateTables[gbufferParity & 1u]);
         commandBuffer->setPushConstants(&generateConstants, sizeof(generateConstants));
         commandBuffer->dispatch(groupsX, groupsY, 1);
         // Closing the compute pass here is what orders the next pass's reads after this one's
@@ -405,7 +412,7 @@ namespace vkm
             temporalConstants._outputSlice = temporalOutSlice;
 
             commandBuffer->bindPipeline(_temporalPipeline);
-            commandBuffer->bindResourceTable(_temporalTable);
+            commandBuffer->bindResourceTable(_temporalTables[gbufferParity & 1u]);
             commandBuffer->setPushConstants(&temporalConstants, sizeof(temporalConstants));
             commandBuffer->dispatch(groupsX, groupsY, 1);
             commandBuffer->unbindPipeline();
@@ -421,7 +428,7 @@ namespace vkm
             }
 
             commandBuffer->bindPipeline(_spatialPipeline);
-            commandBuffer->bindResourceTable(_spatialTable);
+            commandBuffer->bindResourceTable(_spatialTables[gbufferParity & 1u]);
             commandBuffer->setPushConstants(&spatialConstants, sizeof(spatialConstants));
             commandBuffer->dispatch(groupsX, groupsY, 1);
             commandBuffer->unbindPipeline();
@@ -432,7 +439,8 @@ namespace vkm
     }
 
     void VkmRestirPass::recordResolveAccumulate(VkmCommandBufferBase* commandBuffer,
-                                                const VkmRestirOptions& options)
+                                                const VkmRestirOptions& options,
+                                                uint32_t gbufferParity)
     {
         VKM_ASSERT(commandBuffer != nullptr, "VkmRestirPass::recordResolveAccumulate requires a command buffer");
 
@@ -460,7 +468,7 @@ namespace vkm
         (void)options;
 
         commandBuffer->bindPipeline(_resolvePipeline);
-        commandBuffer->bindResourceTable(_resolveTable);
+        commandBuffer->bindResourceTable(_resolveTables[gbufferParity & 1u]);
         commandBuffer->setPushConstants(&constants, sizeof(constants));
         commandBuffer->dispatch(groupsX, groupsY, 1);
         commandBuffer->unbindPipeline();
@@ -499,18 +507,18 @@ namespace vkm
                                   sizeof(constants));
     }
 
-    void VkmRestirPass::recordLighting(VkmCommandBufferBase* commandBuffer)
+    void VkmRestirPass::recordLighting(VkmCommandBufferBase* commandBuffer, uint32_t gbufferParity)
     {
         VKM_ASSERT(commandBuffer != nullptr, "VkmRestirPass::recordLighting requires a command buffer");
 
-        if (_lightingPipeline == nullptr || _lightingTable == nullptr)
+        if (_lightingPipeline == nullptr || _lightingTables[0] == nullptr)
         {
             VKM_DEBUG_ERROR("recordLighting before a successful VkmRestirPass::initialize");
             return;
         }
 
         commandBuffer->bindPipeline(_lightingPipeline);
-        commandBuffer->bindResourceTable(_lightingTable);
+        commandBuffer->bindResourceTable(_lightingTables[gbufferParity & 1u]);
         commandBuffer->draw(3, 1, 0, 0);
     }
 } // namespace vkm
