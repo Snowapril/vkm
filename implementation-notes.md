@@ -3724,3 +3724,56 @@ are gone.
 Verified: Metal 246/246, Vulkan 237/237 (excluding `captureMemorySnapshot`), no
 `MTL4CommandQueueError`, same four pre-existing VUIDs. Probe GI propagation still 16 frames to 90%,
 which is the regression test for the NaN atlases that a missing Metal barrier produces.
+
+## 2026-08-09 — Metal cross-encoder fences: the two defects behind the "multi-subgraph hang"
+
+The fence conversion (`updateFence:afterEncoderStages:` / `waitForFence:beforeEncoderStages:` for
+cross-encoder ordering, `barrierAfterEncoderStages:beforeEncoderStages:` inside one encoder, zero
+queue-stage barriers) built and then appeared to hang the queue on any graph with several
+subgraphs. It was not a queue deadlock, and the split-barrier tracker was right to stay silent:
+every wait did name a fence some earlier encoder had produced.
+
+### The stage mask was never clamped to the encoder
+
+`waitForFence:` and `updateFence:` accept only stages the encoder can itself encode -- the render
+set and the compute set are disjoint -- and Metal rejects anything else with a debug-layer
+assertion. `onResourceBarrier` had always clamped for the intra-encoder barrier form; the two fence
+halves passed the graph's stage masks through untouched. A dependency names its stages in graph
+terms, so a compute-scoped destination reaching a render encoder was enough to trip:
+
+    -[MTL4DebugCommandEncoder waitForFence:beforeEncoderStages:]:252: failed assertion
+    beforeEncoderStages must be a valid combination of MTLStages for the current encoder type
+
+The assertion aborts inside a signal handler, and under a coverage build that turns into a
+gcov-writeout and mimalloc-heap spiral that prints without ever terminating. That endless spew, not
+a stalled GPU, is what "the test never returns" was. Both halves now clamp, falling back to every
+stage the encoder has when the intersection is empty -- for a wait and for an update alike, that
+orders more than was asked rather than less.
+
+### An encoder-boundary hazard had nothing to wait on
+
+`onResourceBarrier` with no encoder open recorded stage bits and no fence, so the ordering was
+silently dropped. That is the shape `VkmScene::recordCull` records three times: `copyBuffer` opens
+and closes its own encoder, and the clear-to-cull and cull-to-emit barriers are both issued after
+`unbindPipeline` has already closed the encoder that produced the data. The queue-stage barrier the
+conversion removed had been covering exactly this case; per-subgraph fences do not, because the
+producer here is a *previous encoder of the same subgraph* and the graph never names it.
+
+Every encoder now updates a per-command-buffer boundary fence as it closes, and a barrier recorded
+with nothing open makes the next encoder wait on it. A wait covers all prior updates, so this means
+"everything recorded earlier in this command buffer" -- coarse, but it is the honest answer when the
+producer is unnamed, and it is confined to that case. Cross-subgraph dependencies keep their precise
+per-producer fences. `_encoderBoundaryPublished` guards the first encoder, which has nothing before
+it and would otherwise wait on a fence no encoder has updated.
+
+Without this fix the failures are silent and downstream, which is what the absence of a Vulkan-style
+validation layer costs: `readVisibleCount` off by one, the per-distance draw counts inverted, and
+probe GI at 4864 frames to 90% instead of 16.
+
+Verified: Metal 244/244 with `MTL_DEBUG_LAYER=1`, no validation assertions, probe GI back to
+16 frames to 90% (model predicts at most 16).
+
+### Noticed, not touched
+
+`_currentSubGraphReleaseStages` is assigned in `onBarrierRelease` and cleared in
+`onBeginCommandBuffer`, and nothing reads it.

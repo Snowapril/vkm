@@ -31,6 +31,14 @@ namespace vkm
         VkmPipelineScope _dstScope = VkmPipelineScope::All;
         VkmSubresourceRange _range;
         /*
+        * The subgraph whose work the destination waits for, or INVALID_VALUE32 when it lies
+        * outside this graph -- a host upload, a previous frame, a swapchain acquire.
+        * A backend that pairs the two halves per producer rather than per pipeline stage needs
+        * this: it is what lets a consumer wait for its own producers instead of for everything
+        * recorded before it at those stages.
+        */
+        uint32_t _producerSubGraphId = INVALID_VALUE32;
+        /*
         * Write-after-read: the source only read, so the two sides need ordering but no cache
         * flush. Vulkan drops the source access mask, Metal drops to MTL4VisibilityOptionNone.
         */

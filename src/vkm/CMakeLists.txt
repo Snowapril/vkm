@@ -82,6 +82,7 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/backend/common/renderer_common.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_graph.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_graph_barrier.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/split_barrier_tracker.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_graph_capture.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/pipeline_state_parser.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/shader_cache_util.cpp

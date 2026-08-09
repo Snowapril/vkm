@@ -3,12 +3,16 @@
 #pragma once
 
 #include <vkm/renderer/backend/common/command_buffer.h>
+#include <vkm/renderer/backend/common/split_barrier_tracker.h>
 
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 @protocol MTL4CommandBuffer;
 @protocol MTL4RenderCommandEncoder;
 @protocol MTL4ComputeCommandEncoder;
+@protocol MTLFence;
 
 namespace vkm
 {
@@ -31,33 +35,35 @@ namespace vkm
             _mtlCommandBuffer = mtlCommandBuffer;
         }
 
-        /*
-        * @brief Opens a render encoder, waiting first for the ordering the caller accumulated.
-        * @details Metal 4 does no automatic hazard tracking, so an encoder that reads what an
-        * earlier one wrote must open with a barrier or it samples memory still being written. The
-        * masks come from the render graph's dependency analysis where it named one, and fall back
-        * to the conservative whole-queue pair where it did not.
-        * @param renderResourcePool Pool the attachments are resolved through.
-        * @param frameBufferDesc Attachments and load/store actions for the pass.
-        * @param acquireAfterQueueStages MTLStages to wait for; 0 means every stage.
-        * @param acquireBeforeStages MTLStages in this encoder that wait; 0 means vertex and
-        * fragment. Typed as uint64_t to keep MTLStages out of this header, as _boundPrimitiveType
-        * does for MTLPrimitiveType.
-        */
-        void beginRenderPass(VkmRenderResourcePool* renderResourcePool, const VkmFrameBufferDescriptor& frameBufferDesc,
-                             uint64_t acquireAfterQueueStages = 0, uint64_t acquireBeforeStages = 0);
+        void beginRenderPass(VkmRenderResourcePool* renderResourcePool, const VkmFrameBufferDescriptor& frameBufferDesc);
         void beginComputePass();
+        void commit();
 
         /*
-        * @brief Publishes this encoder's writes to the queue stages that consume them, then ends it.
-        * @details Metal 4 does no automatic hazard tracking, so an encoder that does not publish
-        * leaves later encoders reading memory still being written. The mask comes from the render
-        * graph's analysis where it named consumers for this subgraph, and falls back to every queue
-        * stage where it named none.
-        * @param releaseBeforeQueueStages MTLStages that must wait for this encoder; 0 means all of
-        * them. Typed as uint64_t to keep MTLStages out of this header.
+        * @brief Waits for the producers this encoder consumes, before the stages that consume them.
+        * @details Metal 4 does no automatic hazard tracking, so an encoder reading what an earlier
+        * one wrote must wait or it samples memory still being written. Must be called while an
+        * encoder is open. The fences come from the render graph's analysis, one per producing
+        * subgraph, so a consumer waits for its own producers rather than for everything recorded
+        * before it at a pipeline stage.
+        * @param fences Fences to wait on. Empty means this encoder consumes nothing in this graph.
+        * @param beforeEncoderStages MTLStages in this encoder that wait. Typed as uint64_t to keep
+        * MTLStages out of this header, as _boundPrimitiveType does for MTLPrimitiveType.
         */
-        void commit(uint64_t releaseBeforeQueueStages = 0);
+        void waitForProducers(const std::vector<id<MTLFence>>& fences, uint64_t beforeEncoderStages);
+
+        /*
+        * @brief Publishes this encoder's writes through the fence its subgraph owns.
+        * @details Must be called while an encoder is open, before it ends. A subgraph that opens
+        * several encoders updates the same fence from each; a wait covers every update recorded
+        * before it, so one fence per producing subgraph is enough.
+        * @param fence Fence to update, or nil when nothing in this graph consumes this subgraph.
+        * @param afterEncoderStages MTLStages whose completion the update waits for.
+        * @return True when the update was encoded. False means no encoder was open or the fence was
+        * nil, and the caller must not record the fence as produced -- a wait on it would not clear.
+        */
+        bool publishThroughFence(id<MTLFence> fence, uint64_t afterEncoderStages);
+
         void reset();
 
         inline id<MTL4RenderCommandEncoder> getActiveRenderCommandEncoder() const { return _mtlRenderCommandEncoder; }
@@ -124,25 +130,67 @@ namespace vkm
         VkmCommandEncoderMetal _commandEncoder;
 
         /*
-        * Ordering named while no encoder was open, carried to the next one that opens. Metal 4's
-        * barriers are encoder-scoped and opening an encoder just to hold one is what causes
-        * MTL4CommandQueueErrorTimeout, so a barrier recorded between passes waits here instead.
+        * Cross-encoder ordering is fences, not queue-scoped barriers: a fence pairs a consumer with
+        * its own producers, where a queue-stage barrier waits for everything recorded before it at
+        * those stages. Metal 4's fence calls are encoder-scoped, and opening an encoder just to
+        * hold one is what causes MTL4CommandQueueErrorTimeout, so a dependency named between passes
+        * waits here until the next encoder opens.
         */
-        uint64_t _pendingAcquireAfterQueueStages = 0;
-        uint64_t _pendingAcquireBeforeStages = 0;
-        // Which queue stages consume what the upcoming subgraph writes, from the analysis. Held
-        // across that subgraph's encoders rather than taken, because a subgraph may close several
-        // and every one of them has to publish.
-        uint64_t _pendingReleaseBeforeQueueStages = 0;
+        std::vector<id<MTLFence>> _pendingWaitFences;
+        uint64_t _pendingWaitBeforeStages = 0;
 
-        // Hands the accumulated masks to the encoder now opening and clears them, so one barrier
+        /*
+        * The fence the running subgraph publishes through, and the stages whose completion its
+        * updates wait for. Held rather than taken: a subgraph that records several copies closes
+        * several encoders, and every one of them has to update the fence.
+        */
+        id<MTLFence> _currentSubGraphFence = nullptr;
+        uint32_t _currentSubGraphId = INVALID_VALUE32;
+        uint64_t _currentSubGraphReleaseStages = 0;
+
+        /*
+        * Subgraphs whose fence has actually been updated in this command buffer. A producer that
+        * records no GPU work opens no encoder and so updates nothing -- VkmScene::recordUpdate
+        * returns early on an empty scene -- and waiting on a fence no encoder ever signals hangs
+        * the queue. A consumer's waits are resolved after its producers have run, so this is known
+        * by then.
+        */
+        std::unordered_set<uint32_t> _publishedSubGraphs;
+
+        // Reports the two mistakes that turn a split barrier into a hang.
+        VkmSplitBarrierTracker _splitBarrierTracker;
+
+        // One fence per producing subgraph, reused across frames.
+        std::unordered_map<uint32_t, id<MTLFence>> _subGraphFences;
+        id<MTLFence> fenceForSubGraph(uint32_t subGraphId);
+        void releaseFences();
+
+        /*
+        * Orders one encoder against the encoders already closed before it, for a hazard the render
+        * graph cannot name a producer for: a barrier recorded inside a subgraph callback, between
+        * two of that subgraph's own encoders. Every encoder updates it on close, so a wait covers
+        * everything recorded earlier in this command buffer -- the honest answer when the producer
+        * is unnamed, and the only case that coarse. Cross-subgraph dependencies keep their own
+        * per-producer fences. `_encoderBoundaryPublished` guards the first encoder, which has
+        * nothing before it and would otherwise wait on a fence no encoder has updated.
+        */
+        id<MTLFence> _encoderBoundaryFence = nullptr;
+        bool _encoderBoundaryPublished = false;
+        id<MTLFence> fenceForEncoderBoundary();
+
+        // Every encoder opens by waiting for the producers this subgraph consumes and closes by
+        // publishing through its fence, so no call site has to remember either.
+        void openComputeEncoder(uint64_t waitBeforeStages);
+        void closeEncoder(uint64_t publishAfterStages);
+
+        // Hands the accumulated waits to the encoder now opening and clears them, so one wait
         // discharges them rather than every later encoder repeating it.
-        void takePendingAcquire(uint64_t* outAfterQueueStages, uint64_t* outBeforeStages)
+        void takePendingWaits(std::vector<id<MTLFence>>* outFences, uint64_t* outBeforeStages)
         {
-            *outAfterQueueStages = _pendingAcquireAfterQueueStages;
-            *outBeforeStages = _pendingAcquireBeforeStages;
-            _pendingAcquireAfterQueueStages = 0;
-            _pendingAcquireBeforeStages = 0;
+            *outFences = _pendingWaitFences;
+            *outBeforeStages = _pendingWaitBeforeStages;
+            _pendingWaitFences.clear();
+            _pendingWaitBeforeStages = 0;
         }
 
         // Primitive type of the currently bound graphics pipeline, captured at

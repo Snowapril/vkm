@@ -164,9 +164,72 @@ namespace vkm
         return static_cast<VkmBufferMetal*>(renderResourcePool->getResource<VkmBuffer>(handle))->getBuffer();
     }
 
+    // Every encoder-scoped stage mask -- both halves of a fence and the intra-encoder barrier --
+    // may only name stages the encoder itself can encode; Metal rejects the rest outright. The two
+    // sets are disjoint, so which one applies identifies the encoder type.
+    static constexpr MTLStages kRenderEncodableStages =
+        MTLStageVertex | MTLStageFragment | MTLStageTile | MTLStageObject | MTLStageMesh;
+    static constexpr MTLStages kComputeEncodableStages =
+        MTLStageDispatch | MTLStageBlit | MTLStageAccelerationStructure;
+
+    // Whichever encoder is open, together with the stages it can name. Nil with an empty mask when
+    // none is.
+    static id<MTL4CommandEncoder> resolveEncoder(id<MTL4RenderCommandEncoder> renderEncoder,
+                                                 id<MTL4ComputeCommandEncoder> computeEncoder,
+                                                 MTLStages* outEncodableStages)
+    {
+        if (renderEncoder != nil)
+        {
+            *outEncodableStages = kRenderEncodableStages;
+            return static_cast<id<MTL4CommandEncoder>>(renderEncoder);
+        }
+        if (computeEncoder != nil)
+        {
+            *outEncodableStages = kComputeEncodableStages;
+            return static_cast<id<MTL4CommandEncoder>>(computeEncoder);
+        }
+        *outEncodableStages = 0;
+        return nil;
+    }
+
+    void VkmCommandEncoderMetal::waitForProducers(const std::vector<id<MTLFence>>& fences,
+                                                  uint64_t beforeEncoderStages)
+    {
+        MTLStages encodable = 0;
+        id<MTL4CommandEncoder> encoder =
+            resolveEncoder(_mtlRenderCommandEncoder, _mtlComputeCommandEncoder, &encodable);
+        if (encoder == nil || fences.empty())
+        {
+            return;
+        }
+        // A dependency names its destination stages in graph terms, so it can name stages this
+        // encoder has none of. Waiting before every stage the encoder does have orders more work
+        // than the dependency asked for, never less.
+        const MTLStages stages = (static_cast<MTLStages>(beforeEncoderStages) & encodable) ?: encodable;
+        for (id<MTLFence> fence : fences)
+        {
+            [encoder waitForFence:fence beforeEncoderStages:stages];
+        }
+    }
+
+    bool VkmCommandEncoderMetal::publishThroughFence(id<MTLFence> fence, uint64_t afterEncoderStages)
+    {
+        MTLStages encodable = 0;
+        id<MTL4CommandEncoder> encoder =
+            resolveEncoder(_mtlRenderCommandEncoder, _mtlComputeCommandEncoder, &encodable);
+        if (encoder == nil || fence == nil)
+        {
+            return false;
+        }
+        // Same clamp as the wait half. Publishing after every stage the encoder has covers more
+        // of this encoder's work than the release asked for, which is the safe direction.
+        const MTLStages stages = (static_cast<MTLStages>(afterEncoderStages) & encodable) ?: encodable;
+        [encoder updateFence:fence afterEncoderStages:stages];
+        return true;
+    }
+
     void VkmCommandEncoderMetal::beginRenderPass(VkmRenderResourcePool* renderResourcePool,
-                                                 const VkmFrameBufferDescriptor& frameBufferDesc,
-                                                 uint64_t acquireAfterQueueStages, uint64_t acquireBeforeStages)
+                                                 const VkmFrameBufferDescriptor& frameBufferDesc)
     {
         MTL4RenderPassDescriptor* mtlRenderPassDescriptor = [[MTL4RenderPassDescriptor alloc] init];
         const VkmRenderPassDescriptor& renderPassDesc = frameBufferDesc._renderPass;
@@ -216,18 +279,6 @@ namespace vkm
         _mtlRenderCommandEncoder = [_mtlCommandBuffer renderCommandEncoderWithDescriptor:mtlRenderPassDescriptor];
         _currentEncoderType = VkmCommandEncoderType::Graphics;
 
-        /*
-        * Metal 4 does no automatic hazard tracking, between two render passes as much as between a
-        * compute pass and a render pass. Without this, a pass that samples what an earlier pass
-        * rendered reads it while it is still being written.
-        * The compute path brackets itself the same way (see onBindPipeline / onUnbindPipeline).
-        * The barrier rides an encoder that exists anyway: opening one per barrier stalls the
-        * command queue. One pair per pass, not one per barrier call.
-        */
-        [_mtlRenderCommandEncoder barrierAfterQueueStages:static_cast<MTLStages>(acquireAfterQueueStages) ?: MTLStageAll
-                                             beforeStages:static_cast<MTLStages>(acquireBeforeStages) ?: (MTLStageVertex | MTLStageFragment)
-                                        visibilityOptions:MTL4VisibilityOptionDevice];
-
         // These sources are compiled without ARC (see the [release] pairs elsewhere in the
         // Metal backend), and the encoder does not keep the descriptor -- without this the
         // descriptor and its attachment sub-objects leak once per render pass, i.e. every frame.
@@ -240,16 +291,11 @@ namespace vkm
         _currentEncoderType = VkmCommandEncoderType::Compute;
     }
 
-    void VkmCommandEncoderMetal::commit(uint64_t releaseBeforeQueueStages)
+    void VkmCommandEncoderMetal::commit()
     {
         switch(_currentEncoderType)
         {
             case VkmCommandEncoderType::Graphics:
-                // The producer half of the pair opened in beginRenderPass: publish this pass's
-                // attachment writes to everything recorded after it.
-                [_mtlRenderCommandEncoder barrierAfterStages:MTLStageVertex | MTLStageFragment
-                                           beforeQueueStages:static_cast<MTLStages>(releaseBeforeQueueStages) ?: MTLStageAll
-                                           visibilityOptions:MTL4VisibilityOptionDevice];
                 [_mtlRenderCommandEncoder endEncoding];
                 _mtlRenderCommandEncoder = nil;
                 break;
@@ -274,6 +320,7 @@ namespace vkm
 
     VkmCommandBufferMetal::~VkmCommandBufferMetal()
     {
+        releaseFences();
         [_mtlCommandBuffer release];
         _mtlCommandBuffer = nil;
     }
@@ -299,16 +346,24 @@ namespace vkm
 
     void VkmCommandBufferMetal::onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc)
     {
-        uint64_t acquireAfterQueueStages = 0;
-        uint64_t acquireBeforeStages = 0;
-        takePendingAcquire(&acquireAfterQueueStages, &acquireBeforeStages);
-        _commandEncoder.beginRenderPass(_driver->getRenderResourcePool(), frameBufferDesc,
-                                        acquireAfterQueueStages, acquireBeforeStages);
+        _commandEncoder.beginRenderPass(_driver->getRenderResourcePool(), frameBufferDesc);
+        _splitBarrierTracker.beginEncoder();
+        std::vector<id<MTLFence>> fences;
+        uint64_t waitStages = 0;
+        takePendingWaits(&fences, &waitStages);
+        fences.erase(std::remove_if(fences.begin(), fences.end(),
+                                    [this](id<MTLFence> fence) {
+                                        return !_splitBarrierTracker.checkConsume(
+                                            reinterpret_cast<uint64_t>(fence), getDebugName().c_str());
+                                    }),
+                     fences.end());
+        _commandEncoder.waitForProducers(fences, waitStages != 0 ? waitStages
+                                                                 : (MTLStageVertex | MTLStageFragment));
     }
 
     void VkmCommandBufferMetal::onEndRenderPass()
     {
-        _commandEncoder.commit(_pendingReleaseBeforeQueueStages);
+        closeEncoder(MTLStageVertex | MTLStageFragment);
     }
 
     void VkmCommandBufferMetal::onSetViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height)
@@ -342,22 +397,11 @@ namespace vkm
             */
             if (_commandEncoder.getActiveComputeCommandEncoder() == nullptr)
             {
-                _commandEncoder.beginComputePass();
+                openComputeEncoder(MTLStageDispatch);
             }
             id<MTL4ComputeCommandEncoder> computeEncoder = _commandEncoder.getActiveComputeCommandEncoder();
             [computeEncoder setComputePipelineState:pipelineStateMetal->getComputePipelineState()];
 
-            // Metal 4 does no automatic hazard tracking: make preceding copies (e.g. the scene's
-            // per-frame ObjectData upload) visible to this pass. The stages come from the render
-            // graph's analysis where it named this subgraph's dependencies, and fall back to the
-            // whole queue where it did not -- an undeclared resource degrades to conservative
-            // rather than to unordered.
-            uint64_t acquireAfterQueueStages = 0;
-            uint64_t acquireBeforeStages = 0;
-            takePendingAcquire(&acquireAfterQueueStages, &acquireBeforeStages);
-            [computeEncoder barrierAfterQueueStages:static_cast<MTLStages>(acquireAfterQueueStages) ?: MTLStageAll
-                                       beforeStages:static_cast<MTLStages>(acquireBeforeStages) ?: MTLStageDispatch
-                                  visibilityOptions:MTL4VisibilityOptionDevice];
 
             // The compute stage reaches the same engine-global bindless set the graphics stages do.
             id<MTL4ArgumentTable> argumentTable = bindlessManager->getArgumentTable();
@@ -414,11 +458,7 @@ namespace vkm
         // everything recorded afterwards, then end the encoder.
         if (_commandEncoder.getActiveComputeCommandEncoder() != nullptr)
         {
-            [_commandEncoder.getActiveComputeCommandEncoder()
-                barrierAfterStages:MTLStageDispatch
-                 beforeQueueStages:static_cast<MTLStages>(_pendingReleaseBeforeQueueStages) ?: MTLStageAll
-                 visibilityOptions:MTL4VisibilityOptionDevice];
-            _commandEncoder.commit();
+            closeEncoder(MTLStageDispatch);
         }
     }
 
@@ -433,23 +473,17 @@ namespace vkm
         // is a setup-time upload path, so a per-call encoder is acceptable here; do NOT
         // leave a compute encoder open across recording (see onEndCommandBuffer's batched
         // marker writes and the queue-timeout lesson behind them).
-        _commandEncoder.beginComputePass();
+        openComputeEncoder(MTLStageBlit);
         id<MTL4ComputeCommandEncoder> computeEncoder = _commandEncoder.getActiveComputeCommandEncoder();
         // Metal4 does no automatic hazard tracking: wait for prior encoders that may have
         // written the source (e.g. render graph capture copying a buffer a pass just used),
         // and make the copy visible to later encoders.
-        [computeEncoder barrierAfterQueueStages:MTLStageAll
-                                   beforeStages:MTLStageBlit
-                              visibilityOptions:MTL4VisibilityOptionDevice];
         [computeEncoder copyFromBuffer:mtlSrcBuffer
                           sourceOffset:srcOffset
                               toBuffer:mtlDstBuffer
                      destinationOffset:dstOffset
                                   size:size];
-        [computeEncoder barrierAfterStages:MTLStageBlit
-                         beforeQueueStages:MTLStageAll
-                         visibilityOptions:MTL4VisibilityOptionDevice];
-        _commandEncoder.commit();
+        closeEncoder(MTLStageBlit);
     }
 
     void VkmCommandBufferMetal::onCopyTexture(VkmResourceHandle srcTexture, VkmResourceHandle dstTexture)
@@ -461,14 +495,11 @@ namespace vkm
 
         // Metal4 has no blit encoder -- texture copies live on the compute encoder, same
         // per-call encoder tradeoff as onCopyBuffer above (debug-capture path, not per-frame).
-        _commandEncoder.beginComputePass();
+        openComputeEncoder(MTLStageBlit);
         id<MTL4ComputeCommandEncoder> computeEncoder = _commandEncoder.getActiveComputeCommandEncoder();
         // Metal4 does no automatic hazard tracking: wait for prior encoders (e.g. the render
         // pass that wrote the source) before copying, and make the copy visible to later
         // encoders (e.g. an ImGui pass sampling the destination).
-        [computeEncoder barrierAfterQueueStages:MTLStageAll
-                                   beforeStages:MTLStageBlit
-                              visibilityOptions:MTL4VisibilityOptionDevice];
         [computeEncoder copyFromTexture:srcTextureMetal->getInternalHandle()
                             sourceSlice:0
                             sourceLevel:0
@@ -478,10 +509,7 @@ namespace vkm
                        destinationSlice:0
                        destinationLevel:0
                       destinationOrigin:MTLOriginMake(0, 0, 0)];
-        [computeEncoder barrierAfterStages:MTLStageBlit
-                         beforeQueueStages:MTLStageAll
-                         visibilityOptions:MTL4VisibilityOptionDevice];
-        _commandEncoder.commit();
+        closeEncoder(MTLStageBlit);
     }
 
     void VkmCommandBufferMetal::onCopyTextureToBuffer(VkmResourceHandle srcTexture, VkmResourceHandle dstBuffer, uint64_t dstOffset, uint32_t arrayLayer)
@@ -497,11 +525,8 @@ namespace vkm
         // per-call encoder rationale as onCopyBuffer above; barriers because Metal4 does no
         // automatic hazard tracking (a same-command-buffer copy right after the render pass
         // that wrote the source, e.g. render graph capture, reads garbage without them).
-        _commandEncoder.beginComputePass();
+        openComputeEncoder(MTLStageBlit);
         id<MTL4ComputeCommandEncoder> computeEncoder = _commandEncoder.getActiveComputeCommandEncoder();
-        [computeEncoder barrierAfterQueueStages:MTLStageAll
-                                   beforeStages:MTLStageBlit
-                              visibilityOptions:MTL4VisibilityOptionDevice];
         [computeEncoder copyFromTexture:textureMetal->getInternalHandle()
                             sourceSlice:arrayLayer
                             sourceLevel:0
@@ -511,10 +536,7 @@ namespace vkm
                       destinationOffset:dstOffset
                  destinationBytesPerRow:bytesPerRow
                destinationBytesPerImage:0];
-        [computeEncoder barrierAfterStages:MTLStageBlit
-                         beforeQueueStages:MTLStageAll
-                         visibilityOptions:MTL4VisibilityOptionDevice];
-        _commandEncoder.commit();
+        closeEncoder(MTLStageBlit);
     }
 
     void VkmCommandBufferMetal::onCopyBufferToTexture(VkmResourceHandle srcBuffer, VkmResourceHandle dstTexture,
@@ -533,11 +555,8 @@ namespace vkm
         // per-call encoder rationale as onCopyBuffer above (setup-time upload, not per-frame).
         // Metal tracks no image layouts, so unlike Vulkan there is nothing to transition:
         // the barriers alone make the written texels visible to later encoders' sampling.
-        _commandEncoder.beginComputePass();
+        openComputeEncoder(MTLStageBlit);
         id<MTL4ComputeCommandEncoder> computeEncoder = _commandEncoder.getActiveComputeCommandEncoder();
-        [computeEncoder barrierAfterQueueStages:MTLStageAll
-                                   beforeStages:MTLStageBlit
-                              visibilityOptions:MTL4VisibilityOptionDevice];
         [computeEncoder copyFromBuffer:mtlSrcBuffer
                           sourceOffset:srcOffset
                      sourceBytesPerRow:bytesPerRow
@@ -547,10 +566,7 @@ namespace vkm
                       destinationSlice:arrayLayer
                       destinationLevel:mipLevel
                      destinationOrigin:MTLOriginMake(0, 0, 0)];
-        [computeEncoder barrierAfterStages:MTLStageBlit
-                         beforeQueueStages:MTLStageAll
-                         visibilityOptions:MTL4VisibilityOptionDevice];
-        _commandEncoder.commit();
+        closeEncoder(MTLStageBlit);
     }
 
     void VkmCommandBufferMetal::onDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
@@ -627,17 +643,14 @@ namespace vkm
         // for compute passes also publishes this build to whatever traverses it afterwards.
         if (_commandEncoder.getActiveComputeCommandEncoder() == nullptr)
         {
-            _commandEncoder.beginComputePass();
+            openComputeEncoder(MTLStageBlit);
         }
         id<MTL4ComputeCommandEncoder> encoder = _commandEncoder.getActiveComputeCommandEncoder();
-        [encoder barrierAfterQueueStages:MTLStageAll
-                            beforeStages:MTLStageDispatch
-                       visibilityOptions:MTL4VisibilityOptionDevice];
         VkmAccelerationStructureMetal* structureMetal = static_cast<VkmAccelerationStructureMetal*>(structure);
         if (structureMetal->getAccelerationStructure() == nil || structureMetal->getDescriptor() == nil)
         {
             VKM_DEBUG_ERROR("buildAccelerationStructure on a structure that failed to initialize");
-            _commandEncoder.commit();
+            closeEncoder(MTLStageBlit);
             return;
         }
         id<MTLBuffer> scratch = structureMetal->getScratchBuffer();
@@ -648,44 +661,144 @@ namespace vkm
             // empty range instead is not a softer failure -- Metal's debug layer aborts the
             // process on a nil scratch buffer, which is how this guard's absence surfaced.
             VKM_DEBUG_ERROR("buildAccelerationStructure on a structure that was not created with _allowUpdate");
-            _commandEncoder.commit();
+            closeEncoder(MTLStageBlit);
             return;
         }
         [encoder buildAccelerationStructure:structureMetal->getAccelerationStructure()
                                  descriptor:structureMetal->getDescriptor()
                               scratchBuffer:MTL4BufferRange{ scratch.gpuAddress, scratch.length }];
-        [encoder barrierAfterStages:MTLStageDispatch
-                  beforeQueueStages:MTLStageAll
-                  visibilityOptions:MTL4VisibilityOptionDevice];
+        closeEncoder(MTLStageBlit);
+    }
+
+    void VkmCommandBufferMetal::openComputeEncoder(uint64_t waitBeforeStages)
+    {
+        _commandEncoder.beginComputePass();
+        _splitBarrierTracker.beginEncoder();
+        std::vector<id<MTLFence>> fences;
+        uint64_t stages = 0;
+        takePendingWaits(&fences, &stages);
+        fences.erase(std::remove_if(fences.begin(), fences.end(),
+                                    [this](id<MTLFence> fence) {
+                                        return !_splitBarrierTracker.checkConsume(
+                                            reinterpret_cast<uint64_t>(fence), getDebugName().c_str());
+                                    }),
+                     fences.end());
+        _commandEncoder.waitForProducers(fences, stages != 0 ? stages : waitBeforeStages);
+    }
+
+    void VkmCommandBufferMetal::closeEncoder(uint64_t publishAfterStages)
+    {
+        // Both halves record only what the encoder actually encoded: a fence marked as produced
+        // when no update reached the encoder is one a later wait would block on forever.
+        if (_commandEncoder.publishThroughFence(_currentSubGraphFence, publishAfterStages))
+        {
+            _publishedSubGraphs.insert(_currentSubGraphId);
+            _splitBarrierTracker.recordProduce(reinterpret_cast<uint64_t>(_currentSubGraphFence),
+                                               ("SubGraph#" + std::to_string(_currentSubGraphId)).c_str());
+        }
+        id<MTLFence> boundaryFence = fenceForEncoderBoundary();
+        if (_commandEncoder.publishThroughFence(boundaryFence, publishAfterStages))
+        {
+            _encoderBoundaryPublished = true;
+            _splitBarrierTracker.recordProduce(reinterpret_cast<uint64_t>(boundaryFence),
+                                               "encoder boundary");
+        }
         _commandEncoder.commit();
+    }
+
+    id<MTLFence> VkmCommandBufferMetal::fenceForSubGraph(uint32_t subGraphId)
+    {
+        const auto it = _subGraphFences.find(subGraphId);
+        if (it != _subGraphFences.end())
+        {
+            return it->second;
+        }
+        id<MTLFence> fence = [static_cast<VkmDriverMetal*>(_driver)->getMTLDevice() newFence];
+        if (fence == nil)
+        {
+            VKM_DEBUG_ERROR("Failed to create an MTLFence for a render subgraph");
+            return nil;
+        }
+        _subGraphFences.emplace(subGraphId, fence);
+        return fence;
+    }
+
+    id<MTLFence> VkmCommandBufferMetal::fenceForEncoderBoundary()
+    {
+        if (_encoderBoundaryFence == nil)
+        {
+            _encoderBoundaryFence = [static_cast<VkmDriverMetal*>(_driver)->getMTLDevice() newFence];
+            if (_encoderBoundaryFence == nil)
+            {
+                VKM_DEBUG_ERROR("Failed to create an MTLFence for the encoder boundary");
+            }
+        }
+        return _encoderBoundaryFence;
+    }
+
+    void VkmCommandBufferMetal::releaseFences()
+    {
+        // These sources are compiled without ARC, so a fence held across frames is owned here.
+        for (auto& entry : _subGraphFences)
+        {
+            [entry.second release];
+        }
+        _subGraphFences.clear();
+        [_encoderBoundaryFence release];
+        _encoderBoundaryFence = nil;
     }
 
     void VkmCommandBufferMetal::onBarrierAcquire(const VkmResourceBarrier* barriers, uint32_t count)
     {
         /*
-        * The render graph calls this before a subgraph commits, so no encoder is open yet and the
-        * masks are accumulated for whichever one opens first. That is the whole reason the acquire
-        * is a separate entry point from resourceBarrier: Metal's barriers are encoder-scoped, and
-        * opening an encoder to hold one is what causes MTL4CommandQueueErrorTimeout.
+        * Called before a subgraph commits, so no encoder is open yet and the waits are accumulated
+        * for whichever one opens first. A dependency whose producer lies outside this graph has no
+        * fence to wait on: cross-submit ordering is the queue's own timeline, and a first touch
+        * within a frame has nothing before it to wait for.
         */
         for (uint32_t i = 0; i < count; ++i)
         {
-            _pendingAcquireAfterQueueStages |= vkmToMTLStages(barriers[i]._srcAccess, barriers[i]._srcScope);
-            _pendingAcquireBeforeStages |= vkmToMTLStages(barriers[i]._dstAccess, barriers[i]._dstScope);
+            if (barriers[i]._producerSubGraphId == INVALID_VALUE32)
+            {
+                continue;
+            }
+            if (_publishedSubGraphs.find(barriers[i]._producerSubGraphId) == _publishedSubGraphs.end())
+            {
+                // That producer recorded no GPU work, so its fence is never updated and waiting on
+                // it would hang the queue. Nothing was written, so there is nothing to wait for.
+                continue;
+            }
+            id<MTLFence> fence = fenceForSubGraph(barriers[i]._producerSubGraphId);
+            if (fence != nil &&
+                std::find(_pendingWaitFences.begin(), _pendingWaitFences.end(), fence) == _pendingWaitFences.end())
+            {
+                _pendingWaitFences.push_back(fence);
+            }
+            _pendingWaitBeforeStages |= vkmToMTLStages(barriers[i]._dstAccess, barriers[i]._dstScope);
         }
     }
 
     void VkmCommandBufferMetal::onBarrierRelease(const VkmResourceBarrier* barriers, uint32_t count)
     {
         /*
-        * Which queue stages consume what the subgraph about to run writes. Recorded before that
-        * subgraph commits, because Metal's publish has to sit inside the producing encoder and
-        * that encoder is closed by the time commit() returns.
+        * What the subgraph about to run publishes. Recorded before it commits, because the update
+        * has to sit inside that subgraph's encoders and they are closed by the time commit()
+        * returns. Replaced rather than accumulated: this names one subgraph's fence, and carrying
+        * the previous one forward would publish through the wrong fence.
         */
-        _pendingReleaseBeforeQueueStages = 0;
+        _currentSubGraphFence = nullptr;
+        _currentSubGraphId = INVALID_VALUE32;
+        _currentSubGraphReleaseStages = 0;
+        if (count == 0)
+        {
+            return;
+        }
+        // Every entry in a release list shares one producer -- this subgraph.
+        _currentSubGraphId = barriers[0]._producerSubGraphId;
+        _currentSubGraphFence = fenceForSubGraph(_currentSubGraphId);
         for (uint32_t i = 0; i < count; ++i)
         {
-            _pendingReleaseBeforeQueueStages |= vkmToMTLStages(barriers[i]._dstAccess, barriers[i]._dstScope);
+            _currentSubGraphReleaseStages |= vkmToMTLStages(barriers[i]._srcAccess, barriers[i]._srcScope);
         }
     }
 
@@ -713,11 +826,8 @@ namespace vkm
         id<MTL4ComputeCommandEncoder> computeEncoder = _commandEncoder.getActiveComputeCommandEncoder();
         if (computeEncoder != nil)
         {
-            // Clamped to what a compute encoder can encode: the intra-encoder form rejects stages
-            // this encoder cannot express, unlike the queue-scoped ones.
-            const MTLStages encodable = MTLStageDispatch | MTLStageBlit | MTLStageAccelerationStructure;
-            [computeEncoder barrierAfterEncoderStages:(afterStages & encodable) ?: MTLStageDispatch
-                                  beforeEncoderStages:(beforeStages & encodable) ?: MTLStageDispatch
+            [computeEncoder barrierAfterEncoderStages:(afterStages & kComputeEncodableStages) ?: MTLStageDispatch
+                                  beforeEncoderStages:(beforeStages & kComputeEncodableStages) ?: MTLStageDispatch
                                     visibilityOptions:visibility];
             return;
         }
@@ -725,16 +835,30 @@ namespace vkm
         id<MTL4RenderCommandEncoder> renderEncoder = _commandEncoder.getActiveRenderCommandEncoder();
         if (renderEncoder != nil)
         {
-            const MTLStages encodable = MTLStageVertex | MTLStageFragment | MTLStageTile |
-                                        MTLStageObject | MTLStageMesh;
-            [renderEncoder barrierAfterEncoderStages:(afterStages & encodable) ?: MTLStageFragment
-                                 beforeEncoderStages:(beforeStages & encodable) ?: MTLStageVertex
+            [renderEncoder barrierAfterEncoderStages:(afterStages & kRenderEncodableStages) ?: MTLStageFragment
+                                 beforeEncoderStages:(beforeStages & kRenderEncodableStages) ?: MTLStageVertex
                                    visibilityOptions:visibility];
             return;
         }
 
-        _pendingAcquireAfterQueueStages |= afterStages;
-        _pendingAcquireBeforeStages |= beforeStages;
+        /*
+        * Nothing is open, so the two sides sit in different encoders and the ordering belongs to
+        * whichever one opens next -- opening one here is what causes MTL4CommandQueueErrorTimeout.
+        * The producing side is already closed and updated the boundary fence on its way out, so the
+        * wait has something to pair with. Without it the two encoders run unordered and the reader
+        * sees a partially written resource, which Metal reports as neither an error nor a hang.
+        */
+        if (_encoderBoundaryPublished)
+        {
+            id<MTLFence> boundaryFence = fenceForEncoderBoundary();
+            if (boundaryFence != nil &&
+                std::find(_pendingWaitFences.begin(), _pendingWaitFences.end(), boundaryFence) ==
+                    _pendingWaitFences.end())
+            {
+                _pendingWaitFences.push_back(boundaryFence);
+            }
+        }
+        _pendingWaitBeforeStages |= beforeStages;
     }
 
     void VkmCommandBufferMetal::onBindResourceTable(VkmResourceTableBase* table)
@@ -784,9 +908,14 @@ namespace vkm
         _openGpuZoneEndSlots.clear();
         // Command buffers are pooled, so ordering staged for a previous frame's last subgraph must
         // not reach this one's first encoder.
-        _pendingAcquireAfterQueueStages = 0;
-        _pendingAcquireBeforeStages = 0;
-        _pendingReleaseBeforeQueueStages = 0;
+        _pendingWaitFences.clear();
+        _pendingWaitBeforeStages = 0;
+        _currentSubGraphFence = nullptr;
+        _currentSubGraphId = INVALID_VALUE32;
+        _currentSubGraphReleaseStages = 0;
+        _publishedSubGraphs.clear();
+        _encoderBoundaryPublished = false;
+        _splitBarrierTracker.reset();
     }
 
     void VkmCommandBufferMetal::onBeginGpuZone(const uint32_t beginSlot, const uint32_t endSlot)
@@ -838,7 +967,7 @@ namespace vkm
         // Metal4 has no blit encoder at all -- buffer copies live on the compute encoder.
         // Batches every writeCompletionMarker() call from this command buffer's recording into
         // a single compute pass, opened/closed once here rather than once per call.
-        _commandEncoder.beginComputePass();
+        openComputeEncoder(MTLStageBlit);
         id<MTL4ComputeCommandEncoder> computeEncoder = _commandEncoder.getActiveComputeCommandEncoder();
         for (const PendingMarkerWrite& write : _pendingMarkerWrites)
         {
@@ -850,7 +979,7 @@ namespace vkm
                           destinationOffset:write.offset
                                        size:sizeof(uint32_t)];
         }
-        _commandEncoder.commit();
+        closeEncoder(MTLStageBlit);
 
         _pendingMarkerWrites.clear();
     }
