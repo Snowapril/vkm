@@ -503,11 +503,13 @@ namespace
         return;
     }
 
-    // Line-based wheels report far larger deltas than trackpads; scale them the same way the
-    // ImGui Metal renderer does so magnitudes match across devices and backends.
+    // A trackpad reports its deltas in points and fires a stream of them per gesture, a line-based
+    // wheel one small delta per notch, so the precise ones are scaled down to put a notch and a
+    // point of finger travel on the same footing -- one scroll unit. Every consumer treats a unit
+    // as one notch, so VkmOrbitCameraController's zoom factor applies per notch as it reads.
     double wheelDeltaX = event.scrollingDeltaX;
     double wheelDeltaY = event.scrollingDeltaY;
-    if ([event hasPreciseScrollingDeltas] == NO)
+    if ([event hasPreciseScrollingDeltas])
     {
         wheelDeltaX *= 0.1;
         wheelDeltaY *= 0.1;

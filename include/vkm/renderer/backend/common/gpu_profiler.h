@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <deque>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace vkm
@@ -97,6 +98,55 @@ namespace vkm
     */
     std::vector<VkmGpuProfileZoneTotal> vkmAggregateGpuProfileRange(const VkmGpuProfileFrame& frame,
                                                                    uint64_t beginNs, uint64_t endNs);
+
+    /*
+    * @brief Sliding-window mean GPU duration per render graph subgraph.
+    * @details Keyed by subgraph name rather than by VkmRenderSubGraph::getSubGraphId(): ids restart
+    * at 0 for every graph, so two windows submitting in one frame reuse them and a graph that
+    * changes shape moves a pass onto another id. Zones sharing a name are averaged together.
+    * A type of its own rather than members on VkmGpuProfiler so it is exercisable from zones built
+    * by hand, the same reason vkmAggregateGpuProfileRange is a free function.
+    */
+    class VkmGpuSubGraphAverages
+    {
+    public:
+        /*
+        * @brief Adds one submission's zones to the windows.
+        * @param zones Zones of one submission. Only depth-1 zones naming a subgraph contribute;
+        * the submission-wide zone and unnamed zones are ignored.
+        */
+        void addZones(const std::vector<VkmGpuProfileZone>& zones);
+
+        /*
+        * @brief Mean duration of the samples currently in a subgraph's window, in milliseconds.
+        * @param subGraphName Name its zones were opened with.
+        * @return 0 when nothing has been recorded under that name.
+        */
+        double getAverageMs(const std::string& subGraphName) const;
+
+        /*
+        * @brief Samples currently in a subgraph's window, at most kWindowSize.
+        * @param subGraphName Name its zones were opened with.
+        * @return 0 when nothing has been recorded under that name.
+        */
+        uint32_t getSampleCount(const std::string& subGraphName) const;
+
+        void clear();
+
+        // ~1 second at 60 fps.
+        static constexpr size_t kWindowSize = 64;
+
+    private:
+        struct Window
+        {
+            std::array<uint64_t, kWindowSize> _samples{};
+            size_t _next = 0;
+            uint32_t _count = 0;
+            uint64_t _sumNs = 0;
+        };
+
+        std::unordered_map<std::string, Window> _windows;
+    };
 
     /*
     * @brief Writes frames in Chrome Trace Event Format, loadable in chrome://tracing or
@@ -240,6 +290,13 @@ namespace vkm
         inline double getLastFrameGpuTimeMs() const { return _lastFrameGpuTimeMs; }
 
         /*
+        * @brief Per-subgraph rolling averages, fed by every resolved submission.
+        * @details Independent of isCapturing() and of clear(), like getLastFrameGpuTimeMs(): the
+        * render graph inspector reads them with this window closed and with no capture armed.
+        */
+        inline const VkmGpuSubGraphAverages& getSubGraphAverages() const { return _subGraphAverages; }
+
+        /*
         * @brief Writes every collected frame through vkmWriteGpuChromeTrace.
         * @param path Destination file.
         * @return False if the file cannot be written.
@@ -301,6 +358,7 @@ namespace vkm
         bool _capturing = false;
         double _lastFrameGpuTimeMs = 0.0;
         double _timestampPeriodNs = 1.0;
+        VkmGpuSubGraphAverages _subGraphAverages;
 
         // Fixed bucket ring: buckets are handed out and retired in submission order, so
         // collect() can stop at the first bucket the GPU has not finished.

@@ -3,6 +3,7 @@
 #pragma once
 
 #include <vkm/base/common.h>
+#include <vkm/renderer/imgui/imgui_canvas.h>
 #include <vkm/renderer/imgui/texture_browser.h>
 
 #include <cstdint>
@@ -11,13 +12,14 @@
 namespace vkm
 {
     class VkmDriverBase;
+    class VkmGpuProfiler;
     class VkmImGuiRendererBase;
     class VkmPipelineStateManager;
     class VkmRenderGraphCapture;
 
     /*
-    * @brief Engine-owned ImGui debug window (F7), drawn from VkmEngine::update() before the
-    * frame's first ImGui::Render() call. Three tabs:
+    * @brief Engine-owned ImGui debug window (F5), drawn from VkmEngine::update() before the
+    * frame's first ImGui::Render() call. Four tabs:
     *
     *   Capture   -- the VkmRenderGraphCapture: pass list, per-pass pipelines, dependencies,
     *                inputs and outputs with texture previews, and a captured-buffer hex view.
@@ -31,8 +33,18 @@ namespace vkm
     class VkmRenderGraphInspector
     {
     public:
+        /*
+        * @brief Draws the window.
+        * @param capture Capture the Capture and Graph tabs read.
+        * @param driver Driver the Textures tab browses.
+        * @param imGuiRenderer Renderer that turns texture handles into ImGui texture ids.
+        * @param pipelineStateManager Manager the Pipelines tab lists and reloads.
+        * @param gpuProfiler Source of the Graph tab's per-subgraph averages. May be null, and on a
+        * backend without timestamp support the averages simply stay empty.
+        */
         void draw(VkmRenderGraphCapture& capture, VkmDriverBase* driver,
-                  VkmImGuiRendererBase* imGuiRenderer, VkmPipelineStateManager* pipelineStateManager);
+                  VkmImGuiRendererBase* imGuiRenderer, VkmPipelineStateManager* pipelineStateManager,
+                  const VkmGpuProfiler* gpuProfiler);
 
         void toggleVisible() { _visible = !_visible; }
         bool isVisible() const { return _visible; }
@@ -58,9 +70,12 @@ namespace vkm
         * per dependency the render graph's analysis found.
         * @details Nodes are placed in columns by dependency level -- level 0 depends on nothing,
         * and a node sits one column right of its deepest producer -- so every edge points left to
-        * right and the columns read as "what can run at the same time".
+        * right and the columns read as "what can run at the same time". Each node carries its
+        * rolling average GPU time and the render targets it reads and writes.
+        * @param capture Capture whose passes are drawn.
+        * @param gpuProfiler Source of the averages, or null for none.
         */
-        void drawGraphTab(VkmRenderGraphCapture& capture);
+        void drawGraphTab(VkmRenderGraphCapture& capture, const VkmGpuProfiler* gpuProfiler);
         void drawPipelinesTab(VkmPipelineStateManager* pipelineStateManager);
         // Reloads `sourceIndex` and records the outcome for the Pipelines tab's error box.
         void reloadSource(VkmPipelineStateManager* pipelineStateManager, size_t sourceIndex);
@@ -69,9 +84,13 @@ namespace vkm
         bool _visible = true;
         int _selectedPass = 0;
         int _selectedBuffer = -1; // index into the selected pass's capturedBuffers, -1 = none
-        float _graphZoom = 1.0f;
+        VkmImGuiCanvas _graphCanvas;
         // Draw only the selected node's own edges, for a frame with more edges than can be read.
         bool _graphIsolateSelection = false;
+        // List each node's render-target inputs and outputs, which is what makes the nodes tall.
+        bool _graphShowResources = true;
+        // Passes the view was last framed for, so a capture of a different graph is re-framed.
+        size_t _graphFittedPassCount = 0;
         bool _recompileShadersOnReload = true;
         std::string _reloadStatus; // last reload's result, shown under the source table
         bool _reloadFailed = false;

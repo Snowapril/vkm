@@ -448,7 +448,8 @@ namespace vkm
         }
         [_impl->argumentTable setSamplerState:_impl->sampler.gpuResourceID atIndex:0];
 
-        const NSEventMask keyEventMask = NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskFlagsChanged | NSEventMaskScrollWheel;
+        const NSEventMask keyEventMask = NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskFlagsChanged |
+                                         NSEventMaskScrollWheel | NSEventMaskMagnify;
         _impl->keyEventMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:keyEventMask handler:^NSEvent* _Nullable(NSEvent* event) {
             ImGuiIO& imguiIO = ImGui::GetIO();
             switch (event.type)
@@ -497,9 +498,14 @@ namespace vkm
                 }
                 case NSEventTypeScrollWheel:
                 {
+                    // A trackpad reports its deltas in points and fires a stream of them per
+                    // gesture, a line-based wheel one small delta per notch; scaling the precise
+                    // ones down puts both near ImGui's convention of 1.0 per notch, which is what
+                    // imgui_impl_osx does. Getting this backwards makes one trackpad flick worth a
+                    // hundred notches, which pins anything zooming on the wheel to its limit.
                     double wheelDeltaX = event.scrollingDeltaX;
                     double wheelDeltaY = event.scrollingDeltaY;
-                    if (!event.hasPreciseScrollingDeltas)
+                    if (event.hasPreciseScrollingDeltas)
                     {
                         wheelDeltaX *= 0.1;
                         wheelDeltaY *= 0.1;
@@ -507,6 +513,18 @@ namespace vkm
                     if (wheelDeltaX != 0.0 || wheelDeltaY != 0.0)
                     {
                         imguiIO.AddMouseWheelEvent((float)wheelDeltaX, (float)wheelDeltaY);
+                    }
+                    return imguiIO.WantCaptureMouse ? nil : event;
+                }
+                case NSEventTypeMagnify:
+                {
+                    // Pinch is the trackpad's own zoom gesture and has no ImGui event of its own,
+                    // so it arrives as a wheel delta: `magnification` accumulates to roughly 1.0
+                    // over a full pinch, and kMagnifyToWheel makes that worth a few notches.
+                    constexpr double kMagnifyToWheel = 8.0;
+                    if (event.magnification != 0.0)
+                    {
+                        imguiIO.AddMouseWheelEvent(0.0f, (float)(event.magnification * kMagnifyToWheel));
                     }
                     return imguiIO.WantCaptureMouse ? nil : event;
                 }

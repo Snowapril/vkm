@@ -194,7 +194,7 @@ namespace vkm
         for (uint32_t i = 0; i < kTargetCount; ++i)
         {
             const Target target = static_cast<Target>(i);
-            const std::string debugName =
+            set._targetNames[i] =
                 std::string("VkmGBuffer") + targetDebugName(target) + std::to_string(setIndex);
 
             VkmTextureInfo info{};
@@ -210,7 +210,7 @@ namespace vkm
             info._numMipLevels = 1;
             info._numArrayLayers = 1;
             info._format = getTargetFormat(target);
-            info._debugName = debugName.c_str();
+            info._debugName = set._targetNames[i].c_str();
 
             VkmTexture* texture = _driver->newTexture(info);
             if (texture == nullptr)
@@ -221,7 +221,7 @@ namespace vkm
             set._targets[i] = texture->getHandle();
         }
 
-        const std::string depthDebugName = std::string("VkmGBufferDepth") + std::to_string(setIndex);
+        set._depthName = std::string("VkmGBufferDepth") + std::to_string(setIndex);
         VkmTextureInfo depthInfo{};
         depthInfo._flags = static_cast<VkmResourceCreateInfo>(
             static_cast<uint32_t>(VkmResourceCreateInfo::AllowDepthStencilAttachment) |
@@ -231,7 +231,7 @@ namespace vkm
         depthInfo._numMipLevels = 1;
         depthInfo._numArrayLayers = 1;
         depthInfo._format = getDepthFormat();
-        depthInfo._debugName = depthDebugName.c_str();
+        depthInfo._debugName = set._depthName.c_str();
 
         VkmTexture* depthTexture = _driver->newTexture(depthInfo);
         if (depthTexture == nullptr)

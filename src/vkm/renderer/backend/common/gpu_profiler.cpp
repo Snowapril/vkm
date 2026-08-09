@@ -279,6 +279,10 @@ namespace vkm
             _lastFrameGpuTimeMs = nsToMs((spanEndNs > spanBeginNs) ? (spanEndNs - spanBeginNs) : 0);
         }
 
+        // Latched on the same terms as _lastFrameGpuTimeMs: the render graph inspector reads the
+        // averages whether or not this profiler's own window is capturing.
+        _subGraphAverages.addZones(zones);
+
         if (!_capturing || (zones.empty() && !submission._overflowed))
         {
             return;
@@ -389,6 +393,47 @@ namespace vkm
     void VkmGpuProfiler::clear()
     {
         _frames.clear();
+    }
+
+    void VkmGpuSubGraphAverages::addZones(const std::vector<VkmGpuProfileZone>& zones)
+    {
+        for (const VkmGpuProfileZone& zone : zones)
+        {
+            if (zone._depth != 1 || zone._subGraphId == INVALID_VALUE32 || zone._name == nullptr)
+            {
+                continue;
+            }
+
+            Window& window = _windows[zone._name];
+            // The slot about to be overwritten holds the sample leaving the window, and holds 0
+            // until the window has wrapped once.
+            window._sumNs -= window._samples[window._next];
+            window._samples[window._next] = zone.getDurationNs();
+            window._sumNs += window._samples[window._next];
+            window._next = (window._next + 1) % kWindowSize;
+            window._count = std::min<uint32_t>(window._count + 1, static_cast<uint32_t>(kWindowSize));
+        }
+    }
+
+    double VkmGpuSubGraphAverages::getAverageMs(const std::string& subGraphName) const
+    {
+        const auto it = _windows.find(subGraphName);
+        if (it == _windows.end() || it->second._count == 0)
+        {
+            return 0.0;
+        }
+        return nsToMs(it->second._sumNs) / static_cast<double>(it->second._count);
+    }
+
+    uint32_t VkmGpuSubGraphAverages::getSampleCount(const std::string& subGraphName) const
+    {
+        const auto it = _windows.find(subGraphName);
+        return (it == _windows.end()) ? 0 : it->second._count;
+    }
+
+    void VkmGpuSubGraphAverages::clear()
+    {
+        _windows.clear();
     }
 
     std::vector<VkmGpuProfileZoneTotal> vkmAggregateGpuProfileRange(const VkmGpuProfileFrame& frame,

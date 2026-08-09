@@ -135,6 +135,7 @@ set(SRCS
 if (VKM_ENABLE_IMGUI)
     list(APPEND PUBLIC_HDRS
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/imgui_renderer.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/imgui_canvas.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/render_graph_inspector.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/texture_browser.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/memory_inspector.h
@@ -143,6 +144,7 @@ if (VKM_ENABLE_IMGUI)
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/imgui/imgui_renderer.cpp
+        ${SRC_DIR}/vkm/renderer/imgui/imgui_canvas.cpp
         ${SRC_DIR}/vkm/renderer/imgui/render_graph_inspector.cpp
         ${SRC_DIR}/vkm/renderer/imgui/texture_browser.cpp
         ${SRC_DIR}/vkm/renderer/imgui/memory_inspector.cpp

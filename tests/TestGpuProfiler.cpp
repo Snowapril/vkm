@@ -145,6 +145,53 @@ TEST_CASE("GPU range aggregation sums across command queues and rejects an empty
     CHECK(vkm::vkmAggregateGpuProfileRange(frame, 80, 20).empty());
 }
 
+TEST_CASE("Subgraph averages mean the samples of every depth-1 zone naming a subgraph")
+{
+    vkm::VkmGpuSubGraphAverages averages;
+
+    // The submission-wide zone and a depth-1 zone that names no subgraph are both ignored, so
+    // only "GBuffer" is measured: 200 ns and 400 ns, a 300 ns mean.
+    averages.addZones({
+        makeZone("Frame", 0, 5000, 0),
+        makeZone("GBuffer", 100, 300, 1, 3),
+        makeZone("Unattributed", 300, 900, 1),
+    });
+    averages.addZones({ makeZone("GBuffer", 100, 500, 1, 3) });
+
+    CHECK(averages.getSampleCount("GBuffer") == 2);
+    CHECK(averages.getAverageMs("GBuffer") == doctest::Approx(300.0 * 1e-6));
+    CHECK(averages.getSampleCount("Frame") == 0);
+    CHECK(averages.getSampleCount("Unattributed") == 0);
+
+    // A name that never ran reads as no data rather than as zero milliseconds spent.
+    CHECK(averages.getSampleCount("Missing") == 0);
+    CHECK(averages.getAverageMs("Missing") == doctest::Approx(0.0));
+
+    averages.clear();
+    CHECK(averages.getSampleCount("GBuffer") == 0);
+}
+
+TEST_CASE("Subgraph averages drop the oldest sample once the window is full")
+{
+    vkm::VkmGpuSubGraphAverages averages;
+
+    // Fill the window with 1000 ns samples, then push the same number of 2000 ns ones: the mean
+    // has to end up at 2000 ns exactly, which only holds if every old sample left the window.
+    for (size_t i = 0; i < vkm::VkmGpuSubGraphAverages::kWindowSize; ++i)
+    {
+        averages.addZones({ makeZone("Lighting", 0, 1000, 1, 4) });
+    }
+    CHECK(averages.getSampleCount("Lighting") == vkm::VkmGpuSubGraphAverages::kWindowSize);
+    CHECK(averages.getAverageMs("Lighting") == doctest::Approx(1000.0 * 1e-6));
+
+    for (size_t i = 0; i < vkm::VkmGpuSubGraphAverages::kWindowSize; ++i)
+    {
+        averages.addZones({ makeZone("Lighting", 0, 2000, 1, 4) });
+    }
+    CHECK(averages.getSampleCount("Lighting") == vkm::VkmGpuSubGraphAverages::kWindowSize);
+    CHECK(averages.getAverageMs("Lighting") == doctest::Approx(2000.0 * 1e-6));
+}
+
 #if defined(ENABLE_CHROME_TRACING)
 TEST_CASE("vkmWriteGpuChromeTrace emits microsecond complete events and one row per command queue")
 {
