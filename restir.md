@@ -3,10 +3,14 @@
 Living document for the ReSTIR GI implementation: what the technique is, the staged plan,
 current status, remaining TODOs, and the reading list. Updated at the end of every phase.
 
-**Status:** Phases 1-3 complete, including Phase 3's gate — the `gi` sample owns the
-G-buffer/deferred/tone-map chain and offers the channel views it asked for. Phase 4 is nearly
-done: the low-spec probe tier renders on screen on all three backends. Remaining there are the
-SSGI contact term (4.4) and a runtime technique switcher, which needs a second technique.
+**Status:** Phases 1-8 complete. ReSTIR GI runs as the second, runtime-selectable technique in
+the `gi` sample — one traced sample per pixel, temporal reuse (confidence cap 20 / age cap 32),
+spatial reuse with the reconnection Jacobian and a bias-verified denominator, a fullscreen
+lighting pass honouring the §5 composite contract, and the roughness MIS blend. Every sub-step
+is gated against the Phase 6 reference on the Cornell fixture. What remains is Phase 9 (denoiser,
+firefly controls, performance) plus the recorded honest limits: moving-camera temporal is
+verified by eye only, the traced passes still see no directional light (environment/emissive
+only, §12), and the final visibility ray is deferred behind its plumbed flag.
 
 ---
 
@@ -1099,6 +1103,14 @@ must match **on a diffuse-only scene** (specular secondary hits are legitimately
 A shifted mean on diffuse means a broken MIS weight or missing Jacobian. Add a debug view per pass
 (reservoir `M`, `W`, `age`, chosen sample position, temporal-vs-spatial contribution) — these bugs
 are invisible in the final image.
+
+**How the gate was actually applied** (8.4/8.5): the mean-match half held as written and caught
+both real bugs. The RelMSE half was re-scoped to "the baseline's own absolute thresholds" rather
+than "beat the baseline": at 1536 *accumulated* samples every estimator sits at its noise floor,
+and reuse correlation holds a resampled estimator's accumulated floor at or above the independent
+baseline's — resampling's win is per-frame, the live path's regime, which no accumulation gate
+can see. Debug views shipped as the lighting pass's M/age/W ramps plus the reservoir word-6
+readback in the test, which is what the caps are actually asserted through.
 
 ### Phase 9 — Denoiser and production hardening
 The denoiser is **shared by both tiers**, so it is built once here and benefits the low-spec path too.

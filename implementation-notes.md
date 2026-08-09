@@ -3828,3 +3828,42 @@ shrink-the-denominator asymmetry as 8.4. Null samples now merge with zero weight
   absolute thresholds plus the 1% mean-ratio bound, for the same reason as 8.4: at 1536
   accumulated samples the reuse correlation holds the floor above the independent baseline's,
   and the mean is the bias detector.
+
+
+## 2026-08-09 — Phase 8.6: the lighting pass, and two consumers of one reservoir
+
+`gi_restir_lighting.hlsl` shades the resampled reservoirs into the indirect-radiance texture as
+a fullscreen graphics pass — incoming irradiance (`radiance * cos * W`), no albedo, no 1/pi,
+honouring gi_composite's contract. The compute resolve stays as the MSE gates' instrument. The
+gate drives one frame exactly the way a live renderer will (staged constants -> resample ->
+fullscreen draw) and compares the fp16 texture, composited per pixel with the G-buffer's own
+albedo, against the accumulated resolve's mean (0.979 measured, 10% tolerance for one frame of
+a confidence-21 estimator).
+
+### Deviations
+
+- **Planned:** attempt `ray_query: true` on the fragment stage for the optional final visibility
+  ray. **Done instead:** deferred with the constants' flag word plumbed and a TODO.md line. The
+  compile path is unproven (the Phase 1 spike covered compute only), and on the static scenes
+  the engine can currently render, 8.4's merge-loop rays plus 8.5's prev-G-buffer validation
+  leave the final ray nothing to catch — the cost of proving a new compiler path was not worth a
+  ray with no observable effect. Revisit when anything moves.
+- **Found while wiring:** `driver->readbackTexture()` converts to 8-bit and clamps HDR, so the
+  gate reads the target raw through `copyTextureToBuffer` and decodes fp16 on the CPU.
+
+## 2026-08-09 — Phase 8.7: the MIS blend, and what it can and cannot be measured by
+
+`out = fresh * (1 - r^2) + resampled * r^2` in gi_restir_lighting.hlsl, the fresh half being the
+pixel's own canonical sample from the fresh slice 8.5's layout preserves. On by default in the
+sample (`gv_gi_restir_mis`).
+
+### Deviations
+
+- **Planned:** verify by A/B screenshot on Sponza's varied-roughness materials. **Done instead:**
+  a unit gate. Sponza is not in the repository, and the sample's headless screenshots turned out
+  non-reproducible run to run (the orbit camera integrates wall-clock time, so frame 64's view
+  differs per run) — a byte-wise A/B measures nondeterminism, not the blend. The Cornell gate now
+  runs the lighting frame in both blend states and holds both to the accumulated mean, which pins
+  the roughness-1 degenerate case (the blend must be a no-op there). The honest limit is recorded
+  in restir.md: at r = 1 the fresh half never contributes, so a wrong fresh-slice read stays
+  invisible until a varied-roughness asset exists to look at.
