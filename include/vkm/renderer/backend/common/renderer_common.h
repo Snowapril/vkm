@@ -137,10 +137,6 @@ namespace vkm
     VkmResourceCreateInfo operator|(VkmResourceCreateInfo lhs, VkmResourceCreateInfo rhs);
     uint32_t operator&(VkmResourceCreateInfo lhs, VkmResourceCreateInfo rhs);
 
-    enum class VkmResourceUsageBits : uint32_t
-    {
-    };
-
     /*
     * @brief How one render subgraph touches one resource, declared alongside the resource so
     * VkmRenderGraph::compile() can derive the dependencies between subgraphs and place barriers
@@ -330,7 +326,6 @@ namespace vkm
     struct VkmResourceInfo
     {
         VkmResourceCreateInfo _flags;
-        VkmResourceUsageBits _usage;
         const char* _debugName = nullptr;
     };
 

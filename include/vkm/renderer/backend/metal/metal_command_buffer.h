@@ -47,7 +47,17 @@ namespace vkm
         void beginRenderPass(VkmRenderResourcePool* renderResourcePool, const VkmFrameBufferDescriptor& frameBufferDesc,
                              uint64_t acquireAfterQueueStages = 0, uint64_t acquireBeforeStages = 0);
         void beginComputePass();
-        void commit();
+
+        /*
+        * @brief Publishes this encoder's writes to the queue stages that consume them, then ends it.
+        * @details Metal 4 does no automatic hazard tracking, so an encoder that does not publish
+        * leaves later encoders reading memory still being written. The mask comes from the render
+        * graph's analysis where it named consumers for this subgraph, and falls back to every queue
+        * stage where it named none.
+        * @param releaseBeforeQueueStages MTLStages that must wait for this encoder; 0 means all of
+        * them. Typed as uint64_t to keep MTLStages out of this header.
+        */
+        void commit(uint64_t releaseBeforeQueueStages = 0);
         void reset();
 
         inline id<MTL4RenderCommandEncoder> getActiveRenderCommandEncoder() const { return _mtlRenderCommandEncoder; }
@@ -88,6 +98,7 @@ namespace vkm
         virtual void onDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) override final;
         virtual void onResourceBarrier(const VkmResourceBarrier* barriers, uint32_t count) override final;
         virtual void onBarrierAcquire(const VkmResourceBarrier* barriers, uint32_t count) override final;
+        virtual void onBarrierRelease(const VkmResourceBarrier* barriers, uint32_t count) override final;
         virtual void onBuildAccelerationStructure(VkmResourceHandle accelerationStructure) override final;
         virtual void onBindResourceTable(VkmResourceTableBase* table) override final;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) override final;
@@ -119,6 +130,10 @@ namespace vkm
         */
         uint64_t _pendingAcquireAfterQueueStages = 0;
         uint64_t _pendingAcquireBeforeStages = 0;
+        // Which queue stages consume what the upcoming subgraph writes, from the analysis. Held
+        // across that subgraph's encoders rather than taken, because a subgraph may close several
+        // and every one of them has to publish.
+        uint64_t _pendingReleaseBeforeQueueStages = 0;
 
         // Hands the accumulated masks to the encoder now opening and clears them, so one barrier
         // discharges them rather than every later encoder repeating it.

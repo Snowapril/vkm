@@ -239,13 +239,16 @@ namespace vkm
                             {
                                 return; // produced outside this graph: only the backend knows by what
                             }
-                            // A producer far enough away for a split to buy something gets the
-                            // release half too. An adjacent producer collapses: there is no work
-                            // between the halves for the dependency to overlap with.
-                            if (!optimize || producer + 1 != index)
-                            {
-                                plan._release[producer].push_back(barrier);
-                            }
+                            /*
+                            * Every dependency gets its release half, adjacent or not. Whether a
+                            * split is worth taking is a backend decision -- Vulkan folds the
+                            * release into the acquire that consumes it, so for it an adjacent pair
+                            * costs nothing either way -- and a backend that narrows its
+                            * encoder-boundary barriers from this list needs the list to be
+                            * complete. Dropping the adjacent case here would silently omit the
+                            * nearest dependency, which is the one most likely to matter.
+                            */
+                            plan._release[producer].push_back(barrier);
 
                             std::vector<uint32_t>& dependencies = plan._dependencies[index];
                             const uint32_t producerId = subGraphs[producer]._subGraphId;
