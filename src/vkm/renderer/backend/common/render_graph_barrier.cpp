@@ -233,6 +233,8 @@ namespace vkm
                             barrier._dstScope = subGraph._scope;
                             barrier._range = VkmSubresourceRange{ mip, 1, layer, 1 };
                             barrier._executionOnly = executionOnly;
+                            barrier._producerSubGraphId =
+                                (producer == INVALID_VALUE32) ? INVALID_VALUE32 : subGraphs[producer]._subGraphId;
                             plan._acquire[index].push_back(barrier);
 
                             if (producer == INVALID_VALUE32)
