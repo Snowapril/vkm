@@ -74,7 +74,9 @@ struct RestirConstants
     float neighbourRadius;
     float normalThreshold;   // cos of the largest accepted angle between two surfaces
     float depthThreshold;    // relative camera-distance difference still considered the same surface
-    uint  _pad0;
+    uint  historySlice;
+    uint  confidenceCap;
+    uint  maxSampleAge;
 };
 
 VKM_PUSH_CONSTANTS(RestirConstants, g_Restir);

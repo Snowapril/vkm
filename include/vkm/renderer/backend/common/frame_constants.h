@@ -107,8 +107,16 @@ namespace vkm
         * frames. A uvec4 rather than a bare uint so the struct keeps its 16-byte member alignment.
         */
         glm::uvec4 _frameIndex{ 0u, 0u, 0u, 0u };                 // offset 352
+
+        /*
+        * @brief Last frame's _cameraPositionWorld, for interpreting history data measured from the
+        * previous camera — the G-buffer's camera distance is radial from the eye that rendered it.
+        * @details Filled by the engine beside _prevViewProjection, with the same first-frame
+        * seeding: equal to the current position until a previous frame exists.
+        */
+        glm::vec4 _prevCameraPositionWorld{ 0.0f, 0.0f, 0.0f, 1.0f }; // offset 368
     };
-    static_assert(sizeof(VkmFrameConstants) == 368,
+    static_assert(sizeof(VkmFrameConstants) == 384,
                   "VkmFrameConstants must match VkmFrameConstants in shaders/vkm_frame_constants.hlsli");
 
     // Byte stride between two frame slots' regions: the struct rounded up to the alignment

@@ -29,7 +29,7 @@ TEST_CASE("VkmReservoir - the packed record is 32 bytes of eight u32 words")
 
 TEST_CASE("VkmRestirConstants - matches the shader-side push-constant record")
 {
-    CHECK(sizeof(vkm::VkmRestirConstants) == 56);
+    CHECK(sizeof(vkm::VkmRestirConstants) == 64);
     // Well inside the 128 bytes every device guarantees, which is what the engine's whole
     // push-constant convention is sized against.
     CHECK(sizeof(vkm::VkmRestirConstants) <= 128);
@@ -45,16 +45,19 @@ TEST_CASE("VkmRestirConstants - matches the shader-side push-constant record")
     CHECK(offsetof(vkm::VkmRestirConstants, _neighbourRadius) == 40);
     CHECK(offsetof(vkm::VkmRestirConstants, _normalThreshold) == 44);
     CHECK(offsetof(vkm::VkmRestirConstants, _depthThreshold) == 48);
+    CHECK(offsetof(vkm::VkmRestirConstants, _historySlice) == 52);
+    CHECK(offsetof(vkm::VkmRestirConstants, _confidenceCap) == 56);
+    CHECK(offsetof(vkm::VkmRestirConstants, _maxSampleAge) == 60);
 }
 
 /*
-* Two slices, deliberately not FRAME_COUNT. A pass reads one and writes the other, which is what
-* 8.4's spatial reuse needs; the frames-in-flight question is answered by VkmRenderGraph's
+* Three slices, deliberately not FRAME_COUNT. Generation writes the fresh slice, temporal reuse
+* ping-pongs the history pair; the frames-in-flight question is answered by VkmRenderGraph's
 * per-slot ensureCompleted() instead. See the comment on kVkmReservoirSliceCount.
 */
-TEST_CASE("kVkmReservoirSliceCount - enough for a read slice and a write slice")
+TEST_CASE("kVkmReservoirSliceCount - a fresh slice plus the history pair")
 {
-    CHECK(vkm::kVkmReservoirSliceCount >= 2);
+    CHECK(vkm::kVkmReservoirSliceCount == 3);
 }
 
 /*

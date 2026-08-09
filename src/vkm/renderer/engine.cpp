@@ -657,7 +657,11 @@ namespace vkm
                     // a violent camera cut.
                     frameConstants._prevViewProjection =
                         _hasPrevViewProjection ? _prevViewProjection : frameConstants._viewProjection;
+                    frameConstants._prevCameraPositionWorld =
+                        _hasPrevViewProjection ? _prevCameraPositionWorld
+                                               : frameConstants._cameraPositionWorld;
                     _prevViewProjection = frameConstants._viewProjection;
+                    _prevCameraPositionWorld = frameConstants._cameraPositionWorld;
                     _hasPrevViewProjection = true;
                 }
                 else

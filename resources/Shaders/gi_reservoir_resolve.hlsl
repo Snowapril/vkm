@@ -32,7 +32,9 @@ struct RestirConstants
     float neighbourRadius;
     float normalThreshold;
     float depthThreshold;
-    uint  _pad0;
+    uint  historySlice;
+    uint  confidenceCap;
+    uint  maxSampleAge;
 };
 
 VKM_PUSH_CONSTANTS(RestirConstants, g_Restir);

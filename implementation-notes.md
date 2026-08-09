@@ -3807,3 +3807,24 @@ change. Measured: mean ratio vs the un-resampled estimator 1.138 → 0.9977, MSE
   reuse correlation holds spatial's RelMSE at 1.9e-3 against the baseline's 1.6e-3 — the
   regression the planned gate would flag is the correlation tax restir.md §9 documents, not a
   bias, and the mean-ratio bound is what actually detects one.
+
+## 2026-08-09 — Phase 8.5: temporal resampling, and what the reservoir readback caught
+
+Three slices (fresh + parity-ping-ponged history pair), a rayless per-stage p_hat consistent
+between numerator and Z, history taps validated against the previous G-buffer only, confidence
+cap 20 / age cap 32, and `_prevCameraPositionWorld` in the frame constants (368 -> 384 B). The
+image gates passed while M never left 1: only the readback of reservoir word 6 caught the test's
+hand-filled frame constants leaving the previous eye at the origin, and then the +0.9% mean from
+`W = 0` histories being treated as invalid — dropping their confidence from Z, the same
+shrink-the-denominator asymmetry as 8.4. Null samples now merge with zero weight and full M.
+
+### Deviations
+
+- **Planned:** a ring of jittered fallback taps and an optional zero-motion fallback around the
+  reprojected history tap. **Done instead:** the single reprojected tap. Nothing measured needs
+  the ring on a static camera, and its value is a moving-camera quality question the gi sample
+  has to answer by eye first — building it now would be tuning without a signal.
+- **Planned (risk 5):** `temporalRelMse <= relativeMse`. **Done instead:** the baseline's own
+  absolute thresholds plus the 1% mean-ratio bound, for the same reason as 8.4: at 1536
+  accumulated samples the reuse correlation holds the floor above the independent baseline's,
+  and the mean is the bias detector.

@@ -323,6 +323,7 @@ namespace vkm
         */
         uint32_t _frameCounter {0};
         glm::mat4 _prevViewProjection {1.0f};
+        glm::vec4 _prevCameraPositionWorld {0.0f, 0.0f, 0.0f, 1.0f};
         bool _hasPrevViewProjection {false};
 
         std::unique_ptr<VkmRenderGraphCapture> _renderGraphCapture;

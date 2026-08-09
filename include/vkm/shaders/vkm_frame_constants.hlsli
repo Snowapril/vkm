@@ -46,6 +46,9 @@ struct VkmFrameConstants
     // x = monotonically increasing frame counter (NOT the 0..FRAME_COUNT-1 slot index); yzw
     // reserved. Seed stochastic sampling with it so successive frames decorrelate.
     uint4    frameIndex;
+    // Last frame's cameraPositionWorld, seeded with the current one on the first frame. History
+    // camera distances are radial from THIS eye, not the current frame's.
+    float4   prevCameraPositionWorld;
 };
 
 #define VKM_FRAME_CONSTANTS(name) \

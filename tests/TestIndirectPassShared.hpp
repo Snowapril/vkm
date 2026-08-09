@@ -38,6 +38,7 @@
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -92,6 +93,36 @@ namespace vkmtest
             driver->getRenderResourcePool()->releaseResource(destination);
             return rgba;
         }
+
+        // The same staging round trip, shaped for the reservoir buffer's raw words.
+        inline std::vector<uint32_t> readBufferWords(vkm::VkmDriverBase* driver,
+                                                     vkm::VkmResourceHandle source,
+                                                     uint64_t byteSize)
+        {
+            vkm::VkmStagingBufferInfo stagingInfo{};
+            stagingInfo._flags = vkm::VkmResourceCreateInfo::AllowTransferDst;
+            stagingInfo._size = byteSize;
+            stagingInfo._debugName = "ReservoirReadback";
+            vkm::VkmStagingBuffer* staging = driver->newStagingBuffer(stagingInfo);
+            REQUIRE(staging != nullptr);
+
+            const vkm::VkmResourceHandle destination = staging->getHandle();
+            vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+            auto* subGraph = renderGraph.beginTransferSubGraph("ReservoirReadback");
+            subGraph->setTransferCallback([=](vkm::VkmCommandBufferBase* commandBuffer) {
+                commandBuffer->copyBuffer(source, destination, 0, 0, byteSize);
+            });
+            renderGraph.compile();
+            renderGraph.execute();
+            renderGraph.ensureCompleted();
+
+            std::vector<uint32_t> words(static_cast<size_t>(byteSize / sizeof(uint32_t)));
+            staging->invalidate(0, byteSize);
+            std::memcpy(words.data(), staging->map(), byteSize);
+            driver->waitIdle();
+            driver->getRenderResourcePool()->releaseResource(destination);
+            return words;
+        }
     } // namespace detail
 
     inline void runIndirectConvergenceTest(vkm::VkmDriverBase* driver, float mseThreshold = 6.0e-4f)
@@ -139,6 +170,10 @@ namespace vkmtest
         frameConstants._inverseViewProjection = glm::inverse(viewProjection);
         frameConstants._prevViewProjection = viewProjection;
         frameConstants._cameraPositionWorld = glm::vec4(0.0f, 0.0f, 0.85f, 1.0f);
+        // Static camera: the previous eye is this eye. Leaving it at the origin default rejects
+        // every temporal history tap on the depth criterion, which the reservoir readback below
+        // catches as M never growing past 1.
+        frameConstants._prevCameraPositionWorld = frameConstants._cameraPositionWorld;
         driver->getFrameConstantManager()->update(/*frameIndex=*/0, frameConstants);
 
         vkm::VkmFrameData frameData;
@@ -151,57 +186,12 @@ namespace vkmtest
 
         REQUIRE_MESSAGE(vkm::vkmLoadRayTracingPipelineStates(&manager, &error), error);
 
-        vkm::VkmPathTracer reference;
-        REQUIRE_MESSAGE(reference.initialize(driver, &manager, detail::kCornellSize,
-                                             detail::kCornellSize, &error),
-                        error);
-        vkm::VkmIndirectPass indirect;
-        REQUIRE_MESSAGE(indirect.initialize(driver, &manager, gbuffer, detail::kCornellSize,
-                                            detail::kCornellSize, &error),
-                        error);
-        vkm::VkmRestirPass restir;
-        REQUIRE_MESSAGE(restir.initialize(driver, &manager, gbuffer, detail::kCornellSize,
-                                          detail::kCornellSize, &error),
-                        error);
-        vkm::VkmRestirPass spatial;
-        REQUIRE_MESSAGE(spatial.initialize(driver, &manager, gbuffer, detail::kCornellSize,
-                                           detail::kCornellSize, &error),
-                        error);
-
-        const vkm::VkmPathTraceOptions referenceOptions{
-            /*_maxBounces=*/detail::kIndirectBounces + 1,
-            // Pixel centres, so both estimators start from the same primary point; otherwise every
-            // silhouette pixel differs for a reason that has nothing to do with the estimator.
-            /*_jitterPrimaryRay=*/false,
-            glm::vec3(detail::kEnvironmentRadiance)
-        };
-        const vkm::VkmIndirectOptions indirectOptions{
-            detail::kIndirectBounces,
-            glm::vec3(detail::kEnvironmentRadiance)
-        };
-        /*
-        * Phase 8.1/8.3: the same estimator again, but routed through a reservoir. Slice 1 rather
-        * than slice 0 on purpose -- with only one slice exercised, a pass that ignored the slice
-        * index entirely would still pass, and the index is the mechanism 8.4 will read one slice
-        * and write another through.
-        */
-        vkm::VkmRestirOptions restirOptions{};
-        restirOptions._maxBounces = detail::kIndirectBounces;
-        restirOptions._environmentRadiance = glm::vec3(detail::kEnvironmentRadiance);
-        // Slice 1 in, slice 0 out -- deliberately not the default pair. With only slice 0
-        // exercised, a pass that ignored the slice index entirely would still pass, and the index
-        // is the mechanism spatial reuse reads one slice and writes another through.
-        restirOptions._inputSlice = 1;
-        restirOptions._outputSlice = 0;
-
-        // Phase 8.4 runs alongside 8.3 rather than replacing it: the whole question this sub-step
-        // is measured by is whether turning resampling on moves the mean, which needs both.
-        vkm::VkmRestirOptions spatialOptions = restirOptions;
-        spatialOptions._spatialResampling = true;
-
-        // One G-buffer fill: the camera and the scene are static, so the indirect pass reads the
-        // same surfaces every sample and only its rays change.
-        {
+        // One G-buffer fill per set: the camera and the scene are static, so the passes read the
+        // same surfaces every sample and only their rays change. Filling BOTH sets (with a flip
+        // between) gives the temporal pass a previous G-buffer with the scene in it -- exactly
+        // what a static camera's second frame sees -- rather than an allocated-but-never-rendered
+        // set whose zero camera distance reads as a full disocclusion.
+        const auto fillGBuffer = [&]() {
             const vkm::VkmFrameBufferDescriptor fbDesc = gbuffer.makeFrameBufferDescriptor();
 
             vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
@@ -236,7 +226,67 @@ namespace vkmtest
             renderGraph.compile();
             renderGraph.execute();
             renderGraph.ensureCompleted();
-        }
+        };
+        fillGBuffer();
+        gbuffer.advanceFrame();
+        fillGBuffer();
+
+        vkm::VkmPathTracer reference;
+        REQUIRE_MESSAGE(reference.initialize(driver, &manager, detail::kCornellSize,
+                                             detail::kCornellSize, &error),
+                        error);
+        vkm::VkmIndirectPass indirect;
+        REQUIRE_MESSAGE(indirect.initialize(driver, &manager, gbuffer, detail::kCornellSize,
+                                            detail::kCornellSize, &error),
+                        error);
+        vkm::VkmRestirPass restir;
+        REQUIRE_MESSAGE(restir.initialize(driver, &manager, gbuffer, detail::kCornellSize,
+                                          detail::kCornellSize, &error),
+                        error);
+        vkm::VkmRestirPass spatial;
+        REQUIRE_MESSAGE(spatial.initialize(driver, &manager, gbuffer, detail::kCornellSize,
+                                           detail::kCornellSize, &error),
+                        error);
+        vkm::VkmRestirPass temporal;
+        REQUIRE_MESSAGE(temporal.initialize(driver, &manager, gbuffer, detail::kCornellSize,
+                                            detail::kCornellSize, &error),
+                        error);
+
+        const vkm::VkmPathTraceOptions referenceOptions{
+            /*_maxBounces=*/detail::kIndirectBounces + 1,
+            // Pixel centres, so both estimators start from the same primary point; otherwise every
+            // silhouette pixel differs for a reason that has nothing to do with the estimator.
+            /*_jitterPrimaryRay=*/false,
+            glm::vec3(detail::kEnvironmentRadiance)
+        };
+        const vkm::VkmIndirectOptions indirectOptions{
+            detail::kIndirectBounces,
+            glm::vec3(detail::kEnvironmentRadiance)
+        };
+        /*
+        * Phase 8.1/8.3: the same estimator again, but routed through a reservoir. Slice 1 rather
+        * than slice 0 on purpose -- with only one slice exercised, a pass that ignored the slice
+        * index entirely would still pass, and the index is the mechanism 8.4 will read one slice
+        * and write another through.
+        */
+        vkm::VkmRestirOptions restirOptions{};
+        restirOptions._maxBounces = detail::kIndirectBounces;
+        restirOptions._environmentRadiance = glm::vec3(detail::kEnvironmentRadiance);
+        // Slice 1 in, slice 0 out -- deliberately not the default pair. With only slice 0
+        // exercised, a pass that ignored the slice index entirely would still pass, and the index
+        // is the mechanism spatial reuse reads one slice and writes another through.
+        restirOptions._inputSlice = 1;
+        restirOptions._outputSlice = 0;
+
+        // Phase 8.4 runs alongside 8.3 rather than replacing it: the whole question this sub-step
+        // is measured by is whether turning resampling on moves the mean, which needs both.
+        vkm::VkmRestirOptions spatialOptions = restirOptions;
+        spatialOptions._spatialResampling = true;
+
+        // Phase 8.5, same reasoning. The camera is static, so reprojection is the identity and
+        // the history tap is the pixel itself -- which is exactly the sub-plan's "static first".
+        vkm::VkmRestirOptions temporalOptions = restirOptions;
+        temporalOptions._temporalResampling = true;
 
         // Both estimators, sample for sample, in one graph per sample so neither can be advantaged
         // by a different number of submissions.
@@ -249,11 +299,14 @@ namespace vkmtest
             subGraph->addReferencedResources(referenced);
             subGraph->addReferencedResource(scene.getTopLevelAccelerationStructure(),
                                            vkm::VkmResourceAccess::AccelerationStructureShaderRead);
-            // The G-buffer pass in the graph above left these as attachments; the estimators sample
-            // them through set 0, which the render graph only knows about because of this.
+            // The G-buffer passes in the graphs above left these as attachments; the estimators
+            // sample them through set 0, which the render graph only knows about because of this.
+            // The previous set too: the temporal pass validates its history taps against it.
             for (uint32_t i = 0; i < vkm::VkmGBuffer::kTargetCount; ++i)
             {
                 subGraph->addReferencedResource(gbuffer.getTexture(static_cast<vkm::VkmGBuffer::Target>(i)),
+                                                vkm::VkmResourceAccess::ShaderSampledRead);
+                subGraph->addReferencedResource(gbuffer.getPrevTexture(static_cast<vkm::VkmGBuffer::Target>(i)),
                                                 vkm::VkmResourceAccess::ShaderSampledRead);
             }
             for (vkm::VkmResourceHandle accumulation : { reference.getAccumulationBuffer(),
@@ -261,7 +314,9 @@ namespace vkmtest
                                                          restir.getAccumulationBuffer(),
                                                          restir.getReservoirBuffer(),
                                                          spatial.getAccumulationBuffer(),
-                                                         spatial.getReservoirBuffer() })
+                                                         spatial.getReservoirBuffer(),
+                                                         temporal.getAccumulationBuffer(),
+                                                         temporal.getReservoirBuffer() })
             {
                 subGraph->addReferencedResource(accumulation, vkm::VkmResourceAccess::ShaderStorageReadWrite);
             }
@@ -270,6 +325,7 @@ namespace vkmtest
                 indirect.recordAccumulate(commandBuffer, indirectOptions);
                 restir.recordAccumulate(commandBuffer, restirOptions);
                 spatial.recordAccumulate(commandBuffer, spatialOptions);
+                temporal.recordAccumulate(commandBuffer, temporalOptions);
             });
             renderGraph.compile();
             renderGraph.execute();
@@ -279,6 +335,7 @@ namespace vkmtest
         CHECK(indirect.getSampleCount() == detail::kCornellSamples);
         CHECK(restir.getSampleCount() == detail::kCornellSamples);
         CHECK(spatial.getSampleCount() == detail::kCornellSamples);
+        CHECK(temporal.getSampleCount() == detail::kCornellSamples);
 
         const std::vector<float> referenceImage = detail::readAccumulationBuffer(
             driver, reference.getAccumulationBuffer(), detail::kCornellSize, detail::kCornellSize);
@@ -288,6 +345,8 @@ namespace vkmtest
             driver, restir.getAccumulationBuffer(), detail::kCornellSize, detail::kCornellSize);
         const std::vector<float> spatialImage = detail::readAccumulationBuffer(
             driver, spatial.getAccumulationBuffer(), detail::kCornellSize, detail::kCornellSize);
+        const std::vector<float> temporalImage = detail::readAccumulationBuffer(
+            driver, temporal.getAccumulationBuffer(), detail::kCornellSize, detail::kCornellSize);
         const uint32_t pixelCount = detail::kCornellSize * detail::kCornellSize;
 
         /*
@@ -445,9 +504,71 @@ namespace vkmtest
         CHECK(spatialMse < mseThreshold);
         CHECK(spatialRelativeMse < 4.0e-3f);
 
+        /*
+        * Phase 8.5's gate, in two halves.
+        *
+        * The mean: on a static camera the reprojection is the identity and last frame's p_hat
+        * equals this frame's (same normal, same position), so the two-participant merge and its
+        * denominator are exact and turning temporal reuse on must not move the mean. The MSE
+        * bounds are the baseline's own, as for the spatial pass above: the estimator is heavily
+        * correlated across accumulated frames (that is what confidence-weighted reuse IS), so its
+        * accumulated floor cannot beat the independent baseline's -- the win is per-frame, in the
+        * live path.
+        *
+        * The structure: the reservoirs themselves are read back and word 6 decoded, because the
+        * caps are invisible in the image. M saturating at confidenceCap + 1 (capped history plus
+        * the fresh sample) says history was found, merged and capped; a temporal pass reading the
+        * wrong slice never grows M past 1, and one ignoring the cap saturates at the field's 255.
+        * A maximum age in (0, maxSampleAge] says samples survive reuse AND the stale ones are
+        * discarded.
+        */
+        uint32_t temporalCovered = 0;
+        const double temporalBrightness = summarize(temporalImage, &temporalCovered);
+        const float temporalMse =
+            vkm::vkmComputeImageMse(referenceImage.data(), temporalImage.data(), pixelCount);
+        const float temporalRelativeMse =
+            vkm::vkmComputeImageRelativeMse(referenceImage.data(), temporalImage.data(), pixelCount);
+        MESSAGE("temporal vs reference: MSE " << temporalMse << ", RelMSE "
+                                              << temporalRelativeMse << ", mean red "
+                                              << temporalBrightness << " (1-spp "
+                                              << indirectBrightness << ", ratio "
+                                              << (temporalBrightness / indirectBrightness)
+                                              << ")");
+        CHECK(temporalCovered == covered);
+        CHECK(temporalBrightness > 0.05);
+        CHECK(std::abs(temporalBrightness / indirectBrightness - 1.0) < 0.01);
+        CHECK(temporalMse < mseThreshold);
+        CHECK(temporalRelativeMse < 4.0e-3f);
+
+        {
+            // The final temporal output lives in the slice written by the LAST recordAccumulate:
+            // parity (kCornellSamples - 1) & 1, output slice 1 - parity.
+            const uint32_t lastParity = (detail::kCornellSamples - 1) & 1u;
+            const uint32_t finalSlice = 1u - lastParity;
+            const std::vector<uint32_t> words = detail::readBufferWords(
+                driver, temporal.getReservoirBuffer(),
+                static_cast<uint64_t>(pixelCount) * vkm::kVkmReservoirSliceCount *
+                    vkm::kVkmReservoirByteStride);
+            uint32_t maxM = 0;
+            uint32_t maxAge = 0;
+            for (uint32_t pixel = 0; pixel < pixelCount; ++pixel)
+            {
+                const uint32_t packed =
+                    words[(static_cast<size_t>(finalSlice) * pixelCount + pixel) *
+                              vkm::kVkmReservoirWordStride + 6];
+                maxM = std::max(maxM, packed & 0xFFu);
+                maxAge = std::max(maxAge, (packed >> 8) & 0xFFu);
+            }
+            MESSAGE("temporal reservoirs: max M " << maxM << ", max age " << maxAge);
+            CHECK(maxM == temporalOptions._confidenceCap + 1);
+            CHECK(maxAge > 0);
+            CHECK(maxAge <= temporalOptions._maxSampleAge);
+        }
+
         // scene.destroy releases through the deferred reclaimer, whose worker frees on another
         // thread while the next test is already allocating; see TestAccelerationStructureShared.
         driver->waitIdle();
+        temporal.destroy(driver);
         spatial.destroy(driver);
         restir.destroy(driver);
         indirect.destroy(driver);

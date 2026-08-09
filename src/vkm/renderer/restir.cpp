@@ -108,11 +108,14 @@ namespace vkm
         std::string psoError;
         _generatePipeline = pipelineStateManager->getPipelineState("gi_reservoir_generate_pso[default]",
                                                                    VkmPipelineStateOrigin::Engine);
+        _temporalPipeline = pipelineStateManager->getPipelineState("gi_reservoir_temporal_pso[default]",
+                                                                   VkmPipelineStateOrigin::Engine);
         _spatialPipeline = pipelineStateManager->getPipelineState("gi_reservoir_spatial_pso[default]",
                                                                   VkmPipelineStateOrigin::Engine);
         _resolvePipeline = pipelineStateManager->getPipelineState("gi_reservoir_resolve_pso[default]",
                                                                   VkmPipelineStateOrigin::Engine);
-        if (_generatePipeline == nullptr || _spatialPipeline == nullptr || _resolvePipeline == nullptr)
+        if (_generatePipeline == nullptr || _temporalPipeline == nullptr || _spatialPipeline == nullptr ||
+            _resolvePipeline == nullptr)
         {
             return fail(outError, "The reservoir pipelines are not loaded; call vkmLoadRayTracingPipelineStates first");
         }
@@ -170,6 +173,24 @@ namespace vkm
             return fail(outError, "Failed to build the reservoir generation table: " + psoError);
         }
 
+        // History-tap validation reads last frame's G-buffer, so this is the one table that binds
+        // the previous set. Before the first advanceFrame() those textures exist but hold nothing
+        // rendered; the temporal pass's per-tap validation reads their zero camera distance as a
+        // disocclusion, which is the right answer for "there is no history yet".
+        _temporalTable = driver->newResourceTable(
+            _temporalPipeline, VkmResourceSetKind::PerPass,
+            {{ 0, gbuffer.getTexture(VkmGBuffer::Target::Normal) },
+             { 1, gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) },
+             { 2, gbuffer.getPrevTexture(VkmGBuffer::Target::Normal) },
+             { 3, gbuffer.getPrevTexture(VkmGBuffer::Target::MotionMetallic) },
+             { 4, _reservoirBuffer }},
+            &psoError);
+        if (_temporalTable == nullptr)
+        {
+            destroy(driver);
+            return fail(outError, "Failed to build the temporal resampling table: " + psoError);
+        }
+
         _spatialTable = driver->newResourceTable(
             _spatialPipeline, VkmResourceSetKind::PerPass,
             {{ 0, gbuffer.getTexture(VkmGBuffer::Target::Normal) },
@@ -212,6 +233,7 @@ namespace vkm
             }
         };
         releaseTable(_generateTable);
+        releaseTable(_temporalTable);
         releaseTable(_spatialTable);
         releaseTable(_resolveTable);
 
@@ -228,6 +250,7 @@ namespace vkm
         release(_accumulationBuffer);
 
         _generatePipeline = nullptr;
+        _temporalPipeline = nullptr;
         _spatialPipeline = nullptr;
         _resolvePipeline = nullptr;
         _width = 0;
@@ -239,7 +262,8 @@ namespace vkm
     {
         VKM_ASSERT(commandBuffer != nullptr, "VkmRestirPass::recordAccumulate requires a command buffer");
 
-        if (_generatePipeline == nullptr || _spatialPipeline == nullptr || _resolvePipeline == nullptr)
+        if (_generatePipeline == nullptr || _temporalPipeline == nullptr || _spatialPipeline == nullptr ||
+            _resolvePipeline == nullptr)
         {
             VKM_DEBUG_ERROR("recordAccumulate before a successful VkmRestirPass::initialize");
             return;
@@ -258,6 +282,21 @@ namespace vkm
             return;
         }
 
+        /*
+        * Slice routing. Without temporal reuse the options drive it: generation writes
+        * `_inputSlice`, spatial moves the result to `_outputSlice`, the resolve reads whichever
+        * the last writer used. With temporal reuse the routing is fixed by the pass: generation
+        * writes the fresh slice (2), temporal merges it with last frame's history slice `p` into
+        * `1 - p` where `p = _sampleIndex & 1`, and spatial — when on — moves that into `p`, the
+        * slice just consumed as history and therefore free. Only the temporal output is ever
+        * re-ingested as history, never the spatial output: feeding spatial results back into the
+        * temporal loop drives correlation and detail erosion (restir.md section 9).
+        */
+        const uint32_t parity = _sampleIndex & 1u;
+        constexpr uint32_t kFreshSlice = 2;
+        const uint32_t historySlice = parity;
+        const uint32_t temporalOutSlice = 1u - parity;
+
         VkmRestirConstants constants{};
         constants._width = _width;
         constants._height = _height;
@@ -272,14 +311,15 @@ namespace vkm
         constants._neighbourRadius = options._neighbourRadius;
         constants._normalThreshold = options._normalThreshold;
         constants._depthThreshold = options._depthThreshold;
+        constants._historySlice = historySlice;
+        constants._confidenceCap = options._confidenceCap;
+        constants._maxSampleAge = options._maxSampleAge;
 
         const uint32_t groupsX = (_width + kThreadGroupSize - 1) / kThreadGroupSize;
         const uint32_t groupsY = (_height + kThreadGroupSize - 1) / kThreadGroupSize;
 
-        // Generation always writes the input slice; the spatial pass, when it runs, moves the
-        // result to the output slice and the resolve reads whichever the last writer used.
         VkmRestirConstants generateConstants = constants;
-        generateConstants._outputSlice = options._inputSlice;
+        generateConstants._outputSlice = options._temporalResampling ? kFreshSlice : options._inputSlice;
 
         commandBuffer->bindPipeline(_generatePipeline);
         commandBuffer->bindResourceTable(_generateTable);
@@ -291,14 +331,36 @@ namespace vkm
 
         VkmRestirConstants resolveConstants = constants;
         resolveConstants._inputSlice = options._inputSlice;
-        if (options._spatialResampling)
+
+        if (options._temporalResampling)
         {
-            commandBuffer->bindPipeline(_spatialPipeline);
-            commandBuffer->bindResourceTable(_spatialTable);
-            commandBuffer->setPushConstants(&constants, sizeof(constants));
+            VkmRestirConstants temporalConstants = constants;
+            temporalConstants._inputSlice = kFreshSlice;
+            temporalConstants._outputSlice = temporalOutSlice;
+
+            commandBuffer->bindPipeline(_temporalPipeline);
+            commandBuffer->bindResourceTable(_temporalTable);
+            commandBuffer->setPushConstants(&temporalConstants, sizeof(temporalConstants));
             commandBuffer->dispatch(groupsX, groupsY, 1);
             commandBuffer->unbindPipeline();
-            resolveConstants._inputSlice = options._outputSlice;
+            resolveConstants._inputSlice = temporalOutSlice;
+        }
+
+        if (options._spatialResampling)
+        {
+            VkmRestirConstants spatialConstants = constants;
+            if (options._temporalResampling)
+            {
+                spatialConstants._inputSlice = temporalOutSlice;
+                spatialConstants._outputSlice = historySlice;
+            }
+
+            commandBuffer->bindPipeline(_spatialPipeline);
+            commandBuffer->bindResourceTable(_spatialTable);
+            commandBuffer->setPushConstants(&spatialConstants, sizeof(spatialConstants));
+            commandBuffer->dispatch(groupsX, groupsY, 1);
+            commandBuffer->unbindPipeline();
+            resolveConstants._inputSlice = spatialConstants._outputSlice;
         }
 
         commandBuffer->bindPipeline(_resolvePipeline);
