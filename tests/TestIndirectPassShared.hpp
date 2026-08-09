@@ -38,6 +38,7 @@
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -414,14 +415,17 @@ namespace vkmtest
         CHECK(packingRelativeMse < 6.0e-5f);
 
         /*
-        * Phase 8.4 is dispatched but NOT yet asserted against ground truth, and saying so here is
-        * the point: its per-neighbour visibility ray makes the image 13.8% bright, and until that
-        * is understood the pass is not something to hold the engine to (see TODO.md and the header
-        * of gi_reservoir_spatial.hlsl for what was measured).
+        * Phase 8.4's gate: turning spatial resampling on must not move the mean. The pass merges
+        * four neighbours per pixel under the target function p_hat = luminance * cos * V, with the
+        * same p_hat in the merge weights and in the bias-correction denominator -- the asymmetry
+        * this gate caught (visibility in the denominator only) read 13.8% bright.
         *
-        * What is checked is what is true: the pass runs, covers the same pixels the others do, and
-        * produces a lit image under a validation layer. That keeps it compiled, dispatched and
-        * exercised rather than rotting, without pretending the estimator is verified.
+        * The ratio is the number a reader wants: 1.0 means resampling did not move the mean.
+        * Measured 0.9977 on Metal at 1536 samples; the tolerance is ~4x that deviation. The MSE
+        * thresholds are the same ones the 1-spp estimator is held to: at this sample count both
+        * are at their noise floors, and reuse correlation keeps the accumulated RelMSE from
+        * *improving* on the baseline -- resampling's win is at low sample counts, which is the
+        * live path's regime, not this accumulation's.
         */
         uint32_t spatialCovered = 0;
         const double spatialBrightness = summarize(spatialImage, &spatialCovered);
@@ -429,18 +433,17 @@ namespace vkmtest
             vkm::vkmComputeImageMse(referenceImage.data(), spatialImage.data(), pixelCount);
         const float spatialRelativeMse =
             vkm::vkmComputeImageRelativeMse(referenceImage.data(), spatialImage.data(), pixelCount);
-        // Printed rather than asserted, and printed with the ratio because that is the number a
-        // reader wants: 1.0 means resampling did not move the mean. On this machine's Metal it
-        // reads 1.138, and whether it reads the same on a different driver is what says whether
-        // the fault is in the estimator or in one backend's code generation.
-        MESSAGE("spatial (UNVERIFIED) vs reference: MSE " << spatialMse << ", RelMSE "
-                                                          << spatialRelativeMse << ", mean red "
-                                                          << spatialBrightness << " (1-spp "
-                                                          << indirectBrightness << ", ratio "
-                                                          << (spatialBrightness / indirectBrightness)
-                                                          << ")");
+        MESSAGE("spatial vs reference: MSE " << spatialMse << ", RelMSE "
+                                             << spatialRelativeMse << ", mean red "
+                                             << spatialBrightness << " (1-spp "
+                                             << indirectBrightness << ", ratio "
+                                             << (spatialBrightness / indirectBrightness)
+                                             << ")");
         CHECK(spatialCovered == covered);
         CHECK(spatialBrightness > 0.05);
+        CHECK(std::abs(spatialBrightness / indirectBrightness - 1.0) < 0.01);
+        CHECK(spatialMse < mseThreshold);
+        CHECK(spatialRelativeMse < 4.0e-3f);
 
         // scene.destroy releases through the deferred reclaimer, whose worker frees on another
         // thread while the next test is already allocating; see TestAccelerationStructureShared.

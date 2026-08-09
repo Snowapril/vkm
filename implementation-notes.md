@@ -3777,3 +3777,33 @@ Verified: Metal 244/244 with `MTL_DEBUG_LAYER=1`, no validation assertions, prob
 
 `_currentSubGraphReleaseStages` is assigned in `onBarrierRelease` and cleared in
 `onBeginCommandBuffer`, and nothing reads it.
+
+## 2026-08-09 — Phase 8.4 verified: visibility belongs in the merge weights, not only in Z
+
+The 13.8% brightening was not the visibility ray's verdict but where it was consulted. The
+bias-correction denominator Z evaluated `p_hat * V` (one ray per participant) while the merge
+loop's resampling weights evaluated `p_hat` with no ray at all. Algorithm 6 is unbiased only when
+the two agree: every participant genuinely occluded from the chosen sample left the divisor while
+its weight stayed in the sum, and on the open Cornell box the occluded fraction is ~14%. That is
+also why every recorded symptom pointed away from the ray — its inputs did not matter because its
+answers were right, bypassing it restored consistency with the rayless numerator, and
+`_neighbourCount = 0` removed the asymmetry with the ray still present.
+
+The fix is one ray in the merge loop, rejecting candidates the centre cannot see — which is also
+restir.md §2's re-traced reconnection visibility, so the wall-leak path closes with the same
+change. Measured: mean ratio vs the un-resampled estimator 1.138 → 0.9977, MSE vs the reference
+2.44e-4 against the 1-spp baseline's 2.41e-4 (Metal, 1536 samples).
+
+### Deviations
+
+- **Planned:** branch on `VKM_RESERVOIR_FLAG_ENVIRONMENT` in the spatial pass and force
+  `jacobian = 1.0` for environment samples. **Done instead:** nothing. At the 1e5-unit stand-in
+  distance the Jacobian's distance and cosine ratios collapse to 1 on their own, which
+  `vkmReservoirJacobian`'s doc comment already states; adding the branch would duplicate that
+  guarantee. The TODO.md entry calling for the branch is removed rather than satisfied.
+- **Planned:** assert `spatialRelativeMse <= relativeMse` (the not-regress gate). **Done
+  instead:** the baseline's own absolute thresholds (`mseThreshold`, 4.0e-3 RelMSE) plus a 1%
+  mean-ratio bound. At 1536 accumulated samples both estimators sit at their noise floors and
+  reuse correlation holds spatial's RelMSE at 1.9e-3 against the baseline's 1.6e-3 — the
+  regression the planned gate would flag is the correlation tax restir.md §9 documents, not a
+  bias, and the mean-ratio bound is what actually detects one.

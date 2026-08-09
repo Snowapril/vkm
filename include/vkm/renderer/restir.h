@@ -86,9 +86,9 @@ namespace vkm
         glm::vec3 _environmentRadiance{ 0.0f, 0.0f, 0.0f };
         /*
         * Whether the spatial pass runs between generation and resolve. Off reproduces Phase 7's
-        * 1-spp estimator exactly, which is what makes 8.3's gate an equality test; on is 8.4.
-        * Kept switchable because "does turning resampling on move the mean" is the question every
-        * later sub-step is measured by.
+        * 1-spp estimator exactly, which is what makes 8.3's gate an equality test; on is 8.4,
+        * verified against the reference on the Cornell gate. Default off so the un-resampled
+        * estimator stays one flag away as a validation mode; a live renderer turns it on.
         */
         bool _spatialResampling = false;
         // Neighbours merged per pixel, and how far away they are looked for, in pixels. The plan

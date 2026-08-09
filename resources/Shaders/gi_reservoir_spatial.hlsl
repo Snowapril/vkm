@@ -18,15 +18,13 @@
 // [0.1, 10]) is NOT applied: it bounds variance at the cost of a mean this sub-step's gate exists
 // to check. That trade belongs to 8.7 and to a profiler, not to the step that proves the maths.
 //
-// **NOT YET VERIFIED, and not enabled by default.** The estimator arithmetic is measured correct:
-// with the per-neighbour visibility ray below bypassed, the mean lands within 0.015% of the
-// un-resampled estimator, which is what says the Jacobian, the receiver-side target function and
-// the bias-correction denominator are right. With that ray in place the image comes out 13.8%
-// bright, and its verdict does not respond to the ray's own inputs -- six structurally different
-// changes (origin from the surface vs the offset point, target lifted off the sample or not,
-// neighbour surface carried in an array vs recomputed, loop rolled vs unrolled, ACCEPT_FIRST_HIT
-// vs closest-hit) all produced a bit-identical result, while bypassing the ray entirely did not.
-// The same function returns "visible" for the call outside the loop. See TODO.md.
+// The target function here is p_hat = luminance * cos * V, and both loops evaluate the SAME one:
+// the merge loop rejects a candidate the centre cannot see, and the denominator Z rejects a
+// participant that cannot see the chosen sample. Bitterli's algorithm 6 is unbiased only when the
+// numerator's p_hat and Z's agree -- visibility in Z alone leaves every genuinely occluded
+// participant out of the divisor while its weight stays in the sum, which measured 13.8% bright
+// on the Cornell gate. With the two symmetric the mean lands within 0.3% of the un-resampled
+// estimator (TestIndirectPassShared).
 
 #include "vkm_bindless.hlsli"
 #include "vkm_frame_constants.hlsli"
@@ -261,6 +259,15 @@ void CSMain(uint3 threadId : SV_DispatchThreadID)
                                                     neighbourReservoir.sampleNormal,
                                                     neighbourSurface.position, centre.position);
         if (!(jacobian > 0.0))
+        {
+            continue;
+        }
+
+        // p_hat includes visibility, here and in Z below. The two loops must evaluate the same
+        // target function: a candidate occluded from the centre contributes zero target density,
+        // and letting it into the numerator while Z's ray excludes its supporters divides by too
+        // little and brightens the result.
+        if (!sampleIsVisible(centre, neighbourReservoir.samplePosition, neighbourReservoir.sampleNormal))
         {
             continue;
         }
