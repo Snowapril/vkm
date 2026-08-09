@@ -1078,8 +1078,17 @@ Incremental, with measured RelMSE against Phase 6 at every sub-step.
       final visibility ray is **not** in: fragment-stage ray query is unproven through the
       SPIRV-Cross MSL path, and with 8.4's merge rays and 8.5's G-buffer validation nothing
       static needs it — deferred with its flag word already plumbed (`TODO.md`)
-- [ ] **8.7 Final-shading MIS** on low-roughness surfaces (see §2's bias note). Cyberpunk's cheap
-      version: `BRDF·(1−roughness²) + ReSTIR·roughness²`
+- [x] **8.7 Final-shading MIS** on low-roughness surfaces (see §2's bias note). Cyberpunk's cheap
+      version, in `gi_restir_lighting.hlsl` rather than the shared composite (which stays
+      technique-agnostic per §5): `out = fresh·(1−r²) + resampled·r²`, where the fresh half is the
+      pixel's own canonical 1-spp sample — kept alive in the fresh slice by 8.5's layout exactly
+      for this. Toggle in the lighting constants, `gv_gi_restir_mis` + a checkbox in the sample,
+      on by default. Gated where it can be: every fixture material has roughness 1, where the
+      blend must degenerate to the resampled estimate — both blend states are held to the same
+      mean in the Cornell gate. The honest limit: at r = 1 the fresh half never contributes, so a
+      wrong fresh-slice read is invisible until a varied-roughness asset exists to look at; the
+      sample's headless A/B was also found to be non-reproducible run to run (the orbit camera
+      integrates wall-clock time), so byte comparisons say nothing there
 
 > **Hard rule (course Tip 4.1):** choose which neighbours to reuse based **only** on the G-buffer.
 > Never on the samples or weights stored *in* the neighbours' reservoirs — that conditions the

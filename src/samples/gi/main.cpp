@@ -117,6 +117,10 @@ VKM_GLOBAL_VARIABLE(float, gv_gi_camera_distance, 1.0f);
 // 0 on a device without ray tracing -- the selection is a runtime capability question, not a
 // build-time one (restir.md section 5).
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_technique, 0u);
+// 8.7's final-shading MIS blend: smooth surfaces lean on the pixel's own fresh sample instead of
+// the resampled one, whose cached radiance is the documented ReSTIR GI bias on low roughness.
+// Settable here so a screenshot run can A/B it.
+VKM_GLOBAL_VARIABLE(bool, gv_gi_restir_mis, true);
 
 namespace
 {
@@ -278,6 +282,7 @@ public:
             }
         }
         _technique = gv_gi_technique.get();
+        _misBlend = gv_gi_restir_mis.get();
 
         loadScene(gv_gi_model_path.get());
     }
@@ -1067,7 +1072,7 @@ private:
     uint32_t _technique = 0; // 0 = probe volume, 1 = ReSTIR
     uint32_t _restirParity = 0;
     float _environmentRadiance = 1.0f;
-    bool _misBlend = false;
+    bool _misBlend = true;
     VkmRestirDebugView _restirDebugView = VkmRestirDebugView::Lighting;
 };
 

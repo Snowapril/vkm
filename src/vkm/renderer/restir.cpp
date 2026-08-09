@@ -496,7 +496,11 @@ namespace vkm
         }
 
         VkmRestirLightingConstants constants{};
-        constants._slices = glm::uvec4(getPlannedOutputSlice(options), 2u,
+        // The fresh 1-spp reservoirs live in slice 2 only when temporal reuse routes them there;
+        // without it, generation wrote the options' input slice and "fresh" and "resampled" may
+        // even coincide -- which makes the MIS blend an exact no-op, the right degenerate case.
+        const uint32_t freshSlice = options._temporalResampling ? 2u : options._inputSlice;
+        constants._slices = glm::uvec4(getPlannedOutputSlice(options), freshSlice,
                                        static_cast<uint32_t>(debugView), 0u);
         constants._params = glm::vec4(misBlend, 0.0f,
                                       1.0f / static_cast<float>(options._confidenceCap + 1),

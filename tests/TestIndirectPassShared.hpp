@@ -658,6 +658,13 @@ namespace vkmtest
             fbDesc._renderPass._colorAttachments[0]._storeAction = vkm::VkmStoreAction::Store;
             fbDesc._colorAttachments[0] = target->getHandle();
 
+            // Twice: without and with 8.7's MIS blend. Every material in the fixture has
+            // roughness 1, where the blend must degenerate to the resampled estimate -- so both
+            // frames are held to the same mean. A blend that moved the mean at roughness 1 reads
+            // the wrong slice or the wrong exponent.
+            for (int blendPass = 0; blendPass < 2; ++blendPass)
+            {
+            const float misBlend = blendPass == 0 ? 0.0f : 1.0f;
             vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
             auto* updateSubGraph = renderGraph.beginTransferSubGraph("RestirLightingConstants");
             updateSubGraph->addReferencedResource(temporal.getLightingConstantBuffer(),
@@ -666,8 +673,7 @@ namespace vkmtest
                                                   vkm::VkmResourceAccess::TransferRead);
             updateSubGraph->setTransferCallback([&](vkm::VkmCommandBufferBase* commandBuffer) {
                 temporal.recordUpdateLightingConstants(commandBuffer, /*frameIndex=*/0, temporalOptions,
-                                                       vkm::VkmRestirDebugView::Lighting,
-                                                       /*misBlend=*/0.0f);
+                                                       vkm::VkmRestirDebugView::Lighting, misBlend);
             });
 
             auto* resampleSubGraph = renderGraph.beginComputeSubGraph("RestirLightingResample");
@@ -740,15 +746,17 @@ namespace vkmtest
             }
             lightingMean = lightingCovered > 0 ? lightingMean / lightingCovered : 0.0;
 
-            MESSAGE("lighting texture mean (composited) " << lightingMean << " vs accumulated "
-                                                          << temporalBrightness << ", ratio "
-                                                          << (lightingMean / temporalBrightness));
+            MESSAGE("lighting texture mean (composited, misBlend " << misBlend << ") " << lightingMean
+                                                                   << " vs accumulated "
+                                                                   << temporalBrightness << ", ratio "
+                                                                   << (lightingMean / temporalBrightness));
             CHECK(lightingCovered == covered);
             CHECK(backgroundNonZero == 0);
             // One frame's estimate against a 1536-frame mean: the tolerance is the single-frame
             // noise of a confidence-21 reservoir averaged over ~2200 pixels, measured and given
             // 3x margin.
             CHECK(std::abs(lightingMean / temporalBrightness - 1.0) < 0.10);
+            }
 
             driver->waitIdle();
             driver->getRenderResourcePool()->releaseResource(target->getHandle());
