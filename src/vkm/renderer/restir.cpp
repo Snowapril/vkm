@@ -10,6 +10,7 @@
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/resource_table.h>
+#include <vkm/renderer/backend/common/staging_buffer.h>
 #include <vkm/renderer/gbuffer.h>
 #include <vkm/renderer/path_tracer.h>
 
@@ -114,8 +115,10 @@ namespace vkm
                                                                   VkmPipelineStateOrigin::Engine);
         _resolvePipeline = pipelineStateManager->getPipelineState("gi_reservoir_resolve_pso[default]",
                                                                   VkmPipelineStateOrigin::Engine);
+        _lightingPipeline = pipelineStateManager->getPipelineState("gi_restir_lighting_pso[default]",
+                                                                   VkmPipelineStateOrigin::Engine);
         if (_generatePipeline == nullptr || _temporalPipeline == nullptr || _spatialPipeline == nullptr ||
-            _resolvePipeline == nullptr)
+            _resolvePipeline == nullptr || _lightingPipeline == nullptr)
         {
             return fail(outError, "The reservoir pipelines are not loaded; call vkmLoadRayTracingPipelineStates first");
         }
@@ -217,6 +220,53 @@ namespace vkm
             destroy(driver);
             return fail(outError, "Failed to build the reservoir resolve table: " + psoError);
         }
+
+        // The lighting constants change per frame (parity-dependent slice indices) while the
+        // table binding them stays immutable, so they ride a uniform buffer with one staging
+        // region per frame slot -- the same shape the gi sample's composite constants use.
+        VkmBufferInfo uniformInfo{};
+        uniformInfo._flags = static_cast<VkmResourceCreateInfo>(
+            static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
+            static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst));
+        uniformInfo._size = sizeof(VkmRestirLightingConstants);
+        uniformInfo._debugName = "RestirLightingConstants";
+        VkmBuffer* lightingConstants = driver->newBuffer(uniformInfo);
+        if (lightingConstants == nullptr)
+        {
+            destroy(driver);
+            return fail(outError, "Failed to create the ReSTIR lighting constant buffer");
+        }
+        _lightingConstantBuffer = lightingConstants->getHandle();
+
+        for (uint32_t frame = 0; frame < FRAME_BUFFER_COUNT; ++frame)
+        {
+            VkmStagingBufferInfo stagingInfo{};
+            stagingInfo._flags = VkmResourceCreateInfo::AllowTransferSrc;
+            stagingInfo._size = sizeof(VkmRestirLightingConstants);
+            stagingInfo._debugName = "RestirLightingStaging";
+            VkmStagingBuffer* staging = driver->newStagingBuffer(stagingInfo);
+            if (staging == nullptr)
+            {
+                destroy(driver);
+                return fail(outError, "Failed to create the ReSTIR lighting staging buffers");
+            }
+            _lightingStaging[frame] = staging->getHandle();
+            _lightingStagingPointers[frame] = staging;
+        }
+
+        _lightingTable = driver->newResourceTable(
+            _lightingPipeline, VkmResourceSetKind::PerPass,
+            {{ 0, gbuffer.getTexture(VkmGBuffer::Target::Normal) },
+             { 1, gbuffer.getTexture(VkmGBuffer::Target::BaseColorRoughness) },
+             { 2, gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) },
+             { 3, _reservoirBuffer },
+             { 4, _lightingConstantBuffer }},
+            &psoError);
+        if (_lightingTable == nullptr)
+        {
+            destroy(driver);
+            return fail(outError, "Failed to build the ReSTIR lighting table: " + psoError);
+        }
         return true;
     }
 
@@ -236,6 +286,7 @@ namespace vkm
         releaseTable(_temporalTable);
         releaseTable(_spatialTable);
         releaseTable(_resolveTable);
+        releaseTable(_lightingTable);
 
         VkmDeferredResourceReclaimer* reclaimer = driver->getDeferredReclaimer();
         const auto release = [reclaimer](VkmResourceHandle& handle) {
@@ -248,24 +299,42 @@ namespace vkm
         release(_reservoirBuffer);
         release(_neighbourOffsetBuffer);
         release(_accumulationBuffer);
+        release(_lightingConstantBuffer);
+        for (uint32_t frame = 0; frame < FRAME_BUFFER_COUNT; ++frame)
+        {
+            release(_lightingStaging[frame]);
+            _lightingStagingPointers[frame] = nullptr;
+        }
 
         _generatePipeline = nullptr;
         _temporalPipeline = nullptr;
         _spatialPipeline = nullptr;
         _resolvePipeline = nullptr;
+        _lightingPipeline = nullptr;
         _width = 0;
         _height = 0;
         _sampleIndex = 0;
+        _lastResolvedSlice = 0;
     }
 
-    void VkmRestirPass::recordAccumulate(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options)
+    uint32_t VkmRestirPass::getPlannedOutputSlice(const VkmRestirOptions& options) const
     {
-        VKM_ASSERT(commandBuffer != nullptr, "VkmRestirPass::recordAccumulate requires a command buffer");
+        if (!options._temporalResampling)
+        {
+            return options._spatialResampling ? options._outputSlice : options._inputSlice;
+        }
+        const uint32_t parity = _sampleIndex & 1u;
+        return options._spatialResampling ? parity : (1u - parity);
+    }
+
+    void VkmRestirPass::recordResample(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options)
+    {
+        VKM_ASSERT(commandBuffer != nullptr, "VkmRestirPass::recordResample requires a command buffer");
 
         if (_generatePipeline == nullptr || _temporalPipeline == nullptr || _spatialPipeline == nullptr ||
             _resolvePipeline == nullptr)
         {
-            VKM_DEBUG_ERROR("recordAccumulate before a successful VkmRestirPass::initialize");
+            VKM_DEBUG_ERROR("recordResample before a successful VkmRestirPass::initialize");
             return;
         }
         if (options._outputSlice >= kVkmReservoirSliceCount || options._inputSlice >= kVkmReservoirSliceCount)
@@ -329,9 +398,6 @@ namespace vkm
         // writes -- the same mechanism VkmScene::recordCull relies on between its two dispatches.
         commandBuffer->unbindPipeline();
 
-        VkmRestirConstants resolveConstants = constants;
-        resolveConstants._inputSlice = options._inputSlice;
-
         if (options._temporalResampling)
         {
             VkmRestirConstants temporalConstants = constants;
@@ -343,7 +409,6 @@ namespace vkm
             commandBuffer->setPushConstants(&temporalConstants, sizeof(temporalConstants));
             commandBuffer->dispatch(groupsX, groupsY, 1);
             commandBuffer->unbindPipeline();
-            resolveConstants._inputSlice = temporalOutSlice;
         }
 
         if (options._spatialResampling)
@@ -360,15 +425,92 @@ namespace vkm
             commandBuffer->setPushConstants(&spatialConstants, sizeof(spatialConstants));
             commandBuffer->dispatch(groupsX, groupsY, 1);
             commandBuffer->unbindPipeline();
-            resolveConstants._inputSlice = spatialConstants._outputSlice;
         }
+
+        _lastResolvedSlice = getPlannedOutputSlice(options);
+        ++_sampleIndex;
+    }
+
+    void VkmRestirPass::recordResolveAccumulate(VkmCommandBufferBase* commandBuffer,
+                                                const VkmRestirOptions& options)
+    {
+        VKM_ASSERT(commandBuffer != nullptr, "VkmRestirPass::recordResolveAccumulate requires a command buffer");
+
+        if (_resolvePipeline == nullptr)
+        {
+            VKM_DEBUG_ERROR("recordResolveAccumulate before a successful VkmRestirPass::initialize");
+            return;
+        }
+        if (_sampleIndex == 0)
+        {
+            VKM_DEBUG_ERROR("recordResolveAccumulate before recordResample: there is nothing to shade");
+            return;
+        }
+
+        VkmRestirConstants constants{};
+        constants._width = _width;
+        constants._height = _height;
+        // The sample recordResample just recorded, which is what the accumulation's first-sample
+        // reset keys on.
+        constants._sampleIndex = _sampleIndex - 1;
+        constants._inputSlice = _lastResolvedSlice;
+
+        const uint32_t groupsX = (_width + kThreadGroupSize - 1) / kThreadGroupSize;
+        const uint32_t groupsY = (_height + kThreadGroupSize - 1) / kThreadGroupSize;
+        (void)options;
 
         commandBuffer->bindPipeline(_resolvePipeline);
         commandBuffer->bindResourceTable(_resolveTable);
-        commandBuffer->setPushConstants(&resolveConstants, sizeof(resolveConstants));
+        commandBuffer->setPushConstants(&constants, sizeof(constants));
         commandBuffer->dispatch(groupsX, groupsY, 1);
         commandBuffer->unbindPipeline();
+    }
 
-        ++_sampleIndex;
+    void VkmRestirPass::recordAccumulate(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options)
+    {
+        recordResample(commandBuffer, options);
+        recordResolveAccumulate(commandBuffer, options);
+    }
+
+    void VkmRestirPass::recordUpdateLightingConstants(VkmCommandBufferBase* commandBuffer,
+                                                      uint32_t frameIndex,
+                                                      const VkmRestirOptions& options,
+                                                      VkmRestirDebugView debugView, float misBlend)
+    {
+        VKM_ASSERT(commandBuffer != nullptr,
+                   "VkmRestirPass::recordUpdateLightingConstants requires a command buffer");
+        VKM_ASSERT(frameIndex < FRAME_BUFFER_COUNT, "frameIndex outside the staging ring");
+
+        if (_lightingStagingPointers[frameIndex] == nullptr)
+        {
+            VKM_DEBUG_ERROR("recordUpdateLightingConstants before a successful VkmRestirPass::initialize");
+            return;
+        }
+
+        VkmRestirLightingConstants constants{};
+        constants._slices = glm::uvec4(getPlannedOutputSlice(options), 2u,
+                                       static_cast<uint32_t>(debugView), 0u);
+        constants._params = glm::vec4(misBlend, 0.0f,
+                                      1.0f / static_cast<float>(options._confidenceCap + 1),
+                                      1.0f / static_cast<float>(options._maxSampleAge > 0
+                                                                    ? options._maxSampleAge : 1));
+        _lightingStagingPointers[frameIndex]->writeDirect(0, &constants, sizeof(constants));
+        commandBuffer->copyBuffer(_lightingStaging[frameIndex], _lightingConstantBuffer, 0, 0,
+                                  sizeof(constants));
+    }
+
+    void VkmRestirPass::recordLighting(VkmCommandBufferBase* commandBuffer)
+    {
+        VKM_ASSERT(commandBuffer != nullptr, "VkmRestirPass::recordLighting requires a command buffer");
+
+        if (_lightingPipeline == nullptr || _lightingTable == nullptr)
+        {
+            VKM_DEBUG_ERROR("recordLighting before a successful VkmRestirPass::initialize");
+            return;
+        }
+
+        commandBuffer->bindPipeline(_lightingPipeline);
+        commandBuffer->bindResourceTable(_lightingTable);
+        commandBuffer->draw(3, 1, 0, 0);
     }
 } // namespace vkm

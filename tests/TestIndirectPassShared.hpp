@@ -28,6 +28,7 @@
 #include <vkm/renderer/backend/common/render_graph.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/staging_buffer.h>
+#include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/gbuffer.h>
 #include <vkm/renderer/indirect_pass.h>
 #include <vkm/renderer/path_tracer.h>
@@ -42,6 +43,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -92,6 +94,60 @@ namespace vkmtest
             driver->waitIdle();
             driver->getRenderResourcePool()->releaseResource(destination);
             return rgba;
+        }
+
+        // IEEE half to float, for reading an R16G16B16A16_SFLOAT target back raw --
+        // driver->readbackTexture() converts to 8-bit and would clamp HDR values.
+        inline float halfToFloat(uint16_t half)
+        {
+            const uint32_t sign = (half >> 15) & 1u;
+            const uint32_t exponent = (half >> 10) & 0x1Fu;
+            const uint32_t mantissa = half & 0x3FFu;
+            float value;
+            if (exponent == 0)
+            {
+                value = static_cast<float>(mantissa) * 5.9604644775390625e-8f; // 2^-24
+            }
+            else if (exponent == 31)
+            {
+                value = std::numeric_limits<float>::infinity();
+            }
+            else
+            {
+                value = std::ldexp(1.0f + static_cast<float>(mantissa) / 1024.0f,
+                                   static_cast<int>(exponent) - 15);
+            }
+            return sign != 0 ? -value : value;
+        }
+
+        // Raw texture bytes via copyTextureToBuffer: mip 0, tightly packed, no format conversion.
+        inline std::vector<uint8_t> readTextureBytes(vkm::VkmDriverBase* driver,
+                                                     vkm::VkmResourceHandle source,
+                                                     uint64_t byteSize)
+        {
+            vkm::VkmStagingBufferInfo stagingInfo{};
+            stagingInfo._flags = vkm::VkmResourceCreateInfo::AllowTransferDst;
+            stagingInfo._size = byteSize;
+            stagingInfo._debugName = "TextureRawReadback";
+            vkm::VkmStagingBuffer* staging = driver->newStagingBuffer(stagingInfo);
+            REQUIRE(staging != nullptr);
+
+            const vkm::VkmResourceHandle destination = staging->getHandle();
+            vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+            auto* subGraph = renderGraph.beginTransferSubGraph("TextureRawReadback");
+            subGraph->setTransferCallback([=](vkm::VkmCommandBufferBase* commandBuffer) {
+                commandBuffer->copyTextureToBuffer(source, destination);
+            });
+            renderGraph.compile();
+            renderGraph.execute();
+            renderGraph.ensureCompleted();
+
+            std::vector<uint8_t> bytes(static_cast<size_t>(byteSize));
+            staging->invalidate(0, byteSize);
+            std::memcpy(bytes.data(), staging->map(), byteSize);
+            driver->waitIdle();
+            driver->getRenderResourcePool()->releaseResource(destination);
+            return bytes;
         }
 
         // The same staging round trip, shaped for the reservoir buffer's raw words.
@@ -174,6 +230,11 @@ namespace vkmtest
         // every temporal history tap on the depth criterion, which the reservoir readback below
         // catches as M never growing past 1.
         frameConstants._prevCameraPositionWorld = frameConstants._cameraPositionWorld;
+        // The lighting pass takes its extent from here (a fragment shader cannot read push
+        // constants on Vulkan).
+        frameConstants._viewportSize = glm::vec4(
+            static_cast<float>(detail::kCornellSize), static_cast<float>(detail::kCornellSize),
+            1.0f / detail::kCornellSize, 1.0f / detail::kCornellSize);
         driver->getFrameConstantManager()->update(/*frameIndex=*/0, frameConstants);
 
         vkm::VkmFrameData frameData;
@@ -563,6 +624,134 @@ namespace vkmtest
             CHECK(maxM == temporalOptions._confidenceCap + 1);
             CHECK(maxAge > 0);
             CHECK(maxAge <= temporalOptions._maxSampleAge);
+        }
+
+        /*
+        * Phase 8.6: the lighting pass, driven for one frame exactly the way a live renderer
+        * drives it -- constants staged in a transfer subgraph, resample in a compute subgraph,
+        * the fullscreen draw into an HDR target in a graphics subgraph. The target carries
+        * incoming irradiance (no albedo, no 1/pi -- gi_composite's contract), so applying the
+        * composite's own factor per pixel must land on the same mean the accumulated compute
+        * resolve converged to. That closes the loop between the two consumers of a reservoir:
+        * a texture whose mean disagreed with the accumulation would mean the two shading paths
+        * read different slices or different equations.
+        */
+        {
+            vkm::VkmTextureInfo targetInfo{};
+            targetInfo._flags = static_cast<vkm::VkmResourceCreateInfo>(
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowColorAttachment) |
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowTransferSrc));
+            targetInfo._extent = glm::uvec3(detail::kCornellSize, detail::kCornellSize, 1);
+            targetInfo._numMipLevels = 1;
+            targetInfo._numArrayLayers = 1;
+            targetInfo._format = vkm::VkmFormat::R16G16B16A16_SFLOAT;
+            targetInfo._debugName = "RestirLightingTarget";
+            vkm::VkmTexture* target = driver->newTexture(targetInfo);
+            REQUIRE(target != nullptr);
+
+            vkm::VkmFrameBufferDescriptor fbDesc{};
+            fbDesc._width = detail::kCornellSize;
+            fbDesc._height = detail::kCornellSize;
+            fbDesc._renderPass._colorAttachmentCount = 1;
+            fbDesc._renderPass._colorAttachments[0]._attachmentId = 0;
+            fbDesc._renderPass._colorAttachments[0]._loadAction = vkm::VkmLoadAction::Clear;
+            fbDesc._renderPass._colorAttachments[0]._storeAction = vkm::VkmStoreAction::Store;
+            fbDesc._colorAttachments[0] = target->getHandle();
+
+            vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+            auto* updateSubGraph = renderGraph.beginTransferSubGraph("RestirLightingConstants");
+            updateSubGraph->addReferencedResource(temporal.getLightingConstantBuffer(),
+                                                  vkm::VkmResourceAccess::TransferWrite);
+            updateSubGraph->addReferencedResource(temporal.getLightingStagingBuffer(0),
+                                                  vkm::VkmResourceAccess::TransferRead);
+            updateSubGraph->setTransferCallback([&](vkm::VkmCommandBufferBase* commandBuffer) {
+                temporal.recordUpdateLightingConstants(commandBuffer, /*frameIndex=*/0, temporalOptions,
+                                                       vkm::VkmRestirDebugView::Lighting,
+                                                       /*misBlend=*/0.0f);
+            });
+
+            auto* resampleSubGraph = renderGraph.beginComputeSubGraph("RestirLightingResample");
+            referenced.clear();
+            scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Draw, &referenced);
+            resampleSubGraph->addReferencedResources(referenced);
+            resampleSubGraph->addReferencedResource(scene.getTopLevelAccelerationStructure(),
+                                                    vkm::VkmResourceAccess::AccelerationStructureShaderRead);
+            for (uint32_t i = 0; i < vkm::VkmGBuffer::kTargetCount; ++i)
+            {
+                resampleSubGraph->addReferencedResource(
+                    gbuffer.getTexture(static_cast<vkm::VkmGBuffer::Target>(i)),
+                    vkm::VkmResourceAccess::ShaderSampledRead);
+                resampleSubGraph->addReferencedResource(
+                    gbuffer.getPrevTexture(static_cast<vkm::VkmGBuffer::Target>(i)),
+                    vkm::VkmResourceAccess::ShaderSampledRead);
+            }
+            resampleSubGraph->addReferencedResource(temporal.getReservoirBuffer(),
+                                                    vkm::VkmResourceAccess::ShaderStorageReadWrite);
+            resampleSubGraph->setComputeCallback([&](vkm::VkmCommandBufferBase* commandBuffer) {
+                temporal.recordResample(commandBuffer, temporalOptions);
+            });
+
+            auto* lightingSubGraph = renderGraph.beginGraphicsSubGraph(fbDesc, "RestirLighting");
+            for (uint32_t i = 0; i < vkm::VkmGBuffer::kTargetCount; ++i)
+            {
+                lightingSubGraph->addReferencedResource(
+                    gbuffer.getTexture(static_cast<vkm::VkmGBuffer::Target>(i)),
+                    vkm::VkmResourceAccess::ShaderSampledRead);
+            }
+            lightingSubGraph->addReferencedResource(temporal.getReservoirBuffer(),
+                                                    vkm::VkmResourceAccess::ShaderStorageReadWrite);
+            lightingSubGraph->addReferencedResource(temporal.getLightingConstantBuffer(),
+                                                    vkm::VkmResourceAccess::ConstantBufferRead);
+            lightingSubGraph->setRenderCallback([&](vkm::VkmCommandBufferBase* commandBuffer) {
+                temporal.recordLighting(commandBuffer);
+            });
+
+            renderGraph.compile();
+            renderGraph.execute();
+            renderGraph.ensureCompleted();
+
+            const std::vector<uint8_t> lightingBytes = detail::readTextureBytes(
+                driver, target->getHandle(), static_cast<uint64_t>(pixelCount) * 4 * sizeof(uint16_t));
+            const std::vector<uint8_t> motionBytes = detail::readTextureBytes(
+                driver, gbuffer.getTexture(vkm::VkmGBuffer::Target::MotionMetallic),
+                static_cast<uint64_t>(pixelCount) * 4 * sizeof(uint16_t));
+            const std::vector<uint8_t> albedoBytes = detail::readTextureBytes(
+                driver, gbuffer.getTexture(vkm::VkmGBuffer::Target::BaseColorRoughness),
+                static_cast<uint64_t>(pixelCount) * 4);
+            const uint16_t* lightingHalves = reinterpret_cast<const uint16_t*>(lightingBytes.data());
+            const uint16_t* motionHalves = reinterpret_cast<const uint16_t*>(motionBytes.data());
+
+            double lightingMean = 0.0;
+            uint32_t lightingCovered = 0;
+            uint32_t backgroundNonZero = 0;
+            for (uint32_t pixel = 0; pixel < pixelCount; ++pixel)
+            {
+                const float irradiance = detail::halfToFloat(lightingHalves[pixel * 4 + 0]);
+                const float coveredHere = detail::halfToFloat(motionHalves[pixel * 4 + 3]);
+                if (coveredHere <= 0.0f)
+                {
+                    backgroundNonZero += irradiance != 0.0f ? 1 : 0;
+                    continue;
+                }
+                const float albedo = static_cast<float>(albedoBytes[pixel * 4 + 0]) / 255.0f;
+                const float metallic = detail::halfToFloat(motionHalves[pixel * 4 + 2]);
+                lightingMean += irradiance * albedo * (1.0f - metallic) * (1.0f / 3.14159265f);
+                ++lightingCovered;
+            }
+            lightingMean = lightingCovered > 0 ? lightingMean / lightingCovered : 0.0;
+
+            MESSAGE("lighting texture mean (composited) " << lightingMean << " vs accumulated "
+                                                          << temporalBrightness << ", ratio "
+                                                          << (lightingMean / temporalBrightness));
+            CHECK(lightingCovered == covered);
+            CHECK(backgroundNonZero == 0);
+            // One frame's estimate against a 1536-frame mean: the tolerance is the single-frame
+            // noise of a confidence-21 reservoir averaged over ~2200 pixels, measured and given
+            // 3x margin.
+            CHECK(std::abs(lightingMean / temporalBrightness - 1.0) < 0.10);
+
+            driver->waitIdle();
+            driver->getRenderResourcePool()->releaseResource(target->getHandle());
         }
 
         // scene.destroy releases through the deferred reclaimer, whose worker frees on another

@@ -5,6 +5,7 @@
 #include <vkm/renderer/backend/common/renderer_common.h>
 
 #include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
 
 #include <cstdint>
 #include <string>
@@ -17,6 +18,7 @@ namespace vkm
     class VkmPipelineStateBase;
     class VkmPipelineStateManager;
     class VkmResourceTableBase;
+    class VkmStagingBuffer;
 
     // Mirrors VKM_RESERVOIR_WORD_STRIDE in vkm_reservoir.hlsli. TestReservoirLayout pins them.
     inline constexpr uint32_t kVkmReservoirWordStride = 8;
@@ -129,6 +131,28 @@ namespace vkm
         uint32_t _outputSlice = 1;
     };
 
+    // Mirrors RestirLightingConstants in gi_restir_lighting.hlsl.
+    struct VkmRestirLightingConstants
+    {
+        // x = resampled slice, y = fresh slice, z = debug view, w = flags (reserved).
+        glm::uvec4 _slices{ 0u, 0u, 0u, 0u };
+        // x = MIS blend toward the fresh sample on smooth surfaces (0 = off),
+        // y = reserved, z = 1 / (confidence cap + 1), w = 1 / max sample age.
+        glm::vec4 _params{ 0.0f, 0.0f, 0.0f, 0.0f };
+    };
+    static_assert(sizeof(VkmRestirLightingConstants) == 32,
+                  "VkmRestirLightingConstants must match the shader-side struct");
+
+    // What gi_restir_lighting draws: the lit estimate, or one of the reservoir's bookkeeping
+    // fields as a grey ramp -- the caps are invisible in the lit image.
+    enum class VkmRestirDebugView : uint32_t
+    {
+        Lighting = 0,
+        Confidence = 1,
+        Age = 2,
+        Weight = 3,
+    };
+
     /*
     * @brief The ReSTIR GI passes: a reservoir buffer, one traced sample per pixel written into it,
     * and shading from it.
@@ -162,16 +186,55 @@ namespace vkm
         inline void reset() { _sampleIndex = 0; }
 
         /*
-        * @brief Records generation then resolve, one sample per pixel. Compute subgraph, after the
-        * G-buffer pass and outside any render pass.
-        *
-        * One entry point rather than two, because nothing yet goes between them; 8.4 and 8.5 are
-        * what split it.
+        * @brief Records generation, then temporal and spatial resampling as the options ask.
+        * Compute subgraph, after the G-buffer pass and outside any render pass.
+        * @details Advances the sample index; the slice the frame's result lands in is readable
+        * afterwards through getResolvedSlice().
         */
+        void recordResample(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options);
+
+        /*
+        * @brief Records the compute resolve: shades the resampled reservoirs into the
+        * accumulation buffer (rgb summed, a = sample count). Same subgraph rules as
+        * recordResample, and must follow it in the frame.
+        */
+        void recordResolveAccumulate(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options);
+
+        // recordResample then recordResolveAccumulate: the accumulating shape the MSE gates use.
         void recordAccumulate(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options);
+
+        /*
+        * @brief Stages this frame's lighting constants into the pass-owned uniform buffer.
+        * Transfer subgraph, before recordResample in the same frame -- the slice indices it
+        * writes are the ones that resample will produce.
+        * @param misBlend 0 disables 8.7's roughness blend; 1 fully enables it.
+        */
+        void recordUpdateLightingConstants(VkmCommandBufferBase* commandBuffer, uint32_t frameIndex,
+                                           const VkmRestirOptions& options,
+                                           VkmRestirDebugView debugView, float misBlend);
+
+        /*
+        * @brief Draws the fullscreen lighting triangle from the resampled reservoirs. Graphics
+        * subgraph whose color attachment is the indirect-radiance target; writes incoming
+        * irradiance, with albedo and 1/pi left to the composite.
+        */
+        void recordLighting(VkmCommandBufferBase* commandBuffer);
+
+        /*
+        * @brief Slice the next recordResample will leave the frame's result in, given `options`.
+        * @details Valid until recordResample runs (it advances the sample index the routing is
+        * derived from).
+        */
+        uint32_t getPlannedOutputSlice(const VkmRestirOptions& options) const;
 
         inline VkmResourceHandle getAccumulationBuffer() const { return _accumulationBuffer; }
         inline VkmResourceHandle getReservoirBuffer() const { return _reservoirBuffer; }
+        // For the caller's subgraph declarations around recordUpdateLightingConstants.
+        inline VkmResourceHandle getLightingConstantBuffer() const { return _lightingConstantBuffer; }
+        inline VkmResourceHandle getLightingStagingBuffer(uint32_t frameIndex) const
+        {
+            return _lightingStaging[frameIndex];
+        }
         inline uint32_t getSampleCount() const { return _sampleIndex; }
         inline uint32_t getWidth() const { return _width; }
         inline uint32_t getHeight() const { return _height; }
@@ -180,17 +243,23 @@ namespace vkm
         uint32_t _width = 0;
         uint32_t _height = 0;
         uint32_t _sampleIndex = 0;
+        uint32_t _lastResolvedSlice = 0;
 
         VkmResourceHandle _reservoirBuffer{ VKM_INVALID_RESOURCE_HANDLE };
         VkmResourceHandle _neighbourOffsetBuffer{ VKM_INVALID_RESOURCE_HANDLE };
         VkmResourceHandle _accumulationBuffer{ VKM_INVALID_RESOURCE_HANDLE };
+        VkmResourceHandle _lightingConstantBuffer{ VKM_INVALID_RESOURCE_HANDLE };
+        VkmResourceHandle _lightingStaging[FRAME_BUFFER_COUNT]{};
+        VkmStagingBuffer* _lightingStagingPointers[FRAME_BUFFER_COUNT]{};
         VkmPipelineStateBase* _generatePipeline = nullptr;
         VkmPipelineStateBase* _temporalPipeline = nullptr;
         VkmPipelineStateBase* _spatialPipeline = nullptr;
         VkmPipelineStateBase* _resolvePipeline = nullptr;
+        VkmPipelineStateBase* _lightingPipeline = nullptr;
         VkmResourceTableBase* _generateTable = nullptr;
         VkmResourceTableBase* _temporalTable = nullptr;
         VkmResourceTableBase* _spatialTable = nullptr;
         VkmResourceTableBase* _resolveTable = nullptr;
+        VkmResourceTableBase* _lightingTable = nullptr;
     };
 } // namespace vkm
