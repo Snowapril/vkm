@@ -265,10 +265,9 @@ namespace vkm
             VKM_DEBUG_ERROR("barrierRelease must be recorded while recording and outside a render pass");
             return;
         }
-        if (barriers == nullptr || count == 0)
-        {
-            return;
-        }
+        // Forwarded even when empty, unlike the other two. A backend that narrows its publish from
+        // this list has to be told that the next subgraph publishes to nobody, or it keeps applying
+        // the previous subgraph's narrower mask -- and a stale narrow mask under-synchronizes.
         onBarrierRelease(barriers, count);
     }
 

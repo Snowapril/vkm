@@ -240,7 +240,7 @@ namespace vkm
         _currentEncoderType = VkmCommandEncoderType::Compute;
     }
 
-    void VkmCommandEncoderMetal::commit()
+    void VkmCommandEncoderMetal::commit(uint64_t releaseBeforeQueueStages)
     {
         switch(_currentEncoderType)
         {
@@ -248,7 +248,7 @@ namespace vkm
                 // The producer half of the pair opened in beginRenderPass: publish this pass's
                 // attachment writes to everything recorded after it.
                 [_mtlRenderCommandEncoder barrierAfterStages:MTLStageVertex | MTLStageFragment
-                                           beforeQueueStages:MTLStageAll
+                                           beforeQueueStages:static_cast<MTLStages>(releaseBeforeQueueStages) ?: MTLStageAll
                                            visibilityOptions:MTL4VisibilityOptionDevice];
                 [_mtlRenderCommandEncoder endEncoding];
                 _mtlRenderCommandEncoder = nil;
@@ -308,7 +308,7 @@ namespace vkm
 
     void VkmCommandBufferMetal::onEndRenderPass()
     {
-        _commandEncoder.commit();
+        _commandEncoder.commit(_pendingReleaseBeforeQueueStages);
     }
 
     void VkmCommandBufferMetal::onSetViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height)
@@ -414,9 +414,10 @@ namespace vkm
         // everything recorded afterwards, then end the encoder.
         if (_commandEncoder.getActiveComputeCommandEncoder() != nullptr)
         {
-            [_commandEncoder.getActiveComputeCommandEncoder() barrierAfterStages:MTLStageDispatch
-                                                              beforeQueueStages:MTLStageAll
-                                                              visibilityOptions:MTL4VisibilityOptionDevice];
+            [_commandEncoder.getActiveComputeCommandEncoder()
+                barrierAfterStages:MTLStageDispatch
+                 beforeQueueStages:static_cast<MTLStages>(_pendingReleaseBeforeQueueStages) ?: MTLStageAll
+                 visibilityOptions:MTL4VisibilityOptionDevice];
             _commandEncoder.commit();
         }
     }
@@ -674,6 +675,20 @@ namespace vkm
         }
     }
 
+    void VkmCommandBufferMetal::onBarrierRelease(const VkmResourceBarrier* barriers, uint32_t count)
+    {
+        /*
+        * Which queue stages consume what the subgraph about to run writes. Recorded before that
+        * subgraph commits, because Metal's publish has to sit inside the producing encoder and
+        * that encoder is closed by the time commit() returns.
+        */
+        _pendingReleaseBeforeQueueStages = 0;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            _pendingReleaseBeforeQueueStages |= vkmToMTLStages(barriers[i]._dstAccess, barriers[i]._dstScope);
+        }
+    }
+
     void VkmCommandBufferMetal::onResourceBarrier(const VkmResourceBarrier* barriers, uint32_t count)
     {
         MTLStages afterStages = 0;
@@ -771,6 +786,7 @@ namespace vkm
         // not reach this one's first encoder.
         _pendingAcquireAfterQueueStages = 0;
         _pendingAcquireBeforeStages = 0;
+        _pendingReleaseBeforeQueueStages = 0;
     }
 
     void VkmCommandBufferMetal::onBeginGpuZone(const uint32_t beginSlot, const uint32_t endSlot)

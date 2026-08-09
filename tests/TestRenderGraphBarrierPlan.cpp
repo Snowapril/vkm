@@ -138,11 +138,12 @@ TEST_CASE("VkmRenderGraphBarrierPlan - a write then a read produces one acquire 
 }
 
 /*
-* Adjacent producer and consumer collapse to an acquire only. Splitting buys nothing when there is
-* no work between the two halves for the dependency to overlap with -- and on the Vulkan event
-* path it would cost a VkEvent for that nothing.
+* Both halves are recorded for every dependency, adjacent or not. Whether splitting is worth taking
+* is a backend decision, and a backend that narrows its encoder-boundary barriers from the release
+* list needs that list complete: omitting the adjacent case would drop the nearest dependency,
+* which is the one most likely to matter.
 */
-TEST_CASE("VkmRenderGraphBarrierPlan - an adjacent producer emits no release half") {
+TEST_CASE("VkmRenderGraphBarrierPlan - an adjacent producer still gets its release half") {
     const VkmResourceHandle buffer = makeHandle(1, VkmResourceType::Buffer);
     FakeLookup lookup;
     lookup.add(buffer);
@@ -155,11 +156,13 @@ TEST_CASE("VkmRenderGraphBarrierPlan - an adjacent producer emits no release hal
 
     const vkm::VkmRenderGraphBarrierPlan plan = graph.build(lookup);
 
-    CHECK(plan._acquire[consumer].size() == 1);
-    CHECK(plan._release[producer].empty());
+    REQUIRE(plan._acquire[consumer].size() == 1);
+    REQUIRE(plan._release[producer].size() == 1);
+    CHECK(plan._release[producer][0]._handle == buffer);
+    CHECK(plan._release[producer][0]._dstAccess == VkmResourceAccess::ShaderStorageRead);
 }
 
-// ... and a producer with work in between keeps both halves, which is what a split barrier is for.
+// A producer with unrelated work in between is the case a split barrier exists for.
 TEST_CASE("VkmRenderGraphBarrierPlan - a non-adjacent producer keeps the release half") {
     const VkmResourceHandle buffer = makeHandle(1, VkmResourceType::Buffer);
     const VkmResourceHandle unrelated = makeHandle(2, VkmResourceType::Buffer);
@@ -420,8 +423,6 @@ TEST_CASE("VkmRenderGraphBarrierPlan - optimize=false emits every barrier separa
 
     const vkm::VkmRenderGraphBarrierPlan conservative = graph.build(lookup, /*optimize=*/false);
     CHECK(conservative._acquire[readB].size() == 1);
-    // The adjacent collapse is off too, so the producer keeps its release half.
-    CHECK(conservative._release[write].empty() == false);
 }
 
 /*

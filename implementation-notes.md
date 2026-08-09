@@ -3692,3 +3692,35 @@ Verified: Metal 244/244, Vulkan 237/237 (both excluding `captureMemorySnapshot`,
 10 s budget under full-suite load on both backends -- recorded in TODO.md on main and passing in
 isolation here). The new table test asserts the mapping, that the declarations follow declaration
 order rather than the order entries were passed, and that collecting appends.
+
+## 2026-08-09 — Narrowing Metal's publish, and the collapse rule that blocked it
+
+The design pass that judged the remaining barrier work had ruled out narrowing Metal's
+encoder-close barrier, on the grounds that `_release[i]` structurally omits every *adjacent*
+consumer and so the narrowed mask would drop the nearest dependency. That was true, but the reason
+it was true was a rule of ours rather than a property of the problem: the analysis skipped the
+release half whenever `producer + 1 == index`, because Vulkan folds the release into the acquire
+and gains nothing from it.
+
+Nothing overrides `onBarrierRelease` except Metal, so populating it unconditionally costs the other
+two backends exactly nothing. The plan now records both halves of every dependency and leaves
+"is a split worth taking" to the backend, which is where that decision belongs. `_release[i]` now
+means what its documentation always claimed.
+
+With the list complete, `VkmCommandEncoderMetal::commit()` and the compute close in
+`onUnbindPipeline` take `beforeQueueStages` from it instead of `MTLStageAll`. Where the analysis
+named no consumer the mask is zero and the conservative value is used unchanged, so an undeclared
+dependency degrades to the previous behaviour.
+
+One trap worth stating: `barrierRelease` is now forwarded to the backend even when empty, unlike
+`barrierAcquire`. An acquire that carries nothing can be skipped, because the masks accumulate and
+a stale one only adds a barrier. A release that carries nothing cannot, because the mask is
+*replaced* -- skipping the call would leave the previous subgraph's narrower mask applied to this
+subgraph's publish, and a stale narrow mask under-synchronizes rather than over-synchronizes.
+
+`VkmResourceUsageBits` and `VkmResourceInfo::_usage` -- an empty enum and a field nothing read --
+are gone.
+
+Verified: Metal 246/246, Vulkan 237/237 (excluding `captureMemorySnapshot`), no
+`MTL4CommandQueueError`, same four pre-existing VUIDs. Probe GI propagation still 16 frames to 90%,
+which is the regression test for the NaN atlases that a missing Metal barrier produces.
