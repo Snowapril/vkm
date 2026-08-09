@@ -503,13 +503,13 @@ namespace
         return;
     }
 
-    // Line-based wheels report far larger deltas than trackpads, so they are scaled down to the
-    // range VkmOrbitCameraController's per-scroll-unit zoom factor is tuned for. Deliberately not
-    // the scaling the ImGui Metal renderer applies: that one targets ImGui's own convention of
-    // 1.0 per notch, and matching it here would re-tune every camera in every sample.
+    // A trackpad reports its deltas in points and fires a stream of them per gesture, a line-based
+    // wheel one small delta per notch, so the precise ones are scaled down to put a notch and a
+    // point of finger travel on the same footing -- one scroll unit. Every consumer treats a unit
+    // as one notch, so VkmOrbitCameraController's zoom factor applies per notch as it reads.
     double wheelDeltaX = event.scrollingDeltaX;
     double wheelDeltaY = event.scrollingDeltaY;
-    if ([event hasPreciseScrollingDeltas] == NO)
+    if ([event hasPreciseScrollingDeltas])
     {
         wheelDeltaX *= 0.1;
         wheelDeltaY *= 0.1;

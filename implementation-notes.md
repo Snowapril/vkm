@@ -887,19 +887,20 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
   `scene_geometry_pool.cpp:52` (geometry buffers); those names are not on the Graph tab's path
   and were left alone.
 
-### 2026-08-09 — Trackpad zoom: fixed the ImGui wheel scaling, left the camera's alone
+### 2026-08-09 — Trackpad scroll scaling was inverted on both macOS scroll paths
 
 - Planned: nothing; the canvas' wheel zoom was assumed to work on any pointing device.
-- Did instead: swapped the precise/non-precise branch in the ImGui Metal renderer's scroll
-  handler, added `NSEventMaskMagnify` so pinch arrives as a wheel delta, and made the canvas'
-  zoom proportional to the delta rather than a fixed step per event. Deliberately did **not**
-  apply the same swap to `application.mm`, whose scroll feeds the cameras.
-- Why: measured deltas reaching ImGui were 0.1 per mouse notch and 10 per trackpad event -- the
-  scaling was inverted against `imgui_impl_osx`, so one two-finger swipe was worth a hundred
-  notches and pinned the canvas at its zoom limit. `application.mm` was written to mirror that
-  same (inverted) scaling, but `VkmOrbitCameraController::_zoomFactor` is tuned per scroll unit
-  against it, so correcting it there re-tunes every sample's camera. Its comment now says the
-  divergence is intentional rather than claiming the two match.
+- Did instead: swapped the precise/non-precise branch in **both** the ImGui Metal renderer's
+  scroll handler and `application.mm`'s, added `NSEventMaskMagnify` so pinch arrives as a wheel
+  delta, and made the canvas' zoom proportional to the delta rather than a fixed step per event.
+- Why: both handlers scaled the *line-based* deltas rather than the precise ones, the opposite of
+  `imgui_impl_osx`. Measured, a mouse notch arrived as 0.1 and one trackpad event as 10.0.
+  The graph canvas hit its zoom limit on the first trackpad event; the orbit camera was worse in
+  both directions, `_zoomFactor` 0.9 giving 1% of zoom per mouse notch and reaching
+  `_minDistance` in three trackpad events. With the branch corrected both devices deliver one
+  scroll unit per notch or per 10 points of finger travel, which is what `_zoomFactor` reads as.
+- Note: the camera path was reverted once mid-task on a report that its zoom had weakened, then
+  restored after measuring -- the pre-existing behaviour it reverted to was the broken one.
 
 ### 2026-08-09 — Subgraph averages are keyed by name, not by subgraph id
 
