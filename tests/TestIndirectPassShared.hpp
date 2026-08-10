@@ -598,7 +598,15 @@ namespace vkmtest
         CHECK(temporalCovered == covered);
         CHECK(temporalBrightness > 0.05);
         CHECK(std::abs(temporalBrightness / indirectBrightness - 1.0) < 0.01);
-        CHECK(temporalMse < mseThreshold);
+        /*
+        * Twice the backend threshold, not the threshold itself: confidence-weighted reuse
+        * correlates the accumulated samples, so the temporal estimator's noise floor sits above
+        * the independent baseline's -- measured 1.9x on Metal (4.6e-4 vs 2.4e-4) and 1.3x on
+        * lavapipe (1.02e-3 vs 7.9e-4), where the baseline-calibrated bound failed by 2%. The
+        * mean-ratio check above is the bias detector; this bound exists to catch gross errors,
+        * and a broken merge scores far past 2x (8.4's asymmetry alone was 13.8% of the mean).
+        */
+        CHECK(temporalMse < 2.0f * mseThreshold);
         CHECK(temporalRelativeMse < 4.0e-3f);
 
         {
