@@ -14,6 +14,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace vkmtest
@@ -21,10 +22,13 @@ namespace vkmtest
     inline constexpr uint32_t kTransientTextureSize = 64;
 
     inline vkm::VkmTexture* createTransientTexture(vkm::VkmDriverBase* driver, vkm::VkmResourceCreateInfo flags,
-                                                   vkm::VkmFormat format, const char* debugName)
+                                                   vkm::VkmFormat format, const char* debugName,
+                                                   vkm::VkmMemoryPlacementHint placementHint =
+                                                       vkm::VkmMemoryPlacementHint::Auto)
     {
         vkm::VkmTextureInfo textureInfo{};
         textureInfo._flags = flags;
+        textureInfo._placementHint = placementHint;
         textureInfo._extent = glm::uvec3(kTransientTextureSize, kTransientTextureSize, 1);
         textureInfo._numMipLevels = 1;
         textureInfo._numArrayLayers = 1;
@@ -136,6 +140,48 @@ namespace vkmtest
                             vkm::VkmResourceCreateInfo::AllowPresent |
                             vkm::VkmResourceCreateInfo::Transient, "TransientPresent");
         }
+    }
+
+    /*
+    * @brief A Transient texture asked to be heap-placed still gets tile memory, or is downgraded
+    * -- never silently charged for real memory.
+    * @details The two requests pull in opposite directions and the backends resolve it differently.
+    * Vulkan can honour both: VMA suballocates from a LAZILY_ALLOCATED block. Metal cannot honour
+    * both at once and keeps the transient half, which is the one that saves memory:
+    * newHeapWithDescriptor: rejects MTLStorageModeMemoryless outright ("Requested storage mode is
+    * not allowed for Heaps"), and placing a memoryless texture in the Private heap the engine does
+    * have is "The requested storage mode does not match the heap's mode" -- both hard validation
+    * assertions. heapTextureSizeAndAlignWithDescriptor: is no help either: it answers a *non-zero*
+    * footprint for a memoryless descriptor, so the generic is-this-heap-placeable test does not
+    * filter one out. Nothing is lost by committing it: a committed memoryless texture already
+    * reports allocatedSize 0, so there is no memory a heap could save.
+    */
+    inline void runTransientHeapHintTest(vkm::VkmDriverBase* driver)
+    {
+        REQUIRE(driver != nullptr);
+        vkm::VkmRenderResourcePool* resourcePool = driver->getRenderResourcePool();
+
+        vkm::VkmTexture* texture = createTransientTexture(
+            driver, vkm::VkmResourceCreateInfo::AllowDepthStencilAttachment | vkm::VkmResourceCreateInfo::Transient,
+            vkm::VkmFormat::D32_SFLOAT, "TransientHeapHinted", vkm::VkmMemoryPlacementHint::Heap);
+        REQUIRE(texture != nullptr);
+
+        const vkm::VkmResourceHandle handle = texture->getHandle();
+        CHECK(handle.poolType == vkm::VkmResourcePoolType::Transient);
+
+        const std::optional<vkm::VkmResourceMemoryTag> tag = resourcePool->getResourceMemoryTag(handle);
+        REQUIRE(tag.has_value());
+        if (texture->isTransient())
+        {
+            CHECK(tag->allocatedSize == 0);
+            CHECK(tag->metadata == "transient");
+        }
+        else
+        {
+            // Downgraded to an ordinary attachment, which then has to account for itself as one.
+            CHECK(tag->metadata.empty());
+        }
+        resourcePool->releaseResource(handle);
     }
 
     // Neither Vulkan nor Metal has a transient buffer, so the flag is dropped there outright.

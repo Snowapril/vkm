@@ -59,6 +59,13 @@ TEST_CASE("Metal transient texture - an unbackable request is downgraded, not re
     vkmtest::runTransientTextureIncompatibleFlagsTest(f.driver.get());
 }
 
+TEST_CASE("Metal transient texture - a heap placement hint does not cost it its tile memory")
+{
+    MetalTransientTextureFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+    vkmtest::runTransientHeapHintTest(f.driver.get());
+}
+
 TEST_CASE("Metal transient buffer - the flag is texture-only and dropped")
 {
     MetalTransientTextureFixture f;

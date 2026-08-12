@@ -187,10 +187,20 @@ namespace vkm
             }
 
             id<MTLDevice> device = driverMetal->getMTLDevice();
-            // Also the "can this be heap-placed at all" test: Metal reports a zero footprint
-            // for a descriptor it cannot place, and overwriting _memoryAlignment with that 0
-            // would break the non-zero-alignment invariant the memory tags report. A memoryless
-            // descriptor is one of those -- MTLHeap has no memoryless storage mode.
+            /*
+            * Also the "can this be heap-placed at all" test: Metal reports a zero footprint for a
+            * descriptor it cannot place, and overwriting _memoryAlignment with that 0 would break
+            * the non-zero-alignment invariant the memory tags report.
+            *
+            * A memoryless texture is excluded before that query rather than by it, because the
+            * query does not exclude it: it answers a non-zero footprint for a memoryless
+            * descriptor even though no heap will take one. There is no memoryless heap to place
+            * it in (newHeapWithDescriptor: -- "Requested storage mode is not allowed for Heaps")
+            * and the Private heap the engine does have rejects it ("The requested storage mode
+            * does not match the heap's mode"); both are hard validation assertions. Committing it
+            * costs nothing either way -- a memoryless texture's allocatedSize is already 0, so
+            * there is no memory a heap could save.
+            */
             MTLSizeAndAlign sizeAndAlign = _isTransient ? MTLSizeAndAlign{0, 0}
                                                         : [device heapTextureSizeAndAlignWithDescriptor:descriptor];
             const bool isHeapPlaceable = (sizeAndAlign.size > 0 && sizeAndAlign.align > 0);
