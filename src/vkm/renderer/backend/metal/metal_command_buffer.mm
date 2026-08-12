@@ -227,12 +227,20 @@ namespace vkm
         {
             return;
         }
-        // MTL4VisibilityOptionResourceAlias is the point: it flushes the caches that make two
-        // virtual addresses over the same bytes coherent. The ordinary barrier path never asks
-        // for it, because nothing but aliasing needs it.
-        [encoder barrierAfterEncoderStages:encodable
-                      beforeEncoderStages:encodable
-                        visibilityOptions:(MTL4VisibilityOptionDevice | MTL4VisibilityOptionResourceAlias)];
+        /*
+        * The queue form, not the encoder one: what has to be ordered against is every read of
+        * the previous alias, which was encoded in earlier encoders and earlier frames -- nothing
+        * in this encoder, which has encoded nothing yet. barrierAfterEncoderStages: would also
+        * reject the mask outright, its afterStages accepting only the stages that can *produce*
+        * within this encoder.
+        *
+        * MTL4VisibilityOptionResourceAlias is the point: it flushes the caches that make two
+        * virtual addresses over the same bytes coherent. The ordinary barrier path never asks
+        * for it, because nothing but aliasing needs it.
+        */
+        [encoder barrierAfterQueueStages:MTLStageAll
+                            beforeStages:encodable
+                       visibilityOptions:(MTL4VisibilityOptionDevice | MTL4VisibilityOptionResourceAlias)];
     }
 
     bool VkmCommandEncoderMetal::publishThroughFence(id<MTLFence> fence, uint64_t afterEncoderStages)
