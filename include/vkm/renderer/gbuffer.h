@@ -27,10 +27,11 @@ namespace vkm
     *   BaseColorRoughness  RGBA8    rgb = base colour, a = roughness
     *   MotionMetallic      RGBA16F  xy = screen-space motion vector, z = metallic,
     *                                w = distance from the camera
-    *   depth               D32      hardware depth, for depth testing only -- never bound as a
-    *                                texture. WebGPU validates a depth-format view against a depth
-    *                                sample type, so consumers reconstruct world positions from the
-    *                                camera distance above instead of sampling this.
+    *   depth               D32      hardware depth. Sampled only as a temporal upscaler's input
+    *                                on Metal/Vulkan; every other consumer reconstructs world
+    *                                positions from the camera distance above, because WebGPU
+    *                                validates a depth-format view against a depth sample type and
+    *                                rejects it as an ordinary sampled texture.
     *
     * Both normals are carried because they answer different questions: the shading normal is what
     * lighting and temporal-tap rejection use, while the geometric normal is what a secondary ray

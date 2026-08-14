@@ -668,6 +668,27 @@ return true. Consequences are recorded in `TODO.md`.
 `VkPhysicalDeviceLimits::timestampPeriod`, `1e9 / [MTLDevice queryTimestampFrequency]` on Metal,
 `1.0` on WebGPU (the spec defines its timestamps as nanoseconds).
 
+## Temporal Upscaling (`upscaler.h`)
+
+`VkmUpscalerBase` is the optional temporal-upscaler abstraction: render-extent color/depth/motion
+in, display-extent image out, with vendor-managed history in between (MetalFX on Metal, FSR on
+Vulkan builds that include the FidelityFX SDK; WebGPU has none).
+
+- **Capability-gated, not pure virtual.** `VkmDriverBase::newUpscalerInner()` is non-pure and
+  returns null by default; only a backend that sets `VkmDriverCapabilityFlags::TemporalUpscaling`
+  in `initializeInner()` overrides it. `newUpscaler()` checks the flag and logs, so callers check
+  the flag where absence is expected (the `newAccelerationStructure` shape).
+- **Caller-owned lifetime.** Same contract as `newResourceTable`: `destroy()` then `delete`, only
+  once no in-flight frame can still reference it. Extents are fixed at creation — a resize
+  retires the old upscaler (FRAME_COUNT-frame delay) and creates a new one.
+- **Render-graph integration.** `recordDispatch()` appends one compute subgraph that declares
+  color/depth/motion as `ShaderSampledRead` and the output as `ShaderStorageReadWrite`; the
+  backend encode runs inside the subgraph callback against barriers the ordinary plan placed.
+  The callback records through the backend's own library (MetalFX/FSR), not a vkm PSO.
+- **Conventions.** Motion is the G-buffer's UV-space current→previous `.xy` (extra channels are
+  ignored); jitter is pixels, +x right / +y down, the same value handed to
+  `VkmCamera::setJitterPixels`; depth is non-inverted `[0,1]` (`glm::perspectiveRH_ZO`).
+
 ## VkmCommandQueueType
 
 ```cpp
