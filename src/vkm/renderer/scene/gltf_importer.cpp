@@ -256,6 +256,12 @@ namespace vkm
         {
             outMaterial->_name = source.name != nullptr ? source.name : "";
             outMaterial->_emissiveFactor = glm::make_vec3(source.emissive_factor);
+            // KHR_materials_emissive_strength: the factor itself is clamped to [0,1] by the core
+            // spec, so this extension is the only way an asset expresses a bright emitter.
+            if (source.has_emissive_strength)
+            {
+                outMaterial->_emissiveFactor *= source.emissive_strength.emissive_strength;
+            }
             outMaterial->_normalImage = imageIndexOf(data, source.normal_texture);
             outMaterial->_emissiveImage = imageIndexOf(data, source.emissive_texture);
 
