@@ -21,7 +21,8 @@
         { "binding": 3, "type": "sampled_texture" },
         { "binding": 4, "type": "sampled_texture" },
         { "binding": 5, "type": "sampler" },
-        { "binding": 6, "type": "uniform_buffer" }
+        { "binding": 6, "type": "uniform_buffer" },
+        { "binding": 7, "type": "sampled_texture" }
     ],
     "shaders": {
         "vertex": { "filepath": "gi_composite.hlsl", "entry_point": "VSMain" },

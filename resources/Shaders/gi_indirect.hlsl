@@ -49,7 +49,8 @@ struct FrameData
     float4 lightDirection;
     uint   materialPoolSlot;
     uint   debugMode;
-    uint2  _pad0;
+    uint   lightPoolSlot;
+    uint   lightCount;
 };
 
 // Mirrors vkm::VkmIndirectConstants (include/vkm/renderer/indirect_pass.h).
@@ -73,6 +74,7 @@ VKM_BINDLESS_OBJECT_DATA(ObjectData, g_ObjectData);
 VKM_BINDLESS_FRAME_DATA(FrameData, g_FrameData);
 VKM_BINDLESS_ACCELERATION_STRUCTURE(g_Scene);
 VKM_MATERIAL_LOADER()
+VKM_LIGHT_LOADER()
 VKM_PATH_TRACING_DECLARE()
 
 // Load(), not Sample(): this pass is 1:1 with the G-buffer's pixels, so there is nothing to filter,

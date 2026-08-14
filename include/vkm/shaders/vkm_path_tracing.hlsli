@@ -25,6 +25,7 @@
 #ifndef VKM_PATH_TRACING_HLSLI
 #define VKM_PATH_TRACING_HLSLI
 
+#include "vkm_lights.hlsli"
 #include "vkm_random.hlsli"
 
 /*
@@ -142,13 +143,102 @@ float3 vkmOffsetRayOrigin(float3 position, float3 normal, float rayT)
         return true;                                                                                 \
     }                                                                                                \
                                                                                                      \
-    /* The seam restir.md section 12 named: what a secondary hit contributes on arrival, as      */  \
-    /* opposed to what continuing the path finds. Emission only today -- the light is found by   */  \
-    /* hitting it, which is unbiased and slow. Next-event estimation replaces this body and      */  \
-    /* nothing else, which is the whole point of it being one.                                   */  \
-    float3 vkmShadeSecondaryHit(VkmSurfacePoint surface, VkmMaterial material, float3 outgoing)        \
+    /* Whether `targetPosition` is reachable from `surface` -- the shadow segment for a          */  \
+    /* reconnection to a sampled light point. Both endpoints are lifted off their surfaces and   */  \
+    /* the direction, distance and t_max are all measured from the OFFSET origin: a grazing      */  \
+    /* segment ending exactly on a triangle is not cleared by relative t_max shortening alone,   */  \
+    /* which is the asymmetry that once cost 13.8% of the mean (gi_reservoir_spatial.hlsl).      */  \
+    bool vkmShadowSegmentVisible(VkmSurfacePoint surface, float rayT,                                \
+                                 float3 targetPosition, float3 targetNormal)                         \
     {                                                                                                \
-        return material.emissiveFactor;                                                              \
+        const float3 origin = vkmOffsetRayOrigin(surface.position, surface.geometricNormal, rayT);   \
+        const float3 target = vkmOffsetRayOrigin(targetPosition, targetNormal,                       \
+                                                 length(targetPosition - origin));                   \
+        const float3 toTarget = target - origin;                                                     \
+        const float distanceToTarget = length(toTarget);                                             \
+        if (distanceToTarget <= 0.0)                                                                 \
+        {                                                                                            \
+            return false;                                                                            \
+        }                                                                                            \
+        RayDesc rayDesc;                                                                             \
+        rayDesc.Origin = origin;                                                                     \
+        rayDesc.Direction = toTarget / distanceToTarget;                                             \
+        rayDesc.TMin = 0.0;                                                                          \
+        rayDesc.TMax = distanceToTarget * 0.999;                                                     \
+        RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;                                    \
+        query.TraceRayInline(g_Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, rayDesc);      \
+        query.Proceed();                                                                             \
+        return query.CommittedStatus() != COMMITTED_TRIANGLE_HIT;                                    \
+    }                                                                                                \
+                                                                                                     \
+    /* Whether `direction` escapes the scene from `surface` -- the shadow ray for a directional  */  \
+    /* light, which has no far endpoint to shorten towards.                                      */  \
+    bool vkmShadowRayVisible(VkmSurfacePoint surface, float rayT, float3 direction)                  \
+    {                                                                                                \
+        RayDesc rayDesc;                                                                             \
+        rayDesc.Origin = vkmOffsetRayOrigin(surface.position, surface.geometricNormal, rayT);        \
+        rayDesc.Direction = direction;                                                               \
+        rayDesc.TMin = 0.0;                                                                          \
+        rayDesc.TMax = 1.0e30;                                                                       \
+        RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;                                    \
+        query.TraceRayInline(g_Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, rayDesc);      \
+        query.Proceed();                                                                             \
+        return query.CommittedStatus() != COMMITTED_TRIANGLE_HIT;                                    \
+    }                                                                                                \
+                                                                                                     \
+    /* The seam restir.md section 12 named, now carrying what it was reserved for: next-event    */  \
+    /* estimation. What a vertex contributes is the light REACHING it from the scene's light     */  \
+    /* table -- one deterministic directional sample plus one area sample drawn proportionally   */  \
+    /* to emitted power -- times the Lambertian BRDF; its own emission belongs to the path's     */  \
+    /* first vertex only (see the loop), or it would be counted once by NEE from the previous    */  \
+    /* vertex and again on arrival.                                                              */  \
+    /*                                                                                           */  \
+    /* The area estimator is in the AREA measure: L * (albedo/pi) * cos_x * |cos_y| / (d^2 *     */  \
+    /* pdfArea). |cos_y|, not a clamp: emission-on-hit is two-sided (the loop flips normals), so */  \
+    /* NEE must integrate the same emitter from both sides. On a scene whose table is empty and  */  \
+    /* whose sun is black this draws NO randoms and returns 0 -- which is what keeps the         */  \
+    /* light-less gates bit-identical.                                                           */  \
+    float3 vkmShadeSecondaryHit(VkmSurfacePoint surface, VkmMaterial material, float rayT,           \
+                                inout uint rng)                                                      \
+    {                                                                                                \
+        const uint lightPoolSlot = g_FrameData[0].lightPoolSlot;                                     \
+        const uint lightCount = g_FrameData[0].lightCount;                                           \
+        const float3 albedoOverPi = material.baseColorFactor.rgb * (1.0 / 3.14159265358979);         \
+        float3 nee = float3(0.0, 0.0, 0.0);                                                          \
+                                                                                                     \
+        const float3 sunRadiance = vkmLoadSunRadiance(lightPoolSlot);                                \
+        if (any(sunRadiance > 0.0))                                                                  \
+        {                                                                                            \
+            const float3 toSun = g_FrameData[0].lightDirection.xyz;                                  \
+            const float cosSun = dot(surface.geometricNormal, toSun);                                \
+            if (cosSun > 0.0 && vkmShadowRayVisible(surface, rayT, toSun))                           \
+            {                                                                                        \
+                nee += albedoOverPi * cosSun * sunRadiance;                                          \
+            }                                                                                        \
+        }                                                                                            \
+                                                                                                     \
+        if (lightCount > 0)                                                                          \
+        {                                                                                            \
+            const float pick = vkmRandomFloat(rng);                                                  \
+            const float2 uv = vkmRandomFloat2(rng);                                                  \
+            const VkmLightSample lightSample =                                                       \
+                vkmSampleLightTable(lightPoolSlot, lightCount, pick, uv);                            \
+            const float3 toLight = lightSample.position - surface.position;                          \
+            const float distanceSquared = dot(toLight, toLight);                                     \
+            if (distanceSquared > 1.0e-8)                                                            \
+            {                                                                                        \
+                const float3 lightDirection = toLight * rsqrt(distanceSquared);                      \
+                const float cosSurface = dot(surface.geometricNormal, lightDirection);               \
+                const float cosLight = abs(dot(lightSample.normal, -lightDirection));                \
+                if (cosSurface > 0.0 && cosLight > 0.0 &&                                            \
+                    vkmShadowSegmentVisible(surface, rayT, lightSample.position, lightSample.normal)) \
+                {                                                                                    \
+                    nee += lightSample.radiance * albedoOverPi * cosSurface * cosLight /             \
+                           (distanceSquared * lightSample.pdfArea);                                  \
+                }                                                                                    \
+            }                                                                                        \
+        }                                                                                            \
+        return nee;                                                                                  \
     }                                                                                                \
                                                                                                      \
     /*                                                                                            */ \
@@ -204,7 +294,13 @@ float3 vkmOffsetRayOrigin(float3 position, float3 normal, float rayT)
             }                                                                                          \
                                                                                                        \
             const VkmMaterial material = vkmLoadMaterial(materialPoolSlot, surface.materialIndex);       \
-            radiance += throughput * vkmShadeSecondaryHit(surface, material, -direction);                \
+            /* Emission at the path's own first vertex only: every later vertex's light arrives  */    \
+            /* by NEE from its predecessor, so counting it again on arrival would double it.     */    \
+            if (bounce == 0)                                                                            \
+            {                                                                                           \
+                radiance += throughput * material.emissiveFactor;                                       \
+            }                                                                                           \
+            radiance += throughput * vkmShadeSecondaryHit(surface, material, hit.rayT, rng);            \
             throughput *= material.baseColorFactor.rgb;                                                \
                                                                                                        \
             origin = vkmOffsetRayOrigin(surface.position, surface.geometricNormal, hit.rayT);              \

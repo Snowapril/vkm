@@ -172,6 +172,22 @@ namespace vkmtest
             CHECK(texel[2] / 255.0f == doctest::Approx(kFixtureBaseColorB).epsilon(0.01));
         }
 
+        SUBCASE("the emissive target carries factor times strength")
+        {
+            // The fixture's emissiveFactor (0.1, 0.2, 0.3) times its
+            // KHR_materials_emissive_strength of 5 -- which is also what proves the strength
+            // survived import, since the raw factor alone cannot exceed 1.
+            const vkm::VkmTextureReadbackResult readback =
+                driver->readbackTexture(gbuffer.getTexture(vkm::VkmGBuffer::Target::Emissive));
+            REQUIRE(readback.channels == 8);
+            const uint8_t* texel =
+                &readback.pixels[(static_cast<size_t>(sampleY) * readback.width + sampleX) * readback.channels];
+
+            CHECK(readHalfComponent(texel, 0) == doctest::Approx(0.5f).epsilon(0.01));
+            CHECK(readHalfComponent(texel, 1) == doctest::Approx(1.0f).epsilon(0.01));
+            CHECK(readHalfComponent(texel, 2) == doctest::Approx(1.5f).epsilon(0.01));
+        }
+
         SUBCASE("a still camera produces exactly zero motion")
         {
             // VkmTextureReadbackResult::channels is bytes per texel, not a channel count -- the
@@ -324,6 +340,7 @@ namespace vkmtest
                 { 2, gbuffer.getTexture(vkm::VkmGBuffer::Target::MotionMetallic) },
                 { 3, sampler->getHandle() },
                 { 4, lightBuffer->getHandle() },
+                { 5, gbuffer.getTexture(vkm::VkmGBuffer::Target::Emissive) },
             };
             std::string tableError;
             vkm::VkmResourceTableBase* table =
@@ -389,13 +406,19 @@ namespace vkmtest
         CHECK(readHalfComponent(texelAt(single, bgX, bgY), 1) == 0.0f);
         CHECK(readHalfComponent(texelAt(single, bgX, bgY), 2) == 0.0f);
 
-        // Doubling only the set-2 uniform buffer doubles the result. Nothing else changed, so this
-        // is what proves that buffer actually reaches the shader rather than the pass running on
-        // whatever happened to be bound.
+        // Doubling only the set-2 uniform buffer doubles the LIT term. The output is
+        // lighting + emission, and the fixture emits (0.5, 1.0, 1.5) -- factor times its
+        // emissive strength -- so the emissive summand is subtracted before asserting
+        // linearity in the light; asserting on the raw sum would demand the emitter brighten
+        // with a light it does not reflect.
         const vkm::VkmTextureReadbackResult doubled = shadeWith(2.0f);
-        CHECK(readHalfComponent(texelAt(doubled, litX, litY), 0) == doctest::Approx(litR * 2.0f).epsilon(0.02));
-        CHECK(readHalfComponent(texelAt(doubled, litX, litY), 1) == doctest::Approx(litG * 2.0f).epsilon(0.02));
-        CHECK(readHalfComponent(texelAt(doubled, litX, litY), 2) == doctest::Approx(litB * 2.0f).epsilon(0.02));
+        const float kEmissive[3] = { 0.5f, 1.0f, 1.5f };
+        const float lit[3] = { litR, litG, litB };
+        for (uint32_t channel = 0; channel < 3; ++channel)
+        {
+            CHECK(readHalfComponent(texelAt(doubled, litX, litY), channel) - kEmissive[channel] ==
+                  doctest::Approx((lit[channel] - kEmissive[channel]) * 2.0f).epsilon(0.02));
+        }
 
         driver->getRenderResourcePool()->releaseResource(lightingTarget->getHandle());
         driver->getRenderResourcePool()->releaseResource(sampler->getHandle());

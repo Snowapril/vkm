@@ -96,13 +96,17 @@ namespace vkm
                 textures._baseColor.isValid() ? textures._baseColor : _placeholderTexture;
             const VkmResourceHandle metallicRoughness =
                 textures._metallicRoughness.isValid() ? textures._metallicRoughness : _placeholderTexture;
+            // The white placeholder samples to 1, leaving the emissive factor exactly -- the same
+            // absent-texture behaviour the other channels get.
+            const VkmResourceHandle emissive =
+                textures._emissive.isValid() ? textures._emissive : _placeholderTexture;
 
             // Binding order mirrors VKM_MATERIAL_DECLARE()'s WebGPU branch and the PSO's
             // per_draw_resources array; the three have to agree.
             std::string tableError;
             VkmResourceTableBase* table = driver->newResourceTable(
                 pipeline, VkmResourceSetKind::PerDraw,
-                {{ 0, baseColor }, { 1, metallicRoughness }, { 2, _sampler }}, &tableError);
+                {{ 0, baseColor }, { 1, metallicRoughness }, { 2, _sampler }, { 3, emissive }}, &tableError);
             if (table == nullptr)
             {
                 destroy(driver);

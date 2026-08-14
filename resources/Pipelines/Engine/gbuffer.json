@@ -22,6 +22,9 @@
         },
         {
             "format": "r16g16b16a16_sfloat"
+        },
+        {
+            "format": "r16g16b16a16_sfloat"
         }
     ],
     "per_draw_resources": {
@@ -40,6 +43,10 @@
             {
                 "binding": 2,
                 "type": "sampler"
+            },
+            {
+                "binding": 3,
+                "type": "sampled_texture"
             }
         ]
     },

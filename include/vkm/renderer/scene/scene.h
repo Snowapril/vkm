@@ -321,6 +321,7 @@ namespace vkm
         {
             VkmResourceHandle _baseColor{ VKM_INVALID_RESOURCE_HANDLE };
             VkmResourceHandle _metallicRoughness{ VKM_INVALID_RESOURCE_HANDLE };
+            VkmResourceHandle _emissive{ VKM_INVALID_RESOURCE_HANDLE };
         };
 
         inline uint32_t getMaterialCount() const { return static_cast<uint32_t>(_materials.size()); }

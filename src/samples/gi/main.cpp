@@ -773,11 +773,13 @@ private:
         std::string error;
         _tables._lighting = driver->newResourceTable(
             _lightingPipeline, VkmResourceSetKind::PerPass,
-            {{ 0, normal }, { 1, baseColor }, { 2, motion }, { 3, _sampler }, { 4, _lightBuffer }}, &error);
+            {{ 0, normal }, { 1, baseColor }, { 2, motion }, { 3, _sampler }, { 4, _lightBuffer },
+             { 5, _gbuffer.getTexture(VkmGBuffer::Target::Emissive) }}, &error);
         _tables._composite = driver->newResourceTable(
             _compositePipeline, VkmResourceSetKind::PerPass,
             {{ 0, _directTarget }, { 1, _gi.getIndirectTexture() }, { 2, baseColor }, { 3, normal },
-             { 4, motion }, { 5, _sampler }, { 6, _compositeBuffer }}, &error);
+             { 4, motion }, { 5, _sampler }, { 6, _compositeBuffer },
+             { 7, _gbuffer.getTexture(VkmGBuffer::Target::Emissive) }}, &error);
         // With an upscaler the tonemap reads the display-extent upscale; without one it samples
         // the render-extent composite directly (bilinear when the extents differ).
         const VkmResourceHandle tonemapSource =

@@ -483,6 +483,7 @@ namespace vkm
             MaterialTextures& handles = _materialTextureHandles[i];
             handles._baseColor = handleFor(refs._baseColor, true);
             handles._metallicRoughness = handleFor(refs._metallicRoughness, false);
+            handles._emissive = handleFor(refs._emissive, true);
         }
 
         if (slotsExhausted)

@@ -87,6 +87,10 @@ struct VkmMaterial
     {                                                                                               \
         const float4 s = vkmSampleMaterialTexture(material.metallicRoughnessSlot, uv);              \
         return float2(material.metallic * s.b, material.roughness * s.g);                           \
+    }                                                                                               \
+    float3 vkmSampleEmissive(VkmMaterial material, float2 uv)                                       \
+    {                                                                                               \
+        return material.emissiveFactor * vkmSampleMaterialTexture(material.emissiveSlot, uv).rgb;   \
     }
 
 #if defined(VKM_BACKEND_WEBGPU)
@@ -112,6 +116,7 @@ struct VkmMaterial
     [[vk::binding(0, 3)]] Texture2D    g_VkmMaterialBaseColor         : register(t0, space3);       \
     [[vk::binding(1, 3)]] Texture2D    g_VkmMaterialMetallicRoughness : register(t1, space3);       \
     [[vk::binding(2, 3)]] SamplerState g_VkmMaterialSampler           : register(s0, space3);       \
+    [[vk::binding(3, 3)]] Texture2D    g_VkmMaterialEmissive          : register(t2, space3);       \
     VKM_MATERIAL_LOADER()                                                                           \
     float4 vkmSampleBaseColor(VkmMaterial material, float2 uv)                                      \
     {                                                                                               \
@@ -122,6 +127,10 @@ struct VkmMaterial
     {                                                                                               \
         const float4 s = g_VkmMaterialMetallicRoughness.Sample(g_VkmMaterialSampler, uv);           \
         return float2(material.metallic * s.b, material.roughness * s.g);                           \
+    }                                                                                               \
+    float3 vkmSampleEmissive(VkmMaterial material, float2 uv)                                       \
+    {                                                                                               \
+        return material.emissiveFactor * g_VkmMaterialEmissive.Sample(g_VkmMaterialSampler, uv).rgb; \
     }
 
 #else

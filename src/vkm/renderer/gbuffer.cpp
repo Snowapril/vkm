@@ -21,6 +21,7 @@ namespace vkm
                 case VkmGBuffer::Target::Normal:             return "Normal";
                 case VkmGBuffer::Target::BaseColorRoughness: return "BaseColorRoughness";
                 case VkmGBuffer::Target::MotionMetallic:     return "MotionMetallic";
+                case VkmGBuffer::Target::Emissive:           return "Emissive";
                 case VkmGBuffer::Target::Count:              break;
             }
             return "Unknown";
@@ -38,6 +39,8 @@ namespace vkm
             case Target::BaseColorRoughness: return VkmFormat::R8G8B8A8_UNORM;
             // Motion vectors are signed and can exceed 1 in UV units under fast motion.
             case Target::MotionMetallic:     return VkmFormat::R16G16B16A16_SFLOAT;
+            // Emitted radiance exceeds [0,1] whenever KHR_materials_emissive_strength does.
+            case Target::Emissive:           return VkmFormat::R16G16B16A16_SFLOAT;
             case Target::Count:              break;
         }
         return VkmFormat::Undefined;
