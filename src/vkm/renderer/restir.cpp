@@ -128,13 +128,27 @@ namespace vkm
         _sampleIndex = 0;
 
         const uint64_t pixelCount = static_cast<uint64_t>(width) * height;
-        VkmBuffer* reservoirs = createStorageBuffer(
-            driver, pixelCount * kVkmReservoirSliceCount * kVkmReservoirByteStride, "RestirReservoirs");
+        const uint64_t reservoirByteSize = pixelCount * kVkmReservoirSliceCount * kVkmReservoirByteStride;
+        VkmBuffer* reservoirs = createStorageBuffer(driver, reservoirByteSize, "RestirReservoirs");
         if (reservoirs == nullptr)
         {
             return fail(outError, "Failed to create the reservoir buffer");
         }
         _reservoirBuffer = reservoirs->getHandle();
+        /*
+        * Zeroed, because the first temporal pass reads a history slice nothing has written: its
+        * per-tap validation is M == 0, and an uninitialized word 6 can carry a garbage M that
+        * passes every check and injects garbage radiance -- nondeterministically, since fresh
+        * allocations carry whatever the allocator last held.
+        */
+        {
+            const std::vector<uint8_t> zeros(reservoirByteSize, 0);
+            if (!driver->uploadToBuffer(_reservoirBuffer, zeros.data(), reservoirByteSize))
+            {
+                destroy(driver);
+                return fail(outError, "Failed to clear the reservoir buffer");
+            }
+        }
 
         VkmBuffer* accumulation =
             createStorageBuffer(driver, pixelCount * 4 * sizeof(float), "RestirAccumulation");
@@ -397,13 +411,27 @@ namespace vkm
         VkmRestirConstants generateConstants = constants;
         generateConstants._outputSlice = options._temporalResampling ? kFreshSlice : options._inputSlice;
 
+        /*
+        * Each pass reads slices the previous one wrote, in the same subgraph -- a dependency the
+        * render graph cannot see (it declares the buffer once, at subgraph scope), so it is
+        * ordered here, the way VkmScene::recordCull orders its own chain. An encoder boundary
+        * alone is NOT a barrier under Metal's fence model: without this, generate and resolve
+        * overlap on the GPU and the 8.3 equality gate wobbles nondeterministically.
+        */
+        const VkmResourceBarrier reservoirHandOff{
+            ._handle = _reservoirBuffer,
+            ._srcAccess = VkmResourceAccess::ShaderStorageWrite,
+            ._dstAccess = VkmResourceAccess::ShaderStorageReadWrite,
+            ._srcScope = VkmPipelineScope::Compute,
+            ._dstScope = VkmPipelineScope::Compute,
+        };
+
         commandBuffer->bindPipeline(_generatePipeline);
         commandBuffer->bindResourceTable(_generateTables[gbufferParity & 1u]);
         commandBuffer->setPushConstants(&generateConstants, sizeof(generateConstants));
         commandBuffer->dispatch(groupsX, groupsY, 1);
-        // Closing the compute pass here is what orders the next pass's reads after this one's
-        // writes -- the same mechanism VkmScene::recordCull relies on between its two dispatches.
         commandBuffer->unbindPipeline();
+        commandBuffer->resourceBarrier(&reservoirHandOff, 1);
 
         if (options._temporalResampling)
         {
@@ -416,6 +444,7 @@ namespace vkm
             commandBuffer->setPushConstants(&temporalConstants, sizeof(temporalConstants));
             commandBuffer->dispatch(groupsX, groupsY, 1);
             commandBuffer->unbindPipeline();
+            commandBuffer->resourceBarrier(&reservoirHandOff, 1);
         }
 
         if (options._spatialResampling)
@@ -432,6 +461,7 @@ namespace vkm
             commandBuffer->setPushConstants(&spatialConstants, sizeof(spatialConstants));
             commandBuffer->dispatch(groupsX, groupsY, 1);
             commandBuffer->unbindPipeline();
+            commandBuffer->resourceBarrier(&reservoirHandOff, 1);
         }
 
         _lastResolvedSlice = getPlannedOutputSlice(options);
