@@ -41,7 +41,9 @@ TEST_CASE("VkmFrameConstants - layout matches the shader-side mirror") {
     CHECK(offsetof(vkm::VkmFrameConstants, _viewportSize) == 336);
     CHECK(offsetof(vkm::VkmFrameConstants, _frameIndex) == 352);
     CHECK(offsetof(vkm::VkmFrameConstants, _prevCameraPositionWorld) == 368);
-    CHECK(sizeof(vkm::VkmFrameConstants) == 384);
+    CHECK(offsetof(vkm::VkmFrameConstants, _viewProjectionNoJitter) == 384);
+    CHECK(offsetof(vkm::VkmFrameConstants, _jitter) == 448);
+    CHECK(sizeof(vkm::VkmFrameConstants) == 464);
 
     // One region per frame slot, so the stride must stay a multiple of every backend's minimum
     // uniform-buffer offset alignment even as the struct grows.
@@ -72,6 +74,46 @@ TEST_CASE("VkmCamera - a zero viewport reports a zero reciprocal rather than inf
 
     CHECK(constants._viewportSize.z == 0.0f);
     CHECK(constants._viewportSize.w == 0.0f);
+}
+
+TEST_CASE("Camera jitter shifts NDC by exactly the sub-pixel offset, and only the jittered pair")
+{
+    vkm::VkmCamera camera;
+    camera.setViewportSize(128, 64);
+    camera.lookAt(glm::vec3(0.0f, 0.0f, 5.0f), glm::vec3(0.0f, 0.0f, 0.0f));
+    camera.setPerspective(1.0f, 0.1f, 100.0f);
+
+    // Zero jitter (the default): the jittered and jitter-free projections are identical.
+    CHECK(camera.getProjection() == camera.getProjectionNoJitter());
+
+    const glm::vec3 world(0.3f, -0.2f, 1.0f);
+    const glm::vec3 baseNdc = projectPoint(camera.getViewProjection(), world);
+
+    camera.setJitterPixels(glm::vec2(0.5f, 0.5f));
+    const glm::vec3 jitteredNdc = projectPoint(camera.getViewProjection(), world);
+
+    // A pixel is 2/extent wide in NDC; +x jitter moves samples right. Pixel space is +y down
+    // while clip space is +y up, so +y jitter moves the NDC point down.
+    CHECK(jitteredNdc.x - baseNdc.x == doctest::Approx(2.0f * 0.5f / 128.0f).epsilon(1e-4));
+    CHECK(jitteredNdc.y - baseNdc.y == doctest::Approx(-2.0f * 0.5f / 64.0f).epsilon(1e-4));
+    CHECK(jitteredNdc.z == doctest::Approx(baseNdc.z).epsilon(1e-5));
+
+    // The jitter-free projection ignores the jitter entirely.
+    const glm::vec3 noJitterNdc =
+        projectPoint(camera.getProjectionNoJitter() * camera.getView(), world);
+    CHECK(noJitterNdc.x == doctest::Approx(baseNdc.x).epsilon(1e-5));
+    CHECK(noJitterNdc.y == doctest::Approx(baseNdc.y).epsilon(1e-5));
+
+    // fillFrameConstants publishes the jittered set, the jitter-free matrix, and the jitter
+    // itself (zw seeded equal to xy; the engine overwrites zw with last frame's value).
+    vkm::VkmFrameConstants constants{};
+    camera.fillFrameConstants(constants);
+    CHECK(constants._viewProjection == camera.getViewProjection());
+    CHECK(constants._viewProjectionNoJitter == camera.getProjectionNoJitter() * camera.getView());
+    CHECK(constants._jitter.x == doctest::Approx(0.5f));
+    CHECK(constants._jitter.y == doctest::Approx(0.5f));
+    CHECK(constants._jitter.z == doctest::Approx(0.5f));
+    CHECK(constants._jitter.w == doctest::Approx(0.5f));
 }
 
 TEST_CASE("Camera projects the target to the center of clip space")

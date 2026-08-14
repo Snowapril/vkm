@@ -4959,3 +4959,20 @@ so a scene reload with the window open could free a structure between the lookup
 tab that dereferenced it. Rows now copy the `VkmAccelerationStructureInfo` at lookup time
 and no resource pointer outlives the `getResource()` call. The copied info's `_debugName`
 still dangles and stays unread; the row's pool-tag name is the durable one.
+## 2026-08-14 — Temporal upscaling: MetalFX (Metal 4) and FSR 3.1 (Vulkan)
+
+Plan: render-res inputs (HDR composite, depth, MotionMetallic.xy) upscaled to display res between
+the gi sample's composite and tonemap passes. Phase 0 lands the backend-agnostic prerequisites
+(camera jitter with jitter-free motion vectors, render/display extent split, VkmUpscalerBase +
+VkmDriverCapabilityFlags::TemporalUpscaling); Phase 1 backs it with MTL4FXTemporalScaler; Phase 2
+with the FidelityFX SDK's ffx-api on Vulkan (Windows/Linux; MoltenVK reports unsupported). WebGPU
+keeps the capability bit clear. Frame generation is deferred by design.
+
+Jitter convention: pixels, +x right / +y down (UV space), folded into VkmCamera::getProjection()
+as a clip-space third-column offset; NDC shift is (+2jx/w, -2jy/h). Motion vectors switch to a
+jitter-free matrix pair (_viewProjectionNoJitter / _prevViewProjection), so both upscalers take
+the motion texture at scale (-renderW, -renderH) with no jitter cancellation flags.
+
+### Deviations
+
+(none yet)

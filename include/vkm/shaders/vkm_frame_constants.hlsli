@@ -49,6 +49,13 @@ struct VkmFrameConstants
     // Last frame's cameraPositionWorld, seeded with the current one on the first frame. History
     // camera distances are radial from THIS eye, not the current frame's.
     float4   prevCameraPositionWorld;
+    // This frame's viewProjection without the sub-pixel jitter offset. Motion vectors are
+    // computed from this and prevViewProjection (also jitter-free), so a temporal upscaler
+    // never sees the jitter duplicated in the motion field.
+    float4x4 viewProjectionNoJitter;
+    // xy = this frame's sub-pixel jitter in render-target pixels (+x right, +y down), zw = the
+    // previous frame's. Zero while no temporal upscaler is active.
+    float4   jitter;
 };
 
 #define VKM_FRAME_CONSTANTS(name) \

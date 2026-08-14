@@ -9,6 +9,7 @@
 #include <vkm/renderer/backend/common/render_graph.h>
 
 #include <glm/mat4x4.hpp>
+#include <glm/vec2.hpp>
 #include <atomic>
 #include <deque>
 #include <memory>
@@ -318,13 +319,15 @@ namespace vkm
         *
         * _frameCounter is monotonic, unlike _currentFrameIndex which cycles 0..FRAME_COUNT-1:
         * stochastic passes seed from it to decorrelate successive frames.
-        * _prevViewProjection carries last frame's matrix for reprojection; _hasPrevViewProjection
-        * keeps the first frame after a camera appears from reprojecting against an identity
-        * matrix, which would look like a violent camera cut.
+        * _prevViewProjection carries last frame's jitter-free matrix for reprojection;
+        * _hasPrevViewProjection keeps the first frame after a camera appears from reprojecting
+        * against an identity matrix, which would look like a violent camera cut. _prevJitter is
+        * last frame's sub-pixel jitter, published as _jitter.zw alongside it.
         */
         uint32_t _frameCounter {0};
         glm::mat4 _prevViewProjection {1.0f};
         glm::vec4 _prevCameraPositionWorld {0.0f, 0.0f, 0.0f, 1.0f};
+        glm::vec2 _prevJitter {0.0f};
         bool _hasPrevViewProjection {false};
 
         std::unique_ptr<VkmRenderGraphCapture> _renderGraphCapture;

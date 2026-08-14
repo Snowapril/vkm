@@ -9,7 +9,8 @@
 // permutations come from the PSO JSON's "options", exactly as the model_viewer shader's do.
 //
 // What is new here is motion vectors. Each vertex is transformed twice -- once by this frame's
-// viewProjection and once by the previous frame's -- and the fragment stage divides both. That
+// jitter-free viewProjection and once by the previous frame's -- and the fragment stage divides
+// both. That
 // captures CAMERA motion only: VkmObjectData carries one world transform, so an object that moved
 // between frames reports the motion of a static object at its new position. That is correct for
 // the static geometry the engine can currently express, and wrong the moment objects animate, so
@@ -152,7 +153,9 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
 
     VSOutput output;
     output.position = mul(g_VkmFrame.viewProjection, worldPosition);
-    output.currentClip = output.position;
+    // Motion vectors use the jitter-free pair: viewProjection carries the temporal upscaler's
+    // sub-pixel jitter, which must not appear as apparent motion.
+    output.currentClip = mul(g_VkmFrame.viewProjectionNoJitter, worldPosition);
     // Camera-only motion: the same world position through last frame's camera. An object that
     // moved needs its own previous transform, which VkmObjectData does not carry.
     output.previousClip = mul(g_VkmFrame.prevViewProjection, worldPosition);
