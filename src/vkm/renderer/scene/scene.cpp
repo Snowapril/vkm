@@ -22,6 +22,7 @@
 #include <glm/geometric.hpp>
 
 #include <algorithm>
+#include <cstring>
 #include <map>
 
 namespace vkm
@@ -165,6 +166,18 @@ namespace vkm
                                        : materialBase + mesh._materialIndex;
             entry._bounds = mesh._bounds;
 
+            // Gathered here, while the model still owns its CPU vertex bytes -- the pool clears
+            // its own copy at upload, and build() only sees ranges. Object space; build() expands
+            // per placed object once the world transforms are final.
+            if (entry._materialIndex != INVALID_VALUE32)
+            {
+                const glm::vec4& emissive = _materials[entry._materialIndex]._emissive;
+                if (emissive.x > 0.0f || emissive.y > 0.0f || emissive.z > 0.0f)
+                {
+                    vkmGatherEmissiveTriangles(mesh, glm::vec3(emissive), &entry._emissiveTriangles);
+                }
+            }
+
             meshEntryIndices[meshIndex] = static_cast<uint32_t>(_meshEntries.size());
             _meshEntries.push_back(entry);
         }
@@ -242,6 +255,13 @@ namespace vkm
             batch._objectCount = 1;
             _drawBatches.push_back(batch);
         }
+    }
+
+    void VkmScene::setDirectionalRadiance(const glm::vec3& radiance)
+    {
+        VKM_ASSERT(_lightBuffer == VKM_INVALID_RESOURCE_HANDLE,
+                   "setDirectionalRadiance must precede build(): the light table uploads once");
+        _directionalRadiance = radiance;
     }
 
     void VkmScene::fillObjectData()
@@ -638,6 +658,77 @@ namespace vkm
         }
 
         fillObjectData();
+
+        if (!buildLightTable(driver, bindlessManager, outError))
+        {
+            destroy(driver);
+            return false;
+        }
+        return true;
+    }
+
+    bool VkmScene::buildLightTable(VkmDriverBase* driver, VkmBindlessResourceManagerBase* bindlessManager,
+                                   std::string* outError)
+    {
+        // Expand each placed object's object-space emissive triangles by its final world
+        // transform. Baked at build: a moved emitter needs a rebuild (TODO.md).
+        std::vector<VkmLightTableTriangle> triangles;
+        for (const VkmSceneObject& object : _objects)
+        {
+            const MeshEntry& entry = _meshEntries[object._meshEntryIndex];
+            for (const VkmLightTableTriangle& local : entry._emissiveTriangles)
+            {
+                VkmLightTableTriangle world = local;
+                float* corners[3] = { world._p0, world._p1, world._p2 };
+                for (float* corner : corners)
+                {
+                    const glm::vec4 transformed =
+                        object._worldTransform * glm::vec4(corner[0], corner[1], corner[2], 1.0f);
+                    corner[0] = transformed.x;
+                    corner[1] = transformed.y;
+                    corner[2] = transformed.z;
+                }
+                triangles.push_back(world);
+            }
+        }
+        _lightTriangleCount = static_cast<uint32_t>(vkmFinalizeLightTable(&triangles));
+
+        /*
+        * Always created, even header-only: an unconditionally valid _lightPoolSlot means no
+        * INVALID branch exists in any shader, and a light-less scene is a data-driven no-op
+        * (zero sun, zero count).
+        */
+        VkmLightTableHeader header{};
+        header._sunRadiance[0] = _directionalRadiance.x;
+        header._sunRadiance[1] = _directionalRadiance.y;
+        header._sunRadiance[2] = _directionalRadiance.z;
+
+        const uint64_t byteSize =
+            sizeof(VkmLightTableHeader) + triangles.size() * sizeof(VkmLightTableTriangle);
+        std::vector<uint8_t> bytes(byteSize);
+        std::memcpy(bytes.data(), &header, sizeof(header));
+        if (!triangles.empty())
+        {
+            std::memcpy(bytes.data() + sizeof(header), triangles.data(),
+                        triangles.size() * sizeof(VkmLightTableTriangle));
+        }
+
+        VkmBuffer* lightBuffer = createStorageBuffer(driver, byteSize, "SceneLightTable");
+        if (lightBuffer == nullptr ||
+            !driver->uploadToBuffer(lightBuffer->getHandle(), bytes.data(), byteSize))
+        {
+            if (lightBuffer != nullptr)
+            {
+                _lightBuffer = lightBuffer->getHandle();
+            }
+            return fail(outError, "Failed to upload the scene's light table");
+        }
+        _lightBuffer = lightBuffer->getHandle();
+        _lightPoolSlot = bindlessManager->registerBuffer(_lightBuffer, VkmBindlessArrayType::Buffer);
+        if (_lightPoolSlot == INVALID_VALUE32)
+        {
+            return fail(outError, "The bindless buffer array is exhausted while registering the light table");
+        }
         return true;
     }
 
@@ -856,6 +947,10 @@ namespace vkm
             {
                 bindlessManager->unregisterBuffer(_materialPoolSlot, VkmBindlessArrayType::Buffer);
             }
+            if (_lightPoolSlot != INVALID_VALUE32)
+            {
+                bindlessManager->unregisterBuffer(_lightPoolSlot, VkmBindlessArrayType::Buffer);
+            }
             for (const uint32_t slot : _materialTextureSlots)
             {
                 bindlessManager->unregisterTexture(slot);
@@ -867,6 +962,8 @@ namespace vkm
             bindlessManager->setSingletonBuffer(VkmBindlessSingletonBuffer::IndirectArgument, VKM_INVALID_RESOURCE_HANDLE);
         }
         _materialPoolSlot = INVALID_VALUE32;
+        _lightPoolSlot = INVALID_VALUE32;
+        _lightTriangleCount = 0;
         _cullPipeline = nullptr;
         _emitPipeline = nullptr;
 
@@ -889,6 +986,7 @@ namespace vkm
         _materialTextureSlots.clear();
 
         release(_materialBuffer);
+        release(_lightBuffer);
         release(_objectDataBuffer);
         release(_frameDataBuffer);
         release(_visibleListBuffer);
@@ -962,6 +1060,8 @@ namespace vkm
         const uint64_t viewByteOffset = static_cast<uint64_t>(viewIndex) * sizeof(VkmFrameData);
         VkmFrameData publishedFrameData = frameData;
         publishedFrameData._materialPoolSlot = _materialPoolSlot;
+        publishedFrameData._lightPoolSlot = _lightPoolSlot;
+        publishedFrameData._lightCount = _lightTriangleCount;
         staging->writeDirect(_frameDataStagingOffset + viewByteOffset, &publishedFrameData, sizeof(VkmFrameData));
         commandBuffer->copyBuffer(_stagingBuffers[frameIndex], _frameDataBuffer,
                                   _frameDataStagingOffset + viewByteOffset, viewByteOffset, sizeof(VkmFrameData));
@@ -1154,6 +1254,7 @@ namespace vkm
                     }
                 }
                 append(_materialBuffer, VkmResourceAccess::ShaderStorageRead);
+                append(_lightBuffer, VkmResourceAccess::ShaderStorageRead);
                 append(_objectDataBuffer, VkmResourceAccess::ShaderStorageRead);
                 append(_frameDataBuffer, VkmResourceAccess::ShaderStorageRead);
                 append(_argumentBuffer, VkmResourceAccess::IndirectArgument);

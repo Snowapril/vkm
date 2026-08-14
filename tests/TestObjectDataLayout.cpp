@@ -42,6 +42,25 @@ TEST_CASE("VkmFrameData - matches the shader-side FrameData layout") {
     CHECK(offsetof(vkm::VkmFrameData, _lightDirection) == 96);
     CHECK(offsetof(vkm::VkmFrameData, _materialPoolSlot) == 112);
     CHECK(offsetof(vkm::VkmFrameData, _debugMode) == 116);
+    CHECK(offsetof(vkm::VkmFrameData, _lightPoolSlot) == 120);
+    CHECK(offsetof(vkm::VkmFrameData, _lightCount) == 124);
+}
+
+/*
+* The light table rides the same untyped u32 Buffer array as the material pool, so its strides
+* are hardcoded in words on the shader side -- VKM_LIGHT_HEADER_WORDS and VKM_LIGHT_WORD_STRIDE
+* in vkm_lights.hlsli. These pins are what keep the two sides one ABI.
+*/
+TEST_CASE("VkmLightTable records - match the shader-side word strides") {
+    CHECK(sizeof(vkm::VkmLightTableHeader) == 16);  // VKM_LIGHT_HEADER_WORDS * 4
+    CHECK(sizeof(vkm::VkmLightTableTriangle) == 64); // VKM_LIGHT_WORD_STRIDE * 4
+
+    CHECK(offsetof(vkm::VkmLightTableTriangle, _p0) == 0);
+    CHECK(offsetof(vkm::VkmLightTableTriangle, _p1) == 12);
+    CHECK(offsetof(vkm::VkmLightTableTriangle, _p2) == 24);
+    CHECK(offsetof(vkm::VkmLightTableTriangle, _radiance) == 36);
+    CHECK(offsetof(vkm::VkmLightTableTriangle, _area) == 48);
+    CHECK(offsetof(vkm::VkmLightTableTriangle, _cdf) == 52);
 }
 
 /*
