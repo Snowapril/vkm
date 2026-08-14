@@ -143,6 +143,7 @@ if (VKM_ENABLE_IMGUI)
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/memory_inspector.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/cpu_profiler_inspector.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/gpu_profiler_inspector.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/acceleration_structure_inspector.h
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/imgui/imgui_renderer.cpp
@@ -153,6 +154,7 @@ if (VKM_ENABLE_IMGUI)
         ${SRC_DIR}/vkm/renderer/imgui/profiler_chart_common.h
         ${SRC_DIR}/vkm/renderer/imgui/cpu_profiler_inspector.cpp
         ${SRC_DIR}/vkm/renderer/imgui/gpu_profiler_inspector.cpp
+        ${SRC_DIR}/vkm/renderer/imgui/acceleration_structure_inspector.cpp
     )
 endif()
 

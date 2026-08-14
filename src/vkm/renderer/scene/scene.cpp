@@ -727,6 +727,11 @@ namespace vkm
             blasInfo._type = VkmAccelerationStructureType::BottomLevel;
             blasInfo._debugName = debugName.c_str();
             blasInfo._geometries.push_back(geometry);
+            if (meshEntry._bounds._valid)
+            {
+                blasInfo._boundsMin = meshEntry._bounds._min;
+                blasInfo._boundsMax = meshEntry._bounds._max;
+            }
 
             VkmAccelerationStructure* blas = driver->newAccelerationStructure(blasInfo);
             if (blas == nullptr)

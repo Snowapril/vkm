@@ -80,12 +80,18 @@ namespace vkmtest
         geometry._indexView = indexView;
         geometry._indexCount = 3;
         blasInfo._geometries.push_back(geometry);
+        // The triangle's actual object-space bounds; the build ignores them, but the retained
+        // info the debug inspector reads must carry them through.
+        blasInfo._boundsMin = glm::vec3(0.0f);
+        blasInfo._boundsMax = glm::vec3(1.0f, 1.0f, 0.0f);
 
         vkm::VkmAccelerationStructure* blas = driver->newAccelerationStructure(blasInfo);
         REQUIRE(blas != nullptr);
         // The size the driver reported for the structure. Zero would mean the build described no
         // geometry at all, which is the failure a "did it return non-null" check cannot see.
         CHECK(blas->getAllocatedSize() > 0);
+        CHECK(blas->getAccelerationStructureInfo()._boundsMin == glm::vec3(0.0f));
+        CHECK(blas->getAccelerationStructureInfo()._boundsMax == glm::vec3(1.0f, 1.0f, 0.0f));
 
         SUBCASE("a top-level structure instances it, and can be rebuilt after the instance moves")
         {
@@ -109,6 +115,14 @@ namespace vkmtest
             instance._transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -5.0f, 0.0f));
             CHECK(tlas->updateInstances({ instance }));
 
+            // The retained info follows the update, so it describes the list the next build reads
+            // rather than the one the structure was created with.
+            const std::vector<vkm::VkmAccelerationStructureInstance>& refreshed =
+                tlas->getAccelerationStructureInfo()._instances;
+            REQUIRE(refreshed.size() == 1);
+            CHECK(refreshed[0]._transform == instance._transform);
+            CHECK(refreshed[0]._instanceId == 7);
+
             vkm::VkmCommandQueueBase* queue =
                 driver->getCommandQueue(vkm::VkmCommandQueueType::Graphics, 0);
             vkm::VkmCommandBufferBase* commandBuffer = queue->getCommandBufferPool()->allocate();
@@ -129,6 +143,8 @@ namespace vkmtest
             {
                 // The structure was sized for one instance; two would read past what was written.
                 CHECK_FALSE(tlas->updateInstances({ instance, instance }));
+                // A refused call must leave the retained info untouched.
+                CHECK(tlas->getAccelerationStructureInfo()._instances.size() == 1);
             }
 
             /*

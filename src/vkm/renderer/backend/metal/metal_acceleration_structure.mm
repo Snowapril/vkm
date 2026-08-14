@@ -312,6 +312,9 @@ namespace vkm
         {
             static_cast<MTL4InstanceAccelerationStructureDescriptor*>(_descriptor).instanceCount = instances.size();
         }
+        // Keep the retained info matching what the next build reads, so the command buffer's
+        // GPU-usage walk and the debug inspector see the rebuilt structure, not the created one.
+        _info._instances = instances;
         return true;
     }
 

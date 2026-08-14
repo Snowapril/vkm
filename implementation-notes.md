@@ -4919,3 +4919,34 @@ sample (`gv_gi_restir_mis`).
   the roughness-1 degenerate case (the blend must be a no-op there). The honest limit is recorded
   in restir.md: at r = 1 the fresh half never contributes, so a wrong fresh-slice read stays
   invisible until a varied-roughness asset exists to look at.
+## 2026-08-14 — Acceleration structure inspector (F4)
+
+A fifth engine-owned ImGui window, `VkmAccelerationStructureInspector`, drawn from
+`VkmEngine::update()` like the others and toggled with F4. It enumerates every live structure
+through `VkmRenderResourcePool::getAllResourceHandles(VkmResourceType::AccelerationStructure)`
+— the texture browser's idiom — so it sees scene-built and driver-built structures alike, and
+takes its names and byte sizes from the pool's memory tags rather than `_info._debugName`,
+which is a borrowed pointer the scene's build loop invalidates.
+
+Three tabs sharing one selection: **Structures** (table of every structure; a selected TLAS
+details its instances, a selected BLAS its triangle geometries and bounds), **Graph** (TLAS
+nodes left, BLAS nodes right, one edge per instanced relationship with an xN count when a BLAS
+is instanced more than once), **Spatial** (top-down world-XZ `VkmImGuiCanvas`, one rectangle
+per instance: the BLAS's object-space bounds pushed through the instance matrix via
+`VkmSceneAABB::transformed()`).
+
+Two data changes carry the tabs:
+
+- `VkmAccelerationStructureInfo` gains `_boundsMin`/`_boundsMax` (both-zero = unknown,
+  backends never read them). `VkmScene::buildAccelerationStructures` fills them from the mesh
+  entry's imported bounds; a structure built without them still lists and graphs, and the
+  Spatial tab falls back to a dot at the instance's translation.
+- Both backends' `updateInstances` now end their success path with
+  `_info._instances = instances;`. Before this the retained info kept the creation-time list,
+  so the inspector — and `VkmCommandBufferBase::buildAccelerationStructure`'s GPU-usage walk —
+  described a structure the next build no longer matched. A refused call still returns before
+  the assignment, so validation failures never mutate the info.
+
+model_viewer now calls `buildAccelerationStructures` after a successful scene build when the
+driver reports `RayTracing`, purely so the window has content in a stock sample; failure is
+logged and rendering continues rasterized.
