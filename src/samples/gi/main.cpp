@@ -121,6 +121,10 @@ VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_technique, 0u);
 // the resampled one, whose cached radiance is the documented ReSTIR GI bias on low roughness.
 // Settable here so a screenshot run can A/B it.
 VKM_GLOBAL_VARIABLE(bool, gv_gi_restir_mis, true);
+// Render resolution as a fraction of the swapchain's, clamped to [0.25, 1]. Below 1 the scene
+// renders at the reduced extent and the tonemap pass upscales into the backbuffer -- bilinearly
+// until a temporal upscaler takes that spot.
+VKM_GLOBAL_VARIABLE(float, gv_gi_render_scale, 1.0f);
 
 namespace
 {
@@ -455,7 +459,7 @@ public:
         // technique with screen-space's view dependence baked in (restir.md section 5).
         if (_ssgiEnabled && !restirActive)
         {
-            VkmFrameBufferDescriptor ssgiFb = makeFullscreenFb(_extent, _indirectTarget);
+            VkmFrameBufferDescriptor ssgiFb = makeFullscreenFb(_renderExtent, _indirectTarget);
             ssgiFb._renderPass._colorAttachments[0]._loadAction = VkmLoadAction::Load;
             VkmRenderGraphicsSubGraph* ssgiSubGraph = renderGraph->beginGraphicsSubGraph(ssgiFb, "GiSsgi");
             ssgiSubGraph->addReferencedResource(_indirectTarget, VkmResourceAccess::ColorAttachmentWrite);
@@ -565,7 +569,7 @@ private:
                           VkmPipelineStateBase* pipeline, VkmResourceTableBase* table)
     {
         VkmRenderGraphicsSubGraph* subGraph =
-            renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_extent, target), name);
+            renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_renderExtent, target), name);
         subGraph->addReferencedResource(target, VkmResourceAccess::ColorAttachmentWrite);
         std::vector<VkmResourceAccessDeclaration> bound;
         table->collectReferencedResources(&bound);
@@ -781,18 +785,29 @@ private:
         _sceneReady = true;
     }
 
-    // Recreates everything sized to the swapchain, and the tables that name those textures.
+    // Recreates everything sized to the swapchain (scene targets at the scaled render extent),
+    // and the tables that name those textures.
     void ensureTargets()
     {
         VkmDriverBase* driver = _engine->getDriver();
         const glm::uvec2 extent = _engine->getMainSwapChain()->getExtent();
-        if (extent.x == 0 || extent.y == 0 || extent == _extent)
+        if (extent.x == 0 || extent.y == 0)
+        {
+            return;
+        }
+        const float renderScale = std::clamp(gv_gi_render_scale.get(), 0.25f, 1.0f);
+        const glm::uvec2 renderExtent =
+            glm::max(glm::uvec2(glm::vec2(extent) * renderScale + 0.5f), glm::uvec2(1u));
+        if (extent == _extent && renderExtent == _renderExtent)
         {
             return;
         }
         _extent = extent;
+        _renderExtent = renderExtent;
+        // At scale 1 the override is released so the camera follows the swapchain again.
+        _engine->setCameraViewportOverride(renderExtent == extent ? glm::uvec2(0u) : renderExtent);
 
-        if (!_gbuffer.isValid() ? !_gbuffer.initialize(driver, extent) : !_gbuffer.resize(extent))
+        if (!_gbuffer.isValid() ? !_gbuffer.initialize(driver, renderExtent) : !_gbuffer.resize(renderExtent))
         {
             VKM_DEBUG_ERROR("Failed to size the GI sample's G-buffer");
             return;
@@ -807,9 +822,9 @@ private:
                 *target = VKM_INVALID_RESOURCE_HANDLE;
             }
         }
-        VkmTexture* direct = createHdrTarget(driver, extent, "GiDirect");
-        VkmTexture* indirect = createHdrTarget(driver, extent, "GiIndirect");
-        VkmTexture* composite = createHdrTarget(driver, extent, "GiComposite");
+        VkmTexture* direct = createHdrTarget(driver, renderExtent, "GiDirect");
+        VkmTexture* indirect = createHdrTarget(driver, renderExtent, "GiIndirect");
+        VkmTexture* composite = createHdrTarget(driver, renderExtent, "GiComposite");
         if (direct == nullptr || indirect == nullptr || composite == nullptr)
         {
             VKM_DEBUG_ERROR("Failed to create the GI sample's HDR targets");
@@ -1055,7 +1070,8 @@ private:
     std::array<VkmResourceHandle, FRAME_BUFFER_COUNT> _compositeStaging{};
     std::array<VkmStagingBuffer*, FRAME_BUFFER_COUNT> _compositeStagingPointers{};
 
-    glm::uvec2 _extent{ 0, 0 };
+    glm::uvec2 _extent{ 0, 0 };       // display: the swapchain's extent
+    glm::uvec2 _renderExtent{ 0, 0 }; // scene targets: _extent scaled by gv_gi_render_scale
     uint64_t _frameCounter = 0;
     bool _sceneReady = false;
 

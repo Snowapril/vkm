@@ -654,7 +654,13 @@ namespace vkm
                 VkmFrameConstants frameConstants{}; // identity while no camera is registered
                 if (_activeCamera != nullptr)
                 {
-                    const glm::uvec2 cameraExtent = windowContext._swapChain->getExtent();
+                    // The override lets a sample render at a reduced resolution: the camera's
+                    // aspect and set 1's _viewportSize then describe the render extent while the
+                    // swapchain keeps its own.
+                    const bool hasViewportOverride =
+                        _cameraViewportOverride.x != 0 && _cameraViewportOverride.y != 0;
+                    const glm::uvec2 cameraExtent =
+                        hasViewportOverride ? _cameraViewportOverride : windowContext._swapChain->getExtent();
                     _activeCamera->setViewportSize(cameraExtent.x, cameraExtent.y);
                     _activeCamera->fillFrameConstants(frameConstants);
 
