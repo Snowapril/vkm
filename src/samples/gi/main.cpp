@@ -111,6 +111,10 @@ VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_z, 20u);
 // is where a probe volume is actually judged -- an exterior view can look right while the interior
 // is black, which is exactly how the scene-scale bug got past a screenshot.
 VKM_GLOBAL_VARIABLE(float, gv_gi_camera_distance, 1.0f);
+// Initial orbit orientation in degrees, so a headless screenshot run can aim the camera at a
+// reported artifact instead of hoping the default orbit sweeps past it.
+VKM_GLOBAL_VARIABLE(float, gv_gi_camera_yaw, 34.4f);   // the controller's 0.6 rad default
+VKM_GLOBAL_VARIABLE(float, gv_gi_camera_pitch, 17.2f); // the controller's 0.3 rad default
 // Which GI technique fills the indirect target: 0 = probe volume (+SSGI), 1 = ReSTIR. Clamped to
 // 0 on a device without ray tracing -- the selection is a runtime capability question, not a
 // build-time one (restir.md section 5).
@@ -591,8 +595,16 @@ private:
         VkmSceneModel model;
         std::string error;
         VkmGltfImportOptions importOptions;
-        if (!importGltfModel(path, &model, &error, importOptions) || !_scene.addModel(model, &error) ||
-            !_scene.build(driver, _engine->getPipelineStateManager(), &error))
+        if (!importGltfModel(path, &model, &error, importOptions) || !_scene.addModel(model, &error))
+        {
+            VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
+            return;
+        }
+        // The same radiance the deferred pass's LightConstants carries (see postDriverReady):
+        // the sun in the light table is what the traced tier samples, and the two must stay in
+        // sync or ReSTIR and the deferred image disagree about how bright the sun is.
+        _scene.setDirectionalRadiance(glm::vec3(3.0f, 3.0f, 2.8f));
+        if (!_scene.build(driver, _engine->getPipelineStateManager(), &error))
         {
             VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
             return;
@@ -614,6 +626,8 @@ private:
         const glm::vec3 center = bounds._valid ? bounds.getCenter() : glm::vec3(0.0f);
         const glm::vec3 extent = bounds._valid ? bounds.getExtent() : glm::vec3(8.0f);
         _cameraController.frame(center, glm::length(extent) * 0.5f * gv_gi_camera_distance.get());
+        _cameraController.setOrientation(glm::radians(gv_gi_camera_yaw.get()),
+                                         glm::radians(gv_gi_camera_pitch.get()));
 
         if (!_gi.prepareScene(&_scene, &error))
         {

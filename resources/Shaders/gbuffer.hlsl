@@ -190,9 +190,19 @@ PSOutput PSMain(VSOutput input)
     }
 
     // PositionOnly geometry has no vertex normal, so the two normals coincide there.
-    const float3 shadingNormal = (dot(input.worldNormal, input.worldNormal) > 0.0)
-                                     ? normalize(input.worldNormal)
-                                     : geometricNormal;
+    float3 shadingNormal = (dot(input.worldNormal, input.worldNormal) > 0.0)
+                               ? normalize(input.worldNormal)
+                               : geometricNormal;
+    // Into the geometric normal's hemisphere, which is already camera-facing: the back side of
+    // thin two-sided geometry (curtains, leaves) otherwise records a normal pointing away from
+    // every viewer, and the deferred pass shades it black. Aligning against the geometric normal
+    // rather than the view direction leaves grazing front faces untouched -- their vertex
+    // normals already share the face's hemisphere. Same two-sided convention the traced path
+    // applies to its own hits.
+    if (dot(shadingNormal, geometricNormal) < 0.0)
+    {
+        shadingNormal = -shadingNormal;
+    }
 
     const VkmMaterial material = vkmLoadMaterial(g_FrameData[0].materialPoolSlot, input.materialIndex);
     const float4 baseColor = vkmSampleBaseColor(material, input.uv);

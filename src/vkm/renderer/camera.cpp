@@ -231,6 +231,13 @@ namespace vkm
         applyToCamera();
     }
 
+    void VkmOrbitCameraController::setOrientation(float yaw, float pitch)
+    {
+        _yaw = yaw;
+        _pitch = std::clamp(pitch, -1.5f, 1.5f);
+        applyToCamera();
+    }
+
     void VkmOrbitCameraController::applyToCamera()
     {
         const glm::vec3 eye = _target + glm::vec3{

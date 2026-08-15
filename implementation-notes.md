@@ -5021,3 +5021,24 @@ a per-frame record/advanceFrame pair. The sample shrank to gv-flag mapping and U
   screenshots and a validation-clean suite.
 - **The system's sampler is not released through the reclaimer** at destroy(); it stays with the
   resource pool until teardown, matching how the sample always treated its own.
+
+## 2026-08-15 — Area/emissive lights + NEE + the emissive G-buffer channel
+
+The full arc is in restir.md's progress row. Deviations from the approved plan:
+
+- **The environment-flag Jacobian analogue never came up** (area sampling reconnects to real
+  triangle points; no environment stand-in exists in the light table).
+- **`gi_reservoir_spatial.hlsl` also gained the FrameData light words.** The plan said three
+  readers; the seam macro textually expands in the spatial shader too, so its mirror had to
+  match even though its own code never reads the fields.
+- **The Cornell MSE bound is 1.5e-3/2.5e-3, not the not-regress shape.** Measured floor 8.8e-4:
+  the deferred side finds the small ceiling patch by BSDF sampling (high variance) while the
+  reference uses NEE (low), so the comparison's floor sits far above the environment-lit
+  Cornell's. The 2% mean-ratio check inside the gate is the bias detector.
+- **Two pre-existing defects fixed en route, in their own commits:** `unbindPipeline()` treated
+  as a barrier in `recordResample` (not one under the Metal fence model — generate and resolve
+  overlapped, wobbling the 8.3 gate 2-5e-6 across identical runs; explicit `resourceBarrier`
+  per hand-off restored bit-exact 9.68e-7) and the reservoir buffer created unzeroed (the
+  first temporal frame read garbage history whose garbage M could pass validation).
+- **The `captureMemorySnapshot` budget moved to 120 s** — its tag-table copy grows with every
+  allocation prior tests made, and 30 s was still not enough at the end of a full suite.
