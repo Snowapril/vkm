@@ -4950,3 +4950,12 @@ Two data changes carry the tabs:
 model_viewer now calls `buildAccelerationStructures` after a successful scene build when the
 driver reports `RayTracing`, purely so the window has content in a stock sample; failure is
 logged and rendering continues rasterized.
+
+### PR #62 review follow-up: no pool pointers across the draw
+
+The inspector's rows kept the `VkmAccelerationStructure*` that `getResource()` returned for
+the whole draw. `VkmDeferredResourceReclaimer` releases resources on its own worker thread,
+so a scene reload with the window open could free a structure between the lookup and the
+tab that dereferenced it. Rows now copy the `VkmAccelerationStructureInfo` at lookup time
+and no resource pointer outlives the `getResource()` call. The copied info's `_debugName`
+still dangles and stays unread; the row's pool-tag name is the durable one.

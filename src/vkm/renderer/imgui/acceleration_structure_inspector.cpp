@@ -33,7 +33,10 @@ namespace vkm
         struct StructureRow
         {
             VkmResourceHandle handle = VKM_INVALID_RESOURCE_HANDLE;
-            const VkmAccelerationStructure* structure = nullptr;
+            // Copied rather than pointed to: the deferred reclaimer's worker thread can release
+            // the structure mid-draw, so no resource pointer survives past the lookup. The
+            // copy's _debugName still dangles and must not be read; `name` is the durable one.
+            VkmAccelerationStructureInfo info;
             std::string name;
             uint64_t allocatedBytes = 0;
         };
@@ -53,7 +56,7 @@ namespace vkm
                 }
                 StructureRow row;
                 row.handle = handle;
-                row.structure = structure;
+                row.info = structure->getAccelerationStructureInfo();
                 // The durable copy of the name -- the info's _debugName is a borrowed
                 // const char* whose owner may be long gone.
                 const std::optional<VkmResourceMemoryTag> tag = pool->getResourceMemoryTag(handle);
@@ -70,8 +73,8 @@ namespace vkm
             }
             // Top-level structures first: they are what the tabs expand from.
             std::stable_sort(rows.begin(), rows.end(), [](const StructureRow& a, const StructureRow& b) {
-                return a.structure->getType() == VkmAccelerationStructureType::TopLevel &&
-                       b.structure->getType() != VkmAccelerationStructureType::TopLevel;
+                return a.info._type == VkmAccelerationStructureType::TopLevel &&
+                       b.info._type != VkmAccelerationStructureType::TopLevel;
             });
             return rows;
         }
@@ -178,7 +181,7 @@ namespace vkm
         size_t topLevelCount = 0;
         for (const StructureRow& row : rows)
         {
-            topLevelCount += row.structure->getType() == VkmAccelerationStructureType::TopLevel ? 1 : 0;
+            topLevelCount += row.info._type == VkmAccelerationStructureType::TopLevel ? 1 : 0;
         }
         ImGui::Text("%zu structure(s), %zu top-level", rows.size(), topLevelCount);
 
@@ -199,7 +202,7 @@ namespace vkm
 
             for (const StructureRow& row : rows)
             {
-                const VkmAccelerationStructureInfo& info = row.structure->getAccelerationStructureInfo();
+                const VkmAccelerationStructureInfo& info = row.info;
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::PushID(static_cast<int>(row.handle.id));
@@ -233,7 +236,7 @@ namespace vkm
             return;
         }
 
-        const VkmAccelerationStructureInfo& info = selected->structure->getAccelerationStructureInfo();
+        const VkmAccelerationStructureInfo& info = selected->info;
         if (info._type == VkmAccelerationStructureType::TopLevel)
         {
             ImGui::Text("%s -- %zu instance(s)", selected->name.c_str(), info._instances.size());
@@ -377,12 +380,12 @@ namespace vkm
         };
         for (const StructureRow& row : rows)
         {
-            if (row.structure->getType() != VkmAccelerationStructureType::TopLevel)
+            if (row.info._type != VkmAccelerationStructureType::TopLevel)
             {
                 continue;
             }
             for (const VkmAccelerationStructureInstance& instance :
-                 row.structure->getAccelerationStructureInfo()._instances)
+                 row.info._instances)
             {
                 appendBottom(instance._blas);
                 const auto matches = [&](const Edge& edge) {
@@ -401,7 +404,7 @@ namespace vkm
         }
         for (const StructureRow& row : rows)
         {
-            if (row.structure->getType() == VkmAccelerationStructureType::BottomLevel)
+            if (row.info._type == VkmAccelerationStructureType::BottomLevel)
             {
                 appendBottom(row.handle);
             }
@@ -415,7 +418,7 @@ namespace vkm
         float topCursor = kGraphMargin;
         for (const StructureRow& row : rows)
         {
-            if (row.structure->getType() == VkmAccelerationStructureType::TopLevel)
+            if (row.info._type == VkmAccelerationStructureType::TopLevel)
             {
                 positionOf[row.handle] = ImVec2(kGraphMargin, topCursor);
                 topCursor += nodeHeight + kNodeGap;
@@ -484,8 +487,8 @@ namespace vkm
             {
                 continue;
             }
-            const bool topLevel = row.structure->getType() == VkmAccelerationStructureType::TopLevel;
-            const VkmAccelerationStructureInfo& info = row.structure->getAccelerationStructureInfo();
+            const bool topLevel = row.info._type == VkmAccelerationStructureType::TopLevel;
+            const VkmAccelerationStructureInfo& info = row.info;
             const ImVec2 min = _graphCanvas.toScreen(it->second);
             const ImVec2 max(min.x + kNodeWidth * scale, min.y + nodeHeight * scale);
 
@@ -556,12 +559,12 @@ namespace vkm
         VkmSceneAABB unionBounds;
         for (const StructureRow& row : rows)
         {
-            if (row.structure->getType() != VkmAccelerationStructureType::TopLevel)
+            if (row.info._type != VkmAccelerationStructureType::TopLevel)
             {
                 continue;
             }
             for (const VkmAccelerationStructureInstance& instance :
-                 row.structure->getAccelerationStructureInfo()._instances)
+                 row.info._instances)
             {
                 InstanceBox box;
                 box.tlas = row.handle;
@@ -569,10 +572,10 @@ namespace vkm
                 box.instanceId = instance._instanceId;
                 box.origin = glm::vec3(instance._transform[3]);
                 const StructureRow* blasRow = findRow(rows, instance._blas);
-                if (blasRow != nullptr && hasBounds(blasRow->structure->getAccelerationStructureInfo()))
+                if (blasRow != nullptr && hasBounds(blasRow->info))
                 {
                     const VkmAccelerationStructureInfo& blasInfo =
-                        blasRow->structure->getAccelerationStructureInfo();
+                        blasRow->info;
                     box.world = VkmSceneAABB{ blasInfo._boundsMin, blasInfo._boundsMax, true }
                                     .transformed(instance._transform);
                     unionBounds.expand(box.world);

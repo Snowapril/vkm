@@ -152,3 +152,4 @@
 - `captureMemorySnapshot aggregates the CPU tracker and the GPU pool into one sample` takes 9.3 s alone on Vulkan against a 10 s budget, so it fails or trips the hang watchdog in full-suite context.
 - Metal orders passes by queue stage rather than by producer, so two passes at the same stage wait on each other even when their declared dependencies do not overlap; a per-producer `MTLFence` would need the producer's identity carried in `VkmResourceBarrier` and a scope boundary for a subgraph that closes several encoders.
 - The ReSTIR lighting pass has no final visibility ray: fragment-stage ray query is unexercised through the SPIRV-Cross MSL path, so the pass's flag word is plumbed but unused and a reused sample occluded by a dynamic object would leak until it ages out.
+- The reservoir-packing MSE gate in TestIndirectPassShared.hpp (3.0e-6 / 6.0e-5) trips intermittently on Metal: identical code measured 1.35e-6, 6.51e-6 and 1.85e-6 across three runs.
