@@ -28,6 +28,7 @@ namespace vkm
     class VkmCommandQueueBase;
     class VkmCommandDispatcher;
     class VkmRenderResourcePool;
+    class VkmAliasedMemoryHeap;
     class VkmPipelineStateBase;
     class VkmDeferredResourceReclaimer;
     class VkmGpuCrashHandler;
@@ -359,6 +360,38 @@ namespace vkm
         */
         virtual VkmGpuMemoryStats getGpuMemoryStats() const { return VkmGpuMemoryStats{}; }
 
+        /*
+        * @brief Whether this backend can place two textures over the same bytes -- i.e. whether
+        * VkmResourceCreateInfo::Aliasable can be honored at all.
+        * @details Vulkan (one VkDeviceMemory block bound at offsets) and Metal (one
+        * MTLHeapTypePlacement heap) override this to true. WebGPU cannot: it exposes no
+        * placement API, and its DontCare load op maps to WGPULoadOp_Load, so a first-use pass
+        * would read whatever the other alias left behind. The default keeps the flag a portable
+        * request that is warned about and cleared where it cannot be served.
+        */
+        virtual bool supportsResourceAliasing() const { return false; }
+
+        /*
+        * @brief Create/destroy one block of aliasing-heap memory. Called only by
+        * VkmAliasedMemoryHeap, which owns the packing but no device memory.
+        * @details `memoryTypeBits` is Vulkan's VkMemoryRequirements::memoryTypeBits, restricting
+        * which memory type the block may come from; Metal passes ~0u since it has no equivalent.
+        * Blocks are append-only and are destroyed only at driver teardown -- nothing reclaims one
+        * while a placement still points into it.
+        */
+        virtual bool onCreateAliasBlock(uint32_t blockIndex, uint64_t sizeBytes, uint32_t memoryTypeBits)
+        {
+            (void)blockIndex; (void)sizeBytes; (void)memoryTypeBits;
+            return false;
+        }
+        virtual void onDestroyAliasBlock(uint32_t blockIndex) { (void)blockIndex; }
+
+        /*
+        * @brief The packer that decides which Aliasable textures share bytes. Null on a backend
+        * that cannot alias, so callers must check.
+        */
+        inline VkmAliasedMemoryHeap* getAliasedMemoryHeap() const { return _aliasedMemoryHeap.get(); }
+
 #if defined(VKM_GPU_CAPTURE)
         /*
         * @brief Frame-boundary hooks called by VkmEngine::loopInner() on the render thread,
@@ -509,6 +542,9 @@ namespace vkm
 
     private:
         std::unique_ptr<VkmRenderResourcePool> _renderResourcePool;
+        // Created in initialize() only when supportsResourceAliasing(); stays null elsewhere so
+        // the flag's sanitizer and compile()'s lifetime pass both short-circuit.
+        std::unique_ptr<VkmAliasedMemoryHeap> _aliasedMemoryHeap;
         std::unique_ptr<VkmDeferredResourceReclaimer> _deferredReclaimer;
         std::unique_ptr<VkmGpuCrashHandler> _gpuCrashHandler;
         std::unique_ptr<VkmGpuProfiler> _gpuProfiler;

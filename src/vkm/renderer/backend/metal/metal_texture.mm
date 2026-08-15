@@ -140,6 +140,11 @@ namespace vkm
             const bool isCube = (info._type == VkmTextureType::Cube);
             VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
             _isHostWritable = shouldUseHostWritableTexture(driverMetal, info);
+            // Always granted: the backend already refuses to initialize below MTLGPUFamilyApple9,
+            // where memoryless is unconditional. Cannot collide with Shared storage either --
+            // VkmDriverBase::newTexture strips Transient from anything carrying AllowTransferDst,
+            // which shouldUseHostWritableTexture requires.
+            _isTransient = (info._flags & VkmResourceCreateInfo::Transient) != 0;
 
             MTLTextureDescriptor* descriptor = [[MTLTextureDescriptor alloc] init];
             descriptor.textureType = isCube ? MTLTextureTypeCube
@@ -153,13 +158,51 @@ namespace vkm
             descriptor.arrayLength = isCube ? 1 : info._numArrayLayers;
             descriptor.usage = getMTLTextureUsage(info._flags);
             // Shared is what makes replaceRegion: legal; on a Private texture it is invalid.
-            descriptor.storageMode = _isHostWritable ? MTLStorageModeShared : MTLStorageModePrivate;
+            descriptor.storageMode = _isTransient ? MTLStorageModeMemoryless
+                                                  : (_isHostWritable ? MTLStorageModeShared : MTLStorageModePrivate);
+
+            /*
+            * An aliasable texture stops here with a descriptor but no texture object: how many
+            * bytes at what alignment it needs is knowable now, but who else shares those bytes
+            * is not until VkmRenderGraph::compile() has seen the whole frame. Unlike Vulkan
+            * there is no separate bind step -- finalizeAliasPlacement() is what finally calls
+            * newTextureWithDescriptor:offset: against the chosen block.
+            */
+            _isAliasable = (info._flags & VkmResourceCreateInfo::Aliasable) != 0;
+            if (_isAliasable)
+            {
+                id<MTLDevice> aliasDevice = driverMetal->getMTLDevice();
+                const MTLSizeAndAlign sizeAndAlign = [aliasDevice heapTextureSizeAndAlignWithDescriptor:descriptor];
+                _memoryAlignment = (uint32_t)sizeAndAlign.align;
+                // Counted once as a heap block, like a transient texture's zero.
+                _allocatedSize = 0;
+                // Retained until finalizeAliasPlacement() consumes it; the non-aliased paths
+                // below release theirs as soon as the texture exists.
+                _aliasDescriptor = descriptor;
+
+                VkmAliasedMemoryHeap* heap = driverMetal->getAliasedMemoryHeap();
+                // Metal has no memory-type restriction, so every block is compatible.
+                return heap != nullptr && heap->registerResource(handle, (uint64_t)sizeAndAlign.size,
+                                                                 (uint64_t)sizeAndAlign.align, ~0u);
+            }
 
             id<MTLDevice> device = driverMetal->getMTLDevice();
-            // Also the "can this be heap-placed at all" test: Metal reports a zero footprint
-            // for a descriptor it cannot place, and overwriting _memoryAlignment with that 0
-            // would break the non-zero-alignment invariant the memory tags report.
-            MTLSizeAndAlign sizeAndAlign = [device heapTextureSizeAndAlignWithDescriptor:descriptor];
+            /*
+            * Also the "can this be heap-placed at all" test: Metal reports a zero footprint for a
+            * descriptor it cannot place, and overwriting _memoryAlignment with that 0 would break
+            * the non-zero-alignment invariant the memory tags report.
+            *
+            * A memoryless texture is excluded before that query rather than by it, because the
+            * query does not exclude it: it answers a non-zero footprint for a memoryless
+            * descriptor even though no heap will take one. There is no memoryless heap to place
+            * it in (newHeapWithDescriptor: -- "Requested storage mode is not allowed for Heaps")
+            * and the Private heap the engine does have rejects it ("The requested storage mode
+            * does not match the heap's mode"); both are hard validation assertions. Committing it
+            * costs nothing either way -- a memoryless texture's allocatedSize is already 0, so
+            * there is no memory a heap could save.
+            */
+            MTLSizeAndAlign sizeAndAlign = _isTransient ? MTLSizeAndAlign{0, 0}
+                                                        : [device heapTextureSizeAndAlignWithDescriptor:descriptor];
             const bool isHeapPlaceable = (sizeAndAlign.size > 0 && sizeAndAlign.align > 0);
             if (isHeapPlaceable)
             {
@@ -182,7 +225,9 @@ namespace vkm
                 VKM_DEBUG_ERROR("Failed to create MTLTexture");
                 return false;
             }
-            _allocatedSize = [_mtlTexture allocatedSize];
+            // A memoryless texture has no IOAccelResource at any point in its lifetime, so this
+            // is the size it occupies -- stated rather than queried, matching the Vulkan path.
+            _allocatedSize = _isTransient ? 0 : [_mtlTexture allocatedSize];
         }
 
         return true;
@@ -227,6 +272,32 @@ namespace vkm
     // deliberately does not -- CAMetalLayer.residencySet already covers its drawables, and
     // registering them individually would retain every drawable the layer ever vends, since a
     // residency set retains its members and only the last drawable is ever released back.
+    bool VkmTextureMetal::finalizeAliasPlacement(const VkmAliasPlacement& placement)
+    {
+        if (_aliasDescriptor == nil)
+        {
+            VKM_DEBUG_ERROR("finalizeAliasPlacement was called on a texture with no pending descriptor");
+            return false;
+        }
+
+        VkmDriverMetal* driverMetal = static_cast<VkmDriverMetal*>(_driver);
+        // Object and placement in one call: newTextureWithDescriptor:offset: is what makes this
+        // texture share bytes with whatever else overlaps [offset, offset + size).
+        _mtlTexture = driverMetal->createTextureInAliasBlock(placement._blockIndex, _aliasDescriptor,
+                                                             placement._offset);
+        [_aliasDescriptor release];
+        _aliasDescriptor = nil;
+
+        if (_mtlTexture == nil)
+        {
+            VKM_DEBUG_ERROR("Failed to place an aliased MTLTexture into its heap block");
+            return false;
+        }
+
+        _isAliasPlaced = true;
+        return true;
+    }
+
     bool VkmTextureMetal::overrideExternalHandle(void* externalHandle)
     {
         _mtlTexture = static_cast<id<MTLTexture>>(externalHandle);

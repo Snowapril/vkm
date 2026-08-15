@@ -153,10 +153,32 @@ namespace vkm
         void barrierRelease(const VkmResourceBarrier* barriers, uint32_t count);
 
         /*
-        * @brief Rebuilds an acceleration structure in place, from the descriptions it was created
-        * with and whatever updateInstances last wrote.
-        * @details The entry point dynamic objects need. A structure created without `_allowUpdate`
-        * is built once, synchronously, at creation; an updatable one keeps its scratch buffer and
+        * @brief Takes ownership of an aliased texture's bytes for this frame: discards whatever
+        * the previous alias left in them, and orders this use after every read of that alias.
+        *
+        * @details Emitted by VkmRenderGraph::execute() before the first subgraph that declared
+        * the texture -- never called by application code, because forgetting it is undefined
+        * pixels rather than a compile error. Must be recorded outside a render pass, so it sits
+        * before the pass that writes.
+        *
+        * Discard and barrier are one call deliberately: doing only the barrier leaves the
+        * previous alias's contents readable, and doing only the discard lets the GPU run this
+        * frame's writes against the previous alias's still-in-flight reads. The barrier reaches
+        * back across command buffers, which is what makes a single heap safe while three frames
+        * are in flight -- everything submits to one queue (see VkmResourceCreateInfo::Aliasable).
+        *
+        * Vulkan transitions the image from UNDEFINED, which *is* the discard. Metal has no
+        * layouts and defers to the next encoder's opening barrier. WebGPU never aliases.
+        */
+        void acquireAliasedTexture(VkmResourceHandle texture);
+
+        /*
+        * @brief Rebuilds `accelerationStructure` in place, from the descriptions it was created
+        * with and whatever `updateInstances` last wrote.
+        *
+        * @details This is the entry point dynamic objects need. A structure created without
+        * `_allowUpdate` is built once, synchronously, when it is created -- fine for geometry that
+        * never moves, useless for anything that does. An updatable one keeps its scratch buffer and
         * can be rebuilt from a render graph pass every frame.
         * Rebuild, not refit: a top-level structure over N instances is cheap to rebuild outright
         * and stays optimal, whereas a refit degrades traversal quality as instances drift. Refit
@@ -283,6 +305,12 @@ namespace vkm
         */
         inline VkmPipelineStateBase* getBoundPipelineState() const { return _boundPipelineState; }
 
+        /*
+        * Rewrites _currentFrameBufferDesc's load/store actions so no transient attachment is
+        * loaded or stored, before any backend translates them. See the definition for why.
+        */
+        void coerceTransientAttachmentActions();
+
         virtual void onBeginRenderPass(const VkmFrameBufferDescriptor& frameBufferDesc) = 0;
         virtual void onEndRenderPass() = 0;
         virtual void onSetViewportAndScissor(int32_t x, int32_t y, uint32_t width, uint32_t height) = 0;
@@ -319,6 +347,9 @@ namespace vkm
             (void)count;
         }
         virtual void onBuildAccelerationStructure(VkmResourceHandle accelerationStructure) = 0;
+        // Not pure: WebGPU never aliases, so it has nothing to implement and this default is the
+        // matching no-op.
+        virtual void onAcquireAliasedTexture(VkmResourceHandle texture) { (void)texture; }
         virtual void onBindResourceTable(VkmResourceTableBase* table) = 0;
         virtual void onSetPushConstants(const void* data, uint32_t size, uint32_t offset) = 0;
         virtual void onSetDebugName(const char* name) = 0;

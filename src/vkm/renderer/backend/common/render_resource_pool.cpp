@@ -226,6 +226,18 @@ namespace vkm
     VkmResourceHandle VkmRenderResourcePool::allocateResourceLocked(VkmResourceType type, VkmResourcePoolType poolType)
     {
         // Caller must already hold _mutex.
+        if (poolType == VkmResourcePoolType::Transient && type == VkmResourceType::Texture)
+        {
+            // Latched, never cleared: it only ever arms beginRenderPass's guard, and a renderer
+            // that uses transient attachments at all uses them every frame.
+            _hasTransientTextures.store(true, std::memory_order_relaxed);
+        }
+        if (poolType == VkmResourcePoolType::Aliased && type == VkmResourceType::Texture)
+        {
+            // Same one-way latch, arming VkmRenderGraph::compile()'s lifetime pass.
+            _hasAliasableTextures.store(true, std::memory_order_relaxed);
+        }
+
         VkmDriverResourceSubPool& subPool = _subPools[(uint8_t)poolType];
         std::vector<VkmResourceHandle::IdType>& freeIds = subPool._freeIds[(uint8_t)type];
 

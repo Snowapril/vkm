@@ -212,6 +212,37 @@ namespace vkm
         }
     }
 
+    void VkmCommandEncoderMetal::flushAliasAcquireIfPending()
+    {
+        if (!_pendingAliasAcquire)
+        {
+            return;
+        }
+        _pendingAliasAcquire = false;
+
+        MTLStages encodable = 0;
+        id<MTL4CommandEncoder> encoder =
+            resolveEncoder(_mtlRenderCommandEncoder, _mtlComputeCommandEncoder, &encodable);
+        if (encoder == nil)
+        {
+            return;
+        }
+        /*
+        * The queue form, not the encoder one: what has to be ordered against is every read of
+        * the previous alias, which was encoded in earlier encoders and earlier frames -- nothing
+        * in this encoder, which has encoded nothing yet. barrierAfterEncoderStages: would also
+        * reject the mask outright, its afterStages accepting only the stages that can *produce*
+        * within this encoder.
+        *
+        * MTL4VisibilityOptionResourceAlias is the point: it flushes the caches that make two
+        * virtual addresses over the same bytes coherent. The ordinary barrier path never asks
+        * for it, because nothing but aliasing needs it.
+        */
+        [encoder barrierAfterQueueStages:MTLStageAll
+                            beforeStages:encodable
+                       visibilityOptions:(MTL4VisibilityOptionDevice | MTL4VisibilityOptionResourceAlias)];
+    }
+
     bool VkmCommandEncoderMetal::publishThroughFence(id<MTLFence> fence, uint64_t afterEncoderStages)
     {
         MTLStages encodable = 0;
@@ -359,6 +390,7 @@ namespace vkm
                      fences.end());
         _commandEncoder.waitForProducers(fences, waitStages != 0 ? waitStages
                                                                  : (MTLStageVertex | MTLStageFragment));
+        _commandEncoder.flushAliasAcquireIfPending();
     }
 
     void VkmCommandBufferMetal::onEndRenderPass()
@@ -684,6 +716,7 @@ namespace vkm
                                     }),
                      fences.end());
         _commandEncoder.waitForProducers(fences, stages != 0 ? stages : waitBeforeStages);
+        _commandEncoder.flushAliasAcquireIfPending();
     }
 
     void VkmCommandBufferMetal::closeEncoder(uint64_t publishAfterStages)
@@ -721,6 +754,22 @@ namespace vkm
         }
         _subGraphFences.emplace(subGraphId, fence);
         return fence;
+    }
+
+    void VkmCommandBufferMetal::onAcquireAliasedTexture(VkmResourceHandle texture)
+    {
+        (void)texture;
+        /*
+        * Records nothing here on purpose. Metal has no image layouts, so there is no discard to
+        * issue -- but the aliasing hazard is real, and a barrier needs an encoder to ride:
+        * opening one just for this is what caused the MTL4CommandQueueErrorTimeout in
+        * common/AGENTS.md, and a barrier in a subgraph that binds no pipeline records nothing.
+        *
+        * So the next encoder this command buffer opens carries it. What the ordinary barrier
+        * path lacks is MTL4VisibilityOptionResourceAlias, which flushes the caches that make two
+        * virtual addresses over the same bytes coherent, and this latch is what adds it.
+        */
+        _commandEncoder.markAliasAcquirePending();
     }
 
     id<MTLFence> VkmCommandBufferMetal::fenceForEncoderBoundary()

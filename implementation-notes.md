@@ -940,6 +940,991 @@ Log entries here when an edge case forces a deviation from an agreed plan. Forma
   placement API at all. A shared body would have been an empty shell on two of three backends,
   and a Vulkan "placement" assertion would have been a test that passes either way.
 
+ a plan is being carried out;
+see `CLAUDE.md` §11 for the policy.
+
+## 2026-07-17 — Render graph visualization (capture + in-app inspector)
+
+- `VkmRenderSubGraph` gained a string name (optional trailing param on `begin*SubGraph`),
+  `getDependentSubGraphIds()`, and `VkmRenderGraphicsSubGraph::getFrameBufferDescriptor()`.
+- `VkmCommandBufferBase` records a per-recording `_boundPipelineHistory`; the capture takes
+  per-subgraph deltas of it to attribute pipelines to passes.
+- New `copyTexture`/`copyTextureToBuffer` on the command buffer (Metal: MTL4 compute-encoder
+  texture-copy selectors; Vulkan/WebGPU: error-logging stubs), gated by the new
+  `VkmDriverCapabilityFlags::TextureContentCapture` (Metal only).
+- `VkmDriverBase::readbackTexture()` implements the API spec'd in TestBackbufferReadback.mm
+  (staging + one-off submit + wait + map), and that test's reference-PNG comparison was
+  restored per its embedded instructions.
+- New `VkmRenderGraphCapture` (common/render_graph_capture.{h,cpp}): Idle/Armed/Pending/Ready
+  state machine; hooked into `VkmRenderGraph::execute()` via
+  `VkmRenderGraphCommitOptions::capture`. Snapshots color attachments post-commit (skipping
+  AllowPresent backbuffers -- framebufferOnly stays YES per user decision) and reads back up
+  to 64 KiB of each referenced buffer.
+- Engine: F10 (ImGui IO) arms a capture, `--capture-render-graph` arms at startup; the
+  capture frame takes one deliberate `ensureCompleted()` hitch before `finalize()`. Snapshot
+  handles are re-referenced on the ImGui overlay subgraph each frame while Ready so the
+  deferred reclaimer waits for in-flight ImGui draws on release.
+- New `VkmRenderGraphInspector` ImGui window (pass list, pipelines, dependencies,
+  inputs/outputs tables, `ImGui::Image` snapshot previews via new
+  `VkmImGuiRendererBase::getTextureID()` -- Metal override only -- and a hex viewer for
+  captured buffers).
+- Triangle sample: names its pass and declares its vertex/index buffers via
+  `addReferencedResource()` (first real producer of that API).
+- New `tests/TestRenderGraphCapture.mm` covers metadata, snapshot pixel contents, and buffer
+  readback headlessly.
+
+### 2026-07-17 — Metal fixes surfaced by the first real GPU readback
+- Planned: `copyTexture`/`copyTextureToBuffer` were expected to work with plain MTL4
+  compute-encoder copy calls, and `readbackTexture` to reuse the existing waitIdle path.
+- Did instead: (1) added explicit consumer/producer barriers
+  (`barrierAfterQueueStages:beforeStages:` / `barrierAfterStages:beforeQueueStages:`,
+  `MTL4VisibilityOptionDevice`) around all three Metal copy ops -- Metal4 does no automatic
+  hazard tracking, so the copy encoder read attachment data before the render pass's writes
+  completed (readback returned all zeros). The crash-handler completion-marker writes were
+  deliberately left barrier-free (they exist to observe partial execution).
+  (2) Fixed `VkmGpuEventTimelineMetal::waitIdle` to wait on `_lastAllocatedTimeline` instead
+  of `_lastCompletedCachedTimeline` -- the cached value is stale (usually 0), so every wait
+  returned immediately without waiting for in-flight work; Vulkan's implementation already
+  waits on the last allocated value, so this aligns Metal with the intended semantics.
+- Why: both were pre-existing latent gaps that only became observable now that readback
+  verifies GPU results on the CPU; conservative fixes limited to the copy ops and the one
+  timeline wait, leaving all other recording paths untouched.
+
+## 2026-07-20 — Xcode GPU capture (MTLCaptureManager, Metal 4)
+
+- `--enable-gpu-capture` now creates a frame-aligned `MTLCaptureScope` ("vkm frame") on the
+  Graphics MTL4 queue and installs it as `MTLCaptureManager.defaultCaptureScope`; new
+  cross-backend `VkmDriverBase::onFrameBegin()/onFrameEnd()` hooks (called from
+  `VkmEngine::loopInner()`, no-ops off-Metal) begin/end the scope each frame.
+- One-shot `.gputrace` export via `requestGpuFrameCapture()` — F9 hotkey or the new
+  `--gpu-capture-frame` flag (implies `--enable-gpu-capture`) — written to the working
+  directory. `MTL_CAPTURE_ENABLED=1` is auto-set before Metal device creation by peeking
+  at raw process args in `platform/apple/application.mm`.
+- Verified end-to-end: triangle `--gpu-capture-frame` wrote a valid 8.4 MB `.gputrace`
+  bundle, validation-clean; smoke test added to `TestRenderGraphCapture.mm`.
+
+## 2026-07-21 — Multiple windows (per-window swapchain) + ImGui on a secondary window
+
+- `VkmEngine` no longer holds a single `_mainSwapChain`; it owns a
+  `std::vector<VkmWindowContext>`, one per window. Each `VkmWindowContext` carries its
+  swapchain, native handle, back-buffer format, an `_isImGuiWindow` flag, and its own
+  `FRAME_COUNT` render graphs (the per-frame render graphs moved off the engine into the
+  context). `addSwapChain(windowInfo, isImGuiWindow=false)` now returns a window index and
+  de-singletonizes (the `_mainSwapChain == nullptr` assert is gone); `getSwapChain(index)` /
+  `getWindowCount()` added, `getMainSwapChain()` kept as a window-0 shim.
+- `VkmEngine::render()` iterates windows: each window independently throttles+resets its
+  own frame-slot graph, acquires its own back buffer, records, then does one
+  `execute()`/submit carrying only its own `presentSwapChain`, then presents. This keeps the
+  backend invariant "exactly one presentSwapChain per submit per frame" intact with N windows
+  (one submit per window, not per frame). `prepareRender()` folded into that loop and removed.
+- ImGui is bound to exactly one window (`isImGuiWindow=true`). Its overlay subgraph now
+  targets that window's back buffer. A dedicated ImGui window clears its attachment (nothing
+  else draws to it); the single-window degrade case (WASM) loads instead, so the sole window
+  shows the app scene with the ImGui overlay on top.
+- `AppDelegate::render` gained a leading `uint32_t windowIndex`; the engine calls it once per
+  non-ImGui window (and, in single-window mode, for the sole window). Both samples updated.
+- Platform apps create a second window: GLFW platforms (linux/windows/apple-vulkan) open a
+  960x640 "ImGui" GLFW window and `addSwapChain(..., true)`; the loop polls both via a single
+  `glfwPollEvents()` and vetoes closing the ImGui window (main-window close quits). Apple/Metal
+  opens a second `NSWindow` + `CAMetalLayer` (RGBA16Float) driven by the existing single
+  `CAMetalDisplayLink` — its callback pulls `[secondaryLayer nextDrawable]` each frame so both
+  swapchains stay on one cadence (no second display link, which would desync the frame ring).
+  WASM stays single-window (a browser tab can't host a second OS window) and marks that window
+  the ImGui window.
+- `VkmSwapChainVulkan::createSwapChain` now asserts
+  `vkGetPhysicalDeviceSurfaceSupportKHR(graphicsFamily, surface)` — with two surfaces the
+  hard-coded Graphics[0] present queue is verified per surface instead of assumed.
+
+## 2026-07-24 — Build time reduction
+
+Four independent causes of the long build, in order of impact:
+
+- **The vendored dxc build ran single-threaded on the critical path.** The nested
+  `ExternalProject_Add(dxc_build ...)` is a separate CMake invocation, so the outer
+  `cmake --build --parallel N` never reached it, and with the pinned `Unix Makefiles`
+  generator that meant `make -j1` over a full LLVM/Clang fork (~4700 translation units).
+  It is not optional work: `UnitTests` → `tests_triangle_shaders` → `vkm-compiler` →
+  `dxc_build`. Fixed by passing `--parallel ${VKM_DXC_BUILD_JOBS}` (from
+  `ProcessorCount`).
+- **That build was also repeated per build tree.** Its output lived in
+  `${CMAKE_BINARY_DIR}/dxc-build`, so `build/metal`, `build/vulkan`,
+  `build/host-tools`, every git worktree and every `run_clean` paid it again. Moved to
+  `dependencies/dxc-macos-build` (shared, out of tree) and the whole ExternalProject is
+  now skipped when `VKM_DXC_EXECUTABLE` already exists. That variable is a cache entry,
+  so `-DVKM_DXC_EXECUTABLE=<path>` also lets an externally supplied dxc (e.g. the one in
+  the Vulkan SDK) replace the source build outright. `run_clean.py --dxc` wipes it.
+- **glslang and meshoptimizer were built but unreferenced.** Nothing under `src/`,
+  `include/` or `tests/` names `glslang`, `ShaderLang`, `GlslangToSpv`, `TShader`,
+  `TProgram`, `EShLang` or `meshopt` — shader compilation goes HLSL → SPIR-V through dxc
+  and SPIR-V → MSL through spirv-cross, never through glslang. Together they were ~100
+  translation units, and `vkmcore` linked an 83 MB `libglslang.a` (Debug) plus a
+  2280-byte, i.e. empty, `libSPIRV.a` for no symbols. Both `add_subdirectory` calls and
+  the `vkmcore` link line are gone; the sources stay in `bootstrap.json` so re-enabling
+  is a CMake-only change. `vkmcore`'s `spirv-cross-core` link was dead for the same
+  reason (`spirv_cross` appears only in `vkm-compiler`) and was dropped too, along with
+  the unused spirv-cross C++/reflection/util writers.
+- **No compiler cache, and the slowest available generator.** The root CMakeLists now
+  enables ccache via `CMAKE_<LANG>_COMPILER_LAUNCHER` when it is installed, and
+  `run_tests.py`/`run_sample.py` select the Ninja generator when `ninja` is present, not
+  on Windows, and the build directory is fresh. Both are pure auto-detection: with
+  neither tool installed the build behaves exactly as before. The generator condition
+  matters for more than speed — compiler launchers are ignored by the Xcode generator,
+  so Ninja is what makes the ccache detection actually take effect.
+
+`.github/workflows/macos.yml` caches the dxc binary (keyed on the `dxc-macos-src`
+revision), the bootstrapped dependency sources, and the ccache store. The cached dxc
+entry covers `bin/` *and* `lib/libdxcompiler.dylib` — `bin/dxc` is a symlink to
+`dxc-3.7`, which loads the dylib through an `@executable_path/../lib` rpath and cannot
+run without it.
+
+Measured on an 11-core macOS host, Release, metal backend, Makefiles generator, no
+ccache (`cmake --build --target UnitTests --parallel 11`):
+
+| Scenario | Wall clock |
+| --- | --- |
+| Cold tree, dxc built from source | 4m27s (267s wall / 1667s CPU) |
+| Any later tree, dxc reused | 40s configure + build + run tests |
+| `--target triangle` after that | 4.8s incl. shader-cache regeneration |
+
+The 267s figure is the *whole* cold build; dxc is ~230s of it at a 6.2x parallel
+speedup. The equivalent single-threaded time is not measured here, but it is bounded
+below by dxc's own CPU time (~1520s ≈ 25min), which is what the old `-j1` nested build
+spent serially. Cold builds of a second and third backend tree drop from that same ~25
+minutes to roughly the 40s row, since dxc is no longer rebuilt per tree.
+
+Verified after the change: 84/84 doctest cases (16919 assertions) pass on the metal
+backend with Metal API Validation enabled and no validation diagnostics; the triangle
+sample builds its `.vfcache` shaders through the dxc → spirv-cross → metallib chain and
+renders without validation errors. The one `ld: warning: ignoring duplicate libraries:
+libspirv-cross-core.a` on the vkm-compiler link predates this work — the generated link
+line names it twice both before and after — and is left alone.
+
+## 2026-07-24 — glTF 2.0 scene import (Phase 1: geometry) + model_viewer sample
+
+- Chose glTF 2.0 (`.gltf`/`.glb`) as the engine's only runtime import format; OBJ/FBX/USD
+  stay offline conversion sources. Parser is **cgltf** v1.15 (`dependencies/bootstrap.json`),
+  a single-header C library with no exceptions — emscripten builds compile without
+  `-fexceptions`. Its implementation lives alone in `renderer/scene/cgltf_impl.cpp` so
+  third-party warnings don't collide with `-Werror`.
+- New `renderer/scene/` module: `scene_model.{h,cpp}` (CPU-side `VkmSceneVertex` /
+  `VkmSceneMesh` / `VkmSceneMaterial` / `VkmSceneNode` / `VkmSceneModel` with draw-list
+  flattening and AABBs), `gltf_importer.{h,cpp}` (cgltf → the fixed 64-byte vertex layout,
+  meshoptimizer vertex-cache/fetch optimization, exception-free error reporting), and
+  `scene_model_gpu.{h,cpp}` (per-mesh vertex/index buffers registered into the bindless set,
+  exactly as the triangle sample does by hand). `meshoptimizer` was already vendored but had
+  never been linked into `vkmcore`; it is now.
+- New `src/samples/model_viewer/`: orbit camera, depth buffer sized to the swapchain
+  (recreated through the deferred reclaimer on resize), per-draw push constants carrying
+  MVP + bindless slots + base color + object-space light direction, and per-pixel Lambert
+  shading of the material's `baseColorFactor`.
+- New `scripts/download_scenes.py` fetches sample scenes (DamagedHelmet, Sponza) from
+  KhronosGroup/glTF-Sample-Assets into `resources/Scenes/`, which is now gitignored — assets
+  are fetched like dependencies, not committed.
+- Tests: `TestGltfImporter.cpp` (fixtures `resources/tests/gltf_triangle.gltf` embedded-base64
+  and `.glb`) covers meshes/materials/hierarchy/draw-list/bounds, normal generation, and
+  graceful failure on missing/truncated files; `TestSceneModelRender{,Metal}.{cpp,mm}` +
+  `TestSceneModelRenderShared.hpp` render an imported mesh offscreen through the
+  model_viewer PSO with a depth attachment and assert the material color reached the pixels.
+
+## 2026-07-25 — Scene rework: vertex layouts, geometry pools, GPU-driven groundwork
+
+- **Vertex layouts.** `VkmSceneVertex` (fixed 64 B) is gone. `renderer/scene/vertex_layout.{h,cpp}`
+  describes a layout as attributes + stride and provides three presets — `PositionOnly` (16 B),
+  `StandardPBR` (64 B, byte-identical to the old struct so the shader ABI is unchanged) and
+  `Compact` (32 B, snorm8x4 normal/tangent + f16x2 uv). `vkmRead/WriteVertexAttribute` is the only
+  place a storage format is decoded, and packing uses meshoptimizer's own `quantizeHalf` /
+  `quantizeSnorm` rather than hand-rolled bit twiddling. `VkmSceneMesh` now holds interleaved bytes
+  plus its layout; the glTF importer packs into whichever preset `VkmGltfImportOptions` names and
+  skips normal generation for a layout that has nowhere to put one.
+- **Geometry pools.** New `VkmSceneGeometryPool`: one mega vertex + index buffer per layout preset,
+  so a scene costs two bindless slots per layout instead of two per primitive. Both are published
+  as untyped u32 word arrays, which is what lets one pool hold any stride.
+- **Scene layer.** New `VkmScene` replaces `VkmSceneModelGpu`: it aggregates imported models as
+  placed objects (honouring the node hierarchy, which the old per-mesh path bypassed), sorts them
+  by (pipeline, layout, material) into draw batches, and publishes `VkmObjectData` /
+  `VkmFrameData` through three new fixed bindless singleton bindings. The device-side ObjectData
+  buffer is a single buffer so an object index is frame-invariant; the per-frame ring lives on the
+  staging side instead.
+- **Draw path.** `model_viewer.hlsl` pushes no constants at all: `SV_InstanceID` is the object
+  index (passed as `firstInstance`), and everything else hangs off ObjectData/FrameData. One
+  permutation per layout preset comes from the PSO JSON `options`. Shading moved to world space,
+  which is what makes `_normalTransform` load-bearing.
+- **WebGPU bug fixed.** `VERTEX_ELEMENT_STRIDE = 32` was mis-addressing every scene mesh past the
+  first (scene vertices were 64 B). Both mega-buffers are now `array<u32>` with word offsets in the
+  slot table, which also brings WebGPU in line with Vulkan/Metal's opaque byte-range treatment.
+- **Compute enablement.** Compute-only PSOs can now be authored in JSON (the parser required a
+  vertex stage while option expansion rejected vertex+compute, so no compute PSO was reachable);
+  `dispatch()`, `drawIndirectCount()` and `barrierIndirectArgumentBuffer()` exist on all three
+  backends; push constants work in a compute pass; Metal opens/closes the compute pass on pipeline
+  bind/unbind and binds the bindless argument table there; WebGPU binds bind group 0 for compute
+  and routes push constants to the compute encoder. `VkmRenderComputeSubGraph` and
+  `VkmRenderTransferSubGraph` finally have callbacks, so they can record anything at all.
+- **GPU-driven draws.** `VkmScene::recordCull()` records two dispatches into one compute pass:
+  `resources/Shaders/scene_cull.hlsl` (shared by every backend) frustum-tests each object's
+  world-space bounding sphere and compacts the survivors into a per-batch index list with
+  `InterlockedAdd`; `scene_emit_draws.hlsl` turns that into `VkmDrawIndirectArguments`, zeroing the
+  slots past the visible count. `recordDrawBatches()` then issues one `drawIndirectCount()` per
+  batch instead of one draw per object. Closing and reopening the compute pass between the two
+  dispatches is what orders the emit's reads after the cull's writes. A new `VisibleList` bindless
+  singleton carries the handoff, and the batch bounds travel as compute push constants.
+- These are the first real engine PSOs, which surfaced two pieces of latent build wiring: a
+  dependency cycle (`vkmcore` -> `vkm_engine_shaders` -> `vkm-compiler` -> `vkmcore`, fixed by
+  having the executables that load the cache depend on it rather than the library) and the fact
+  that engine PSO json and engine HLSL live in different directories, which needed a `SHADER_ROOT`
+  option on `vkm_add_shader_cache_target`. Under Emscripten `vkmcore`'s `RESOURCES_DIR` now points
+  at `/resources/` and each wasm executable preloads the engine PSO and shader-cache directories.
+- Testing culling needed care: the frustum planes come from the same view-projection the rasterizer
+  clips against, so anything culling rejects would have been clipped anyway and the rendered pixels
+  cannot tell the two apart. The test reads the visible count back instead and asserts 1 -> 0 -> 1
+  as the object leaves the frustum and returns. That immediately found a real bug -- thread 0 of the
+  emit pass returned early when nothing was visible, leaving the argument buffer's count word
+  holding the previous frame's value.
+- Still to come (see TODO.md): the Metal-only emit variant that fills an
+  `MTLIndirectCommandBuffer` from MSL, and WebGPU render-bundle caching.
+
+## 2026-07-24 — CPU/GPU memory statistics + ImGui Memory Inspector
+
+- The engine tracked memory but never showed it, and the two "actual" numbers were missing
+  entirely. Added `getProcessMemoryStats()` to `platform/common/process_stats.h` (one
+  implementation per OS, next to the existing CPU-usage ones) and
+  `VkmDriverBase::getGpuMemoryStats()` with Metal (`currentAllocatedSize`,
+  `recommendedMaxWorkingSetSize`, `MTLHeap.usedSize`/`currentAllocatedSize`) and Vulkan
+  (`vmaGetHeapBudgets` over device-local heaps, `vmaCalculateStatistics`' block-vs-allocation
+  split) overrides. WebGPU keeps the base default of "nothing to report".
+- New `renderer/memory_report.{h,cpp}` joins those with `MemoryTracker` and
+  `VkmRenderResourcePool` into one `VkmMemorySnapshot`, plus `logMemoryReport()` and
+  `formatByteSize()`. Deliberately ImGui-free so the shutdown dump and the unit tests share
+  the capture path with the UI.
+- New `renderer/imgui/memory_inspector.{h,cpp}` (F8) shows process/CPU/GPU tracked-vs-actual
+  sections, a top-32 table of CPU tags and a per-category GPU table; `VkmEngine` samples it at
+  2 Hz (the tracker's global mutex is on every allocation's path), the debug overlay reads the
+  same cached sample, and `VkmEngine::destroy()` logs a full report before teardown.
+- `vkmResourceTypeName()` moved into `renderer_common` because the report needed the same
+  mapping the render graph inspector had privately; the inspector now uses the shared one.
+## 2026-07-24 — macOS Metal app registers as a foreground UI app
+
+- The samples are plain executables, not `.app` bundles, and the Metal path drives
+  `NSApplication` directly, so macOS registered the process as `type="BackgroundOnly"`
+  (verified with `lsappinfo`): no Dock tile, no menu bar, no Cmd-Tab entry. The Vulkan path
+  gets this for free from GLFW (`dependencies/src/glfw/src/cocoa_init.m:638`).
+- `VkmApplication::entryPoint` now sets `NSApplicationActivationPolicyRegular` and installs a
+  minimal app menu (Hide / Hide Others / Show All / Quit) before `NSApplicationMain`;
+  `applicationDidFinishLaunching` calls `[NSApp activate]` so the window is key on launch.
+- Side effect: as a foreground app the `CAMetalDisplayLink` is no longer throttled (5 s run
+  went from ~940 to ~2670 log lines), which made the pre-existing shutdown race fire on every
+  exit — teardown never stopped the render thread, so it logged into spdlog after its statics
+  were gone (`[*** LOG ERROR #0001 ***] ... mutex lock failed`). Fixed below.
+
+## 2026-07-24 — macOS Metal shutdown path stops the render thread
+
+- The render thread was detached and ran `-[NSRunLoop run]`, which has no exit; nothing ever
+  invalidated the `CAMetalDisplayLink`. Since `-terminate:` exits the process directly (main()
+  never regains control on Metal, so `VkmApplication::destroy` never ran), the display-link
+  callback kept driving the engine and the logger through static destruction.
+- `RendererCoordinatorController` is now stoppable: the worker publishes its `CFRunLoopRef`
+  (handshake via a `dispatch_semaphore_t` so `-stop` cannot race thread startup) and runs
+  `CFRunLoopRun()`; the thread is `PTHREAD_CREATE_JOINABLE`. New `-stop` invalidates the display
+  link, calls `CFRunLoopStop`, and `pthread_join`s, so an in-flight callback is waited out.
+- `applicationWillTerminate:` now calls `-stop`, releases the coordinator (the file is non-ARC;
+  the previous `= nil` leaked it and the display link) and calls `_engine->destroy()`, matching
+  what the Vulkan path does in `VkmApplication::destroy`.
+- Verified with `MTL_DEBUG_LAYER=1` on all three quit paths (`--auto-close`, ESC, Quit menu
+  item, window close): no hang, no `mutex lock failed`, no validation errors.
+
+## 2026-07-25 — Backend divergence moved out of user shaders into a common HLSL header
+
+- `triangle.hlsl` and `model_viewer.hlsl` each carried two byte-identical
+  `#if defined(VKM_BACKEND_WEBGPU)` blocks (resource declarations + the vertex/index fetch),
+  leaking the bindless binding numbers, the WebGPU push-constant emulation and the slot-table
+  layout into every sample. New `include/vkm/shaders/vkm_bindless.hlsli` is now the single
+  place that branches on the backend; samples use `VKM_PUSH_CONSTANTS`,
+  `VKM_BINDLESS_VERTEX_PULLING`, `VKM_LOAD_INDEX`, `VKM_LOAD_VERTEX` and contain no
+  `VKM_BACKEND_*` test at all.
+- Macros rather than HLSL 2021 templates: the WebGPU mega-buffer and the Vulkan/Metal
+  descriptor array are both `StructuredBuffer<VertexType>` declarations, and only a macro can
+  emit a *declaration* parameterized by the sample's vertex struct.
+- dxc was being invoked with no `-I` at all, so a shared header was previously impossible.
+  `vkm-compiler` gained `--include-dir`; `ShaderCompile.cmake` passes
+  `include/vkm/shaders` and globs its `*.hlsli` into every shader command's `DEPENDS`.
+  That glob is load-bearing — dxc emits no depfile here, so without it editing the header
+  would silently not rebuild any `.vfcache`.
+- Verified as a no-op at the ABI level rather than by inspection: MSL regenerated for both
+  samples diffs against the pre-change baseline only as resource renames plus a moved
+  `type_PushConstant_PushConstants` declaration (source order) — `[[id(4096)]]`,
+  `[[id(8192)]]`, `[[buffer(2)]]`, `[[buffer(3)]]` unchanged, fragment stages byte-identical.
+  For WebGPU (no local runtime, `VKM_COMPILER_ENABLE_WGSL=OFF`), old vs new SPIR-V
+  disassembly is identical once `OpName`s are dropped and ids normalized. All 12
+  backend × shader × stage dxc combinations compile. Metal suite 97/97 passed, and touching
+  the header regenerates all 6 caches.
+## 2026-07-25 — macOS leak tooling + per-frame command buffer / Metal object leaks
+
+- New `scripts/detect_leaks.py`: runs a sample under `MallocStackLogging=1` and snapshots it
+  with `leaks`/`heap` on an interval, reporting unreferenced leaks separately from
+  still-referenced heap growth. Each snapshot saves a `.memgraph`, and the last is compared to
+  the first with `leaks --diffFrom=` so only leaks that appeared while running are listed.
+  Driven by the `detect-leak` skill. `MTL_DEBUG_LAYER` is deliberately left off — the debug
+  layer retains command buffers and descriptors of its own and skews both numbers.
+- It found ~4700 leaks per 30 s in `model_viewer` (metal), one set per frame:
+  - `VkmCommandEncoderMetal::beginRenderPass` never released its `MTL4RenderPassDescriptor`
+    and `VkmCommandQueueMetal::submit` never released its `MTL4CommitOptions` (these sources
+    are non-ARC).
+  - `VkmCommandBufferPoolBase::release()` had no callers at all, so `allocate()` constructed a
+    new command buffer instance — and with it a new `MTL4CommandBuffer` — every frame, even
+    though the base class already resets per-use state for reuse. `VkmRenderGraph::execute()`
+    and the `uploadToBuffer`/`readbackTexture` one-off submits now return theirs to the pool.
+  - `VkmCommandBufferMetal` now owns the +1 reference that
+    `getOrCreateRHICommandBuffer()` hands over: it releases the previous use's command buffer
+    when the pool hands the slot out again (one frame later at the earliest) rather than
+    straight after commit.
+- After the fixes the sample's physical footprint is flat (213.2 MB -> 213.0 MB over 40 s,
+  was +14.2 MB per 30 s) and 2 new leaks (416 B) appear over a minute, none from vkm code.
+- Not fixed, logged in `TODO.md`: Vulkan's `getOrCreateRHICommandBuffer()` has the same shape
+  of leak (`vkAllocateCommandBuffers` per acquire, never freed); WebGPU already releases its
+  encoder in `submit()`.
+## 2026-07-25 — Cubemap loading + skybox sample (first textured render path)
+
+- vkm had never sampled a texture: no image decoder, no upload path, no `registerTexture`, no
+  sampler bound anywhere. A cubemap is the first consumer of all four, so most of this change
+  is general texture infrastructure and only the last part is skybox-specific.
+- `VkmTextureType {Auto, Cube}` on `VkmTextureInfo`/`VkmTextureViewInfo`. `Auto` reproduces the
+  old `_numArrayLayers > 1` inference exactly, so no existing call site changes behavior. Cube
+  sets `VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT` + `VK_IMAGE_VIEW_TYPE_CUBE` on Vulkan, and
+  `MTLTextureTypeCube` with `arrayLength = 1` on Metal — Metal counts `arrayLength` in whole
+  cubes, so passing 6 there would create a 6-cube array. `initializeTextureCommon` asserts the
+  6-layers/square invariant once, centrally, rather than letting the two backends diverge.
+- `copyBufferToTexture` / `uploadToTexture` mirror `copyTextureToBuffer` / `uploadToBuffer`.
+  `copyTextureToBuffer` and `readbackTexture` gained an `arrayLayer` parameter at the same
+  time — without it a test can only ever see face 0, and face-order is the most likely bug in
+  a cubemap.
+- **Latent bug fixed:** `transitionImageLayout` hardcoded `subresourceRange = {aspect,0,1,0,1}`.
+  Every texture in the engine had been single-mip single-layer, so this never mattered; on a
+  6-layer cube it left layers 1-5 in `UNDEFINED` while `VkmTextureVulkan::_currentLayout` (one
+  scalar for the whole image) claimed otherwise. Now `VK_REMAINING_*`, which is identical for
+  every pre-existing caller.
+- Bindless `registerTexture` takes the **texture**, not a view — the default view already has
+  the right dimensionality thanks to `_type`, so no extra view object is needed on either
+  backend. Set 0 gained one engine sampler at binding 3 (linear, clamp-to-edge), as a Vulkan
+  `pImmutableSamplers` binding and a Metal argument-buffer entry at id 12288.
+- `vkm_add_shader_cache_target` now depends on `bindless_resource_manager.h`: the generated MSL
+  bakes in the argument-buffer ids, so editing that header must invalidate every `.vfcache`.
+  The `vkm-compiler` target dependency already covered the normal path, but not
+  `VKM_HOST_VKM_COMPILER` (wasm), where the compiler is an opaque prebuilt file.
+- The skybox is a generated fullscreen triangle — no vertex/index buffers at all, which suits
+  an engine where nothing ever binds one. The view ray is built in the vertex stage and
+  interpolated, because the fragment stage cannot read push constants (vertex-only range).
+- Verified: `run_tests.py` passes on all three backends. Metal 102/102 with
+  `MTL_DEBUG_LAYER=1`, Vulkan 103/103 with `VK_LAYER_KHRONOS_validation` active, WebGPU PASS
+  (stubs still compile). Zero validation errors on either backend. The skybox sample was run
+  on Metal and visually confirmed: +Z blue centered, +X red on the left, -X cyan on the right,
+  matching the right-handed `lookAtRH` convention.
+
+## 2026-07-25 — Host-copy texture upload on unified-memory devices
+
+- `uploadToTexture` had one implementation: staging buffer, one-off command buffer, submit,
+  block. Correct for a discrete GPU; on unified memory it copies the pixels twice through
+  memory the CPU can already write and stalls the queue once per call.
+- Now two paths behind one entry point. Which one runs is the *destination texture's*
+  property, not the caller's: `VkmTexture::isHostWritable()` is set at creation from what the
+  backend actually allocated, and `VkmResourceUploadMode` (Auto/ForceStaging/ForceHostCopy)
+  only selects among what that made available. Two levels of gating --
+  `VkmDriverCapabilityFlags::TextureHostCopy` per device, `isHostWritable()` per texture.
+- Metal: `MTLStorageModeShared` + `replaceRegion:`, the same mechanism the ImGui font atlas
+  already used. Vulkan: `VK_EXT_host_image_copy`, because an OPTIMAL-tiled image cannot be
+  memcpy'd into -- host-visible memory alone buys nothing. On Vulkan the outcome is re-checked
+  after allocation with `vmaGetAllocationMemoryProperties`, since adding `HOST_TRANSFER` usage
+  can change the image's memory-type requirements: a request is not a guarantee.
+- Only plain upload destinations are eligible (`AllowTransferDst`, not an attachment or
+  presentable). Render targets stay device-local; they are GPU-written and would only lose
+  bandwidth.
+- The host path does no queue work at all, so it does not block -- which removes the six
+  per-cubemap stalls previously recorded in `TODO.md` on any device that supports it.
+- **Debugging note.** A null `vkCopyMemoryToImage` (see the deviation below) surfaced as a
+  *hang* with mimalloc "heap corruption" assertions, not a stack trace: backward-cpp's signal
+  handler allocates while formatting the trace, so the abort re-entered mimalloc and recursed
+  forever. The mimalloc output was entirely a red herring. Bisecting the feature in two steps
+  (extension enabled but unused, then images created but never written) localized it in two
+  runs where reading the assertion text would have misled indefinitely. Logged in `TODO.md`.
+- Verified: Metal 102/102 with `MTL_DEBUG_LAYER=1`, Vulkan 103/103 with
+  `VK_LAYER_KHRONOS_validation`, WebGPU PASS. Zero validation errors on either backend. The
+  cubemap test uploads all six faces through *both* paths and asserts identical readback, with
+  the second pass writing different colors so a silently-no-op host copy cannot pass. Both
+  skybox samples log "uploaded by direct host copy", confirming the fast path is the one
+  actually taken rather than a silent fallback.
+
+## 2026-07-25 — Per-thread CPU profiler + ImGui flame chart
+
+- Nothing CPU-side existed to profile with: `getProcessCpuUsagePercent()` gives one
+  process-wide number, `VkmGpuTimerVulkan` times whole frames on the GPU, and the
+  `CHROME_TRACING`/`TASKFLOW_PROFILER` CMake options at `CMakeLists.txt:204-205` are read by
+  no source file. New `base/cpu_profiler.{h,cpp}` adds `VKM_PROFILE_SCOPE` /
+  `VKM_PROFILE_SCOPE_DYNAMIC` / `VKM_PROFILE_SET_THREAD_NAME` and a `VkmCpuProfiler` immortal
+  singleton that collects nested per-thread zones into a 240-frame ring.
+- Zones are wall-clock `steady_clock` intervals, not per-thread CPU time: a flame chart is
+  read to find where a frame went, and time blocked on a fence or a mutex is exactly what
+  needs to be visible there.
+- Locking is split so the hot path takes nothing shared: a thread's open-zone stack is
+  touched only by that thread, while its closed-zone buffer and name sit behind a small
+  per-thread mutex the collector takes once per frame. `ThreadState` objects are never
+  destroyed, so a thread exiting mid-capture cannot invalidate a buffer `beginFrame()` is
+  about to drain. While not capturing, a scope costs one relaxed atomic load.
+- A frame's span is the union of its zones rather than the frame driver's own bracket:
+  `VkmDeferredResourceReclaimer` polls on a 4 ms cadence that does not align to frame
+  boundaries, and clipping to the driver's bracket would drop its work off the chart.
+- Zone names are stored by pointer, so `VKM_PROFILE_SCOPE_DYNAMIC` interns its argument --
+  `VkmRenderSubGraph::getName()` is rebuilt every frame by `VkmRenderGraph::reset()` while
+  the ring holds the pointer for up to 240 frames.
+- New `renderer/imgui/cpu_profiler_inspector.{h,cpp}` (F7, or `--gv_cpu_profile=1`) draws a
+  clickable frame-time history strip over a per-thread flame chart with a time ruler,
+  wheel-zoom about the cursor, drag-pan and hover tooltips. Capture follows the window's
+  visibility, and clicking a history bar pins that frame *and* stops capture -- otherwise the
+  ring would keep rolling and drop the frame the user asked to look at.
+- Instrumented the whole engine frame path (`loopInner`/`update`/`render`, per-window
+  acquire/compile/execute/present, each subgraph's `commit()`, `CommandQueue::submit`) plus
+  the reclaimer's release pass; thread names are set where each thread starts, so macOS shows
+  `RenderThread` and the other platforms `MainThread`.
+
+## 2026-07-25 — Camera into vkm + descriptor set 1 (per-frame constants)
+
+- New `VkmCamera` + `VkmOrbitCameraController` (`renderer/camera.{h,cpp}`), lifted from
+  `model_viewer`'s anonymous-namespace `OrbitCamera`. The controller **registers a listener** on
+  `VkmInputHandler` (`addListener`, previously used only by a test) instead of polling it, so it
+  needs no per-frame tick: listeners run from `beginFrame()`, which `loopInner()` calls before
+  `update()`/`render()`. It tracks left-drag state itself and derives cursor deltas from
+  consecutive `CursorMove` positions, dropping the tracked position on button-press because ImGui
+  may have owned the mouse in between and left it stale.
+- `frame()` takes center+radius rather than a `VkmSceneAABB`, keeping `renderer/camera.h` free of
+  a `renderer/scene/` dependency; the sample adapts in a 4-line helper.
+- Established the set convention in `common/frame_constants.h`: 0 bindless, 1 per-frame,
+  2 per-pass (reserved), 3 per-draw (reserved) — ascending update frequency. `VkmFrameConstants`
+  is 272 bytes (view, projection, viewProjection, inverseViewProjection, cameraPositionWorld).
+- Set 1 implemented on all three backends via `VkmFrameConstantManager*`, each owning a raw
+  native uniform buffer with `FRAME_COUNT` regions (Vulkan: host-visible + persistently mapped,
+  one descriptor set per slot; Metal: `StorageModeShared`, bound by GPU address at
+  `[[buffer(4)]]`; WebGPU: `Uniform|CopyDst` + `wgpuQueueWriteBuffer`, one bind group per slot).
+  `VkmEngine::render()` writes the slot after its `ensureCompleted()` and after acquire.
+- Metal: `add_discrete_descriptor_set(1)` in vkm-compiler is what keeps set 1 out of a second
+  Tier-2 argument buffer. Verified in the emitted MSL:
+  `constant type_ConstantBuffer_VkmFrameConstants& g_VkmFrame [[buffer(4)]]`, struct layout
+  matching the C++ one field for field. `maxBufferBindCount` bumped 4 -> 5.
+- `model_viewer` push constants now carry the model matrix, not the MVP; the shader composes
+  `viewProjection * model`. `TestSceneModelRenderShared.hpp` splits its placement transform
+  across set 1 (translate) and the push constants (scale) so neither path is an identity that
+  could mask a broken binding — that existing Metal offscreen test is now the GPU-level proof
+  that set 1 reaches the shader.
+- Verification: Metal 105/105 tests (17065 assertions), Vulkan 106/106 (678), both with
+  validation on and zero validation output; `model_viewer` and `triangle` run on both. WebGPU is
+  compile-verified (vkmcore + sample under emsdk) plus SPIR-V-verified
+  (`OpDecorate %g_VkmFrame DescriptorSet 1 / Binding 0`); emitting WGSL needs a tint build no
+  local or CI configuration provides (logged in `TODO.md`).
+
+## 2026-07-25 — Per-test time budgets in UnitTests
+
+- `UnitTests.cpp` now gives every registered test case a default budget
+  (`kDefaultTestTimeoutSeconds = 10`) by walking `doctest::detail::getRegisteredTests()` and
+  setting `m_timeout` where it is still 0, so doctest's own "exceeded time limit" failure
+  applies to all ~107 tests without decorating each one. A test that needs longer declares
+  `TEST_CASE("..." * doctest::timeout(seconds))`, which the pass leaves alone. The registry is a
+  `std::set` whose ordering is line/name/file/template-id only, so the in-place mutation cannot
+  break its invariant.
+- doctest's check is post-hoc, so it cannot help with a test that never returns -- exactly the
+  failure that had left 79 cases unrun. A `TestHangWatchdog` listener therefore tracks the
+  running test's deadline on its own thread and kills the process at
+  `max(budget * 3, budget + 5s)`, printing the test name and file:line. The two mechanisms don't
+  race: an overrun that returns is a normal failure and the run continues; only a stuck test
+  reaches the watchdog.
+- Budget chosen from measurement, not guesswork: with `--duration=true` the slowest test is
+  0.087 s on Metal (`Backbuffer readback - solid red`) and 0.333 s on Vulkan (`Vulkan clip space`),
+  so 10 s is ~30x the observed worst case.
+- `main()` now forwards `argc`/`argv` to `applyCommandLine`. It previously took no arguments, so
+  `--test-case=` and `--duration=` were silently ignored -- which is also what made it impossible
+  to re-run just the test the watchdog names.
+- New `tests/TestTimeBudget.cpp` guards the mechanism itself: one case asserts no test is left
+  unbudgeted, and one deliberately overruns a 0.05 s budget under `doctest::should_fail()` so the
+  enforcement is proven from inside a green suite.
+- Verified: Metal 107/107, Vulkan 108/108, wasm/WebGPU via headless Chrome all pass; a temporary
+  infinite-loop test was killed by the watchdog in 6 s with exit code 1 and correct attribution.
+
+## 2026-07-28 — Host-writable buffers, buffer map/unmap, and GPU virtual addresses
+
+- `uploadToBuffer` had gained a `VkmResourceUploadMode` parameter that nothing read, because there
+  was nothing it *could* read: `VkmBuffer` had no `isHostWritable()`, no `map()`, and every backend
+  allocated it GPU-only (VMA `AUTO` with no `HOST_ACCESS_*`; `MTLResourceStorageModePrivate`; no
+  WebGPU map usage bits). It now has the same two-path shape `uploadToTexture` has had.
+- **Host-writability is a caller opt-in for buffers, not backend policy.** New
+  `VkmMemoryAccessHint {DeviceLocal, HostWrite}` on `VkmBufferInfo`; the default leaves all nine
+  existing `uploadToBuffer` call sites and every engine buffer in exactly today's memory. Textures
+  infer it instead, and the asymmetry is deliberate: inferring it for buffers would have moved the
+  scene mega-buffers, the ObjectData buffer and the indirect-args buffer into host-visible memory
+  at once, which is a bandwidth decision only the caller can make.
+- `HostWrite` forces the committed path on both backends — Vulkan's shared pool block is
+  device-local and Metal's heap is `MTLStorageModePrivate`, so a host-writable buffer cannot be
+  suballocated from either. Combining it with `ForcePooled` warns rather than failing.
+- Vulkan reports `isHostWritable()` from `vmaGetAllocationMemoryProperties` after the fact, the
+  same "a request is not a guarantee" check `VkmTextureVulkan` already does. `unmap()` is where
+  `vmaFlushAllocation` happens: the mapping itself is permanent (`VMA_ALLOCATION_CREATE_MAPPED_BIT`),
+  so a separate `flush()` on `VkmBuffer` would have been API surface for nothing.
+- **`bufferDeviceAddress` turned out to need no enabling.** `VkmDriverVulkan` already requests every
+  feature `vkGetPhysicalDeviceFeatures2` reports and passes that chain straight to `vkCreateDevice`,
+  so the feature was on all along and unused. What was missing was
+  `VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT` and `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT`
+  on every buffer — including the pool block, or its sub-allocations could not report an address
+  either. A pooled buffer's address is the block's plus `getBufferOffset()`.
+- New `VkmDriverCapabilityFlags::BufferDeviceAddress` keeps that optional: a driver without the
+  feature adds neither the usage bit nor the allocator flag and reports 0, so nothing about its
+  initialization changes. Metal sets the flag unconditionally (`MTLBuffer.gpuAddress`), WebGPU never.
+- WebGPU gets no host-write path at all, and this is forced rather than deferred: a `WGPUBuffer`'s
+  usage flags fix its map mode for life and `MapWrite` only combines with `CopySrc`, so a buffer
+  anything else touches can never be CPU-write-mapped. It warns and stays device-local.
+- `VkmStagingBuffer` needed only `getGPUVirtualAddress()` — its `map()`/`unmap()` already existed
+  on all three backends and were left untouched.
+- New `tests/TestBufferHostWrite{,Metal}.{cpp,mm}` + shared header. The load-bearing assertion is
+  that `ForceStaging` and `ForceHostCopy` produce identical bytes while writing *different*
+  patterns, so a host write that silently did nothing fails instead of passing on the staging
+  pass's leftovers — the same trick that made the cubemap test meaningful. The GPU-address test
+  covers committed, pooled and host-writable buffers and asserts their addresses are distinct,
+  which is what would catch a pooled buffer reporting the block base instead of its own range.
+- Verified: Metal 147/147 (17932 assertions) with Metal API Validation on, Vulkan 148/148 with
+  `VK_LAYER_KHRONOS_validation`, WebGPU PASS. Zero validation output on either backend — which
+  matters more than usual here, since the new usage bit and allocator flag touch *every* Vulkan
+  buffer allocation. On this machine's MoltenVK, `bufferDeviceAddress` is supported and the tests
+  observed real, distinct addresses rather than the 0 fallback.
+
+## 2026-07-28 — WASD fly camera + per-window input focus
+
+- **New `VkmFlyCameraController`** next to the orbit one (`renderer/camera.{h,cpp}`): WASD moves
+  along the camera basis, Q/E along **world** up so rising stays vertical while pitched, Shift
+  boosts, left-drag looks (matching the orbit controller and the skybox `LookCamera`, which were
+  the only existing conventions). The orbit controller is untouched, so `model_viewer`'s turntable
+  feel is unchanged; a checkbox in its Scene Browser hands the shared camera between the two, with
+  `syncFromCamera()` on the way in so the switch is invisible.
+- It is the first controller with a `tick(deltaTime)`. Continuous movement cannot be event-driven:
+  held keys are polled from `VkmInputHandler::isKeyDown` rather than integrated from key events,
+  because auto-repeat rate is an OS setting and would otherwise decide how fast the camera flies.
+  The direction is normalized so diagonals are not faster than the axes.
+- Switching *back* to orbit reframes on the scene bounds. The orbit controller only touches the
+  camera when it receives an event, so without that the view would sit where the fly camera left it
+  and then jump on the first drag.
+- **The macOS multi-window mouse bug** was `VkmImGuiRendererMetal::newFrameInner` polling
+  `[NSApp keyWindow]` unconditionally. At startup that is the *scene* window, so the scene cursor
+  drove ImGui's virtual cursor in the ImGui window's `io.DisplaySize` space; wherever it crossed a
+  panel's rectangle `WantCaptureMouse` flipped true and `VkmWindowImpl::forwardCursorMoveEvent`
+  dropped the event — the camera stalled depending on where in the scene window the cursor was.
+  `[NSEvent pressedMouseButtons]` being system-global made a scene drag register as an ImGui click
+  on top of that.
+- Fixed by giving the engine real focus tracking rather than by patching the poll in place:
+  `VkmInputHandler::onWindowFocusChanged` / `getFocusedWindowIndex()`, fed by
+  `windowDidBecomeKey:`/`windowDidResignKey:` on macOS and a new `glfwSetWindowFocusCallback` on the
+  GLFW backends, with `VkmEngine::findWindowIndex()` mapping a native handle back to an index (the
+  first real use of `VkmWindowContext::_windowHandle`, stored since the multi-window work and never
+  read). `VkmImGuiRendererBase::newFrame(windowFocused)` carries the answer to the backend, and the
+  Metal poll is gated on it; when it is not focused ImGui is told the cursor is outside *and* all
+  three buttons are up.
+- Resolving the window is deliberately done against the `NSWindow`s the app created, not
+  `contentView.layer`: neither view is marked layer-hosting, so AppKit may substitute a layer there
+  and the comparison would silently never match.
+- **Latent bug the same mechanism fixes:** hold a key, click the other window, and the release goes
+  to whoever took focus — `_keyDown` stayed latched forever. Harmless while nothing read held keys;
+  it stops being harmless the moment WASD lands. Focus loss now clears held keys and buttons,
+  publishing them as release *edges* so a consumer watching the transition still sees one, and drops
+  the tracked cursor so the next move does not produce a delta spanning two windows. Both camera
+  controllers also end any drag in progress on focus loss.
+- A stale focus loss cannot clear a focus another window just took: macOS delivers the gain before
+  the previous window's loss, so only the window that still holds focus may clear it.
+- Verified: Metal 157/157 (17977 assertions) with Metal API Validation, Vulkan 158/158 with
+  `VK_LAYER_KHRONOS_validation`, WebGPU PASS, zero validation output; `model_viewer` and `triangle`
+  run validation-clean on Metal. The new headless cases cover the movement basis, dt proportionality
+  (two half-ticks == one full tick), boost, normalized diagonals, look-only-while-dragging, pitch
+  clamping, `syncFromCamera` round-trip, unregister, and the focus semantics including the
+  held-key release. **The two-window interaction itself is not machine-verifiable** — it needs a
+  human clicking between the windows — so that part rests on the code path plus the unit-level
+  focus tests.
+
+## 2026-07-28 — TODO.md sweep: eight small self-contained fixes
+
+Picked the slice of `TODO.md` that was small, self-contained, and verifiable on this machine.
+Two entries turned out to describe less than was actually wrong.
+
+- `VkmRenderResourcePool::_driver` was not merely unstored, it was **uninitialized** — the member
+  was declared, the constructor took the pointer, and nothing ever assigned it, so it held an
+  indeterminate value for the object's lifetime. Initialized it, added a `protected getDriver()`,
+  and dropped `VkmRenderResourcePoolMetal::_driverMetal` in favour of it. Deleting the parameter
+  instead was rejected: it would modify a public method in `common/` (the one absolute rule in
+  `AGENTS.md`), touch four call sites, and still leave the Metal duplicate.
+- `VkmCommandBufferBase::setDebugName()` gained its first caller. The render graph records every
+  subgraph into **one** command buffer, so per-subgraph naming is structurally unavailable; the
+  frame slot is what the `"<queueName>#<index>"` fallback actually lacks, and subgraph identity
+  is already carried by the debug group and the completion markers.
+- Metal's depth attachment now honours `VkmDepthStencilAttachmentDescriptor`. The converters were
+  already there and already applied to color twelve lines above. Also widened the guard to require
+  **both** the framebuffer and render-pass depth optionals — they are set independently, and
+  reading the descriptor on the strength of the handle alone is UB. Metal was the only backend
+  not checking both.
+- Metal residency: membership is now tracked explicitly instead of inferred from "does this handle
+  have an allocation". `onResourceInitialized` skips resources whose native object does not exist
+  yet (the swapchain backbuffer, whose drawable arrives later via `overrideExternalHandle`), but
+  `releaseResource` removed anything that had one by then. `registerExternalAllocation` /
+  `unregisterExternalAllocation` became idempotent as a side effect.
+- Metal raster state (fill/cull/winding) is applied at bind time. It is *encoder* state on Metal,
+  not part of `MTLRenderPipelineState`, and nothing ever set it — `setTriangleFillMode:`,
+  `setCullMode:` and `setFrontFacingWinding:` appeared nowhere in the tree. Second-order effect
+  worth knowing: a PSO omitting `rasterization_state` now gets the descriptor's default
+  `cullMode = Back` on Metal where it previously got `MTLCullModeNone`. Audited every PSO JSON;
+  only `model_viewer` declares back-face culling.
+- Vulkan now frees command buffers. Not eagerly the way Metal does — see the deviation below.
+- `CHROME_TRACING` went from dead to functional: `VkmCpuProfiler::exportChromeTrace()` writes
+  Chrome Trace Event Format built on the profiler's existing frame/zone model. `TASKFLOW_PROFILER`
+  was deleted rather than repaired; its stray comma made the variable literally
+  `TASKFLOW_PROFILER,` so its guard tested a never-defined name, and there is no taskflow code
+  anywhere to profile.
+- New `tests/TestRasterState{.cpp,Metal.mm,Shared.hpp}` renders the wireframe PSO variant offscreen
+  and asserts the triangle interior is empty. Proven as a real repro, not just a passing test:
+  with the fill mode forced back to `Fill` the interior pixel reads (94, 102, 60) and the test
+  fails. Runs on both Metal and Vulkan.
+- New `TestCpuProfiler` case asserts the exporter's microsecond units and containment nesting.
+- Verified: Metal, Vulkan **and** wasm/WebGPU all pass (147 cases on Metal). The Vulkan free path
+  was measured on the triangle sample at 22000 acquires with the pending list never exceeding 0
+  and no validation output. Also configured once with `-DCHROME_TRACING=OFF` to confirm the build
+  stays green with the export compiled out.
+- Deliberately untested, and why: no public API exposes the live `VkCommandBuffer` count and
+  `MTLResidencySet` has no membership query, so the Vulkan and Metal residency fixes are proven by
+  validation-layer silence plus a sample soak rather than by assertions. Adding accessors purely
+  for tests would be the speculative API `CLAUDE.md` §2 forbids.
+- Surfaced, not fixed (`CLAUDE.md` §3): `~VkmCommandBufferPoolBase` leaks every pooled
+  `VkmCommandBufferBase*`; `VkmRenderResource::initializeCommon` validates `_handle` *before*
+  assigning it, so its guard can never fire; the taskflow include paths in `CMakeLists.txt:265`
+  and `tests/CMakeLists.txt:116` are now fully orphaned.
+
+## 2026-07-30 — Per-subgraph GPU profiler + per-queue timeline viewer
+
+- The CPU side could answer "where did the frame go"; the GPU side could not. `VkmGpuTimerVulkan`
+  timed **whole frames**, on Vulkan only, and reached the debug overlay through a
+  `static_cast<VkmDriverVulkan*>` in `engine.cpp` — Metal and WebGPU showed "GPU: n/a". New
+  `renderer/backend/common/gpu_profiler.{h,cpp}` (`VkmGpuProfiler`) times each render graph
+  subgraph and groups zones by the command queue that ran them; `renderer/imgui/
+  gpu_profiler_inspector.{h,cpp}` (F6, or `--gv_gpu_profile=1`) draws them in milliseconds.
+  `vulkan_gpu_timer.{h,cpp}` is deleted and the overlay's stat is now backend-free.
+- Same collector/front-end split as the CPU profiler, and the same interaction model on purpose:
+  history strip, pin-a-frame, ruler drag-select, wheel-zoom about the cursor. `zoneColor()` and
+  `chooseGridStepMs()` moved out of the CPU inspector's anonymous namespace into
+  `imgui/profiler_chart_common.h` so a subgraph gets the **same** color in both charts — which is
+  what makes reading them side by side worth anything.
+- Recording is always on where the device supports timestamps; only the frame *history ring* is
+  gated on `isCapturing()`. That is what keeps the always-visible overlay stat alive with the
+  window closed, and it is the one place this deliberately differs from the CPU profiler.
+- Slots are a ring of fixed buckets, not a frame-indexed ring. `VkmGpuTimerVulkan` keyed its pool
+  by frame slot (`2 * FRAME_COUNT` queries), which `implementation-notes.md` already noted breaks
+  with multiple windows submitting per frame. Buckets are handed out and retired in submission
+  order, so `collect()` can stop at the first one the GPU has not finished, and it never blocks:
+  it resolves only submissions whose `VkmGpuEventTimelineObject` has already completed.
+- `beginSubmission()` takes an exact zone count and resets exactly `2 * zoneCount` slots. Reserving
+  more would be worse than wasteful on Vulkan: a slot that is reset but never written stays
+  permanently unavailable to `vkGetQueryPoolResults` (`VUID-vkGetQueryPoolResults-None-09401`).
+- Metal writes timestamps at **command-buffer** scope
+  (`[MTL4CommandBuffer writeTimestampIntoHeap:atIndex:]`), like `pushDebugGroup` already does, not
+  through the per-encoder `writeTimestampWithGranularity:` variants. That is what lets a zone wrap
+  a whole subgraph without splitting an encoder, and `VkmCommandEncoderMetal` is untouched. Ticks
+  are scaled by `1e9 / [MTLDevice queryTimestampFrequency]` rather than assumed to be nanoseconds.
+- WebGPU forced the shape of the seam. It has no encoder-level timestamp write at all — a
+  begin/end pair can only ride one pass descriptor's
+  `beginningOfPassWriteIndex`/`endOfPassWriteIndex`, which must be filled *before* the pass opens.
+  Hence `beginGpuZone(beginSlot, endSlot)` receives both slots up front on every backend, and
+  `endGpuZone()` returns a bool: a zone that enclosed no pass (a transfer subgraph, or the
+  submission-wide zone around the subgraphs) is never written there, and the profiler drops it
+  rather than report a span it never measured. Consequently `getLastFrameGpuTimeMs()` latches the
+  submission's whole *span* rather than specifically its depth-0 zone.
+- `vkmWriteGpuChromeTrace()` is a free function that `exportChromeTrace()` forwards its ring to,
+  so the format is testable from hand-built frames — the profiler cannot produce one without a
+  device. It uses pid 2 (the CPU export uses 1) so both JSONs load into one viewer without their
+  rows colliding. The two are still on different clocks and cannot be overlaid; logged in `TODO.md`.
+- Tests: `TestGpuProfiler.cpp` covers range aggregation and the trace format with no device;
+  `TestGpuProfilerCapture.mm` drives a real two-subgraph render graph through `VkmRenderGraph` only
+  (per `tests/CLAUDE.md`) and asserts a `MainGraphics` timeline whose depth-0 zone contains both
+  depth-1 subgraph zones with real elapsed time.
+
+## 2026-07-25 — Render graph capture: PSO hot reload, input previews, texture browser
+
+Three additions to the render graph capture tooling, all behind the (now toggleable, F5)
+`VkmRenderGraphInspector` window, which became a three-tab window: **Capture** / **Pipelines** /
+**Textures**. It used to render nothing at all unless a capture was `Ready`.
+
+### PSO hot reload
+- **In-place recreate is the whole design.** Every holder of a PSO outside
+  `VkmPipelineStateManager` keeps a raw non-owning `VkmPipelineStateBase*` — sample members, the
+  per-frame render-callback lambdas that capture it by value, and `VkmCommandBufferBase`'s bound-
+  pipeline history — with no invalidation hook anywhere. New
+  `VkmPipelineStateBase::reload(desc, shaderCacheDir, outError)` calls `destroyInner()` then
+  `createInner(newDesc)` on the *same object*, so no cached pointer ever changes. That makes the
+  whole class of "who still points at the old pipeline?" questions vacuous, and it is why the
+  alternative (swapping the `unique_ptr` in the manager's map) was rejected outright.
+- On failure it re-`destroyInner()`s and rebuilds the previous descriptor, so a bad edit leaves a
+  working pipeline rather than a destroyed one. Caveat, deliberately not engineered around: if the
+  shader compiled but the new render state did not, the rollback pairs the *new* shaders with the
+  *old* state. Still a valid pipeline, which is the contract.
+- Backend pipeline objects are destroyed synchronously (`vkDestroyPipeline`; PSOs never go through
+  the deferred reclaimer), so new `VkmDriverBase::waitIdle()` drains every command queue once per
+  reload batch. Reload runs from `VkmEngine::update()`, before `render()` records anything.
+- `VkmFormat::Swapchain` resolution moved out of `newPipelineState()` into
+  `VkmDriverBase::resolveSwapChainFormats()`, because `reload()` bypasses the former. Missing this
+  would have silently broken every reloaded PSO that uses the sentinel — which is every sample's.
+- **Reload is per json, not per variant**: `expandPipelineStateOptions` re-runs over the edited
+  file and the variant set itself can change. New `VkmPipelineStateSource` records jsonPath /
+  shaderCacheDir / origin / variantNames / watched files per loaded json.
+- Nothing is destroyed until recompile, parse and expand have all succeeded, so a broken edit is a
+  no-op rather than a half-applied reload.
+
+### Runtime shader recompilation
+- `vkm-compiler` is invoked as a subprocess with byte-identical arguments to the build-time
+  `ShaderCompile.cmake` invocation — including *omitting* `--shader-root`, which the tool defaults
+  to the PSO json's own directory. Producer and consumer therefore cannot drift.
+- `src/tools/vkm-compiler/subprocess.{h,cpp}` moved to `include/vkm/base/subprocess.h` +
+  `src/vkm/base/subprocess.cpp`; vkm-compiler already links vkmcore, so it just includes it now.
+  Gained an `__EMSCRIPTEN__` branch returning a failure result (no subprocesses on wasm).
+- `VKM_COMPILER_EXECUTABLE` is baked in from the **top-level** CMakeLists (the vkm-compiler target
+  is added *after* `src/vkm`, so `$<TARGET_FILE:>` is not resolvable there); the
+  `VKM_HOST_VKM_COMPILER` branch stays in `src/vkm/CMakeLists.txt`. When neither exists (installed
+  or Emscripten builds) `isShaderRecompilationAvailable()` is false, the checkbox is disabled, and
+  reload still re-applies json render state.
+- Staleness is a throttled 0.5 s poll of `last_write_time` over the json, its shader sources and
+  the shared `*.hlsli` — driven from `update()` next to the memory inspector's sampling, at the
+  same cadence. No watcher thread: it would have to synchronize with a path that calls
+  `waitIdle()` and destroys GPU objects.
+
+### Input-texture previews
+- The color-attachment snapshot body became `VkmRenderGraphCapture::takeTextureSnapshot()`, now
+  used by referenced *input* textures too. Net lines went down.
+- `snapshotTexture` moved from `VkmCapturedAttachment` into `VkmCapturedResourceInfo` so
+  attachments, inputs and (later) the browser share one preview path.
+- **No `AllowTransferSrc` requirement on the source.** A sampled input is typically
+  `AllowShaderRead|AllowTransferDst`; demanding the flag would have excluded exactly the textures
+  this feature exists for. Metal, the only backend that reaches this code, imposes no usage
+  restriction on a blit source, and the existing color-attachment path never checked it either.
+- Cube/array sources snapshot slice 0 (`copyTexture` is defined as mip 0 / layer 0). **Verified,
+  not assumed**: `TestRenderGraphCapture.mm` uploads six differently-colored faces and asserts the
+  snapshot holds face 0's color, with `MTL_DEBUG_LAYER=1` clean — a cube-to-2D blit is legal.
+- Depth/stencil stays metadata only. Note `vkmBytesPerTexel()` returns 4 for `D32_SFLOAT`, so the
+  gate is `hasDepth() || hasStencil()`, not a zero byte size — the first draft got this wrong and
+  the new depth test caught it.
+- Where no snapshot exists the inspector falls back to previewing the *live* texture, labelled as
+  such, so non-Metal backends and cube inputs still show something truthful.
+
+### Texture browser
+- New `VkmRenderResourcePool::getAllResourceHandles(type)`, the companion to `getAllMemoryTags()`
+  (which reports sizes but no handles). It iterates `_resources` rather than `_memoryTags`, so
+  untagged externally-owned resources are not silently dropped, and returns **handles, not
+  pointers**: a slot recycled between enumeration and use is rejected by the generation check
+  instead of dangling.
+- Names come from `VkmResourceMemoryTag::name` (a durable `std::string`), never from
+  `VkmTextureInfo::_debugName`, which is a borrowed `const char*`.
+- Two preview paths. A plain single-layer 2D texture is shown live and zero-copy via
+  `getTextureID()` — the Metal ImGui renderer binds whatever `ImTextureID` a widget emits, so
+  there is no per-texture setup. A cube/array texture goes through
+  `readbackTexture(handle, layer)` → `uploadToTexture` into one reusable preview texture, only on
+  selection/layer change or an explicit Refresh, because that readback blocks on a full queue
+  wait. The preview keeps the **source's** format, since `readbackTexture` returns native channel
+  order (an RGBA8 preview would swap channels for a BGRA source).
+- Textures the inspector emitted an `ImGui::Image()` for are referenced on the ImGui overlay
+  subgraph each frame, exactly as the capture's snapshots already were, so their GPU usage is
+  tracked while those draws are in flight.
+- `formatToString` was file-local in the inspector; it became `vkmFormatName()` in
+  `renderer_common.h` next to `vkmResourceTypeName()` rather than being duplicated.
+
+### Two additions beyond the literal request
+- **Snapshot byte budget** (`kMaxSnapshotBytes`, 256 MiB): now that inputs are snapshotted too, a
+  graph with several passes each referencing a few 4K textures would allocate hundreds of MB on one
+  F10 press. ~6 lines, mirroring the existing `kMaxCapturedBufferBytes`.
+- **Name filter** in the texture browser: with hundreds of live textures the list is unusable
+  without one, and it is also how a developer excludes the capture's own `GraphCapture.*` snapshots
+  (which are deliberately listed — hiding them would make a browser that claims "all textures" lie).
+
+### Verified
+`scripts/run_tests.py` PASS on all three backends. Metal 106/106 with `MTL_DEBUG_LAYER=1`, Vulkan
+109/109 with `VK_LAYER_KHRONOS_validation`, WebGPU PASS. Zero validation errors. The triangle and
+skybox samples run clean under `MTL_DEBUG_LAYER=1` with the new tabbed window. The recompile test
+really spawns `vkm-compiler` over the triangle sample's HLSL and asserts both the success path and
+that a syntax error fails the reload with the compiler's own output while the old pipeline keeps
+rendering. Reload/recompile tests were each confirmed to actually execute (not silently skip) by
+temporarily inverting an assertion and observing the failure.
+
+**Rebase note (2026-08-01).** Landing this after the descriptor-set-2 work surfaced one new
+interaction: `VkmPerPassResourceTableBase` allocates its descriptor set from a layout the pipeline
+owns and `destroyInner()` destroys, so a reload that changes a PSO's set-2 declaration leaves any
+table already built from it stale. The table's `_pipelineState` pointer itself stays valid (that is
+what in-place recreate buys), and only tests build tables today, so nothing holds one across a
+reload yet. Logged in `TODO.md` rather than fixed here: the fix is an invalidation/notification path
+from reload to tables, which is exactly the observer machinery this design set out to avoid, and
+there is no caller to justify it yet. The toggle also moved from F7 to **F5**, since F7 became the
+CPU profiler.
+
+**Not verified by a running app**: clicking Reload in the UI while a sample is on screen, and the
+cube face selector's visual output. Both need interactive input, which this environment has no way
+to drive; every layer beneath them is covered by the headless tests above.
+
+## 2026-08-01 — Probe GI 4.2c: per-frame probe budget and propagation latency
+
+Turns `restir.md` §8 item 4.2c into running code: the probe passes existed but nothing drove
+them, so every one of them was reachable only from `tests/`.
+
+- New `VkmProbeVolumeUpdater` (`renderer/probe_volume_updater.{h,cpp}`) appends the whole refresh
+  to a `VkmRenderGraph`: scene update -> cull -> capture (every budgeted probe's six faces in one
+  render pass, viewport per tile) -> `barrierTextureForShaderRead` -> irradiance blend -> distance
+  blend. Round-robin cursor, clamped per round so every probe is refreshed exactly once.
+- `VkmProbeVolume` lost its second atlas copy, `advanceFrame()` and `getPrev*Texture()`;
+  hysteresis is now `SrcAlpha`/`OneMinusSrcAlpha` blending against the atlas itself. It also now
+  releases through the deferred reclaimer rather than the pool directly, since a per-frame
+  consumer makes destroy-while-in-flight reachable.
+- `VkmProbeCaptureConstants`/`VkmProbeBlendConstants` became probe-independent (see the Deviations
+  entry below); the per-probe remainder is pushed as `VkmProbeCapturePushConstants` (16 B) and
+  `VkmProbeBlendPushConstants` (8 B), from the vertex stage, forwarded to the pixel stage as flat
+  interpolants because Vulkan declares the push-constant range for vertex/compute only.
+- `probe_blend.json` gained blend state and lost the previous-atlas binding.
+- New `tests/TestProbeVolumeUpdaterShared.hpp`: a driverless convergence-model test, a
+  round-robin schedule test (Metal + Vulkan), and a GPU propagation measurement (Metal).
+
+**The measurement, which is the deliverable:** the decay is geometric at `hysteresis` per refresh,
+one refresh per `ceil(probeCount / budget)` frames. Measured on a 4-probe volume and asserted
+against that model, then projected: the shipping defaults (2048 probes, budget 32, h = 0.97) need
+**4864 frames — ~81 s at 60 Hz — to shed 90%** of a light change. Recorded in `restir.md` §12 and
+`TODO.md`.
+
+**Verification.** Metal 193/193 with validation clean; Vulkan clean; Release built. Both new tests
+were checked to actually fail when sabotaged: `dst_color_blend_factor: zero` breaks the decay
+assertions (7 failures), and wrapping instead of clamping the round-robin breaks the coverage
+assertion (2 failures). The first sabotage run also exposed a weakness in the test itself —
+doctest's `Approx` folds a scale of 1.0 into its epsilon, so absolute comparisons against the
+small radiances an 8x8 probe records passed no matter what the atlas held; the checks are now
+ratios against the lit value.
+
+The wasm build also had to be fixed: `TEST_ENGINE_PIPELINE_DIR` is defined for the native backends
+only, so everything in the new shared header that loads a pipeline is now behind
+`#if defined(TEST_ENGINE_PIPELINE_DIR)`. The convergence-model test is arithmetic and stays outside
+it, so it runs on every backend.
+
+**Left unverified:** WebGPU cannot compile shaders at all (no Tint/Dawn build), so the rewritten
+`probe_capture.hlsl` and `probe_blend.hlsl` are unverified there — including the blend pass's new
+push constant, which on that backend is a set-0 uniform buffer rather than a real push constant,
+i.e. a genuinely different code path.
+
+## Deviations
+
+Log entries here when an edge case forces a deviation from an agreed plan. Format:
+
+```
+### <date> — <short title>
+- Planned: <what the plan said>
+- Did instead: <the conservative option taken>
+- Why: <the edge case that forced it>
+```
+
+### 2026-08-09 — Render graph viewer: fixed the G-buffer's dangling debug names
+
+- Planned: enhance the Graph tab only — averages, render-target rows, load/store, pan/zoom.
+- Did instead: also fixed `VkmGBuffer::createSet()`, which built each target's debug name in a
+  local `std::string` and stored `debugName.c_str()` in `VkmTextureInfo::_debugName`. That field
+  is a raw `const char*` the texture keeps, so every read of a G-buffer target's name was a
+  use-after-free. The names now live in `TextureSet`, whose lifetime matches the textures'.
+- Why: the new node rows read exactly those names, and rendered `??` / `0 (` / `?` instead of
+  `VkmGBufferNormal1` and friends. The same pattern still exists in `scene.cpp:728` (BLAS) and
+  `scene_geometry_pool.cpp:52` (geometry buffers); those names are not on the Graph tab's path
+  and were left alone.
+
+### 2026-08-09 — Trackpad scroll scaling was inverted on both macOS scroll paths
+
+- Planned: nothing; the canvas' wheel zoom was assumed to work on any pointing device.
+- Did instead: swapped the precise/non-precise branch in **both** the ImGui Metal renderer's
+  scroll handler and `application.mm`'s, added `NSEventMaskMagnify` so pinch arrives as a wheel
+  delta, and made the canvas' zoom proportional to the delta rather than a fixed step per event.
+- Why: both handlers scaled the *line-based* deltas rather than the precise ones, the opposite of
+  `imgui_impl_osx`. Measured, a mouse notch arrived as 0.1 and one trackpad event as 10.0.
+  The graph canvas hit its zoom limit on the first trackpad event; the orbit camera was worse in
+  both directions, `_zoomFactor` 0.9 giving 1% of zoom per mouse notch and reaching
+  `_minDistance` in three trackpad events. With the branch corrected both devices deliver one
+  scroll unit per notch or per 10 points of finger travel, which is what `_zoomFactor` reads as.
+- Note: the camera path was reverted once mid-task on a report that its zoom had weakened, then
+  restored after measuring -- the pre-existing behaviour it reverted to was the broken one.
+
+### 2026-08-09 — Subgraph averages are keyed by name, not by subgraph id
+
+- Planned: `VkmGpuProfiler::getSubGraphAverageMs(subGraphId)`.
+- Did instead: `VkmGpuSubGraphAverages`, keyed by the subgraph's name.
+- Why: `VkmRenderGraph` restarts `_currentSubGraphId` at 0 for every graph, so two windows
+  submitting in one frame reuse the same ids, and a graph that changes shape moves a pass onto
+  another id — either would silently average unrelated passes together. The name is stable and
+  is what `VkmCapturedPass` carries anyway. Passes sharing a name are averaged together, which
+  is the intended reading of "this pass costs x ms".
+
+### 2026-08-08 — Metal heap block selection tries one block, not every block
+
+- Planned: factor the shared "walk `_heapPools`, grow on exhaustion" loop out of
+  `allocateFromHeapPool` so the texture path could reuse it.
+- Did instead: `acquireHeapWithSpace()` returns the *first* block whose
+  `maxAvailableSizeWithAlignment:` reports room, and the caller allocates from that one block
+  only. The old buffer loop instead called `tryAllocateBuffer` on each block in turn, so it
+  would have moved on to the next block if an allocation unexpectedly failed.
+- Why: sharing the loop requires a fit predicate (`hasSpaceFor`) separate from the allocation,
+  and re-checking every block after a failed allocate would mean threading the allocation
+  itself back into the loop, which is what the refactor was removing. Apple documents
+  `maxAvailableSizeWithAlignment:` as the largest size that can be successfully allocated, so a
+  false positive is not expected; if one occurs the caller falls through to a committed
+  resource, which is correct and is the same fall-through the pool-exhausted path already took.
+
+### 2026-08-08 — No TestTexturePlacementShared.hpp, and no Vulkan texture placement assertion
+
+- Planned: `TestTexturePlacementShared.hpp` + a Vulkan and a Metal wrapper, per the usual
+  backend-agnostic test convention, with a Vulkan case asserting `Committed` vs `Heap`.
+- Did instead: `TestTexturePlacementMetal.mm` only, with a header comment saying why it is
+  Metal-only. The Vulkan buffer side is covered instead by a new assertion in
+  `TestEngineSetup.cpp` that two `Heap` buffers share one `VkBuffer` at distinct offsets.
+- Why: Metal is the only backend with an engine-owned texture heap. A Vulkan `Heap` texture is
+  placed by VMA's internal suballocator, which exposes nothing the engine can observe —
+  `getGpuMemoryStats()` cannot distinguish it from a dedicated image — and WebGPU has no
+  placement API at all. A shared body would have been an empty shell on two of three backends,
+  and a Vulkan "placement" assertion would have been a test that passes either way.
+
+### 2026-08-08 — Aliasing ships with no in-engine user, and not the one that was planned
+- Planned: convert the gi sample as the feature's first real user, aliasing `_directTarget` with
+  `_compositeTarget`.
+- Did instead: shipped the mechanism and its tests with nothing in the engine or samples flagged
+  `Aliasable`.
+- Why: those two cannot alias. `gi_composite.hlsl:26` declares `g_Direct` and `gi/main.cpp:730`
+  binds `_directTarget` to it, so `GiComposite` *reads* it while *writing* `_compositeTarget` --
+  their lifetimes touch. All three full-screen HDR targets meet at that pass, so no pair among
+  them works. The only viable pair left is `VkmGBuffer`'s two depth targets (never read outside
+  `VkmGBuffer`) against a full-screen target, which would mean flagging shared engine
+  infrastructure whose `AllowShaderRead` invites a future depth-based effect that aliasing would
+  silently break. Recorded in TODO.md, along with the finding that the history depth is dead
+  weight worth deleting rather than aliasing.
+
+### 2026-08-08 — The Metal alias barrier rides the encoder, so the latch lives there
+- Planned: `VkmCommandBufferMetal` holds a `_pendingAliasAcquire` flag that the next
+  `onBeginRenderPass` / `onBindPipeline` consumes.
+- Did instead: the flag lives on `VkmCommandEncoderMetal`, with
+  `markAliasAcquirePending()` / `consumeAliasAcquirePending()`.
+- Why: the render pass's opening `barrierAfterQueueStages:MTLStageAll` is emitted inside
+  `VkmCommandEncoderMetal::beginRenderPass`, not in the command buffer, so a flag on the command
+  buffer is not in scope where the barrier is built. Putting it on the encoder keeps the barrier
+  riding one that already exists -- opening an encoder per barrier is what caused the
+  `MTL4CommandQueueErrorTimeout` in common/AGENTS.md.
+
+### 2026-08-08 — `vkSetDebugUtilsObjectNameEXT` skips a texture with no image yet
+- Planned: no change to `VkmTextureVulkan::setDebugName`.
+- Did instead: it returns early when `_vkTexture` is `VK_NULL_HANDLE`.
+- Why: `newTexture()` names a texture immediately after `initialize()`, but an aliasable one has
+  no image until graph-compile time and an `ExternalHandleOwner` one never gets its handle from
+  `initialize()` at all. Naming `VK_NULL_HANDLE` is
+  `VUID-vkSetDebugUtilsObjectNameEXT-pNameInfo-02588`. The bug predates this change (any external
+  texture hit it) but was unreachable until a test created one, so fixing it here was cheaper than
+  leaving a validation error the new tests trip.
+
+### 2026-08-08 — The transient-texture Metal fixture tears its driver down
+- Planned: copy the Metal fixture from `TestBufferHostWriteMetal.mm`, which constructs a
+  `VkmDriverMetal` and lets the `unique_ptr` drop it without calling `destroy()`.
+- Did instead: `MetalTransientTextureFixture` gained a destructor that calls `driver->destroy()`
+  before resetting the pointer, matching `MetalGBufferRenderFixture` rather than the buffer one.
+- Why: the buffer test never records a render pass, so what it leaks is cheap. Two of the five
+  transient cases build a `VkmRenderGraph`, submit it and read a texture back, and five leaked
+  drivers' command queues and deferred reclaimers were enough to hang a *later* test — the whole
+  suite blew its 600 s watchdog while every transient case passed in isolation. Same failure shape
+  as the counter-heap entry above: leak something scarce and the symptom lands somewhere else.
 
 ### 2026-07-30 — VkmDriverMetal's destructor releases the timestamp counter heap
 - Planned: the timestamp pool is created in `initializeGpuTimestampPool()` and released in

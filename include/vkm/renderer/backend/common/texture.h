@@ -3,6 +3,7 @@
 #pragma once
 
 #include <vkm/base/common.h>
+#include <vkm/renderer/backend/common/aliased_memory_heap.h>
 #include <vkm/renderer/backend/common/render_resource.h>
 
 #include <vector>
@@ -34,6 +35,7 @@ namespace vkm
         inline bool isHostWritable() const { return _isHostWritable; }
 
         /*
+<<<<<<< HEAD
         * @brief Writes tightly-packed pixels straight into this texture's memory, with no staging
         * buffer and no queue submission. Only call this when isHostWritable().
         * @details The counterpart of VkmCommandBufferBase::copyBufferToTexture, with the same
@@ -43,6 +45,52 @@ namespace vkm
         * @param mipLevel Mip level to write.
         * @param arrayLayer Array layer to write.
         * @return False if the texture's memory cannot be written directly.
+=======
+        * @brief Whether this texture's contents live only in on-chip tile memory, with no
+        * device memory backing at all.
+        * @details Set by the backend at creation from what it actually allocated -- asking for
+        * a transient texture is a request, not a guarantee, so this reports the outcome rather
+        * than the intent. Metal: MTLStorageModeMemoryless, always granted. Vulkan: the
+        * allocation reports LAZILY_ALLOCATED, which a device offering no such memory type will
+        * not grant -- the image is then an ordinary device-local attachment. Always false on
+        * WebGPU, which has no equivalent.
+        *
+        * True means the texture must never be sampled, blitted or read back, and that every
+        * pass writing it must use VkmStoreAction::DontCare -- see
+        * VkmResourceCreateInfo::Transient.
+        */
+        inline bool isTransient() const { return _isTransient; }
+
+        /*
+        * @brief Whether this texture's memory is shared with other textures whose render-graph
+        * lifetimes do not overlap its own.
+        * @details Set by the backend at creation from what it can actually do -- asking for an
+        * aliased texture is a request, not a guarantee, so this reports the outcome rather than
+        * the intent. False on WebGPU, which has no aliasing at all.
+        *
+        * True means the texture's contents are undefined at the start of every frame and that
+        * every subgraph touching it must declare it -- see VkmResourceCreateInfo::Aliasable.
+        */
+        inline bool isAliasable() const { return _isAliasable; }
+
+        /*
+        * @brief Whether this texture's backing memory has been assigned yet.
+        * @details An aliasable texture is created without memory: its placement is chosen by the
+        * first VkmRenderGraph::compile() that declares it, and is final from then on. Until this
+        * returns true the texture has no usable native handle and must not be attached, bound
+        * into a VkmResourceTable, or registered bindless. Always true for a non-aliasable
+        * texture, which owns its memory from creation.
+        */
+        inline bool isAliasPlaced() const { return !_isAliasable || _isAliasPlaced; }
+
+        /*
+        * @brief Writes tightly-packed pixels straight into this texture's memory, with no
+        * staging buffer and no queue submission. Only called when isHostWritable() is true.
+        * @details The counterpart of VkmCommandBufferBase::copyBufferToTexture, and carries
+        * the same end-state contract: the texture is shader-readable once this returns.
+        * Not pure -- a backend that never reports isHostWritable() has nothing to implement,
+        * and this default is the matching "should be unreachable" guard.
+>>>>>>> e3e8755 (Add a Transient (tile-memory-only) resource pool type and create flag)
         */
         virtual bool writeRegion(const void* data, uint64_t size, uint32_t mipLevel, uint32_t arrayLayer)
         {
@@ -61,6 +109,19 @@ namespace vkm
 
         std::vector<VkmResourceHandle> getOwnedChildHandles() const override { return _ownedViewHandles; }
 
+        /*
+        * @brief Bind this texture to the bytes the render graph chose for it, once.
+        * @details Called by VkmRenderGraph::compile() for a texture the aliasing heap has just
+        * placed. Not pure: a backend that never reports isAliasable() never receives one, and
+        * this default is the matching "should be unreachable" guard.
+        */
+        virtual bool finalizeAliasPlacement(const VkmAliasPlacement& placement)
+        {
+            (void)placement;
+            VKM_DEBUG_ERROR("finalizeAliasPlacement is not implemented for this texture");
+            return false;
+        }
+
     protected:
         bool initializeTextureCommon(VkmResourceHandle handle, const VkmTextureInfo& info);
 
@@ -68,5 +129,12 @@ namespace vkm
         VkmTextureInfo _textureInfo;
         std::vector<VkmResourceHandle> _ownedViewHandles;
         bool _isHostWritable = false;
+        // Safe default: a backend that cannot honor VkmResourceCreateInfo::Transient reports an
+        // ordinary device-backed attachment, which is what it actually allocated.
+        bool _isTransient = false;
+        // Safe default: a backend that cannot alias owns its memory outright, so nothing has to
+        // wait for a placement that will never come (see isAliasPlaced).
+        bool _isAliasable = false;
+        bool _isAliasPlaced = false;
     };
 } // namespace vkm

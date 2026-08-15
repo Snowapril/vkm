@@ -83,6 +83,18 @@ namespace vkm
             _vkTexture = VK_NULL_HANDLE;
             _vmaAllocation = nullptr;
         }
+        else if (_isAliasable && _vkTexture != VK_NULL_HANDLE)
+        {
+            // No VmaAllocation of its own: the memory belongs to a heap block shared with other
+            // textures, so only the image is destroyed. The block outlives every image in it and
+            // is freed at driver teardown.
+            vkDestroyImage(driverVulkan->getDevice(), _vkTexture, nullptr);
+            _vkTexture = VK_NULL_HANDLE;
+            if (VkmAliasedMemoryHeap* heap = driverVulkan->getAliasedMemoryHeap())
+            {
+                heap->unregisterResource(getHandle());
+            }
+        }
     }
 
     bool VkmTextureVulkan::initialize(VkmResourceHandle handle, const VkmTextureInfo& info)
@@ -126,9 +138,53 @@ namespace vkm
             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
         };
 
+        /*
+        * An aliasable texture stops here with an image but no memory. The image has to exist --
+        * vkGetImageMemoryRequirements is what tells the packer how many bytes at what alignment
+        * to reserve, and out of which memory types -- but who else shares those bytes is not
+        * known until VkmRenderGraph::compile() has seen the whole frame. finalizeAliasPlacement()
+        * binds and creates the view; until then isAliasPlaced() reports false.
+        */
+        _isAliasable = (info._flags & VkmResourceCreateInfo::Aliasable) != 0;
+        if (_isAliasable)
+        {
+            const VkResult imageResult =
+                vkCreateImage(driverVulkan->getDevice(), &imageCreateInfo, nullptr, &_vkTexture);
+            if (!VKM_VK_CHECK_RESULT_MSG(imageResult, "Failed to create an aliasable image"))
+            {
+                return false;
+            }
+
+            VkMemoryRequirements aliasMemReqs{};
+            vkGetImageMemoryRequirements(driverVulkan->getDevice(), _vkTexture, &aliasMemReqs);
+            _alignment = (uint32_t)aliasMemReqs.alignment;
+            // Reported as zero for the same reason a transient texture is: the bytes are counted
+            // once as a heap block, so charging each sharer would inflate the report.
+            _allocatedSize = 0;
+            _uniformLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+            VkmAliasedMemoryHeap* heap = driverVulkan->getAliasedMemoryHeap();
+            return heap != nullptr && heap->registerResource(handle, aliasMemReqs.size, aliasMemReqs.alignment,
+                                                             aliasMemReqs.memoryTypeBits);
+        }
+
         VmaAllocationCreateInfo allocCreateInfo{};
         allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
         allocCreateInfo.flags = shouldUseDedicatedTexture(info) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;
+
+        // Requested, not granted -- like the host-writable path above. preferredFlags rather
+        // than requiredFlags: a device offering no lazily-allocated memory type would make
+        // requiredFlags fail vmaCreateImage outright, while an ordinary device-local
+        // attachment is still correct, just not lazy. TRANSIENT_ATTACHMENT usage is what puts
+        // such a type into the image's memoryTypeBits at all, so this is only ever scored
+        // where the driver offers one. shouldUseDedicatedTexture already returns true for
+        // every attachment, which matters here: suballocating into a shared VMA block would
+        // defeat the lazy commitment.
+        const bool requestTransient = (info._flags & VkmResourceCreateInfo::Transient) != 0;
+        if (requestTransient)
+        {
+            allocCreateInfo.preferredFlags = VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
+        }
 
         VmaAllocationInfo vmaAllocationInfo{};
         const VkResult vkResult = vmaCreateImage(driverVulkan->getVmaAllocator(), &imageCreateInfo, &allocCreateInfo, &_vkTexture, &_vmaAllocation, &vmaAllocationInfo);
@@ -151,6 +207,20 @@ namespace vkm
             VkMemoryPropertyFlags memoryProperties = 0;
             vmaGetAllocationMemoryProperties(driverVulkan->getVmaAllocator(), _vmaAllocation, &memoryProperties);
             _isHostWritable = (memoryProperties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+        }
+
+        if (requestTransient)
+        {
+            VkMemoryPropertyFlags memoryProperties = 0;
+            vmaGetAllocationMemoryProperties(driverVulkan->getVmaAllocator(), _vmaAllocation, &memoryProperties);
+            _isTransient = (memoryProperties & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0;
+            if (_isTransient)
+            {
+                // VmaAllocationInfo::size is the *virtual* size; lazily-allocated memory commits
+                // pages on demand and normally commits none, so reporting it would inflate the
+                // memory report by the attachment's whole footprint. Metal reports 0 natively.
+                _allocatedSize = 0;
+            }
         }
 
         _uniformLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -246,6 +316,26 @@ namespace vkm
             }
             setSubresourceLayout(writtenRange, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
+        return true;
+    }
+
+    bool VkmTextureVulkan::finalizeAliasPlacement(const VkmAliasPlacement& placement)
+    {
+        VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
+        if (!driverVulkan->bindImageToAliasBlock(placement._blockIndex, _vkTexture, placement._offset))
+        {
+            return false;
+        }
+
+        // Only now: vkCreateImageView requires the image to have memory bound
+        // (VUID-VkImageViewCreateInfo-image-01020), which is the whole reason a resource table
+        // naming an aliasable texture cannot be built before this point.
+        if (!createDefaultView())
+        {
+            return false;
+        }
+
+        _isAliasPlaced = true;
         return true;
     }
 
@@ -400,6 +490,16 @@ namespace vkm
     void VkmTextureVulkan::setDebugName(const char* name)
     {
 #ifdef VKM_DEBUG_NAME_ENABLED
+        // An externally-owned or aliasable texture has no image yet at the point newTexture()
+        // names it -- the swapchain binds one later, and an aliasable one gets its memory at
+        // graph-compile time. Naming VK_NULL_HANDLE is a validation error
+        // (VUID-vkSetDebugUtilsObjectNameEXT-pNameInfo-02588), so skip until there is something
+        // to name.
+        if (_vkTexture == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
         const VkDebugUtilsObjectNameInfoEXT nameInfo{
             .sType        = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,

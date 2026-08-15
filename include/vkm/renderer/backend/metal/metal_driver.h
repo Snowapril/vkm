@@ -15,10 +15,12 @@
 @protocol MTLTexture;
 @protocol MTLCaptureScope;
 @protocol MTL4CounterHeap;
+@protocol MTLTexture;
 @class MTLTextureDescriptor;
 namespace vkm
 {
     class VkmGpuHeapAllocatorMetal;
+    class VkmGpuImageHeapMetal;
 
     /*
     * @brief Metal renderer backend driver.
@@ -44,6 +46,15 @@ namespace vkm
         inline VkmGpuHeapAllocatorMetal* getHeapAllocator() const { return _heapAllocator.get(); }
 
         // Device-reported allocation size/budget plus the heap allocator's reserved-vs-used split.
+        // Creates an aliasable texture in place, in the block VkmAliasedMemoryHeap assigned it.
+        id<MTLTexture> createTextureInAliasBlock(uint32_t blockIndex, MTLTextureDescriptor* descriptor,
+                                                 uint64_t offset);
+
+        bool supportsResourceAliasing() const override final { return true; }
+        bool onCreateAliasBlock(uint32_t blockIndex, uint64_t sizeBytes, uint32_t memoryTypeBits) override final;
+        void onDestroyAliasBlock(uint32_t blockIndex) override final;
+
+        // Device-reported allocation size/budget plus the heap pool's reserved-vs-used split.
         virtual VkmGpuMemoryStats getGpuMemoryStats() const override final;
 
         // GPU timestamp pool backing VkmGpuProfiler: one MTL4CounterHeap of `slotCount`
@@ -99,6 +110,9 @@ namespace vkm
     private:
         id<MTLDevice> _mtlDevice;
         std::unique_ptr<VkmGpuHeapAllocatorMetal> _heapAllocator;
+        // Indexed by the block index VkmAliasedMemoryHeap hands out; append-only, freed only at
+        // teardown since a live placement always points into one.
+        std::vector<std::unique_ptr<VkmGpuImageHeapMetal>> _imageHeaps;
 
         // Owned +1 under MRC, like _captureScope below.
         id<MTL4CounterHeap> _timestampCounterHeap {nullptr};

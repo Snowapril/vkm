@@ -81,6 +81,79 @@ The device-level preconditions:
 Both paths leave the resource GPU-readable, so callers never branch on which one ran. A backend
 that offers neither needs no override; the base defaults are the unreachable-case guards.
 
+### Transient (tile-memory-only) textures
+
+`VkmResourceCreateInfo::Transient` asks for an attachment whose backing store never leaves
+on-chip tile memory — Vulkan `VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT` behind a
+`VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT` image, Metal `MTLStorageModeMemoryless`. WebGPU has
+no equivalent and warns.
+
+Three rules make it safe, all enforced in common code so no backend can hand an illegal
+descriptor to a validation layer:
+
+1. **Sanitized at creation.** Vulkan VUID-`VkImageCreateInfo`-usage-00963/00966 and Metal's
+   memoryless contract agree that such a resource may carry attachment usage and nothing else,
+   and must carry at least one. `VkmDriverBase::newTexture` warns and clears the bit for any
+   other combination — and for any buffer, since neither API has a transient buffer. Downgraded
+   rather than rejected, matching how `ForcePooled` falls back.
+2. **Pool type derived, never a separate field.** A surviving flag puts the handle in
+   `VkmResourcePoolType::Transient`. Membership follows the *request*: a Vulkan device offering
+   no lazily-allocated memory type still places its ordinary fallback allocation there.
+3. **Load/store actions coerced.** `VkmCommandBufferBase::beginRenderPass` forces
+   `VkmStoreAction::DontCare` and rewrites `VkmLoadAction::Load` on any attachment reporting
+   `isTransient()`, logging an error for each. Storing one is a Metal validation error, and on
+   Vulkan it forces the lazily-allocated memory to commit, undoing the request. The guard is
+   keyed on the *grant*, and skipped entirely (one relaxed atomic load) until
+   `VkmRenderResourcePool::hasTransientTextures()` latches.
+
+`VkmTexture::isTransient()` reports what was allocated, the same request-vs-grant contract
+`isHostWritable()` carries. A granted texture must never be sampled, blitted or read back.
+
+### Aliased (memory-sharing) textures
+
+`VkmResourceCreateInfo::Aliasable` lets two textures whose render-graph lifetimes do not overlap
+share the same bytes — Vulkan binds both images into one `VkDeviceMemory` block at chosen
+offsets, Metal creates both into one `MTLHeapTypePlacement` heap. WebGPU has neither and warns.
+
+The packing lives in `VkmAliasedMemoryHeap` (`common/aliased_memory_heap.h`), which owns no
+device memory at all: the driver supplies blocks through `onCreateAliasBlock`, and each backend
+turns a `VkmAliasPlacement` into a real binding. That split is what makes the rules unit-testable
+with no GPU (`tests/TestAliasedMemoryHeap.cpp`).
+
+Four rules, all enforced in common code:
+
+1. **Lifetimes are declared, never inferred.** Every subgraph touching an aliasable texture must
+   call `VkmRenderSubGraph::addAliasedResource()`. A texture read through a bindless index or a
+   `VkmResourceTable` is invisible to the graph, and `addReferencedResource` (which exists only
+   to drive the deferred reclaimer) is opt-in and routinely incomplete. `compile()` catches the
+   one case it can see — an aliasable texture attached without being declared — logs an error and
+   **widens** the lifetime: an over-wide lifetime costs memory, an under-wide one corrupts pixels.
+   A registered texture nobody declared this frame is treated as live for the whole graph, since
+   an empty lifetime would let two such textures look mutually disjoint.
+2. **Placement is decided once and never revisited.** `vkBindImageMemory` may be called once per
+   image, `vkCreateImageView` needs bound memory, and `VkmResourceTableBase` bakes that view in —
+   so moving a texture later would invalidate every table naming it. The consequence is a
+   one-frame gate: an aliasable texture has no usable native handle until the frame after the
+   first `compile()` that declares it. Check `isAliasPlaced()` before attaching it, building a
+   table from it, or registering it bindless.
+3. **Acquisition discards and fences, in one call.** `VkmRenderGraph::execute()` emits
+   `VkmCommandBufferBase::acquireAliasedTexture()` before the first subgraph that declared each
+   texture whose bytes are actually shared. Application code never calls it — forgetting it would
+   be undefined pixels rather than a compile error. `compile()` also coerces that first use's
+   load action to `DontCare`, since the previous contents belong to another texture.
+4. **One global heap, because there is one queue.** A barrier's first synchronization scope covers
+   everything earlier in *submission order* on the queue, which spans command buffers — so the
+   acquisition barrier orders this frame's first write after the previous frame's reads of the
+   other alias, and per-frame-slot heaps are unnecessary. **This holds only while everything
+   submits to `(Graphics, 0)`.** A second queue would break it and need a timeline-semaphore wait
+   instead; see `TODO.md`.
+
+`isAliasable()` reports the grant, the same request-vs-grant contract `isHostWritable()` and
+`isTransient()` carry. `Aliasable` is mutually exclusive with `Transient` (memoryless has no
+memory to alias), `ExternalHandleOwner`, `DeferredCreation` and `AllowPresent`, requires at least
+one attachment usage, and is texture-only — a buffer is never an attachment, so the undeclared-use
+check could not exist for one.
+
 ### GPU virtual addresses
 
 `VkmBuffer::getGPUVirtualAddress()` and `VkmStagingBuffer::getGPUVirtualAddress()` report the
@@ -238,10 +311,17 @@ struct VkmResourceHandle { uint64_t id; VkmResourcePoolType poolType; VkmResourc
 - Allocated by `VkmRenderResourcePool` — do not construct raw handles manually.
 - `id == (uint64_t)-1` means invalid. Use `handle.isValid()`.
 - `VkmResourceType`: Texture=0, Buffer=1, StagingBuffer=2, Sampler=3, TextureView=4, BufferView=5.
+<<<<<<< HEAD
 - Pooled resources: `handle.isPooledResource()` true when `poolType != Undefined`. This is about
   the *render resource pool* (handle ownership) and has nothing to do with
   `VkmMemoryPlacementHint::Heap` (memory suballocation) — the collision is why that enumerator is
   spelled `Heap` rather than `Pooled`.
+=======
+- Pooled resources: `handle.isPooledResource()` true when `poolType != Undefined`.
+- `VkmResourcePoolType`: Default=0, Transient=1. Every sub-pool has its own per-type id space,
+  so two handles can share an `id` and still differ. `Transient` holds textures only, and
+  membership follows the *request* — see "Transient (tile-memory-only) textures" below.
+>>>>>>> e3e8755 (Add a Transient (tile-memory-only) resource pool type and create flag)
 - `generation` is bumped by the pool each time a slot is released; `getResource()` only
   returns a resource when the handle's `generation` still matches the slot's, giving views a
   weak-reference liveness check. `allocateResourceLocked()` recycles released ids from a
@@ -355,6 +435,11 @@ tag's `allocatedSize`/`alignment`:
   default survives only when that call reports no heap footprint.
 - **Sampler / TextureView / BufferView** = always `0` (no independent GPU memory allocation of
   their own), via the base-class default — no override.
+- **A granted transient texture** = `allocatedSize` `0` on both Vulkan and Metal, with the tag's
+  `metadata` set to `"transient"`. Nothing is committed, so reporting the image's virtual size
+  would inflate the report by an attachment that costs no device memory; the `metadata` string
+  is what tells that apart from an untagged `0`. `requestedSize` is unchanged, which is what
+  makes the saving visible.
 
 ### Device-reported memory (the "actual" side)
 

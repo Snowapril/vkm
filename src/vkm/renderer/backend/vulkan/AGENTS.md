@@ -46,6 +46,30 @@ block is device-local, so it is allocated committed with
 backing at all (`vkCreateSampler` involves no VMA/`VkDeviceMemory`). StagingBuffer is always
 committed + persistently host-mapped (`VMA_ALLOCATION_CREATE_MAPPED_BIT`), never suballocated.
 
+A `VkmResourceCreateInfo::Transient` texture adds `VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT` (legal
+only alongside attachment usage, which `VkmDriverBase` has already guaranteed) and asks VMA for
+`VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT` through `preferredFlags`, **not** `requiredFlags`: a
+device offering no such memory type would make `requiredFlags` fail `vmaCreateImage` outright,
+while an ordinary device-local attachment is still correct — just not lazy. `shouldUseDedicatedTexture`
+already returns true for every attachment, which matters here, since suballocating into a shared VMA
+block would defeat the lazy commitment. The grant is read back with `vmaGetAllocationMemoryProperties`
+into `isTransient()`, and a granted allocation reports `getAllocatedSize() == 0` (VMA's size is the
+*virtual* one; lazily-allocated memory normally commits no pages). There is deliberately no device
+capability probe — nothing needs the answer before allocating — but one modelled on
+`hasUnifiedMemory()` would be the natural follow-up if a caller ever has to choose an algorithm up front.
+
+An `Aliasable` texture takes a third path, distinct from both committed and pooled. `vkCreateImage`
+runs at creation (its `VkMemoryRequirements` are what the packer reserves against) but nothing is
+bound and no view is made; `VkmRenderGraph::compile()` then picks a block and offset and
+`finalizeAliasPlacement()` binds via `vmaBindImageMemory2` — the one VMA entry point taking a local
+offset — before creating the view, which `vkCreateImageView` requires bound memory for. The blocks
+are `VkmGpuImageHeapVulkan`, one whole `VkDeviceMemory` each from `vmaAllocateMemory` with
+`VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT`. Note the memory usage there is
+`VMA_MEMORY_USAGE_UNKNOWN` plus an explicit `requiredFlags`, **not** the `AUTO` family: AUTO infers
+a memory type from the buffer or image being created and asserts when there is none, which is
+exactly a bare block. Such a texture is destroyed with `vkDestroyImage`, never `vmaDestroyImage` --
+it has no allocation of its own. See `common/AGENTS.md` for the lifetime rules.
+
 Every buffer (pool block included) carries `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` and the
 allocator `VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT` when
 `VkmDriverVulkan::isBufferDeviceAddressEnabled()`; without that feature nothing carries either and

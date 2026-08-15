@@ -9,6 +9,7 @@
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/common/resource_table.h>
+#include <vkm/renderer/backend/common/texture.h>
 
 namespace vkm
 {
@@ -65,8 +66,63 @@ namespace vkm
         VKM_DEBUG_LOG("Beginning render pass with frame buffer descriptor");
 
         _currentFrameBufferDesc = frameBufferDesc;
+        coerceTransientAttachmentActions();
 
-        onBeginRenderPass(frameBufferDesc);
+        onBeginRenderPass(_currentFrameBufferDesc);
+    }
+
+    /*
+    * A transient attachment lives only in tile memory: storing it is a Metal validation error,
+    * and on Vulkan it forces the lazily-allocated memory to commit, undoing the request
+    * entirely. Loading it reads undefined tile contents. Coerced rather than rejected so a
+    * misuse degrades to a correct (if wasteful) frame instead of a validation abort -- the
+    * error log is what makes it visible.
+    *
+    * Keyed on isTransient() (what was allocated) rather than the create flag (what was asked
+    * for): a request the device could not honor is an ordinary attachment and must keep
+    * whatever actions the caller chose.
+    */
+    void VkmCommandBufferBase::coerceTransientAttachmentActions()
+    {
+        VkmRenderResourcePool* renderResourcePool = _driver->getRenderResourcePool();
+        if (!renderResourcePool->hasTransientTextures())
+        {
+            return;
+        }
+
+        const auto coerce = [renderResourcePool](VkmResourceHandle handle, VkmLoadAction& loadAction,
+                                                 VkmStoreAction& storeAction, const char* slot) {
+            VkmTexture* texture = renderResourcePool->getResource<VkmTexture>(handle);
+            if (texture == nullptr || !texture->isTransient())
+            {
+                return;
+            }
+            if (storeAction != VkmStoreAction::DontCare)
+            {
+                VKM_DEBUG_ERROR(fmt::format("{} is a transient attachment and cannot be stored; "
+                                            "forcing VkmStoreAction::DontCare", slot).c_str());
+                storeAction = VkmStoreAction::DontCare;
+            }
+            if (loadAction == VkmLoadAction::Load)
+            {
+                VKM_DEBUG_ERROR(fmt::format("{} is a transient attachment and has no contents to load; "
+                                            "forcing VkmLoadAction::DontCare", slot).c_str());
+                loadAction = VkmLoadAction::DontCare;
+            }
+        };
+
+        VkmRenderPassDescriptor& renderPass = _currentFrameBufferDesc._renderPass;
+        for (uint32_t i = 0; i < renderPass._colorAttachmentCount; ++i)
+        {
+            coerce(_currentFrameBufferDesc._colorAttachments[i], renderPass._colorAttachments[i]._loadAction,
+                   renderPass._colorAttachments[i]._storeAction, "Color attachment");
+        }
+        if (renderPass._depthStencilAttachment.has_value() && _currentFrameBufferDesc._depthStencilAttachment.has_value())
+        {
+            coerce(_currentFrameBufferDesc._depthStencilAttachment.value(),
+                   renderPass._depthStencilAttachment->_loadAction,
+                   renderPass._depthStencilAttachment->_storeAction, "Depth/stencil attachment");
+        }
     }
 
     void VkmCommandBufferBase::endRenderPass()
@@ -331,6 +387,16 @@ namespace vkm
             recordUsageOfViewParent(geometry._vertexView);
             recordUsageOfViewParent(geometry._indexView);
         }
+    }
+
+    void VkmCommandBufferBase::acquireAliasedTexture(VkmResourceHandle texture)
+    {
+        if (!_isRecording || _isInRenderPass)
+        {
+            VKM_DEBUG_ERROR("acquireAliasedTexture must be recorded while recording and outside a render pass");
+            return;
+        }
+        onAcquireAliasedTexture(texture);
     }
 
     void VkmCommandBufferBase::bindResourceTable(VkmResourceTableBase* table)

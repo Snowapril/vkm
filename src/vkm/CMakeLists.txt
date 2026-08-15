@@ -33,6 +33,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/pipeline_state_manager.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_buffer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/command_queue.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/aliased_memory_heap.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/driver.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/gpu_crash_handler.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/backend/common/gpu_profiler.h
@@ -92,6 +93,7 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/backend/common/bindless_resource_manager.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/command_buffer.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/command_queue.cpp
+    ${SRC_DIR}/vkm/renderer/backend/common/aliased_memory_heap.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/driver.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/gpu_crash_handler.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/gpu_profiler.cpp
@@ -197,6 +199,7 @@ if (VKM_USE_VULKAN_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_buffer_view.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_buffer_pool.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_heap_allocator.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_image_heap.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_util.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_command_queue.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/vulkan/vulkan_command_buffer.h
@@ -217,6 +220,7 @@ if (VKM_USE_VULKAN_API)
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_buffer_view.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_buffer_pool.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_heap_allocator.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_gpu_image_heap.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_util.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_command_queue.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_barrier.cpp
@@ -253,6 +257,7 @@ if (VKM_USE_METAL_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_buffer_view.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_allocator.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_gpu_image_heap.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_bindless_resource_manager.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_frame_constant_manager.h
     )
@@ -274,6 +279,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_buffer_view.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_allocator.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_gpu_image_heap.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_bindless_resource_manager.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_frame_constant_manager.mm
     )

@@ -178,15 +178,22 @@ namespace vkm
         }
 
         VkmRenderResourcePoolMetal* renderResourcePoolMetal = static_cast<VkmRenderResourcePoolMetal*>(driverMetal->getRenderResourcePool());
-        id<MTLResidencySet> residencySet = renderResourcePoolMetal->getResidencySet(VkmResourcePoolType::Default);
-        if (residencySet == nil)
+        // Every pool type, not just Default: Metal 4 does no implicit residency, and the
+        // Transient sub-pool holds whatever VkmResourceCreateInfo::Transient asked for --
+        // which on a backend that could not honor the request would be an ordinary
+        // device-backed texture. Leaving its set off the queue would be a latent GPU fault.
+        for (uint8_t poolType = 0; poolType < (uint8_t)VkmResourcePoolType::Count; ++poolType)
         {
-            // Without a residency set no resource is ever made resident on this queue --
-            // fail loudly at init instead of faulting at first GPU use.
-            VKM_DEBUG_ERROR("Residency set unavailable; cannot initialize Metal command queue");
-            return false;
+            id<MTLResidencySet> residencySet = renderResourcePoolMetal->getResidencySet((VkmResourcePoolType)poolType);
+            if (residencySet == nil)
+            {
+                // Without a residency set no resource is ever made resident on this queue --
+                // fail loudly at init instead of faulting at first GPU use.
+                VKM_DEBUG_ERROR("Residency set unavailable; cannot initialize Metal command queue");
+                return false;
+            }
+            [_mtlCommandQueue addResidencySet:residencySet];
         }
-        [_mtlCommandQueue addResidencySet:residencySet];
 
         _commandBufferPool.reset(new VkmCommandBufferPoolMetal(_driver, this));
         _gpuEventTimeline.reset(new VkmGpuEventTimelineMetal(_driver));

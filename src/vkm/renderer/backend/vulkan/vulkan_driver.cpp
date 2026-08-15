@@ -76,6 +76,7 @@
 #include <vkm/renderer/backend/vulkan/vulkan_texture_view.h>
 #include <vkm/renderer/backend/vulkan/vulkan_buffer_view.h>
 #include <vkm/renderer/backend/vulkan/vulkan_gpu_heap_allocator.h>
+#include <vkm/renderer/backend/vulkan/vulkan_gpu_image_heap.h>
 #include <vkm/renderer/backend/vulkan/vulkan_command_queue.h>
 #include <vkm/renderer/backend/vulkan/vulkan_bindless_resource_manager.h>
 #include <vkm/renderer/backend/vulkan/vulkan_command_buffer.h>
@@ -299,6 +300,9 @@ namespace vkm
         VmaTotalStatistics totalStatistics{};
         vmaCalculateStatistics(_vmaAllocator, &totalStatistics);
         stats._poolReservedBytes = totalStatistics.total.statistics.blockBytes;
+        // Aliasing blocks are already inside VMA's totals (they are VmaAllocations), so they are
+        // not added again here -- the per-texture tags report zero instead, which is what keeps
+        // the tracked side from double-counting shared bytes.
         stats._poolUsedBytes = totalStatistics.total.statistics.allocationBytes;
         stats._hasPoolStats = true;
 
@@ -965,4 +969,42 @@ namespace vkm
         }
     }
 
+    bool VkmDriverVulkan::onCreateAliasBlock(uint32_t blockIndex, uint64_t sizeBytes, uint32_t memoryTypeBits)
+    {
+        // VkmAliasedMemoryHeap hands out indices in order and never reuses one, so a mismatch
+        // means the two have fallen out of step rather than that a block is missing.
+        if (blockIndex != (uint32_t)_imageHeaps.size())
+        {
+            VKM_DEBUG_ERROR("Aliasing block indices are out of step with the driver's heap list");
+            return false;
+        }
+
+        auto heap = std::make_unique<VkmGpuImageHeapVulkan>(this);
+        if (!heap->initialize(sizeBytes, memoryTypeBits))
+        {
+            return false;
+        }
+        _imageHeaps.push_back(std::move(heap));
+        return true;
+    }
+
+    void VkmDriverVulkan::onDestroyAliasBlock(uint32_t blockIndex)
+    {
+        // Destroyed in place rather than erased: indices are the heap's identity for a block and
+        // must stay stable for the placements still naming them.
+        if (blockIndex < (uint32_t)_imageHeaps.size() && _imageHeaps[blockIndex] != nullptr)
+        {
+            _imageHeaps[blockIndex]->destroy();
+        }
+    }
+
+    bool VkmDriverVulkan::bindImageToAliasBlock(uint32_t blockIndex, VkImage image, uint64_t offset)
+    {
+        if (blockIndex >= (uint32_t)_imageHeaps.size() || _imageHeaps[blockIndex] == nullptr)
+        {
+            VKM_DEBUG_ERROR("An aliased image was placed into a block that does not exist");
+            return false;
+        }
+        return _imageHeaps[blockIndex]->bindImage(image, offset);
+    }
 }
