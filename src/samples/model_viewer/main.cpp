@@ -338,6 +338,17 @@ private:
             return;
         }
 
+        // Optional: the structures give the F4 inspector (and any ray-query pass) something to
+        // show, and a backend without the capability just skips.
+        if ((driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::RayTracing) != 0)
+        {
+            std::string asError;
+            if (!_scene.buildAccelerationStructures(driver, &asError))
+            {
+                VKM_DEBUG_ERROR(("Failed to build acceleration structures: " + asError).c_str());
+            }
+        }
+
         _meshCount = model._meshes.size();
         _vertexCount = model.getTotalVertexCount();
         // frame() moves the shared camera whether or not the orbit controller is the registered

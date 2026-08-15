@@ -40,6 +40,7 @@
 #include <vkm/renderer/imgui/memory_inspector.h>
 #include <vkm/renderer/imgui/cpu_profiler_inspector.h>
 #include <vkm/renderer/imgui/gpu_profiler_inspector.h>
+#include <vkm/renderer/imgui/acceleration_structure_inspector.h>
 #include <imgui.h>
 #endif
 
@@ -122,6 +123,7 @@ namespace vkm
         // update()'s visibility-edge check below sees the window open on the first frame and
         // starts capture then.
         _gpuProfilerInspector->setVisible(gv_gpu_profile.get());
+        _accelerationStructureInspector = std::make_unique<VkmAccelerationStructureInspector>();
 #endif
 
         return true;
@@ -455,6 +457,10 @@ namespace vkm
             _pipelineStateManager->pollSourceChanges(deltaTime);
             renderDebugOverlay(deltaTime);
 
+            if (ImGui::IsKeyPressed(ImGuiKey_F4, false))
+            {
+                _accelerationStructureInspector->toggleVisible();
+            }
             if (ImGui::IsKeyPressed(ImGuiKey_F5, false))
             {
                 _renderGraphInspector->toggleVisible();
@@ -488,6 +494,7 @@ namespace vkm
                 _memoryInspector->draw();
                 _cpuProfilerInspector->draw();
                 _gpuProfilerInspector->draw(_driver->getGpuProfiler());
+                _accelerationStructureInspector->draw(_driver);
             }
 
             // Collection follows the window: closing it (with F7 or the title bar's close
@@ -549,6 +556,7 @@ namespace vkm
                         formatByteSize(memory._gpu._deviceBudgetBytes).c_str());
         }
 
+        ImGui::Text("F4: acceleration structures");
         ImGui::Text("F5: render graph inspector");
         ImGui::Text("F6: GPU profiler");
         ImGui::Text("F7: CPU profiler");

@@ -27,6 +27,7 @@ namespace vkm
     class VkmMemoryInspector;
     class VkmCpuProfilerInspector;
     class VkmGpuProfilerInspector;
+    class VkmAccelerationStructureInspector;
 #endif
     struct VkmInitResult;
 
@@ -334,6 +335,7 @@ namespace vkm
         std::unique_ptr<VkmMemoryInspector> _memoryInspector;
         std::unique_ptr<VkmCpuProfilerInspector> _cpuProfilerInspector;
         std::unique_ptr<VkmGpuProfilerInspector> _gpuProfilerInspector;
+        std::unique_ptr<VkmAccelerationStructureInspector> _accelerationStructureInspector;
         // Previous frame's profiler window visibility, so update() can start/stop capture on
         // the edge instead of overriding the inspector's own Start/Stop button every frame.
         bool _cpuProfilerWasVisible {false};

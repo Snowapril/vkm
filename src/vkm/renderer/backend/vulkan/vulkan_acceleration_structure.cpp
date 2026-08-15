@@ -422,6 +422,9 @@ namespace vkm
         {
             _primitiveCounts[0] = static_cast<uint32_t>(instances.size());
         }
+        // Keep the retained info matching what the next build reads, so the command buffer's
+        // GPU-usage walk and the debug inspector see the rebuilt structure, not the created one.
+        _info._instances = instances;
         return true;
     }
 

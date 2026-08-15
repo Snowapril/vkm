@@ -83,6 +83,13 @@ namespace vkm
         * changes only its instance transform, so its bottom-level structure stays built once.
         */
         bool _allowUpdate = false;
+        /*
+        * Object-space bounds of the geometry a bottom-level structure is built over, for debug
+        * visualization only -- no backend reads them. Both zero means unknown.
+        * VkmScene::buildAccelerationStructures fills them from the mesh entry's imported bounds.
+        */
+        glm::vec3 _boundsMin{ 0.0f };
+        glm::vec3 _boundsMax{ 0.0f };
     };
 
     /*
@@ -113,6 +120,9 @@ namespace vkm
         * @details Top-level structures only, and only those created with `_allowUpdate`. Writes the
         * backend's instance descriptors into the buffer the build reads; the rebuild is recorded
         * separately, so a caller can update every structure and then record every build.
+        * A successful call also replaces the retained info's instance list, so
+        * `getAccelerationStructureInfo()` describes the list the next build reads; a refused call
+        * leaves it untouched.
         * @param instances New instance list. Must be no longer than the list the structure was
         * created with, the buffer being sized once. A shorter list leaves the extra instances out
         * of the rebuilt structure.
