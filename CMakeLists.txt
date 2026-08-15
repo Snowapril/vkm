@@ -109,6 +109,17 @@ if (VKM_USE_VULKAN_API)
     add_definitions(-DVKM_USE_VULKAN_API)
 endif()
 
+# FSR 3.1 backs VkmUpscalerBase on Vulkan through AMD's prebuilt signed runtime, which ships for
+# Windows only (the SDK's own build is MSVC-only). The DLL is loaded at run time, so only the
+# ffx-api headers and a copy of the DLL next to the binaries are needed.
+if (VKM_USE_VULKAN_API AND VKM_PLATFORM_WINDOWS AND
+    EXISTS ${PROJECT_SOURCE_DIR}/dependencies/src/fidelityfx-sdk/ffx-api/include)
+    add_definitions(-DVKM_ENABLE_FSR)
+    include_directories(${PROJECT_SOURCE_DIR}/dependencies/src/fidelityfx-sdk/ffx-api/include)
+    file(COPY ${PROJECT_SOURCE_DIR}/dependencies/src/fidelityfx-sdk/PrebuiltSignedDLL/amd_fidelityfx_vk.dll
+         DESTINATION ${CMAKE_BINARY_DIR}/bin)
+endif()
+
 if (VKM_USE_METAL_API)
     add_definitions(-DVKM_USE_METAL_API)
 endif()

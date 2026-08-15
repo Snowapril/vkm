@@ -48,6 +48,7 @@ set(SRCS
     ${SRC_DIR}/TestAliasedTexture.cpp
     ${SRC_DIR}/TestAccelerationStructure.cpp
     ${SRC_DIR}/TestGBufferRenderVulkan.cpp
+    ${SRC_DIR}/TestUpscaler.cpp
     ${SRC_DIR}/TestPathTracerMetrics.cpp
     ${SRC_DIR}/TestReservoirLayout.cpp
 )

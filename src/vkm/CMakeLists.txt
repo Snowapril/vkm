@@ -212,6 +212,7 @@ if (VKM_USE_VULKAN_API)
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_driver.cpp
+        ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_upscaler.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_swapchain.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_texture.cpp
         ${SRC_DIR}/vkm/renderer/backend/vulkan/vulkan_buffer.cpp

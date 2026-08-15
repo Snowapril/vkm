@@ -211,5 +211,15 @@
       "type": "script",
       "file": "fetch_dawn_dependencies.py"
     }
+  },
+  {
+    "name": "fidelityfx-sdk",
+    "platforms": ["Windows"],
+    "comment": "FSR 3.1 for the Vulkan backend. Only the ffx-api headers and the prebuilt signed amd_fidelityfx_vk.dll are consumed; the SDK's own build (MSVC-only) is never run.",
+    "source": {
+      "type": "git",
+      "url": "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git",
+      "revision": "v1.1.4"
+    }
   }
 ]

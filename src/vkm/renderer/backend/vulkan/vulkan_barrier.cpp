@@ -140,10 +140,10 @@ namespace vkm
             case VkmResourceAccess::ShaderSampledRead:
                 // The layout the bindless texture descriptors declare
                 // (VkmBindlessResourceManagerVulkan writes SHADER_READ_ONLY_OPTIMAL), so anything
-                // sampled through set 0 has to actually be in it.
-                return (hasDepth(format) || hasStencil(format))
-                           ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-                           : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                // sampled through set 0 has to actually be in it. Depth formats included: the one
+                // sampled-depth consumer is the FSR upscaler, whose runtime assumes this exact
+                // layout for a compute-read input and restores the texture to it afterwards.
+                return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
             // A storage image has no read-only layout to sit in.
             case VkmResourceAccess::ShaderStorageRead:
