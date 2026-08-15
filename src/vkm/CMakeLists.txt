@@ -266,6 +266,7 @@ if (VKM_USE_METAL_API)
     )
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_driver.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_upscaler.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_render_resource_pool.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_command_buffer.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_command_queue.mm
@@ -489,8 +490,8 @@ endif()
 if (VKM_PLATFORM_APPLE)
     if (VKM_USE_METAL_API)
         # platform/apple/application.mm references CAMetalLayer/MTLDevice directly for the
-        # Metal windowing surface.
-        target_link_libraries(${target} PUBLIC "-framework Metal -framework CoreVideo -framework QuartzCore")
+        # Metal windowing surface. MetalFX backs VkmUpscalerMetal.
+        target_link_libraries(${target} PUBLIC "-framework Metal -framework CoreVideo -framework QuartzCore -framework MetalFX")
     endif()
     if (NOT IOS)
         # Needed for the Metal branch's NSApplication/NSWindow code, and for GLFW's Cocoa

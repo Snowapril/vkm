@@ -73,6 +73,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestProbeVolumeMetal.mm
         ${SRC_DIR}/TestViewportMetal.mm
         ${SRC_DIR}/TestAccelerationStructureMetal.mm
+        ${SRC_DIR}/TestUpscalerMetal.mm
     )
 endif()
 
@@ -99,6 +100,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestProbeVolumeMetal.mm
         ${SRC_DIR}/TestViewportMetal.mm
         ${SRC_DIR}/TestAccelerationStructureMetal.mm
+        ${SRC_DIR}/TestUpscalerMetal.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++"
     )
 endif()

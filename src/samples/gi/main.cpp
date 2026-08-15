@@ -910,10 +910,13 @@ private:
         if (renderExtent != extent &&
             (driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::TemporalUpscaling) != 0)
         {
+            // ColorAttachment as well: MetalFX publishes render-target usage as part of its
+            // output-texture requirements (outputTextureUsage), not just shader write.
             VkmTextureInfo upscaledInfo{};
             upscaledInfo._flags = static_cast<VkmResourceCreateInfo>(
                 static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
-                static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderWrite));
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderWrite) |
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowColorAttachment));
             upscaledInfo._extent = glm::uvec3(extent, 1);
             upscaledInfo._numMipLevels = 1;
             upscaledInfo._numArrayLayers = 1;

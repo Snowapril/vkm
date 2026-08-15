@@ -64,9 +64,10 @@ namespace vkm
     /*
     * @brief Per-frame inputs for one upscale dispatch.
     * @details All textures are render-extent sized except _output, which is display-extent sized
-    * and must allow shader writes. _motion carries UV-space current-to-previous motion in .xy,
-    * the convention vkmComputeMotionVector writes. _jitterPixels must equal the value the camera
-    * was jittered by this frame (VkmCamera::setJitterPixels).
+    * and must allow shader writes plus color attachment (MetalFX's published output requirement).
+    * _motion carries UV-space current-to-previous motion in .xy, the convention
+    * vkmComputeMotionVector writes. _jitterPixels must equal the value the camera was jittered by
+    * this frame (VkmCamera::setJitterPixels).
     */
     struct VkmUpscalerDispatchDesc
     {

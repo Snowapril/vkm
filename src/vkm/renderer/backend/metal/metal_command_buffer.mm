@@ -739,6 +739,13 @@ namespace vkm
         _commandEncoder.commit();
     }
 
+    id<MTLFence> VkmCommandBufferMetal::bridgeExternalEncode()
+    {
+        openComputeEncoder(MTLStageDispatch);
+        closeEncoder(MTLStageDispatch);
+        return _currentSubGraphFence;
+    }
+
     id<MTLFence> VkmCommandBufferMetal::fenceForSubGraph(uint32_t subGraphId)
     {
         const auto it = _subGraphFences.find(subGraphId);

@@ -4975,4 +4975,30 @@ the motion texture at scale (-renderW, -renderH) with no jitter cancellation fla
 
 ### Deviations
 
-(none yet)
+- **Planned:** the MetalFX upscaler runs under the unit-test harness's `MTL_DEBUG_LAYER=1`.
+  **Done instead:** `VkmDriverMetal` withholds `TemporalUpscaling` whenever the Metal debug layer
+  is active, so the upscaler test self-skips there and the gi sample falls back to bilinear.
+  **Why:** `MTL4FXTemporalScaler` cannot encode under the debug layer on macOS 26.2 -- without a
+  fence it aborts on an internal `_outputTextureBarrierStages not set` assertion, and with one
+  its signpost path raises `-[MTL4DebugComputeCommandEncoder globalTraceObjectID]:
+  unrecognized selector` (both reproduced in a minimal standalone Metal4+MetalFX program with no
+  vkm code involved). Refusing the combination is the conservative option: validation stays on
+  everywhere else, and no validation error is being silenced -- the OS framework itself cannot
+  run under the layer. Verified the full encode+readback path in the same test binary with the
+  debug layer off.
+- During Phase 1 bring-up the gi sample intermittently hung at any render scale below 1 while a
+  crashed UnitTests process (the MetalFX-under-debug-layer abort, spinning in its own signal
+  handler) was still alive and holding GPU work; every configuration -- including a fully inert
+  upscale callback -- hung under that condition and passed 5/5 once the process was killed. Not a
+  vkm defect; recorded because the symptom (starved CAMetalDisplayLink, no drawables) looks
+  exactly like a fence deadlock and cost a bisect to rule out.
+- MetalFX publishes `outputTextureUsage = ShaderRead|ShaderWrite|RenderTarget`; the upscaled
+  target and the test's output texture carry AllowColorAttachment for that reason.
+
+- **Planned:** FSR 3.1 on Windows + Linux (ExternalProject build of ffx-api on Linux).
+  **Done instead:** Windows-only, via AMD's prebuilt signed `amd_fidelityfx_vk.dll` loaded at
+  run time; Linux keeps the capability bit clear (TODO.md line).
+  **Why:** the SDK's sources are MSVC-only as shipped (`#define FFX_API_ENTRY
+  __declspec(dllexport)` unconditionally, shader-compiler tools present only as .exe), so a
+  Linux build is a porting project, exactly the "patching balloons" case the plan's fallback
+  named.
