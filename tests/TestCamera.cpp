@@ -40,7 +40,8 @@ TEST_CASE("VkmFrameConstants - layout matches the shader-side mirror") {
     CHECK(offsetof(vkm::VkmFrameConstants, _cameraPositionWorld) == 320);
     CHECK(offsetof(vkm::VkmFrameConstants, _viewportSize) == 336);
     CHECK(offsetof(vkm::VkmFrameConstants, _frameIndex) == 352);
-    CHECK(sizeof(vkm::VkmFrameConstants) == 368);
+    CHECK(offsetof(vkm::VkmFrameConstants, _prevCameraPositionWorld) == 368);
+    CHECK(sizeof(vkm::VkmFrameConstants) == 384);
 
     // One region per frame slot, so the stride must stay a multiple of every backend's minimum
     // uniform-buffer offset alignment even as the struct grows.

@@ -4829,3 +4829,93 @@ Verified: Metal 244/244 with `MTL_DEBUG_LAYER=1`, no validation assertions, prob
 
 `_currentSubGraphReleaseStages` is assigned in `onBarrierRelease` and cleared in
 `onBeginCommandBuffer`, and nothing reads it.
+
+## 2026-08-09 — Phase 8.4 verified: visibility belongs in the merge weights, not only in Z
+
+The 13.8% brightening was not the visibility ray's verdict but where it was consulted. The
+bias-correction denominator Z evaluated `p_hat * V` (one ray per participant) while the merge
+loop's resampling weights evaluated `p_hat` with no ray at all. Algorithm 6 is unbiased only when
+the two agree: every participant genuinely occluded from the chosen sample left the divisor while
+its weight stayed in the sum, and on the open Cornell box the occluded fraction is ~14%. That is
+also why every recorded symptom pointed away from the ray — its inputs did not matter because its
+answers were right, bypassing it restored consistency with the rayless numerator, and
+`_neighbourCount = 0` removed the asymmetry with the ray still present.
+
+The fix is one ray in the merge loop, rejecting candidates the centre cannot see — which is also
+restir.md §2's re-traced reconnection visibility, so the wall-leak path closes with the same
+change. Measured: mean ratio vs the un-resampled estimator 1.138 → 0.9977, MSE vs the reference
+2.44e-4 against the 1-spp baseline's 2.41e-4 (Metal, 1536 samples).
+
+### Deviations
+
+- **Planned:** branch on `VKM_RESERVOIR_FLAG_ENVIRONMENT` in the spatial pass and force
+  `jacobian = 1.0` for environment samples. **Done instead:** nothing. At the 1e5-unit stand-in
+  distance the Jacobian's distance and cosine ratios collapse to 1 on their own, which
+  `vkmReservoirJacobian`'s doc comment already states; adding the branch would duplicate that
+  guarantee. The TODO.md entry calling for the branch is removed rather than satisfied.
+- **Planned:** assert `spatialRelativeMse <= relativeMse` (the not-regress gate). **Done
+  instead:** the baseline's own absolute thresholds (`mseThreshold`, 4.0e-3 RelMSE) plus a 1%
+  mean-ratio bound. At 1536 accumulated samples both estimators sit at their noise floors and
+  reuse correlation holds spatial's RelMSE at 1.9e-3 against the baseline's 1.6e-3 — the
+  regression the planned gate would flag is the correlation tax restir.md §9 documents, not a
+  bias, and the mean-ratio bound is what actually detects one.
+
+## 2026-08-09 — Phase 8.5: temporal resampling, and what the reservoir readback caught
+
+Three slices (fresh + parity-ping-ponged history pair), a rayless per-stage p_hat consistent
+between numerator and Z, history taps validated against the previous G-buffer only, confidence
+cap 20 / age cap 32, and `_prevCameraPositionWorld` in the frame constants (368 -> 384 B). The
+image gates passed while M never left 1: only the readback of reservoir word 6 caught the test's
+hand-filled frame constants leaving the previous eye at the origin, and then the +0.9% mean from
+`W = 0` histories being treated as invalid — dropping their confidence from Z, the same
+shrink-the-denominator asymmetry as 8.4. Null samples now merge with zero weight and full M.
+
+### Deviations
+
+- **Planned:** a ring of jittered fallback taps and an optional zero-motion fallback around the
+  reprojected history tap. **Done instead:** the single reprojected tap. Nothing measured needs
+  the ring on a static camera, and its value is a moving-camera quality question the gi sample
+  has to answer by eye first — building it now would be tuning without a signal.
+- **Planned (risk 5):** `temporalRelMse <= relativeMse`. **Done instead:** the baseline's own
+  absolute thresholds plus the 1% mean-ratio bound, for the same reason as 8.4: at 1536
+  accumulated samples the reuse correlation holds the floor above the independent baseline's,
+  and the mean is the bias detector.
+
+
+## 2026-08-09 — Phase 8.6: the lighting pass, and two consumers of one reservoir
+
+`gi_restir_lighting.hlsl` shades the resampled reservoirs into the indirect-radiance texture as
+a fullscreen graphics pass — incoming irradiance (`radiance * cos * W`), no albedo, no 1/pi,
+honouring gi_composite's contract. The compute resolve stays as the MSE gates' instrument. The
+gate drives one frame exactly the way a live renderer will (staged constants -> resample ->
+fullscreen draw) and compares the fp16 texture, composited per pixel with the G-buffer's own
+albedo, against the accumulated resolve's mean (0.979 measured, 10% tolerance for one frame of
+a confidence-21 estimator).
+
+### Deviations
+
+- **Planned:** attempt `ray_query: true` on the fragment stage for the optional final visibility
+  ray. **Done instead:** deferred with the constants' flag word plumbed and a TODO.md line. The
+  compile path is unproven (the Phase 1 spike covered compute only), and on the static scenes
+  the engine can currently render, 8.4's merge-loop rays plus 8.5's prev-G-buffer validation
+  leave the final ray nothing to catch — the cost of proving a new compiler path was not worth a
+  ray with no observable effect. Revisit when anything moves.
+- **Found while wiring:** `driver->readbackTexture()` converts to 8-bit and clamps HDR, so the
+  gate reads the target raw through `copyTextureToBuffer` and decodes fp16 on the CPU.
+
+## 2026-08-09 — Phase 8.7: the MIS blend, and what it can and cannot be measured by
+
+`out = fresh * (1 - r^2) + resampled * r^2` in gi_restir_lighting.hlsl, the fresh half being the
+pixel's own canonical sample from the fresh slice 8.5's layout preserves. On by default in the
+sample (`gv_gi_restir_mis`).
+
+### Deviations
+
+- **Planned:** verify by A/B screenshot on Sponza's varied-roughness materials. **Done instead:**
+  a unit gate. Sponza is not in the repository, and the sample's headless screenshots turned out
+  non-reproducible run to run (the orbit camera integrates wall-clock time, so frame 64's view
+  differs per run) — a byte-wise A/B measures nondeterminism, not the blend. The Cornell gate now
+  runs the lighting frame in both blend states and holds both to the accumulated mean, which pins
+  the roughness-1 degenerate case (the blend must be a no-op there). The honest limit is recorded
+  in restir.md: at r = 1 the fresh half never contributes, so a wrong fresh-slice read stays
+  invisible until a varied-roughness asset exists to look at.

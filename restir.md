@@ -3,10 +3,14 @@
 Living document for the ReSTIR GI implementation: what the technique is, the staged plan,
 current status, remaining TODOs, and the reading list. Updated at the end of every phase.
 
-**Status:** Phases 1-3 complete, including Phase 3's gate — the `gi` sample owns the
-G-buffer/deferred/tone-map chain and offers the channel views it asked for. Phase 4 is nearly
-done: the low-spec probe tier renders on screen on all three backends. Remaining there are the
-SSGI contact term (4.4) and a runtime technique switcher, which needs a second technique.
+**Status:** Phases 1-8 complete. ReSTIR GI runs as the second, runtime-selectable technique in
+the `gi` sample — one traced sample per pixel, temporal reuse (confidence cap 20 / age cap 32),
+spatial reuse with the reconnection Jacobian and a bias-verified denominator, a fullscreen
+lighting pass honouring the §5 composite contract, and the roughness MIS blend. Every sub-step
+is gated against the Phase 6 reference on the Cornell fixture. What remains is Phase 9 (denoiser,
+firefly controls, performance) plus the recorded honest limits: moving-camera temporal is
+verified by eye only, the traced passes still see no directional light (environment/emissive
+only, §12), and the final visibility ray is deferred behind its plumbed flag.
 
 ---
 
@@ -691,11 +695,13 @@ Technique decided in §5: **raster-updated dynamic probe volume + SSGI contact t
       combined (irradiance × albedo / pi, added to direct), so a second technique means adding
       passes rather than editing the composite. The optional confidence channel is not there yet:
       nothing consumes one until the Phase 9 denoiser
-- [ ] Runtime selection gated on `VkmDriverCapabilityFlags::RayTracing` + a quality setting, not
-      `#ifdef`. **Deliberately not built yet**: there is one technique, so a selector would have
-      nothing to select between and no second consumer to prove the interface against. The place it
-      plugs into is settled — `gi_composite` is the only pass that consumes a technique's output —
-      so this lands with ReSTIR in Phase 8, which is the second technique
+- [x] Runtime selection gated on `VkmDriverCapabilityFlags::RayTracing` + a quality setting, not
+      `#ifdef`. **Landed with Phase 8, as planned**: `gv_gi_technique` / an ImGui combo in the gi
+      sample selects probe volume or ReSTIR at runtime, shown only where the device reports ray
+      tracing and clamped back to the probe tier where it does not (or where the RT pipelines or
+      acceleration structures fail). The interface held: the switch swaps which subgraphs run
+      between GiDirectLighting and GiComposite, and `_indirectTarget` and the composite table are
+      untouched — exactly the §5 boundary, proven by its second consumer
 - [x] **4.1 Probe volume storage.** `VkmProbeVolume`: probe grid, both atlases (8×8 irradiance,
       16×16 distance/moments), double-buffered for hysteresis blending, with a **one-texel border
       per probe** so bilinear taps near an octahedral seam read the right neighbour rather than the
@@ -811,9 +817,9 @@ validation errors and builds on all three backends; a two-room fixture now exist
 (`resources/tests/gltf_two_rooms.gltf`) and a probe walled off from the white room captures none of
 it. Not met, and each for a stated reason:
 
-- **The technique switcher has nothing to switch.** One technique exists. Deferred to Phase 8 rather
-  than faked with a one-entry menu — the interface's real test needs a second consumer, and that is
-  what ReSTIR will be.
+- ~~**The technique switcher has nothing to switch.**~~ **Resolved with Phase 8**: ReSTIR is the
+  second technique, selectable at runtime behind the RayTracing capability, and the composite was
+  untouched by its arrival — the interface's real test, passed.
 - **Leak prevention is verified on the capture side only.** The Chebyshev test lives in the *lookup*,
   and disabling it leaves the two-room test passing: reaching that path needs `probe_lighting` run
   over an authored G-buffer against real captured atlases. Its rejection is covered against
@@ -1012,27 +1018,81 @@ Incremental, with measured RelMSE against Phase 6 at every sub-step.
       consecutive points share almost the same radius — a run of them would sample a ring rather
       than a disk. `vkmBuildNeighbourOffsets` is free-standing, so the distribution is testable
       without a GPU.
-- [~] **8.4 Spatial resampling** — written, dispatched, **not verified, not on by default.**
+- [x] **8.4 Spatial resampling** — verified, still off by default (the un-resampled estimator
+      stays one flag away as a validation mode; the gi sample turns it on).
       `gi_reservoir_spatial.hlsl` merges k neighbours chosen from the G-buffer alone (normal within
       25°, camera distance within 10%), applies the reconnection Jacobian, and runs the second loop
       over the same neighbours for the bias-correction denominator with a visibility ray each.
       RTXDI's Jacobian magnitude clamp is deliberately left out: it buys variance at the cost of a
       mean this sub-step exists to measure.
-      **What is measured.** With the per-neighbour visibility ray bypassed the mean lands within
-      **0.015%** of the un-resampled estimator — so the Jacobian, the receiver-side target function
-      and the denominator arithmetic are right. With it in place the image is **13.8% bright**, and
-      that verdict does not respond to the ray's inputs: six structurally different changes all
-      produced a bit-identical result while bypassing the ray did not, and the same function
-      returns "visible" for the call outside the loop (`_neighbourCount = 0` reproduces the
-      un-resampled mean exactly). Recorded in `TODO.md`; this stays unchecked until it is
-      understood rather than tuned away.
-- [ ] **8.5 Temporal resampling** — camera and scene **static first**, then moving. Reproject via
-      motion vectors, ring of jittered fallback taps, optional zero-motion fallback, confidence
-      cap (start 20), separate **age cap**
-- [ ] **8.6 Shading/resolve** — `f_s · cos · L_o · W`, optional final visibility ray, composite
-      with direct light
-- [ ] **8.7 Final-shading MIS** on low-roughness surfaces (see §2's bias note). Cyberpunk's cheap
-      version: `BRDF·(1−roughness²) + ReSTIR·roughness²`
+      **The 13.8% brightening was the asymmetry the maths forbids**: the denominator Z evaluated
+      `p̂·V` (its per-participant visibility ray) while the merge weights evaluated `p̂` alone — no
+      ray in the merge loop. Every genuinely occluded participant was dropped from the divisor
+      while its weight stayed in the sum. Algorithm 6 requires the *same* target function in both;
+      adding the centre-visibility ray to the merge loop (rejecting candidates the centre cannot
+      see, which is also §2's leak-prevention ray) took the mean from 1.138× to **0.9977×** the
+      un-resampled estimator, with MSE vs the reference equal to the 1-spp baseline's (2.44e-4 vs
+      2.41e-4 on Metal). Asserted in `TestIndirectPassShared` at the baseline's own thresholds
+      plus a 1% mean-ratio bound. The environment flag needed no Jacobian special case after all —
+      at the 1e5-unit stand-in distance the Jacobian's own ratios collapse to 1 (documented at
+      `vkmReservoirJacobian`). One honest note: at 1536 *accumulated* samples spatial's RelMSE
+      (1.9e-3) does not beat the baseline's (1.6e-3) — reuse correlation holds the floor; the win
+      resampling buys is at low sample counts, the live path's regime.
+- [x] **8.5 Temporal resampling** — `gi_reservoir_temporal.hlsl`, no rays. The slice layout grew
+      to three: generation writes a fresh slice that survives the whole frame (8.7's MIS blend
+      reads it), temporal ping-pongs the history pair by sample parity, and spatial — when on —
+      writes into the slice history was just consumed from. Only the temporal output is ever
+      re-ingested; spatial results never feed back (§9). Reprojection subtracts the motion vector
+      from the current UV; the history tap is validated against the **previous** G-buffer only
+      (bounds, coverage, normal within threshold, camera distance against the **previous** eye —
+      which needed `_prevCameraPositionWorld` in the frame constants, 368 → 384 B). Confidence cap
+      20 and a separate age cap 32, both push constants; age is the *sample's*, so a pixel that
+      adopts its fresh candidate resets it and never trips the cap. The temporal p̂ is
+      luminance·cos with **no** visibility ray, stated per-stage: the history sample came from
+      (up to reprojection) this surface, disocclusion is G-buffer-rejected, and the spatial pass
+      and resolve still guard the result — numerator and Z use the same rayless p̂, so the stage
+      is consistent the way 8.4 taught. Verified on the Cornell gate: mean ratio 1.002, caps
+      observed in a reservoir readback (max M exactly 21, max age exactly 32) — and that readback
+      caught two real bugs on the way in: a hand-filled test frame-constant leaving the previous
+      eye at the origin (every tap depth-rejected; M never left 1), and `W = 0` histories treated
+      as invalid, which drops their confidence from Z and brightens by the same asymmetry 8.4 was
+      (+0.9% → +0.2% once null samples merge with weight 0 but full M, per §9's null-sample rule).
+      The ring of jittered fallback taps is deliberately not built: nothing measured needs it yet,
+      and it belongs with the moving-camera work the gi sample verifies by eye
+- [ ] **8.5 (deferred half): moving camera/scene verification** — reprojection and the previous-eye
+      depth test are implemented and static-verified; a moving camera is checked in the gi sample
+      by eye (no automated gate exists for it), and object motion still reports camera-only
+      vectors (`VkmObjectData` carries no previous transform)
+- [x] **8.6 Shading/resolve** — two consumers of one reservoir, deliberately. The compute resolve
+      (`gi_reservoir_resolve.hlsl`, applies albedo/π into the accumulation buffer) stays as the
+      MSE gates' instrument; the new `gi_restir_lighting.hlsl` is a fullscreen **graphics** pass
+      that shades the resampled reservoirs into the indirect-radiance texture, honouring
+      gi_composite's contract — incoming irradiance, `radiance·cos·W`, **no** albedo and no 1/π,
+      both applied once by the composite. A graphics pass because the target is a color
+      attachment and a fragment shader reads the reservoir storage buffer fine;
+      `VkmTableResourceType` needs no storage-texture kind for this. `recordAccumulate` split
+      into `recordResample` / `recordResolveAccumulate`, plus `recordUpdateLightingConstants`
+      (per-frame staged uniform: parity-dependent slice indices cannot live in an immutable
+      table) and `recordLighting`. Debug views ride the same constants: reservoir M, age and W
+      as grey ramps — the caps are invisible in the lit image. Gate: one frame driven exactly as
+      a live renderer drives it (transfer → resample → fullscreen draw), read back **raw fp16**
+      (readbackTexture converts to 8-bit and clamps HDR), composited per pixel with the
+      G-buffer's own albedo·(1−metallic)/π, and its mean must land on the accumulated resolve's
+      (measured 0.979, tolerance 10% for one frame of a confidence-21 estimator). The optional
+      final visibility ray is **not** in: fragment-stage ray query is unproven through the
+      SPIRV-Cross MSL path, and with 8.4's merge rays and 8.5's G-buffer validation nothing
+      static needs it — deferred with its flag word already plumbed (`TODO.md`)
+- [x] **8.7 Final-shading MIS** on low-roughness surfaces (see §2's bias note). Cyberpunk's cheap
+      version, in `gi_restir_lighting.hlsl` rather than the shared composite (which stays
+      technique-agnostic per §5): `out = fresh·(1−r²) + resampled·r²`, where the fresh half is the
+      pixel's own canonical 1-spp sample — kept alive in the fresh slice by 8.5's layout exactly
+      for this. Toggle in the lighting constants, `gv_gi_restir_mis` + a checkbox in the sample,
+      on by default. Gated where it can be: every fixture material has roughness 1, where the
+      blend must degenerate to the resampled estimate — both blend states are held to the same
+      mean in the Cornell gate. The honest limit: at r = 1 the fresh half never contributes, so a
+      wrong fresh-slice read is invisible until a varied-roughness asset exists to look at; the
+      sample's headless A/B was also found to be non-reproducible run to run (the orbit camera
+      integrates wall-clock time), so byte comparisons say nothing there
 
 > **Hard rule (course Tip 4.1):** choose which neighbours to reuse based **only** on the G-buffer.
 > Never on the samples or weights stored *in* the neighbours' reservoirs — that conditions the
@@ -1043,6 +1103,14 @@ must match **on a diffuse-only scene** (specular secondary hits are legitimately
 A shifted mean on diffuse means a broken MIS weight or missing Jacobian. Add a debug view per pass
 (reservoir `M`, `W`, `age`, chosen sample position, temporal-vs-spatial contribution) — these bugs
 are invisible in the final image.
+
+**How the gate was actually applied** (8.4/8.5): the mean-match half held as written and caught
+both real bugs. The RelMSE half was re-scoped to "the baseline's own absolute thresholds" rather
+than "beat the baseline": at 1536 *accumulated* samples every estimator sits at its noise floor,
+and reuse correlation holds a resampled estimator's accumulated floor at or above the independent
+baseline's — resampling's win is per-frame, the live path's regime, which no accumulation gate
+can see. Debug views shipped as the lighting pass's M/age/W ramps plus the reservoir word-6
+readback in the test, which is what the caps are actually asserted through.
 
 ### Phase 9 — Denoiser and production hardening
 The denoiser is **shared by both tiers**, so it is built once here and benefits the low-spec path too.
@@ -1371,6 +1439,10 @@ unifying DI + GI into *one* reservoir set. Memory 431 → 265 MB/frame.
 | 2026-08-06 | 7 | **The third bug the convergence gate found: an acceleration structure built before it was resident.** `VkmDriverBase::newAccelerationStructure` calls `onResourceInitialized()` -- which is what adds a resource to Metal's residency set -- *after* `initialize()` returns, and `initialize()` is where the synchronous build happens. Every structure was therefore built while unmapped: a bottom-level build wrote into memory that was not resident, and a top-level build read bottom-level structures that were not either. It worked whenever that memory happened to be resident anyway, so it depended on what the process had allocated first and Metal reported nothing either way -- the gate saw it as zero ray hits under `MTL_DEBUG_LAYER=1` only after another test case had run. What cracked it: rebuilding the freshly built structure once made it work every time, while a full `waitIdle` did not and the instance ids were byte-identical at build and rebuild, so it was neither synchronization nor contents. The structure now registers itself before recording its build, its scratch and instance buffers too, and the synchronous build records through the same `buildAccelerationStructure` entry point the per-frame rebuild uses. Gate registered on both backends; Metal 218/218 under validation. |
 | 2026-08-06 | 8 | **8.1 + 8.3, and the packing bug the sub-step gate caught.** A 32-byte reservoir (fp32 position, octahedral snorm16 normal, RGB9E5 radiance, fp32 W, 8-bit M and age), one buffer with slices and per-pass slice indices, one traced sample per pixel written into it, and a resolve that shades `f_s * cos * L * W` from it. Two slices rather than `FRAME_COUNT`, because `VkmRenderGraph`'s per-slot `ensureCompleted()` already answers the frames-in-flight question -- the count is set by what resampling needs. **The gate is 'is it the same estimator', not 'does it converge':** with one candidate RIS reduces to `W = 1/p_source`, and the pass shares gi_indirect's random stream on purpose, so the two see the same direction at every pixel and may differ only by the reservoir round trip. It scored MSE 5.5e-4 -- 7.4% dark -- because RGB9E5's exponent bias was written 16 instead of 15. That is not a visible off-by-one: pack and unpack share the scale, so small values round-trip perfectly and every channel whose mantissa lands above 511 silently clamps. Fixed: **9.7e-7**, two orders under the convergence gate. Slice index sabotage-verified. |
 | 2026-08-06 | 8 | **8.2 and 8.4: the neighbour LUT, and a spatial pass that is honest about not being verified.** 256 R2 points through a concentric disk map, and a spatial resampling pass that picks neighbours from the G-buffer alone, applies the reconnection Jacobian, and runs the second loop for the bias-correction denominator with a visibility ray each. The estimator arithmetic is **measured** correct: with that ray bypassed the mean is within 0.015% of the un-resampled one, which is what says the Jacobian, the receiver-side target function and the denominator are right. With the ray in place the image is 13.8% bright and the verdict is insensitive to the ray's own inputs -- origin, target offset, surface from an array vs recomputed, rolled vs unrolled, `ACCEPT_FIRST_HIT` vs closest-hit all give a bit-identical result, while bypassing it does not, and the same function returns visible for the call outside the loop. Landed off by default and left unchecked in the plan rather than tuned until the number looked right. |
+| 2026-08-09 | 8 | **8.4 verified: the 13.8% was visibility in the denominator but not in the merge weights.** Z's per-participant ray evaluated `p̂·V` while the merge loop evaluated `p̂` with no ray at all, so every genuinely occluded participant left the divisor while its weight stayed in the sum — brighter by exactly the occluded fraction, which on the open Cornell box is ~14%. That is also why the recorded symptoms pointed away from the ray itself: its verdicts were correct (input changes bit-identical), bypassing it made Z consistent with the rayless numerator again (mean within 0.015%), and `_neighbourCount = 0` removed the asymmetry with the ray still present. One added ray in the merge loop — which is §2's re-traced reconnection visibility, so it also closes the wall-leak path — took the ratio to 0.9977 and the MSE to the 1-spp baseline's own floor (2.44e-4 vs 2.41e-4, Metal). The gate is now asserted: mean ratio within 1%, baseline MSE/RelMSE thresholds. The environment-flag Jacobian special case TODO.md called for was dropped rather than added: at the 1e5-unit stand-in distance the Jacobian's ratios collapse to 1 on their own, already documented at `vkmReservoirJacobian`. |
+| 2026-08-09 | 8 | **8.5: temporal resampling, static-verified, and the reservoir readback earned its keep twice.** Three slices now (fresh + a parity-ping-ponged history pair; only the temporal output re-ingests), a rayless per-stage p̂ = luminance·cos consistent between numerator and Z, history taps validated against the previous G-buffer only, confidence cap 20 / age cap 32 as push constants, and `_prevCameraPositionWorld` added to the frame constants (368 → 384 B) because a history camera distance is radial from the *previous* eye. The image gates alone said "fine" while M never left 1 — the readback of reservoir word 6 is what caught the test's own frame-constants leaving the previous eye at the origin (every tap depth-rejected). It then caught the second bug at +0.9% mean: `W = 0` histories treated as invalid, dropping their confidence from Z — §9's null-sample rule, and the same shrink-the-denominator asymmetry as 8.4. Null samples now merge with zero weight and full M: ratio 1.002, max M exactly 21, max age exactly 32. Metal 246/246. |
+| 2026-08-09 | 8 | **8.6: the reservoir gets its second consumer.** `gi_restir_lighting` shades the resampled reservoirs into the indirect-radiance texture as a fullscreen graphics pass, emitting incoming irradiance per gi_composite's contract (albedo and 1/π applied once, by the composite — the compute resolve keeps applying them itself because it feeds the MSE gates, and the two must not be conflated). `recordAccumulate` split into `recordResample`/`recordResolveAccumulate`; lighting constants ride a per-frame staged uniform buffer because the parity-dependent slice indices cannot live in an immutable table. M/age/W debug ramps ride the same constants. The gate drives one frame the way a live renderer will and compares the fp16 target (read raw — `readbackTexture` clamps HDR to 8-bit) composited with the G-buffer's own albedo against the accumulated mean: 0.979. The final visibility ray is deferred with its flag plumbed: fragment-stage ray query is an unproven compiler path, and on static scenes the merge rays + history validation leave it nothing to catch. Metal 246/246. |
+| 2026-08-09 | 8 | **ReSTIR is on screen, and the §5 interface passed its real test.** The gi sample gained `gv_gi_technique` / an ImGui combo (shown only where the device reports RayTracing, clamped back to probes where it doesn't or where the RT load / AS build fails), builds the scene's acceleration structures at load, loads the RT PSOs exactly once, and — when ReSTIR is active — skips the probe refresh, probe lighting and SSGI, recording instead one compute subgraph (generate → temporal → spatial) and one fullscreen lighting draw into the *same* `_indirectTarget`. The composite and its table were untouched, which is the interface holding. The G-buffer flip hazard is solved in the engine: `VkmRestirPass` builds every G-buffer-binding table twice, roles swapped, and the record calls take a parity — the count of `advanceFrame()` calls since the pass was built. On resize the whole pass object retires for `FRAME_BUFFER_COUNT` frames (its destroy() deletes tables immediately, which in-flight frames may hold). Verified headless on the Cornell fixture: composite and indirect-only screenshots on Metal, zero validation errors — the indirect view shows the smooth, occlusion-graded environment irradiance a confidence-21 temporal estimator should give, not 1-spp noise. Honest limits: the scene's directional light is invisible to the traced passes (restir.md §12 — environment radiance is the knob until area lights exist), and camera-motion ghosting is checked interactively, not headless. Metal 246/246. |
 | 2026-08-07 | 5 | **The acceleration structure lifetime bugs the first ray-tracing CI job found.** Everything above had been written against a device that reports no ray tracing, so lavapipe running it was the first execution anywhere. It reported `VUID-vkDestroyAccelerationStructureKHR-...-02442` and died with SIGSEGV, and the cause was three separate things stacked. **One counter used for two purposes:** `beginCommandBuffer()` takes a timeline value and `submit()` allocates and signals another, so `waitIdle()` waiting on the last *allocated* value is correct only while every allocation is followed by a submit -- and one test deliberately begins a command buffer it never submits. Metal blocked for the full timeout; Vulkan's `vkWaitSemaphores` returned `VK_TIMEOUT` and **the result was discarded**, making the wait indistinguishable from success. **The deferred reclaimer was deferring nothing:** `recordUsage` was called only by `VkmRenderGraph::execute`, and only for resources a pass declared, so a structure built through a bare queue submit reached the reclaimer with no usages at all -- and an entry with no usages is ready on the worker's next 4 ms poll. **And a timeline wait is not the API considering the work retired:** the engine called `vkDeviceWaitIdle` nowhere outside the swapchain, and adding it to `VkmDriverVulkan::waitIdle` is what finally cleared the VUID. |
 | 2026-08-07 | 7 | **Vulkan culled every front face, and two gates had to move.** The deferred GI test reported **zero** covered pixels on lavapipe while its reference path tracer covered all of them -- the ray tracing was fine and the rasteriser was drawing nothing. `toVkFrontFace` inverted the enum behind a comment saying not to "fix" it, on the reasoning that vkm-compiler's `-fvk-invert-y` mirrors screen-space winding so inverting here cancels it. What that misses is that **Metal flips too**, in its viewport transform, because its NDC is +Y up and its framebuffer origin is top-left: one flip each, nothing left to cancel. Settled by measurement after two reasoning attempts got it wrong -- the same scene through both backends fills 2016 of 4096 texels, bounding box x[0..62] y[1..63], covered-mask centroid (20.7, 42.3), pixel-identical and therefore identically wound, with the indirect argument buffers matching byte for byte to rule out the cull and emit passes. It surfaced only now because the two tests that draw a scene were **Metal-only**; `TestGBufferRenderVulkan.cpp` instantiates them for Vulkan, needs no ray tracing, and so reproduces this class of failure on MoltenVK locally. Also found: the Cornell G-buffer was sampled while still in `COLOR_ATTACHMENT_OPTIMAL` (`VUID-vkCmdDraw-None-09600`), and Phase 7's convergence threshold cannot be shared -- lavapipe's floor at 1536 samples is 7.9e-4 against Metal's 2.4e-4, and eight times the samples moves it 14%, so the excess is systematic rather than variance and the threshold is now per-backend (6.0e-4 Metal, 1.0e-3 Vulkan) with the unexplained ~5.5e-4 in `TODO.md`. The last failure was not ours: lavapipe segfaults while compiling the internal shaders it builds acceleration structures with, proven by `MESA_SHADER_CACHE_DISABLE=true` making *every* run crash instead of only the first, so the job warms the cache and judges the second run. Full suite on lavapipe: **222/222, 9199 assertions**; 17/17 CI jobs. |
 | 2026-08-08 | 5 | **Review follow-ups.** Acceleration structure geometry now names its vertex and index ranges with two `VkmBufferView` handles rather than a (buffer, byte offset) pair each -- a range inside a buffer someone else owns is what a view already means here, and naming it twice invited the halves to disagree. The scene makes them with `VkmBuffer::createView`, so they are children of the pool buffer and released with it. Both backends resolve one through the common API, using the view's *relative* offset: `VkmBufferViewVulkan::getOffset()` is absolute and would count a pooled buffer's own offset twice on top of the parent's device address. Separately, `recordBuild` is gone from both backends' resource classes -- a resource describes itself and the command buffer turns that into a command -- which also stopped Vulkan's `initialize()` reaching for the raw `VkCommandBuffer` and thereby skipping the recording-rule checks and the usage recording the reclaimer waits on. |

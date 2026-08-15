@@ -10,6 +10,7 @@
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/resource_table.h>
+#include <vkm/renderer/backend/common/staging_buffer.h>
 #include <vkm/renderer/gbuffer.h>
 #include <vkm/renderer/path_tracer.h>
 
@@ -108,11 +109,16 @@ namespace vkm
         std::string psoError;
         _generatePipeline = pipelineStateManager->getPipelineState("gi_reservoir_generate_pso[default]",
                                                                    VkmPipelineStateOrigin::Engine);
+        _temporalPipeline = pipelineStateManager->getPipelineState("gi_reservoir_temporal_pso[default]",
+                                                                   VkmPipelineStateOrigin::Engine);
         _spatialPipeline = pipelineStateManager->getPipelineState("gi_reservoir_spatial_pso[default]",
                                                                   VkmPipelineStateOrigin::Engine);
         _resolvePipeline = pipelineStateManager->getPipelineState("gi_reservoir_resolve_pso[default]",
                                                                   VkmPipelineStateOrigin::Engine);
-        if (_generatePipeline == nullptr || _spatialPipeline == nullptr || _resolvePipeline == nullptr)
+        _lightingPipeline = pipelineStateManager->getPipelineState("gi_restir_lighting_pso[default]",
+                                                                   VkmPipelineStateOrigin::Engine);
+        if (_generatePipeline == nullptr || _temporalPipeline == nullptr || _spatialPipeline == nullptr ||
+            _resolvePipeline == nullptr || _lightingPipeline == nullptr)
         {
             return fail(outError, "The reservoir pipelines are not loaded; call vkmLoadRayTracingPipelineStates first");
         }
@@ -157,44 +163,112 @@ namespace vkm
         }
         _neighbourOffsetBuffer = neighbourOffsets->getHandle();
 
-        // Binding orders mirror the PSO jsons.
-        _generateTable = driver->newResourceTable(
-            _generatePipeline, VkmResourceSetKind::PerPass,
-            {{ 0, gbuffer.getTexture(VkmGBuffer::Target::Normal) },
-             { 1, gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) },
-             { 2, _reservoirBuffer }},
-            &psoError);
-        if (_generateTable == nullptr)
+        /*
+        * Binding orders mirror the PSO jsons. Every pass that binds G-buffer textures gets one
+        * table per parity: the G-buffer's current/previous roles swap on advanceFrame() while a
+        * table is immutable, so parity 0 binds the roles as they are at initialize and parity 1
+        * binds them swapped -- recordResample selects by the caller's flip count. The temporal
+        * table also binds the previous set for history-tap validation; before the first
+        * advanceFrame() that set holds nothing rendered, whose zero camera distance reads as a
+        * disocclusion -- the right answer for "there is no history yet".
+        */
+        for (uint32_t parity = 0; parity < 2; ++parity)
         {
-            destroy(driver);
-            return fail(outError, "Failed to build the reservoir generation table: " + psoError);
+            const auto current = [&](VkmGBuffer::Target target) {
+                return parity == 0 ? gbuffer.getTexture(target) : gbuffer.getPrevTexture(target);
+            };
+            const auto previous = [&](VkmGBuffer::Target target) {
+                return parity == 0 ? gbuffer.getPrevTexture(target) : gbuffer.getTexture(target);
+            };
+
+            _generateTables[parity] = driver->newResourceTable(
+                _generatePipeline, VkmResourceSetKind::PerPass,
+                {{ 0, current(VkmGBuffer::Target::Normal) },
+                 { 1, current(VkmGBuffer::Target::MotionMetallic) },
+                 { 2, _reservoirBuffer }},
+                &psoError);
+            _temporalTables[parity] = driver->newResourceTable(
+                _temporalPipeline, VkmResourceSetKind::PerPass,
+                {{ 0, current(VkmGBuffer::Target::Normal) },
+                 { 1, current(VkmGBuffer::Target::MotionMetallic) },
+                 { 2, previous(VkmGBuffer::Target::Normal) },
+                 { 3, previous(VkmGBuffer::Target::MotionMetallic) },
+                 { 4, _reservoirBuffer }},
+                &psoError);
+            _spatialTables[parity] = driver->newResourceTable(
+                _spatialPipeline, VkmResourceSetKind::PerPass,
+                {{ 0, current(VkmGBuffer::Target::Normal) },
+                 { 1, current(VkmGBuffer::Target::MotionMetallic) },
+                 { 2, _neighbourOffsetBuffer },
+                 { 3, _reservoirBuffer }},
+                &psoError);
+            _resolveTables[parity] = driver->newResourceTable(
+                _resolvePipeline, VkmResourceSetKind::PerPass,
+                {{ 0, current(VkmGBuffer::Target::Normal) },
+                 { 1, current(VkmGBuffer::Target::BaseColorRoughness) },
+                 { 2, current(VkmGBuffer::Target::MotionMetallic) },
+                 { 3, _reservoirBuffer },
+                 { 4, _accumulationBuffer }},
+                &psoError);
+            if (_generateTables[parity] == nullptr || _temporalTables[parity] == nullptr ||
+                _spatialTables[parity] == nullptr || _resolveTables[parity] == nullptr)
+            {
+                destroy(driver);
+                return fail(outError, "Failed to build the reservoir pass tables: " + psoError);
+            }
         }
 
-        _spatialTable = driver->newResourceTable(
-            _spatialPipeline, VkmResourceSetKind::PerPass,
-            {{ 0, gbuffer.getTexture(VkmGBuffer::Target::Normal) },
-             { 1, gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) },
-             { 2, _neighbourOffsetBuffer },
-             { 3, _reservoirBuffer }},
-            &psoError);
-        if (_spatialTable == nullptr)
+        // The lighting constants change per frame (parity-dependent slice indices) while the
+        // table binding them stays immutable, so they ride a uniform buffer with one staging
+        // region per frame slot -- the same shape the gi sample's composite constants use.
+        VkmBufferInfo uniformInfo{};
+        uniformInfo._flags = static_cast<VkmResourceCreateInfo>(
+            static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
+            static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst));
+        uniformInfo._size = sizeof(VkmRestirLightingConstants);
+        uniformInfo._debugName = "RestirLightingConstants";
+        VkmBuffer* lightingConstants = driver->newBuffer(uniformInfo);
+        if (lightingConstants == nullptr)
         {
             destroy(driver);
-            return fail(outError, "Failed to build the spatial resampling table: " + psoError);
+            return fail(outError, "Failed to create the ReSTIR lighting constant buffer");
+        }
+        _lightingConstantBuffer = lightingConstants->getHandle();
+
+        for (uint32_t frame = 0; frame < FRAME_BUFFER_COUNT; ++frame)
+        {
+            VkmStagingBufferInfo stagingInfo{};
+            stagingInfo._flags = VkmResourceCreateInfo::AllowTransferSrc;
+            stagingInfo._size = sizeof(VkmRestirLightingConstants);
+            stagingInfo._debugName = "RestirLightingStaging";
+            VkmStagingBuffer* staging = driver->newStagingBuffer(stagingInfo);
+            if (staging == nullptr)
+            {
+                destroy(driver);
+                return fail(outError, "Failed to create the ReSTIR lighting staging buffers");
+            }
+            _lightingStaging[frame] = staging->getHandle();
+            _lightingStagingPointers[frame] = staging;
         }
 
-        _resolveTable = driver->newResourceTable(
-            _resolvePipeline, VkmResourceSetKind::PerPass,
-            {{ 0, gbuffer.getTexture(VkmGBuffer::Target::Normal) },
-             { 1, gbuffer.getTexture(VkmGBuffer::Target::BaseColorRoughness) },
-             { 2, gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic) },
-             { 3, _reservoirBuffer },
-             { 4, _accumulationBuffer }},
-            &psoError);
-        if (_resolveTable == nullptr)
+        for (uint32_t parity = 0; parity < 2; ++parity)
         {
-            destroy(driver);
-            return fail(outError, "Failed to build the reservoir resolve table: " + psoError);
+            const auto current = [&](VkmGBuffer::Target target) {
+                return parity == 0 ? gbuffer.getTexture(target) : gbuffer.getPrevTexture(target);
+            };
+            _lightingTables[parity] = driver->newResourceTable(
+                _lightingPipeline, VkmResourceSetKind::PerPass,
+                {{ 0, current(VkmGBuffer::Target::Normal) },
+                 { 1, current(VkmGBuffer::Target::BaseColorRoughness) },
+                 { 2, current(VkmGBuffer::Target::MotionMetallic) },
+                 { 3, _reservoirBuffer },
+                 { 4, _lightingConstantBuffer }},
+                &psoError);
+            if (_lightingTables[parity] == nullptr)
+            {
+                destroy(driver);
+                return fail(outError, "Failed to build the ReSTIR lighting table: " + psoError);
+            }
         }
         return true;
     }
@@ -211,9 +285,14 @@ namespace vkm
                 table = nullptr;
             }
         };
-        releaseTable(_generateTable);
-        releaseTable(_spatialTable);
-        releaseTable(_resolveTable);
+        for (uint32_t parity = 0; parity < 2; ++parity)
+        {
+            releaseTable(_generateTables[parity]);
+            releaseTable(_temporalTables[parity]);
+            releaseTable(_spatialTables[parity]);
+            releaseTable(_resolveTables[parity]);
+            releaseTable(_lightingTables[parity]);
+        }
 
         VkmDeferredResourceReclaimer* reclaimer = driver->getDeferredReclaimer();
         const auto release = [reclaimer](VkmResourceHandle& handle) {
@@ -226,22 +305,43 @@ namespace vkm
         release(_reservoirBuffer);
         release(_neighbourOffsetBuffer);
         release(_accumulationBuffer);
+        release(_lightingConstantBuffer);
+        for (uint32_t frame = 0; frame < FRAME_BUFFER_COUNT; ++frame)
+        {
+            release(_lightingStaging[frame]);
+            _lightingStagingPointers[frame] = nullptr;
+        }
 
         _generatePipeline = nullptr;
+        _temporalPipeline = nullptr;
         _spatialPipeline = nullptr;
         _resolvePipeline = nullptr;
+        _lightingPipeline = nullptr;
         _width = 0;
         _height = 0;
         _sampleIndex = 0;
+        _lastResolvedSlice = 0;
     }
 
-    void VkmRestirPass::recordAccumulate(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options)
+    uint32_t VkmRestirPass::getPlannedOutputSlice(const VkmRestirOptions& options) const
     {
-        VKM_ASSERT(commandBuffer != nullptr, "VkmRestirPass::recordAccumulate requires a command buffer");
-
-        if (_generatePipeline == nullptr || _spatialPipeline == nullptr || _resolvePipeline == nullptr)
+        if (!options._temporalResampling)
         {
-            VKM_DEBUG_ERROR("recordAccumulate before a successful VkmRestirPass::initialize");
+            return options._spatialResampling ? options._outputSlice : options._inputSlice;
+        }
+        const uint32_t parity = _sampleIndex & 1u;
+        return options._spatialResampling ? parity : (1u - parity);
+    }
+
+    void VkmRestirPass::recordResample(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options,
+                                       uint32_t gbufferParity)
+    {
+        VKM_ASSERT(commandBuffer != nullptr, "VkmRestirPass::recordResample requires a command buffer");
+
+        if (_generatePipeline == nullptr || _temporalPipeline == nullptr || _spatialPipeline == nullptr ||
+            _resolvePipeline == nullptr)
+        {
+            VKM_DEBUG_ERROR("recordResample before a successful VkmRestirPass::initialize");
             return;
         }
         if (options._outputSlice >= kVkmReservoirSliceCount || options._inputSlice >= kVkmReservoirSliceCount)
@@ -258,6 +358,21 @@ namespace vkm
             return;
         }
 
+        /*
+        * Slice routing. Without temporal reuse the options drive it: generation writes
+        * `_inputSlice`, spatial moves the result to `_outputSlice`, the resolve reads whichever
+        * the last writer used. With temporal reuse the routing is fixed by the pass: generation
+        * writes the fresh slice (2), temporal merges it with last frame's history slice `p` into
+        * `1 - p` where `p = _sampleIndex & 1`, and spatial — when on — moves that into `p`, the
+        * slice just consumed as history and therefore free. Only the temporal output is ever
+        * re-ingested as history, never the spatial output: feeding spatial results back into the
+        * temporal loop drives correlation and detail erosion (restir.md section 9).
+        */
+        const uint32_t parity = _sampleIndex & 1u;
+        constexpr uint32_t kFreshSlice = 2;
+        const uint32_t historySlice = parity;
+        const uint32_t temporalOutSlice = 1u - parity;
+
         VkmRestirConstants constants{};
         constants._width = _width;
         constants._height = _height;
@@ -272,41 +387,142 @@ namespace vkm
         constants._neighbourRadius = options._neighbourRadius;
         constants._normalThreshold = options._normalThreshold;
         constants._depthThreshold = options._depthThreshold;
+        constants._historySlice = historySlice;
+        constants._confidenceCap = options._confidenceCap;
+        constants._maxSampleAge = options._maxSampleAge;
 
         const uint32_t groupsX = (_width + kThreadGroupSize - 1) / kThreadGroupSize;
         const uint32_t groupsY = (_height + kThreadGroupSize - 1) / kThreadGroupSize;
 
-        // Generation always writes the input slice; the spatial pass, when it runs, moves the
-        // result to the output slice and the resolve reads whichever the last writer used.
         VkmRestirConstants generateConstants = constants;
-        generateConstants._outputSlice = options._inputSlice;
+        generateConstants._outputSlice = options._temporalResampling ? kFreshSlice : options._inputSlice;
 
         commandBuffer->bindPipeline(_generatePipeline);
-        commandBuffer->bindResourceTable(_generateTable);
+        commandBuffer->bindResourceTable(_generateTables[gbufferParity & 1u]);
         commandBuffer->setPushConstants(&generateConstants, sizeof(generateConstants));
         commandBuffer->dispatch(groupsX, groupsY, 1);
         // Closing the compute pass here is what orders the next pass's reads after this one's
         // writes -- the same mechanism VkmScene::recordCull relies on between its two dispatches.
         commandBuffer->unbindPipeline();
 
-        VkmRestirConstants resolveConstants = constants;
-        resolveConstants._inputSlice = options._inputSlice;
-        if (options._spatialResampling)
+        if (options._temporalResampling)
         {
-            commandBuffer->bindPipeline(_spatialPipeline);
-            commandBuffer->bindResourceTable(_spatialTable);
-            commandBuffer->setPushConstants(&constants, sizeof(constants));
+            VkmRestirConstants temporalConstants = constants;
+            temporalConstants._inputSlice = kFreshSlice;
+            temporalConstants._outputSlice = temporalOutSlice;
+
+            commandBuffer->bindPipeline(_temporalPipeline);
+            commandBuffer->bindResourceTable(_temporalTables[gbufferParity & 1u]);
+            commandBuffer->setPushConstants(&temporalConstants, sizeof(temporalConstants));
             commandBuffer->dispatch(groupsX, groupsY, 1);
             commandBuffer->unbindPipeline();
-            resolveConstants._inputSlice = options._outputSlice;
         }
 
+        if (options._spatialResampling)
+        {
+            VkmRestirConstants spatialConstants = constants;
+            if (options._temporalResampling)
+            {
+                spatialConstants._inputSlice = temporalOutSlice;
+                spatialConstants._outputSlice = historySlice;
+            }
+
+            commandBuffer->bindPipeline(_spatialPipeline);
+            commandBuffer->bindResourceTable(_spatialTables[gbufferParity & 1u]);
+            commandBuffer->setPushConstants(&spatialConstants, sizeof(spatialConstants));
+            commandBuffer->dispatch(groupsX, groupsY, 1);
+            commandBuffer->unbindPipeline();
+        }
+
+        _lastResolvedSlice = getPlannedOutputSlice(options);
+        ++_sampleIndex;
+    }
+
+    void VkmRestirPass::recordResolveAccumulate(VkmCommandBufferBase* commandBuffer,
+                                                const VkmRestirOptions& options,
+                                                uint32_t gbufferParity)
+    {
+        VKM_ASSERT(commandBuffer != nullptr, "VkmRestirPass::recordResolveAccumulate requires a command buffer");
+
+        if (_resolvePipeline == nullptr)
+        {
+            VKM_DEBUG_ERROR("recordResolveAccumulate before a successful VkmRestirPass::initialize");
+            return;
+        }
+        if (_sampleIndex == 0)
+        {
+            VKM_DEBUG_ERROR("recordResolveAccumulate before recordResample: there is nothing to shade");
+            return;
+        }
+
+        VkmRestirConstants constants{};
+        constants._width = _width;
+        constants._height = _height;
+        // The sample recordResample just recorded, which is what the accumulation's first-sample
+        // reset keys on.
+        constants._sampleIndex = _sampleIndex - 1;
+        constants._inputSlice = _lastResolvedSlice;
+
+        const uint32_t groupsX = (_width + kThreadGroupSize - 1) / kThreadGroupSize;
+        const uint32_t groupsY = (_height + kThreadGroupSize - 1) / kThreadGroupSize;
+        (void)options;
+
         commandBuffer->bindPipeline(_resolvePipeline);
-        commandBuffer->bindResourceTable(_resolveTable);
-        commandBuffer->setPushConstants(&resolveConstants, sizeof(resolveConstants));
+        commandBuffer->bindResourceTable(_resolveTables[gbufferParity & 1u]);
+        commandBuffer->setPushConstants(&constants, sizeof(constants));
         commandBuffer->dispatch(groupsX, groupsY, 1);
         commandBuffer->unbindPipeline();
+    }
 
-        ++_sampleIndex;
+    void VkmRestirPass::recordAccumulate(VkmCommandBufferBase* commandBuffer, const VkmRestirOptions& options)
+    {
+        recordResample(commandBuffer, options);
+        recordResolveAccumulate(commandBuffer, options);
+    }
+
+    void VkmRestirPass::recordUpdateLightingConstants(VkmCommandBufferBase* commandBuffer,
+                                                      uint32_t frameIndex,
+                                                      const VkmRestirOptions& options,
+                                                      VkmRestirDebugView debugView, float misBlend)
+    {
+        VKM_ASSERT(commandBuffer != nullptr,
+                   "VkmRestirPass::recordUpdateLightingConstants requires a command buffer");
+        VKM_ASSERT(frameIndex < FRAME_BUFFER_COUNT, "frameIndex outside the staging ring");
+
+        if (_lightingStagingPointers[frameIndex] == nullptr)
+        {
+            VKM_DEBUG_ERROR("recordUpdateLightingConstants before a successful VkmRestirPass::initialize");
+            return;
+        }
+
+        VkmRestirLightingConstants constants{};
+        // The fresh 1-spp reservoirs live in slice 2 only when temporal reuse routes them there;
+        // without it, generation wrote the options' input slice and "fresh" and "resampled" may
+        // even coincide -- which makes the MIS blend an exact no-op, the right degenerate case.
+        const uint32_t freshSlice = options._temporalResampling ? 2u : options._inputSlice;
+        constants._slices = glm::uvec4(getPlannedOutputSlice(options), freshSlice,
+                                       static_cast<uint32_t>(debugView), 0u);
+        constants._params = glm::vec4(misBlend, 0.0f,
+                                      1.0f / static_cast<float>(options._confidenceCap + 1),
+                                      1.0f / static_cast<float>(options._maxSampleAge > 0
+                                                                    ? options._maxSampleAge : 1));
+        _lightingStagingPointers[frameIndex]->writeDirect(0, &constants, sizeof(constants));
+        commandBuffer->copyBuffer(_lightingStaging[frameIndex], _lightingConstantBuffer, 0, 0,
+                                  sizeof(constants));
+    }
+
+    void VkmRestirPass::recordLighting(VkmCommandBufferBase* commandBuffer, uint32_t gbufferParity)
+    {
+        VKM_ASSERT(commandBuffer != nullptr, "VkmRestirPass::recordLighting requires a command buffer");
+
+        if (_lightingPipeline == nullptr || _lightingTables[0] == nullptr)
+        {
+            VKM_DEBUG_ERROR("recordLighting before a successful VkmRestirPass::initialize");
+            return;
+        }
+
+        commandBuffer->bindPipeline(_lightingPipeline);
+        commandBuffer->bindResourceTable(_lightingTables[gbufferParity & 1u]);
+        commandBuffer->draw(3, 1, 0, 0);
     }
 } // namespace vkm

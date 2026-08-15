@@ -47,8 +47,10 @@
 #include <vkm/renderer/engine.h>
 #include <vkm/renderer/gbuffer.h>
 #include <vkm/renderer/gi_composite.h>
+#include <vkm/renderer/path_tracer.h>
 #include <vkm/renderer/probe_volume.h>
 #include <vkm/renderer/probe_volume_updater.h>
+#include <vkm/renderer/restir.h>
 #include <vkm/renderer/screenshot.h>
 
 #include <cstdio>
@@ -69,6 +71,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -110,6 +113,14 @@ VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_z, 20u);
 // is where a probe volume is actually judged -- an exterior view can look right while the interior
 // is black, which is exactly how the scene-scale bug got past a screenshot.
 VKM_GLOBAL_VARIABLE(float, gv_gi_camera_distance, 1.0f);
+// Which GI technique fills the indirect target: 0 = probe volume (+SSGI), 1 = ReSTIR. Clamped to
+// 0 on a device without ray tracing -- the selection is a runtime capability question, not a
+// build-time one (restir.md section 5).
+VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_technique, 0u);
+// 8.7's final-shading MIS blend: smooth surfaces lean on the pixel's own fresh sample instead of
+// the resampled one, whose cached radiance is the documented ReSTIR GI bias on low roughness.
+// Settable here so a screenshot run can A/B it.
+VKM_GLOBAL_VARIABLE(bool, gv_gi_restir_mis, true);
 
 namespace
 {
@@ -255,6 +266,24 @@ public:
             _debugView = static_cast<VkmGiDebugView>(gv_gi_debug_view.get());
         }
 
+        // The second technique needs ray tracing; on a device without it the switcher never
+        // appears and the probe tier is the only entry. Loaded exactly once -- a second load of
+        // the same directory destroys pipelines live passes still hold pointers to.
+        if ((driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::RayTracing) != 0)
+        {
+            std::string rtError;
+            if (vkmLoadRayTracingPipelineStates(manager, &rtError))
+            {
+                _rtPipelinesLoaded = true;
+            }
+            else
+            {
+                VKM_DEBUG_ERROR(("ReSTIR unavailable: " + rtError).c_str());
+            }
+        }
+        _technique = gv_gi_technique.get();
+        _misBlend = gv_gi_restir_mis.get();
+
         loadScene(gv_gi_model_path.get());
     }
 
@@ -272,6 +301,16 @@ public:
             destroyTables(retired._tables);
         }
         _retiredTables.clear();
+        if (_restir != nullptr)
+        {
+            _restir->destroy(_engine->getDriver());
+            _restir.reset();
+        }
+        for (RetiredRestir& retired : _retiredRestir)
+        {
+            retired._pass->destroy(_engine->getDriver());
+        }
+        _retiredRestir.clear();
         _updater.destroy();
         _volume.destroy();
         _gbuffer.destroy();
@@ -288,6 +327,10 @@ public:
         if (_engine == nullptr || !_sceneReady)
         {
             return;
+        }
+        if (!_restirAvailable)
+        {
+            _technique = 0; // the runtime capability gate, not an #ifdef
         }
         retireTables();
         ensureTargets();
@@ -315,8 +358,16 @@ public:
         VkmFrameData frameData;
         frameData._lightDirection = glm::vec4(glm::normalize(kLightDirection), 0.0f);
 
+        const bool restirActive = _technique == 1 && _restirAvailable && _restir != nullptr;
+
         // 1. The probe refresh owns cull view 1 and records its own update, cull, capture and blend.
-        _updater.record(renderGraph, &_scene, frameData);
+        // Skipped entirely while ReSTIR fills the indirect target: the probes would spend a frame's
+        // rasterization feeding a lookup nothing runs, and they reconverge over a round anyway
+        // when the technique switches back.
+        if (!restirActive)
+        {
+            _updater.record(renderGraph, &_scene, frameData);
+        }
 
         // 2. The camera's own update and cull, in view 0.
         const uint32_t frameIndex = renderGraph->frameIndex();
@@ -327,7 +378,15 @@ public:
         referenceScene(updateSubGraph, _scene, VkmScene::ReferencePhase::Update);
         updateSubGraph->addReferencedResource(_compositeBuffer, VkmResourceAccess::TransferWrite);
         updateSubGraph->addReferencedResource(_compositeStaging[frameIndex], VkmResourceAccess::TransferRead);
-        updateSubGraph->setTransferCallback([this, frameIndex, cameraFrameData](VkmCommandBufferBase* commandBuffer) {
+        if (restirActive)
+        {
+            updateSubGraph->addReferencedResource(_restir->getLightingConstantBuffer(),
+                                                  VkmResourceAccess::TransferWrite);
+            updateSubGraph->addReferencedResource(_restir->getLightingStagingBuffer(frameIndex),
+                                                  VkmResourceAccess::TransferRead);
+        }
+        updateSubGraph->setTransferCallback([this, frameIndex, cameraFrameData,
+                                             restirActive](VkmCommandBufferBase* commandBuffer) {
             _scene.recordUpdate(commandBuffer, frameIndex, cameraFrameData, kCameraCullView);
             // The composite's settings ride a buffer whose contents change per frame while the
             // table binding it stays immutable, which is how a per-pass table is meant to be used.
@@ -336,6 +395,11 @@ public:
             composite._params = glm::vec4(_indirectIntensity, static_cast<float>(_debugView), 0.0f, 0.0f);
             _compositeStagingPointers[frameIndex]->writeDirect(0, &composite, sizeof(composite));
             commandBuffer->copyBuffer(_compositeStaging[frameIndex], _compositeBuffer, 0, 0, sizeof(composite));
+            if (restirActive)
+            {
+                _restir->recordUpdateLightingConstants(commandBuffer, frameIndex, makeRestirOptions(),
+                                                       _restirDebugView, _misBlend ? 1.0f : 0.0f);
+            }
         });
 
         VkmRenderComputeSubGraph* cullSubGraph = renderGraph->beginComputeSubGraph("GiSceneCull");
@@ -372,14 +436,24 @@ public:
         // attachments over.
         recordFullscreen(renderGraph, "GiDirectLighting", _directTarget, _lightingPipeline, _tables._lighting);
 
-        recordFullscreen(renderGraph, "GiProbeLighting", _indirectTarget, _probeLightingPipeline,
-                         _tables._probeLighting);
+        // The technique boundary: exactly one producer fills _indirectTarget, and the composite
+        // neither knows nor cares which -- that is restir.md section 5's interface, and this
+        // branch is its second consumer.
+        if (restirActive)
+        {
+            recordRestir(renderGraph);
+        }
+        else
+        {
+            recordFullscreen(renderGraph, "GiProbeLighting", _indirectTarget, _probeLightingPipeline,
+                             _tables._probeLighting);
+        }
 
         // The contact term is added on top of the probe result, in the same target: its PSO blends
         // one-to-one and the pass loads rather than discards, so it can only ever brighten what the
         // probes produced. Keeping it strictly additive is what stops it becoming a second GI
         // technique with screen-space's view dependence baked in (restir.md section 5).
-        if (_ssgiEnabled)
+        if (_ssgiEnabled && !restirActive)
         {
             VkmFrameBufferDescriptor ssgiFb = makeFullscreenFb(_extent, _indirectTarget);
             ssgiFb._renderPass._colorAttachments[0]._loadAction = VkmLoadAction::Load;
@@ -432,6 +506,9 @@ public:
         }
 
         _gbuffer.advanceFrame();
+        // The restir pass's tables come in pairs selected by how often the G-buffer has flipped
+        // since the pass was built; ensureTargets resets both together.
+        _restirParity ^= 1u;
     }
 
 private:
@@ -460,6 +537,13 @@ private:
     {
         uint64_t _retiredAtFrame = 0;
         Tables _tables;
+    };
+
+    // Same rule for the restir pass, retired whole: its destroy() deletes its tables immediately.
+    struct RetiredRestir
+    {
+        uint64_t _retiredAtFrame = 0;
+        std::unique_ptr<VkmRestirPass> _pass;
     };
 
     static void referenceScene(VkmRenderSubGraph* subGraph, const VkmScene& scene,
@@ -493,6 +577,59 @@ private:
         });
     }
 
+    VkmRestirOptions makeRestirOptions() const
+    {
+        VkmRestirOptions options{};
+        // The engine's only light is directional and the traced passes see emissive geometry and
+        // the environment only (restir.md section 12), so the environment is what lights ReSTIR's
+        // indirect term until an area-light representation exists.
+        options._environmentRadiance = glm::vec3(_environmentRadiance);
+        options._temporalResampling = true;
+        options._spatialResampling = true;
+        // Scaled with the resolution, per the option's own guidance (roughly 30 px at 1080p).
+        options._neighbourRadius = std::max(8.0f, static_cast<float>(_extent.x) * (30.0f / 1920.0f));
+        return options;
+    }
+
+    // ReSTIR's half of the frame: resample in compute, then shade the reservoirs into the
+    // indirect target. The traced passes read the scene through sets 0/1 plus the TLAS, so the
+    // compute subgraph declares the same Draw-phase set the G-buffer draw does.
+    void recordRestir(VkmRenderGraph* renderGraph)
+    {
+        VkmRenderComputeSubGraph* resampleSubGraph = renderGraph->beginComputeSubGraph("GiRestir");
+        referenceScene(resampleSubGraph, _scene, VkmScene::ReferencePhase::Draw);
+        resampleSubGraph->addReferencedResource(_scene.getTopLevelAccelerationStructure(),
+                                                VkmResourceAccess::AccelerationStructureShaderRead);
+        for (uint32_t i = 0; i < VkmGBuffer::kTargetCount; ++i)
+        {
+            resampleSubGraph->addReferencedResource(_gbuffer.getTexture(static_cast<VkmGBuffer::Target>(i)),
+                                                    VkmResourceAccess::ShaderSampledRead);
+            resampleSubGraph->addReferencedResource(_gbuffer.getPrevTexture(static_cast<VkmGBuffer::Target>(i)),
+                                                    VkmResourceAccess::ShaderSampledRead);
+        }
+        resampleSubGraph->addReferencedResource(_restir->getReservoirBuffer(),
+                                                VkmResourceAccess::ShaderStorageReadWrite);
+        resampleSubGraph->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
+            _restir->recordResample(commandBuffer, makeRestirOptions(), _restirParity);
+        });
+
+        VkmRenderGraphicsSubGraph* lightingSubGraph =
+            renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_extent, _indirectTarget), "GiRestirLighting");
+        lightingSubGraph->addReferencedResource(_indirectTarget, VkmResourceAccess::ColorAttachmentWrite);
+        for (uint32_t i = 0; i < VkmGBuffer::kTargetCount; ++i)
+        {
+            lightingSubGraph->addReferencedResource(_gbuffer.getTexture(static_cast<VkmGBuffer::Target>(i)),
+                                                    VkmResourceAccess::ShaderSampledRead);
+        }
+        lightingSubGraph->addReferencedResource(_restir->getReservoirBuffer(),
+                                                VkmResourceAccess::ShaderStorageReadWrite);
+        lightingSubGraph->addReferencedResource(_restir->getLightingConstantBuffer(),
+                                                VkmResourceAccess::ConstantBufferRead);
+        lightingSubGraph->setRenderCallback([this](VkmCommandBufferBase* commandBuffer) {
+            _restir->recordLighting(commandBuffer, _restirParity);
+        });
+    }
+
     void destroyTables(Tables& tables)
     {
         for (VkmResourceTableBase** table :
@@ -517,6 +654,14 @@ private:
                 _retiredTables.erase(_retiredTables.begin() + static_cast<ptrdiff_t>(i));
             }
         }
+        for (size_t i = _retiredRestir.size(); i-- > 0;)
+        {
+            if (_frameCounter >= _retiredRestir[i]._retiredAtFrame + FRAME_BUFFER_COUNT)
+            {
+                _retiredRestir[i]._pass->destroy(_engine->getDriver());
+                _retiredRestir.erase(_retiredRestir.begin() + static_cast<ptrdiff_t>(i));
+            }
+        }
     }
 
     void loadScene(const std::string& path)
@@ -537,6 +682,20 @@ private:
         {
             VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
             return;
+        }
+
+        // What makes ReSTIR selectable at all: the traced passes read the scene through this.
+        // A failure downgrades to the probe technique rather than the whole sample.
+        if (_rtPipelinesLoaded)
+        {
+            if (_scene.buildAccelerationStructures(driver, &error))
+            {
+                _restirAvailable = true;
+            }
+            else
+            {
+                VKM_DEBUG_ERROR(("ReSTIR unavailable: " + error).c_str());
+            }
         }
 
         // Must follow build(), which is where the material textures are created.
@@ -689,6 +848,26 @@ private:
             _tables = Tables{};
         }
         buildTables();
+
+        // The restir pass binds the G-buffer's textures at initialize, so a resize needs a fresh
+        // pass. The old one is retired whole rather than destroyed: destroy() deletes its tables
+        // immediately, which frames still in flight may have bound.
+        if (_restirAvailable)
+        {
+            if (_restir != nullptr)
+            {
+                _retiredRestir.push_back(RetiredRestir{ _frameCounter, std::move(_restir) });
+            }
+            _restir = std::make_unique<VkmRestirPass>();
+            std::string error;
+            if (!_restir->initialize(driver, _engine->getPipelineStateManager(), _gbuffer,
+                                     extent.x, extent.y, &error))
+            {
+                VKM_DEBUG_ERROR(("Failed to size the ReSTIR pass: " + error).c_str());
+                _restir.reset();
+            }
+            _restirParity = 0;
+        }
     }
 
     void buildTables()
@@ -803,6 +982,28 @@ private:
         ImGui::DragFloat("Indirect intensity", &_indirectIntensity, 0.05f, 0.0f, 8.0f);
         ImGui::Checkbox("SSGI contact term", &_ssgiEnabled);
 
+        if (_restirAvailable)
+        {
+            ImGui::Separator();
+            static const char* kTechniqueNames[] = { "Probe volume", "ReSTIR" };
+            int technique = static_cast<int>(_technique);
+            if (ImGui::Combo("Technique", &technique, kTechniqueNames, 2))
+            {
+                _technique = static_cast<uint32_t>(technique);
+            }
+            if (_technique == 1)
+            {
+                ImGui::DragFloat("Environment radiance", &_environmentRadiance, 0.05f, 0.0f, 8.0f);
+                ImGui::Checkbox("Roughness MIS blend", &_misBlend);
+                static const char* kRestirViewNames[] = { "Lighting", "Confidence (M)", "Age", "Weight" };
+                int restirView = static_cast<int>(_restirDebugView);
+                if (ImGui::Combo("ReSTIR view", &restirView, kRestirViewNames, 4))
+                {
+                    _restirDebugView = static_cast<VkmRestirDebugView>(restirView);
+                }
+            }
+        }
+
         ImGui::Separator();
         ImGui::Text("Probes: %u, budget %u/frame", _volume.getProbeCount(), _updater.getDescriptor()._budget);
         const uint32_t roundLength = _updater.getRoundLengthInFrames();
@@ -863,6 +1064,16 @@ private:
     bool _ssgiEnabled = true;
     uint32_t _probeBudget = 32u;
     float _hysteresis = 0.9f;
+
+    std::unique_ptr<VkmRestirPass> _restir;
+    std::vector<RetiredRestir> _retiredRestir;
+    bool _rtPipelinesLoaded = false;
+    bool _restirAvailable = false;
+    uint32_t _technique = 0; // 0 = probe volume, 1 = ReSTIR
+    uint32_t _restirParity = 0;
+    float _environmentRadiance = 1.0f;
+    bool _misBlend = true;
+    VkmRestirDebugView _restirDebugView = VkmRestirDebugView::Lighting;
 };
 
 int main(int argc, char* argv[])
