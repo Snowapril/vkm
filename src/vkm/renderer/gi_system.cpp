@@ -288,7 +288,8 @@ namespace vkm
         _probeLightingTable = _driver->newResourceTable(
             _probeLightingPipeline, VkmResourceSetKind::PerPass,
             {{ 0, normal }, { 1, motion }, { 2, _volume.getIrradianceTexture() },
-             { 3, _volume.getDistanceTexture() }, { 4, _sampler }, { 5, _volumeBuffer }}, &error);
+             { 3, _volume.getDistanceTexture() }, { 4, _sampler }, { 5, _volumeBuffer },
+             { 6, _volume.getProbeOffsetTexture() }}, &error);
         _ssgiTable = _driver->newResourceTable(
             _ssgiPipeline, VkmResourceSetKind::PerPass,
             {{ 0, normal }, { 1, motion }, { 2, directTarget }, { 3, _sampler }, { 4, _ssgiBuffer }},
@@ -433,6 +434,37 @@ namespace vkm
         {
             recordProbeTier(renderGraph, frameData);
         }
+    }
+
+    bool VkmGiSystem::setProbeOffset(uint32_t probeIndex, const glm::vec3& offset)
+    {
+        if (!_volume.isValid() || probeIndex >= _volume.getProbeCount())
+        {
+            return false;
+        }
+        _volume.setProbeOffset(probeIndex, offset);
+        _updater.invalidateProbe(probeIndex);
+        // Frames already submitted are still sampling the offset texture, and the upload copies
+        // into it outside the render graph. Draining first is what makes that safe; this is a
+        // manual placement action, not a per-frame path.
+        _driver->waitIdle();
+        return _volume.uploadProbeOffsets();
+    }
+
+    bool VkmGiSystem::clearProbeOffsets()
+    {
+        if (!_volume.isValid())
+        {
+            return false;
+        }
+        const uint32_t probeCount = _volume.getProbeCount();
+        for (uint32_t probeIndex = 0; probeIndex < probeCount; ++probeIndex)
+        {
+            _updater.invalidateProbe(probeIndex);
+        }
+        _volume.clearProbeOffsets();
+        _driver->waitIdle();
+        return _volume.uploadProbeOffsets();
     }
 
     void VkmGiSystem::advanceFrame()

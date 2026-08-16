@@ -132,6 +132,23 @@ namespace vkm
 
         inline const VkmProbeVolume& getProbeVolume() const { return _volume; }
         inline const VkmProbeVolumeUpdater& getProbeUpdater() const { return _updater; }
+        // The volume's shader constants, filled once in prepareScene(). Exposed so a debug view of
+        // the grid addresses it with the same origin, spacing and counts the lookup uses.
+        inline VkmResourceHandle getProbeVolumeBuffer() const { return _volumeBuffer; }
+
+        /*
+        * @brief Moves one probe off its grid position and republishes the volume.
+        * @details The single entry point for probe placement: it uploads the offset texture the
+        * lookup reads and invalidates the probe, so the refresh that reaches it takes its capture
+        * whole rather than blending it into what was measured at the old position. Editing the
+        * volume directly would do the first and skip the second.
+        * @param probeIndex Linear probe index; out of range is a no-op returning false.
+        * @param offset World-space displacement from the probe's grid position.
+        * @return Whether the offset was applied and uploaded.
+        */
+        bool setProbeOffset(uint32_t probeIndex, const glm::vec3& offset);
+        // Returns every probe to its grid position, invalidating all of them.
+        bool clearProbeOffsets();
 
     private:
         struct Retired

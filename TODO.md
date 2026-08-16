@@ -161,3 +161,6 @@
 - Linux FSR build (ffx-api is MSVC-only as shipped; Windows uses AMD's prebuilt DLL).
 - MetalFX temporal upscaling is withheld under MTL_DEBUG_LAYER (MTL4FX cannot encode under the debug layer).
 - Thin double-sided geometry (Sponza's curtains) reads near-zero from the probe volume: the Chebyshev test self-shadows a surface against its own probe-captured depth, and with the unshadowed sun lighting only one side, the other renders pure black in the probe tier -- the ReSTIR tier lights it correctly.
+- Probe placement is manual and per-probe: no automatic relocation, no way to save or load an authored offset set.
+- The probe debug view has no depth test and no picking; selection is by linear index.
+- Probe offsets upload through a device drain, not through the frame's transfer subgraph.

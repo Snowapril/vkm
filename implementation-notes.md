@@ -5042,3 +5042,31 @@ The full arc is in restir.md's progress row. Deviations from the approved plan:
   first temporal frame read garbage history whose garbage M could pass validation).
 - **The `captureMemorySnapshot` budget moved to 120 s** — its tag-table copy grows with every
   allocation prior tests made, and 30 s was still not enough at the end of a full suite.
+
+## 2026-08-16 — Probe placement: normal bias, alpha masking, authored probe offsets
+
+Three things came out of chasing the black patches in the Sponza view. Deviations from what was
+planned:
+
+- **The normal bias did not fix the dark curtains.** Making the bias reach the visibility test
+  (it had only ever offset the cell lookup) and making it scale-relative are both correct, and
+  neither moved the region's mean luminance: 24.858 -> 24.859. ReSTIR lights the same region 34%
+  brighter from an identical viewpoint, so what remains is the probe tier's, not a tuning value.
+  The fix stands on its own merits and is not the answer to the reported artifact.
+- **The reported artifact was alpha masking, which the engine did not have at all.** Sponza's
+  three doubleSided materials are all `alphaMode: MASK`, and their masked texels are dark, so
+  they rasterized as hard-edged dark cards. The cutoff rides word 7 of the GPU material record,
+  which was unused, rather than growing the record.
+- **Probe offsets are a texture, not the planned buffer.** The consumer that has to read them is
+  `probe_lighting`'s fragment shader, and `VkmTableResourceType::StorageBuffer` is compute-visible
+  only (WebGPU forbids writable storage in the vertex stage). One texel per probe, addressed by
+  `probeCellCoord()` exactly as the atlases are.
+- **`VkmGiSystem::setProbeOffset` drains the device before uploading.** The upload copies into a
+  texture that frames already submitted are still sampling, and it runs outside the render graph.
+  A staging buffer copied inside the frame's transfer subgraph would avoid the stall, but this is
+  a manual placement action, not a per-frame path, and `waitIdle()` is what the pipeline-reload
+  path already uses for the same hazard.
+- **Probe selection is an index slider, not click-to-pick.** Picking would have to arbitrate with
+  the orbit controller's drag; the gizmo is what the user asked for and a slider reaches it.
+- **The probe view has no depth test.** A probe buried in a wall is the case the view exists to
+  find, and depth testing would hide exactly those.

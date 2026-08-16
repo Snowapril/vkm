@@ -131,6 +131,16 @@ namespace vkm
         inline uint32_t getUpdateCount() const { return static_cast<uint32_t>(_slice.size()); }
         inline uint32_t getProbeIndexForSlot(uint32_t slot) const { return _slice[slot]; }
 
+        /*
+        * @brief Forgets that a probe was ever refreshed, so its next refresh takes its capture
+        * whole instead of blending it into what is stored.
+        * @details For a probe that moved. Its cell holds irradiance and distances measured from
+        * somewhere it no longer is, and blending at 0.9 hysteresis would leave that wrong depth
+        * dominating the Chebyshev test for tens of rounds.
+        * @param probeIndex Linear probe index; out-of-range indices are ignored.
+        */
+        void invalidateProbe(uint32_t probeIndex);
+
         // Frames a full sweep of the grid takes at the current budget.
         uint32_t getRoundLengthInFrames() const;
 

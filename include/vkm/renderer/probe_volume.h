@@ -122,6 +122,21 @@ namespace vkm
                   "VkmProbeBlendPushConstants must match ProbePushConstants in probe_blend.hlsl");
 
     /*
+    * @brief The probe debug view's per-draw inputs (push constants, vertex stage).
+    * @details Mirrors ProbeDebugPushConstants in shaders/probe_debug.hlsl. The whole volume is one
+    * instanced draw, so these are the only per-draw values there are.
+    */
+    struct VkmProbeDebugPushConstants
+    {
+        // Sphere radius in world units.
+        float _radius = 1.0f;
+        // Linear index of the probe drawn highlighted; any out-of-range value selects none.
+        uint32_t _selectedProbe = ~0u;
+    };
+    static_assert(sizeof(VkmProbeDebugPushConstants) == 8,
+                  "VkmProbeDebugPushConstants must match ProbeDebugPushConstants in probe_debug.hlsl");
+
+    /*
     * @brief Builds the six cube-face view-projections for a probe.
     * @details Face order is +X, -X, +Y, -Y, +Z, -Z, matching the cubemap convention the engine uses
     * for skybox faces. The near plane is small and the far plane is the caller's: a probe's usable

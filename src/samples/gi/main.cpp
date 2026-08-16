@@ -23,10 +23,12 @@
 #include <glm/gtx/component_wise.hpp>
 #include <glm/geometric.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/component_wise.hpp>
 #include <glm/matrix.hpp>
 
 #if defined(VKM_ENABLE_IMGUI)
 #include <imgui.h>
+#include <ImGuizmo.h>
 #endif
 
 #include <vkm/base/common.h>
@@ -102,6 +104,9 @@ VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_screenshot_frame, 600u);
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_debug_view, 0u);
 // Off switch for the contact term, so a screenshot run can A/B it against the probes alone.
 VKM_GLOBAL_VARIABLE(bool, gv_gi_ssgi, true);
+// Draw the probe grid as shaded spheres. Settable here as well as through the UI so a screenshot
+// run can capture the placement view without anyone touching the window.
+VKM_GLOBAL_VARIABLE(bool, gv_gi_show_probes, false);
 // How far a probe lookup steps off its surface, as a fraction of the probe spacing. Exposed
 // because it is the knob thin geometry needs: at 0 a curtain self-occludes against its own
 // probe's recorded depth and renders black.
@@ -200,6 +205,7 @@ public:
     virtual void postDriverReady(VkmEngine* engine) override final
     {
         _engine = engine;
+        _showProbes = gv_gi_show_probes.get();
         // A screenshot run is a measurement, so it must not be steerable: with the controller
         // subscribed, any stray cursor drag over the window during the run moves the camera and
         // two "identical" captures disagree -- which is exactly what made an earlier A/B
@@ -223,7 +229,9 @@ public:
         _lightingPipeline = manager->getPipelineState("deferred_lighting_pso", VkmPipelineStateOrigin::Engine);
         _compositePipeline = manager->getPipelineState("gi_composite_pso", VkmPipelineStateOrigin::Engine);
         _tonemapPipeline = manager->getPipelineState("tonemap_pso", VkmPipelineStateOrigin::Engine);
-        if (_lightingPipeline == nullptr || _compositePipeline == nullptr || _tonemapPipeline == nullptr)
+        _probeDebugPipeline = manager->getPipelineState("probe_debug_pso", VkmPipelineStateOrigin::Engine);
+        if (_lightingPipeline == nullptr || _compositePipeline == nullptr || _tonemapPipeline == nullptr ||
+            _probeDebugPipeline == nullptr)
         {
             VKM_DEBUG_ERROR("The GI sample needs the engine PSO cache; run a build that generates it");
             return;
@@ -466,6 +474,13 @@ public:
             commandBuffer->draw(3, 1, 0, 0);
         });
 
+        // 6. The probe placement view, over the tone-mapped image. Not into the composite target:
+        // these are UI, and tone mapping them would darken the very irradiance they display.
+        if (_showProbes)
+        {
+            recordProbeDebug(renderGraph, backBuffer, "GiProbeDebug");
+        }
+
         // The backbuffer cannot be read back (Metal keeps framebufferOnly on the drawable), so a
         // screenshot frame tone-maps a second time into a target this sample owns. Only on that
         // one frame -- this is a debugging path, not a permanent second pass.
@@ -481,6 +496,12 @@ public:
                 commandBuffer->bindResourceTable(table);
                 commandBuffer->draw(3, 1, 0, 0);
             });
+            // The probe view has to be drawn again here, over this target: it is not tone mapped
+            // from anything, so a screenshot would otherwise never show it.
+            if (_showProbes)
+            {
+                recordProbeDebug(renderGraph, _screenshotTarget, "GiScreenshotProbeDebug");
+            }
             _screenshotPending = true;
         }
 
@@ -498,10 +519,12 @@ private:
         VkmResourceTableBase* _lighting = nullptr;
         VkmResourceTableBase* _composite = nullptr;
         VkmResourceTableBase* _tonemap = nullptr;
+        VkmResourceTableBase* _probeDebug = nullptr;
 
         bool isComplete() const
         {
-            return _lighting != nullptr && _composite != nullptr && _tonemap != nullptr;
+            return _lighting != nullptr && _composite != nullptr && _tonemap != nullptr &&
+                   _probeDebug != nullptr;
         }
     };
 
@@ -554,7 +577,8 @@ private:
 
     void destroyTables(Tables& tables)
     {
-        for (VkmResourceTableBase** table : { &tables._lighting, &tables._composite, &tables._tonemap })
+        for (VkmResourceTableBase** table : { &tables._lighting, &tables._composite, &tables._tonemap,
+                                              &tables._probeDebug })
         {
             if (*table != nullptr)
             {
@@ -789,6 +813,34 @@ private:
         buildTables();
     }
 
+    void recordProbeDebug(VkmRenderGraph* renderGraph, VkmResourceHandle target, const char* name)
+    {
+        // Load, not DontCare: this draws over what the tone map just wrote.
+        VkmFrameBufferDescriptor fb = makeFullscreenFb(_extent, target);
+        fb._renderPass._colorAttachments[0]._loadAction = VkmLoadAction::Load;
+        VkmRenderGraphicsSubGraph* subGraph = renderGraph->beginGraphicsSubGraph(fb, name);
+        subGraph->addReferencedResource(target, VkmResourceAccess::ColorAttachmentWrite);
+        std::vector<VkmResourceAccessDeclaration> bound;
+        _tables._probeDebug->collectReferencedResources(&bound);
+        subGraph->addReferencedResources(bound);
+
+        VkmProbeDebugPushConstants push{};
+        push._radius = glm::compMin(glm::abs(_gi.getProbeVolume().getDescriptor()._spacing)) *
+                       _probeRadiusFraction;
+        push._selectedProbe = static_cast<uint32_t>(_selectedProbe);
+
+        VkmPipelineStateBase* pipeline = _probeDebugPipeline;
+        VkmResourceTableBase* table = _tables._probeDebug;
+        const uint32_t probeCount = _gi.getProbeVolume().getProbeCount();
+        subGraph->setRenderCallback([pipeline, table, push, probeCount](VkmCommandBufferBase* commandBuffer) {
+            commandBuffer->bindPipeline(pipeline);
+            commandBuffer->bindResourceTable(table);
+            commandBuffer->setPushConstants(&push, sizeof(push));
+            // Six vertices per probe: the impostor quad the vertex shader builds from SV_VertexID.
+            commandBuffer->draw(6, probeCount, 0, 0);
+        });
+    }
+
     void buildTables()
     {
         VkmDriverBase* driver = _engine->getDriver();
@@ -811,7 +863,12 @@ private:
         const VkmResourceHandle tonemapSource =
             _upscaler != nullptr ? _upscaledTarget : _compositeTarget;
         _tables._tonemap = driver->newResourceTable(
-            _tonemapPipeline, VkmResourceSetKind::PerPass, {{ 0, tonemapSource }, { 1, _sampler }, { 2, _tonemapBuffer }}, &error);
+            _tonemapPipeline, VkmResourceSetKind::PerPass, {{ 0, _compositeTarget }, { 1, _sampler }, { 2, _tonemapBuffer }}, &error);
+        _tables._probeDebug = driver->newResourceTable(
+            _probeDebugPipeline, VkmResourceSetKind::PerPass,
+            {{ 0, _gi.getProbeVolume().getProbeOffsetTexture() },
+             { 1, _gi.getProbeVolume().getIrradianceTexture() },
+             { 2, _sampler }, { 3, _gi.getProbeVolumeBuffer() }}, &error);
 
         if (!_tables.isComplete())
         {
@@ -940,9 +997,61 @@ private:
                     VkmProbeVolumeUpdater::framesToConverge(volume.getProbeCount(),
                                                             updater.getDescriptor()._budget,
                                                             updater.getDescriptor()._hysteresis, 0.1f));
+
+        drawProbePlacementUi(volume);
         ImGui::End();
 #endif
     }
+
+#if defined(VKM_ENABLE_IMGUI)
+    /*
+    * @brief The probe placement tool: show the grid, pick a probe, drag it with a gizmo.
+    *
+    * A probe that lands inside a wall captures that wall's interior and hands it to every surface
+    * around it. Finding one means seeing where the probes actually are, which is what the debug
+    * view is for; fixing it means moving that probe into open space, which is what the gizmo does.
+    */
+    void drawProbePlacementUi(const VkmProbeVolume& volume)
+    {
+        ImGui::Separator();
+        ImGui::Checkbox("Show probes", &_showProbes);
+        if (!_showProbes)
+        {
+            return;
+        }
+        ImGui::DragFloat("Probe size", &_probeRadiusFraction, 0.01f, 0.02f, 0.5f);
+
+        const int probeCount = static_cast<int>(volume.getProbeCount());
+        _selectedProbe = glm::clamp(_selectedProbe, 0, glm::max(0, probeCount - 1));
+        ImGui::SliderInt("Selected probe", &_selectedProbe, 0, glm::max(0, probeCount - 1));
+
+        const uint32_t probeIndex = static_cast<uint32_t>(_selectedProbe);
+        const glm::uvec3 coord = volume.getProbeCoord(probeIndex);
+        const glm::vec3 offset = volume.getProbeOffset(probeIndex);
+        ImGui::Text("Grid (%u, %u, %u), offset (%.2f, %.2f, %.2f)", coord.x, coord.y, coord.z,
+                    offset.x, offset.y, offset.z);
+        if (ImGui::Button("Reset all offsets"))
+        {
+            _gi.clearProbeOffsets();
+        }
+
+        // ImGuizmo draws into the current ImGui frame and reads the mouse from it, so it belongs
+        // here rather than in render(). It manipulates a full transform; only the translation
+        // column is read back, the volume storing a displacement rather than a matrix.
+        ImGuizmo::BeginFrame();
+        ImGuizmo::SetOrthographic(false);
+        ImGuizmo::SetRect(0.0f, 0.0f, static_cast<float>(_extent.x), static_cast<float>(_extent.y));
+
+        const glm::mat4 view = _camera.getView();
+        const glm::mat4 projection = _camera.getProjection();
+        glm::mat4 transform = glm::translate(glm::mat4(1.0f), volume.getProbePosition(probeIndex));
+        if (ImGuizmo::Manipulate(&view[0][0], &projection[0][0], ImGuizmo::TRANSLATE, ImGuizmo::WORLD,
+                                 &transform[0][0]))
+        {
+            _gi.setProbeOffset(probeIndex, glm::vec3(transform[3]) - volume.getProbeGridPosition(probeIndex));
+        }
+    }
+#endif
 
     VkmEngine* _engine = nullptr;
     VkmCamera _camera;
@@ -959,6 +1068,7 @@ private:
     VkmPipelineStateBase* _lightingPipeline = nullptr;
     VkmPipelineStateBase* _compositePipeline = nullptr;
     VkmPipelineStateBase* _tonemapPipeline = nullptr;
+    VkmPipelineStateBase* _probeDebugPipeline = nullptr;
 
     VkmResourceHandle _sampler{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _lightBuffer{ VKM_INVALID_RESOURCE_HANDLE };
@@ -988,6 +1098,14 @@ private:
 
     VkmGiDebugView _debugView = VkmGiDebugView::Composite;
     float _indirectIntensity = 1.0f;
+
+    // Probe placement UI state. The radius is a fraction of the probe spacing so it stays sensible
+    // across scenes of wildly different scale.
+    // Seeded from gv_gi_show_probes in postDriverReady, not here: the delegate is constructed
+    // before the command line is parsed, so a member initializer would always read the default.
+    bool _showProbes = false;
+    float _probeRadiusFraction = 0.12f;
+    int _selectedProbe = 0;
 };
 
 int main(int argc, char* argv[])
