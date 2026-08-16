@@ -73,6 +73,9 @@
 #include <vkm/renderer/backend/vulkan/vulkan_staging_buffer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_sampler.h>
 #include <vkm/renderer/backend/vulkan/vulkan_acceleration_structure.h>
+#if defined(VKM_ENABLE_FSR)
+#include <vkm/renderer/backend/vulkan/vulkan_upscaler.h>
+#endif
 #include <vkm/renderer/backend/vulkan/vulkan_texture_view.h>
 #include <vkm/renderer/backend/vulkan/vulkan_buffer_view.h>
 #include <vkm/renderer/backend/vulkan/vulkan_gpu_heap_allocator.h>
@@ -245,6 +248,13 @@ namespace vkm
     {
         return new VkmAccelerationStructureVulkan(this);
     }
+
+#if defined(VKM_ENABLE_FSR)
+    VkmUpscalerBase* VkmDriverVulkan::newUpscalerInner()
+    {
+        return new VkmUpscalerVulkan();
+    }
+#endif
 
     void VkmDriverVulkan::waitIdle(const uint64_t timeoutMs)
     {
@@ -915,6 +925,12 @@ namespace vkm
         {
             _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::RayTracing;
         }
+#if defined(VKM_ENABLE_FSR)
+        // FSR rides AMD's prebuilt Windows runtime (see vulkan_upscaler.cpp), and VKM_ENABLE_FSR
+        // is only defined on such builds -- so no per-driver check is needed here. If the DLL is
+        // missing at run time, newUpscaler fails and callers fall back.
+        _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::TemporalUpscaling;
+#endif
 
         // Both must exist before VkmEngine::initializeBackendDriver() loads engine PSOs, since
         // pipeline-layout creation (VkmPipelineStateVulkan::createInner) needs the bindless

@@ -9,6 +9,7 @@
 #include <vkm/renderer/backend/common/render_graph.h>
 
 #include <glm/mat4x4.hpp>
+#include <glm/vec2.hpp>
 #include <atomic>
 #include <deque>
 #include <memory>
@@ -259,6 +260,16 @@ namespace vkm
         inline VkmCamera* getActiveCamera() const { return _activeCamera; }
 
         /*
+        * @brief Decouples the active camera's viewport from the main swapchain's extent.
+        * @details While non-zero, the engine drives the camera (and therefore set 1's
+        * _viewportSize) from this extent instead of the swapchain's -- what a sample rendering
+        * at a reduced resolution and upscaling to the backbuffer needs. A zero extent restores
+        * the default swapchain-driven behavior.
+        * @param extent Render extent in pixels, or zero to follow the swapchain.
+        */
+        inline void setCameraViewportOverride(const glm::uvec2& extent) { _cameraViewportOverride = extent; }
+
+        /*
         * @brief engine loop exit condition. True once the input handler has received an exit request.
         */
         inline bool shouldExit() const { return _inputHandler.shouldExit(); }
@@ -293,6 +304,7 @@ namespace vkm
         VkmInputHandler _inputHandler;
 
         VkmCamera* _activeCamera {nullptr}; // non-owning, see setActiveCamera()
+        glm::uvec2 _cameraViewportOverride {0, 0}; // zero = follow the swapchain extent
 
         // One entry per window; each owns its swapchain and per-frame-slot render graphs.
         // A deque, not a vector: VkmWindowContext holds atomics (so it is neither copyable nor
@@ -318,13 +330,15 @@ namespace vkm
         *
         * _frameCounter is monotonic, unlike _currentFrameIndex which cycles 0..FRAME_COUNT-1:
         * stochastic passes seed from it to decorrelate successive frames.
-        * _prevViewProjection carries last frame's matrix for reprojection; _hasPrevViewProjection
-        * keeps the first frame after a camera appears from reprojecting against an identity
-        * matrix, which would look like a violent camera cut.
+        * _prevViewProjection carries last frame's jitter-free matrix for reprojection;
+        * _hasPrevViewProjection keeps the first frame after a camera appears from reprojecting
+        * against an identity matrix, which would look like a violent camera cut. _prevJitter is
+        * last frame's sub-pixel jitter, published as _jitter.zw alongside it.
         */
         uint32_t _frameCounter {0};
         glm::mat4 _prevViewProjection {1.0f};
         glm::vec4 _prevCameraPositionWorld {0.0f, 0.0f, 0.0f, 1.0f};
+        glm::vec2 _prevJitter {0.0f};
         bool _hasPrevViewProjection {false};
 
         std::unique_ptr<VkmRenderGraphCapture> _renderGraphCapture;

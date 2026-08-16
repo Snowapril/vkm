@@ -28,6 +28,7 @@ set(SRCS
     ${SRC_DIR}/TestInputHandler.cpp
     ${SRC_DIR}/TestTimeBudget.cpp
     ${SRC_DIR}/TestCamera.cpp
+    ${SRC_DIR}/TestUpscalerJitter.cpp
     ${SRC_DIR}/TestClipSpaceOrientation.cpp
     ${SRC_DIR}/TestRasterState.cpp
     ${SRC_DIR}/TestGlobalVariable.cpp
@@ -47,6 +48,7 @@ set(SRCS
     ${SRC_DIR}/TestAliasedTexture.cpp
     ${SRC_DIR}/TestAccelerationStructure.cpp
     ${SRC_DIR}/TestGBufferRenderVulkan.cpp
+    ${SRC_DIR}/TestUpscaler.cpp
     ${SRC_DIR}/TestPathTracerMetrics.cpp
     ${SRC_DIR}/TestReservoirLayout.cpp
 )
@@ -72,6 +74,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestProbeVolumeMetal.mm
         ${SRC_DIR}/TestViewportMetal.mm
         ${SRC_DIR}/TestAccelerationStructureMetal.mm
+        ${SRC_DIR}/TestUpscalerMetal.mm
     )
 endif()
 
@@ -98,6 +101,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestProbeVolumeMetal.mm
         ${SRC_DIR}/TestViewportMetal.mm
         ${SRC_DIR}/TestAccelerationStructureMetal.mm
+        ${SRC_DIR}/TestUpscalerMetal.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++"
     )
 endif()

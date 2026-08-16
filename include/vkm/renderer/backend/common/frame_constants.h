@@ -115,8 +115,25 @@ namespace vkm
         * seeding: equal to the current position until a previous frame exists.
         */
         glm::vec4 _prevCameraPositionWorld{ 0.0f, 0.0f, 0.0f, 1.0f }; // offset 368
+
+        /*
+        * @brief This frame's view-projection without the sub-pixel jitter offset.
+        * @details Equal to _viewProjection while the camera carries no jitter. Motion vectors
+        * are computed from this and _prevViewProjection (also jitter-free) so they carry scene
+        * and camera motion only -- a temporal upscaler receives the jitter separately through
+        * _jitter and must not see it duplicated in the motion field.
+        */
+        glm::mat4 _viewProjectionNoJitter{ 1.0f };                // offset 384
+
+        /*
+        * @brief xy = this frame's sub-pixel jitter in render-target pixels (+x right, +y down),
+        * zw = the previous frame's.
+        * @details xy is the camera's to fill; zw is the engine's, "previous" being a property of
+        * the frame loop. zw equals xy on the first frame after a camera becomes active.
+        */
+        glm::vec4 _jitter{ 0.0f, 0.0f, 0.0f, 0.0f };              // offset 448
     };
-    static_assert(sizeof(VkmFrameConstants) == 384,
+    static_assert(sizeof(VkmFrameConstants) == 464,
                   "VkmFrameConstants must match VkmFrameConstants in shaders/vkm_frame_constants.hlsli");
 
     // Byte stride between two frame slots' regions: the struct rounded up to the alignment

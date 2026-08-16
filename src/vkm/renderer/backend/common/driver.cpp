@@ -20,6 +20,7 @@
 #include <vkm/renderer/backend/common/gpu_profiler.h>
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/frame_constants.h>
+#include <vkm/renderer/backend/common/upscaler.h>
 
 #include <cstring>
 
@@ -648,6 +649,29 @@ namespace vkm
             accelerationStructure->setDebugName(info._debugName);
         }
         return accelerationStructure;
+    }
+
+    VkmUpscalerBase* VkmDriverBase::newUpscaler(const VkmUpscalerDescriptor& descriptor)
+    {
+        // Checked here rather than in each backend so the message is the same everywhere and a
+        // backend's Inner() never has to guess why it was called.
+        if ((_driverCapabilityFlags & VkmDriverCapabilityFlags::TemporalUpscaling) == 0)
+        {
+            VKM_DEBUG_ERROR("newUpscaler requires VkmDriverCapabilityFlags::TemporalUpscaling");
+            return nullptr;
+        }
+
+        VkmUpscalerBase* upscaler = newUpscalerInner();
+        if (upscaler == nullptr)
+        {
+            return nullptr;
+        }
+        if (!upscaler->initialize(this, descriptor))
+        {
+            delete upscaler;
+            return nullptr;
+        }
+        return upscaler;
     }
 
     VkmSampler* VkmDriverBase::newSampler(const VkmSamplerInfo& info)

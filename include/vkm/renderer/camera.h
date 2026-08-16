@@ -6,6 +6,7 @@
 #include <vkm/renderer/backend/common/frame_constants.h>
 
 #include <glm/mat4x4.hpp>
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
 #include <cstdint>
@@ -38,8 +39,22 @@ namespace vkm
         */
         void setViewportSize(uint32_t width, uint32_t height);
 
+        /*
+        * @brief Sub-pixel jitter applied to the projection, in viewport pixels.
+        * @details +x right, +y down, matching UV space; a temporal upscaler feeds the same value
+        * to its dispatch. Folded into getProjection() as a constant clip-space offset; ignored
+        * while the viewport size is zero. Zero (the default) leaves the projection unjittered.
+        * @param jitterPixels Offset from the pixel center, typically in [-0.5, 0.5).
+        */
+        void setJitterPixels(const glm::vec2& jitterPixels);
+
         glm::mat4 getView() const;
         glm::mat4 getProjection() const;
+
+        /*
+        * @brief The projection without the jitter offset, for motion vectors and reprojection.
+        */
+        glm::mat4 getProjectionNoJitter() const;
         glm::mat4 getViewProjection() const;
         glm::mat4 getInverseViewProjection() const;
 
@@ -57,6 +72,7 @@ namespace vkm
         inline float getFarZ() const { return _farZ; }
         inline uint32_t getViewportWidth() const { return _viewportWidth; }
         inline uint32_t getViewportHeight() const { return _viewportHeight; }
+        inline const glm::vec2& getJitterPixels() const { return _jitterPixels; }
 
     private:
         glm::vec3 _eye{ 0.0f, 0.0f, 1.0f };
@@ -69,6 +85,8 @@ namespace vkm
 
         uint32_t _viewportWidth = 0;
         uint32_t _viewportHeight = 0;
+
+        glm::vec2 _jitterPixels{ 0.0f, 0.0f };
     };
 
     /*

@@ -153,3 +153,9 @@
 - Metal orders passes by queue stage rather than by producer, so two passes at the same stage wait on each other even when their declared dependencies do not overlap; a per-producer `MTLFence` would need the producer's identity carried in `VkmResourceBarrier` and a scope boundary for a subgraph that closes several encoders.
 - The ReSTIR lighting pass has no final visibility ray: fragment-stage ray query is unexercised through the SPIRV-Cross MSL path, so the pass's flag word is plumbed but unused and a reused sample occluded by a dynamic object would leak until it ages out.
 - The reservoir-packing MSE gate in TestIndirectPassShared.hpp (3.0e-6 / 6.0e-5) trips intermittently on Metal: identical code measured 1.35e-6, 6.51e-6 and 1.85e-6 across three runs.
+- Per-object previous transforms for dynamic motion vectors; animated geometry ghosts under any temporal upscaler.
+- Temporal upscaler reactive mask and exposure-texture inputs are unwired (auto-exposure only).
+- Temporal upscaler dynamic resolution (fixed render extent per upscaler today).
+- MetalFX/FSR frame generation (interpolator sibling to VkmUpscalerBase, present pacing, UI composited after interpolation).
+- Linux FSR build (ffx-api is MSVC-only as shipped; Windows uses AMD's prebuilt DLL).
+- MetalFX temporal upscaling is withheld under MTL_DEBUG_LAYER (MTL4FX cannot encode under the debug layer).

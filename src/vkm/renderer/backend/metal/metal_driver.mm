@@ -15,11 +15,13 @@
 #include <vkm/renderer/backend/metal/metal_command_queue.h>
 #include <vkm/renderer/backend/metal/metal_pipeline_state.h>
 #include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
+#include <vkm/renderer/backend/metal/metal_upscaler.h>
 #include <vkm/renderer/backend/metal/metal_util.h>
 
 #import <Metal/MTLDevice.h>
 #import <Metal/MTL4Counters.h>
 #import <Metal/MTLHeap.h>
+#import <MetalFX/MetalFX.h>
 
 #include <TargetConditionals.h>
 #if TARGET_OS_OSX
@@ -95,6 +97,20 @@ namespace vkm
         if ([_mtlDevice supportsRaytracing])
         {
             _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::RayTracing;
+        }
+        // Metal-4 MetalFX support is its own device question, separate from classic MetalFX.
+        // Withheld while the Metal debug layer is active: MTL4FXTemporalScaler's encode aborts
+        // the process under the debug layer's wrapper objects, so the capability stays clear
+        // there and callers take their non-upscaled path instead.
+        const char* debugLayer = getenv("MTL_DEBUG_LAYER");
+        const bool debugLayerActive = debugLayer != nullptr && debugLayer[0] != '\0' && debugLayer[0] != '0';
+        if (!debugLayerActive && [MTLFXTemporalScalerDescriptor supportsMetal4FX:_mtlDevice])
+        {
+            _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::TemporalUpscaling;
+        }
+        else if (debugLayerActive)
+        {
+            VKM_DEBUG_INFO("Temporal upscaling withheld: MTL4FX cannot encode under MTL_DEBUG_LAYER");
         }
 
         // Allocates no heap block yet -- the first Heap resource grows the first one.
@@ -501,6 +517,11 @@ namespace vkm
     VkmAccelerationStructure* VkmDriverMetal::newAccelerationStructureInner()
     {
         return new VkmAccelerationStructureMetal(this);
+    }
+
+    VkmUpscalerBase* VkmDriverMetal::newUpscalerInner()
+    {
+        return new VkmUpscalerMetal();
     }
 
     VkmResourceTableBase* VkmDriverMetal::newResourceTableInner()

@@ -23,6 +23,8 @@ namespace vkm
     class VkmTextureView;
     class VkmBufferView;
     class VkmAccelerationStructure;
+    class VkmUpscalerBase;
+    struct VkmUpscalerDescriptor;
     struct VkmAccelerationStructureInfo;
     class VkmSwapChainBase;
     class VkmCommandQueueBase;
@@ -80,6 +82,13 @@ namespace vkm
         * while the Metal backend reports it -- hence a runtime capability rather than an #ifdef.
         */
         RayTracing              = 0x00000080,
+        /*
+        * Backend can create a VkmUpscalerBase (see upscaler.h): MetalFX on Metal, FSR on Vulkan
+        * where the FidelityFX SDK is built in. A runtime capability for the same reason
+        * RayTracing is -- on macOS the Metal backend reports it while MoltenVK does not -- and
+        * clear on WebGPU, which has no upscaler library at all.
+        */
+        TemporalUpscaling       = 0x00000100,
     };
 
     inline VkmDriverCapabilityFlags operator|(VkmDriverCapabilityFlags lhs, VkmDriverCapabilityFlags rhs)
@@ -223,6 +232,17 @@ namespace vkm
         */
         VkmAccelerationStructure* newAccelerationStructure(const VkmAccelerationStructureInfo& info);
 
+        /*
+        * @brief Creates a temporal upscaler for a fixed render/display extent pair.
+        * @details The caller owns the result: destroy() then delete, once no in-flight frame can
+        * still be using it -- the same lifetime contract as newResourceTable. A resize means a
+        * new upscaler.
+        * @param descriptor Extents and formats; see upscaler.h.
+        * @return The upscaler, or null with an error logged on a backend whose capability flags
+        * lack VkmDriverCapabilityFlags::TemporalUpscaling. Check the flag rather than the result
+        * where the absence is expected.
+        */
+        VkmUpscalerBase* newUpscaler(const VkmUpscalerDescriptor& descriptor);
 
         /*
         * @brief Create swapchain with window info
@@ -520,6 +540,9 @@ namespace vkm
         // Every backend implements this, including those without ray tracing: the WebGPU one logs
         // and returns null rather than splitting the base class behind an #ifdef.
         virtual VkmAccelerationStructure* newAccelerationStructureInner() = 0;
+        // Non-pure with a null default: only backends whose capability flags advertise
+        // TemporalUpscaling override this, so a backend without an upscaler needs no stub.
+        virtual VkmUpscalerBase* newUpscalerInner() { return nullptr; }
         virtual VkmCommandQueueBase* newCommandQueueInner() = 0;
         virtual VkmPipelineStateBase* newPipelineStateInner() = 0;
         virtual VkmRenderResourcePool* newRenderResourcePoolInner() = 0;

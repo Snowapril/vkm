@@ -654,22 +654,38 @@ namespace vkm
                 VkmFrameConstants frameConstants{}; // identity while no camera is registered
                 if (_activeCamera != nullptr)
                 {
-                    const glm::uvec2 cameraExtent = windowContext._swapChain->getExtent();
+                    // The override lets a sample render at a reduced resolution: the camera's
+                    // aspect and set 1's _viewportSize then describe the render extent while the
+                    // swapchain keeps its own.
+                    const bool hasViewportOverride =
+                        _cameraViewportOverride.x != 0 && _cameraViewportOverride.y != 0;
+                    const glm::uvec2 cameraExtent =
+                        hasViewportOverride ? _cameraViewportOverride : windowContext._swapChain->getExtent();
                     _activeCamera->setViewportSize(cameraExtent.x, cameraExtent.y);
                     _activeCamera->fillFrameConstants(frameConstants);
 
-                    // The camera fills everything derivable from this frame alone; the two
+                    // The camera fills everything derivable from this frame alone; the
                     // frame-to-frame fields are the engine's. Seeding _prevViewProjection with
                     // the current matrix on the first frame makes reprojection the identity
                     // there, instead of reprojecting against the identity matrix and reading as
-                    // a violent camera cut.
-                    frameConstants._prevViewProjection =
-                        _hasPrevViewProjection ? _prevViewProjection : frameConstants._viewProjection;
-                    frameConstants._prevCameraPositionWorld =
-                        _hasPrevViewProjection ? _prevCameraPositionWorld
-                                               : frameConstants._cameraPositionWorld;
-                    _prevViewProjection = frameConstants._viewProjection;
+                    // a violent camera cut. Both sides of the reprojection pair are jitter-free,
+                    // so motion vectors never carry the sub-pixel jitter a temporal upscaler
+                    // receives separately through _jitter.
+                    if (_hasPrevViewProjection)
+                    {
+                        frameConstants._prevViewProjection = _prevViewProjection;
+                        frameConstants._prevCameraPositionWorld = _prevCameraPositionWorld;
+                        frameConstants._jitter.z = _prevJitter.x;
+                        frameConstants._jitter.w = _prevJitter.y;
+                    }
+                    else
+                    {
+                        frameConstants._prevViewProjection = frameConstants._viewProjectionNoJitter;
+                        frameConstants._prevCameraPositionWorld = frameConstants._cameraPositionWorld;
+                    }
+                    _prevViewProjection = frameConstants._viewProjectionNoJitter;
                     _prevCameraPositionWorld = frameConstants._cameraPositionWorld;
+                    _prevJitter = glm::vec2(frameConstants._jitter.x, frameConstants._jitter.y);
                     _hasPrevViewProjection = true;
                 }
                 else

@@ -31,12 +31,36 @@ namespace vkm
         _viewportHeight = height;
     }
 
+    void VkmCamera::setJitterPixels(const glm::vec2& jitterPixels)
+    {
+        _jitterPixels = jitterPixels;
+    }
+
     glm::mat4 VkmCamera::getView() const
     {
         return glm::lookAtRH(_eye, _target, _up);
     }
 
     glm::mat4 VkmCamera::getProjection() const
+    {
+        glm::mat4 projection = getProjectionNoJitter();
+        if ((_jitterPixels.x != 0.0f || _jitterPixels.y != 0.0f) &&
+            _viewportWidth > 0 && _viewportHeight > 0)
+        {
+            // A pixel is 2/extent wide in NDC. Pixel space is +y down while the engine's clip
+            // space is +y up, hence the y negation. Written into the third column, which scales
+            // z_view: perspectiveRH_ZO's w is -z_view, so shifting NDC by +j needs the stored
+            // coefficient to be -j (the perspective divide flips its sign back).
+            const glm::vec2 ndcJitter(
+                2.0f * _jitterPixels.x / static_cast<float>(_viewportWidth),
+                -2.0f * _jitterPixels.y / static_cast<float>(_viewportHeight));
+            projection[2][0] -= ndcJitter.x;
+            projection[2][1] -= ndcJitter.y;
+        }
+        return projection;
+    }
+
+    glm::mat4 VkmCamera::getProjectionNoJitter() const
     {
         const float aspect = (_viewportHeight > 0)
             ? static_cast<float>(_viewportWidth) / static_cast<float>(_viewportHeight)
@@ -66,6 +90,8 @@ namespace vkm
         outConstants._projection = projection;
         outConstants._viewProjection = viewProjection;
         outConstants._inverseViewProjection = glm::inverse(viewProjection);
+        outConstants._viewProjectionNoJitter = getProjectionNoJitter() * view;
+        outConstants._jitter = glm::vec4(_jitterPixels, _jitterPixels);
         outConstants._cameraPositionWorld = glm::vec4(_eye, 1.0f);
 
         // Zero until setViewportSize() has been called; the reciprocal is left at zero rather
@@ -77,8 +103,9 @@ namespace vkm
                                                width > 0.0f ? 1.0f / width : 0.0f,
                                                height > 0.0f ? 1.0f / height : 0.0f);
 
-        // _prevViewProjection and _frameIndex are the engine's to fill: a camera holds no
-        // frame-to-frame state (see VkmEngine::render).
+        // _prevViewProjection, _jitter.zw and _frameIndex are the engine's to fill: a camera
+        // holds no frame-to-frame state (see VkmEngine::render). _jitter.zw is seeded with the
+        // current jitter so the pair is consistent even if the engine never overwrites it.
     }
 
     VkmOrbitCameraController::VkmOrbitCameraController(VkmCamera* camera)

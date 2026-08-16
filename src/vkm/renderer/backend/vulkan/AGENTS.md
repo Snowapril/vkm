@@ -115,6 +115,8 @@ Do not query features before calling `vkGetPhysicalDeviceFeatures2`.
 - `newBufferViewInner` — returns `new VkmBufferViewVulkan`
 - `newSwapChainInner` — returns `new VkmSwapChainVulkan`
 - `newCommandQueueInner` → returns `new VkmCommandQueueVulkan(this)` (see `vulkan_command_queue.h`)
+- `newUpscalerInner` — returns `new VkmUpscalerVulkan` (FSR 3.1); only under `VKM_ENABLE_FSR`,
+  i.e. Windows builds with the FidelityFX SDK bootstrapped, matching the capability bit
 
 ## Platform-Specific Surface Creation
 

@@ -4959,3 +4959,46 @@ so a scene reload with the window open could free a structure between the lookup
 tab that dereferenced it. Rows now copy the `VkmAccelerationStructureInfo` at lookup time
 and no resource pointer outlives the `getResource()` call. The copied info's `_debugName`
 still dangles and stays unread; the row's pool-tag name is the durable one.
+## 2026-08-14 — Temporal upscaling: MetalFX (Metal 4) and FSR 3.1 (Vulkan)
+
+Plan: render-res inputs (HDR composite, depth, MotionMetallic.xy) upscaled to display res between
+the gi sample's composite and tonemap passes. Phase 0 lands the backend-agnostic prerequisites
+(camera jitter with jitter-free motion vectors, render/display extent split, VkmUpscalerBase +
+VkmDriverCapabilityFlags::TemporalUpscaling); Phase 1 backs it with MTL4FXTemporalScaler; Phase 2
+with the FidelityFX SDK's ffx-api on Vulkan (Windows/Linux; MoltenVK reports unsupported). WebGPU
+keeps the capability bit clear. Frame generation is deferred by design.
+
+Jitter convention: pixels, +x right / +y down (UV space), folded into VkmCamera::getProjection()
+as a clip-space third-column offset; NDC shift is (+2jx/w, -2jy/h). Motion vectors switch to a
+jitter-free matrix pair (_viewProjectionNoJitter / _prevViewProjection), so both upscalers take
+the motion texture at scale (-renderW, -renderH) with no jitter cancellation flags.
+
+### Deviations
+
+- **Planned:** the MetalFX upscaler runs under the unit-test harness's `MTL_DEBUG_LAYER=1`.
+  **Done instead:** `VkmDriverMetal` withholds `TemporalUpscaling` whenever the Metal debug layer
+  is active, so the upscaler test self-skips there and the gi sample falls back to bilinear.
+  **Why:** `MTL4FXTemporalScaler` cannot encode under the debug layer on macOS 26.2 -- without a
+  fence it aborts on an internal `_outputTextureBarrierStages not set` assertion, and with one
+  its signpost path raises `-[MTL4DebugComputeCommandEncoder globalTraceObjectID]:
+  unrecognized selector` (both reproduced in a minimal standalone Metal4+MetalFX program with no
+  vkm code involved). Refusing the combination is the conservative option: validation stays on
+  everywhere else, and no validation error is being silenced -- the OS framework itself cannot
+  run under the layer. Verified the full encode+readback path in the same test binary with the
+  debug layer off.
+- During Phase 1 bring-up the gi sample intermittently hung at any render scale below 1 while a
+  crashed UnitTests process (the MetalFX-under-debug-layer abort, spinning in its own signal
+  handler) was still alive and holding GPU work; every configuration -- including a fully inert
+  upscale callback -- hung under that condition and passed 5/5 once the process was killed. Not a
+  vkm defect; recorded because the symptom (starved CAMetalDisplayLink, no drawables) looks
+  exactly like a fence deadlock and cost a bisect to rule out.
+- MetalFX publishes `outputTextureUsage = ShaderRead|ShaderWrite|RenderTarget`; the upscaled
+  target and the test's output texture carry AllowColorAttachment for that reason.
+
+- **Planned:** FSR 3.1 on Windows + Linux (ExternalProject build of ffx-api on Linux).
+  **Done instead:** Windows-only, via AMD's prebuilt signed `amd_fidelityfx_vk.dll` loaded at
+  run time; Linux keeps the capability bit clear (TODO.md line).
+  **Why:** the SDK's sources are MSVC-only as shipped (`#define FFX_API_ENTRY
+  __declspec(dllexport)` unconditionally, shader-compiler tools present only as .exe), so a
+  Linux build is a porting project, exactly the "patching balloons" case the plan's fallback
+  named.

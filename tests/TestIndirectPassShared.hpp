@@ -224,6 +224,7 @@ namespace vkmtest
         frameConstants._projection = projection;
         frameConstants._viewProjection = viewProjection;
         frameConstants._inverseViewProjection = glm::inverse(viewProjection);
+        frameConstants._viewProjectionNoJitter = viewProjection;
         frameConstants._prevViewProjection = viewProjection;
         frameConstants._cameraPositionWorld = glm::vec4(0.0f, 0.0f, 0.85f, 1.0f);
         // Static camera: the previous eye is this eye. Leaving it at the origin default rejects

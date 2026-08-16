@@ -33,6 +33,9 @@ namespace vkm
         virtual VkmSwapChainBase* newSwapChainInner() override final;
         virtual VkmResourceTableBase* newResourceTableInner() override final;
         virtual VkmAccelerationStructure* newAccelerationStructureInner() override final;
+#if defined(VKM_ENABLE_FSR)
+        virtual VkmUpscalerBase* newUpscalerInner() override final;
+#endif
 
         /*
         * @brief Waits on every queue's timeline as the base class does, then vkDeviceWaitIdle.

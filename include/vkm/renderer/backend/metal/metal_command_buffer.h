@@ -138,6 +138,19 @@ namespace vkm
         inline id<MTL4RenderCommandEncoder> getActiveRenderCommandEncoder() const { return _commandEncoder.getActiveRenderCommandEncoder(); }
         inline id<MTL4ComputeCommandEncoder> getActiveComputeCommandEncoder() const { return _commandEncoder.getActiveComputeCommandEncoder(); }
 
+        /*
+        * @brief Hands the running subgraph's ordering to an external effect that encodes through
+        * its own encoders (MetalFX).
+        * @details Opens and immediately closes one empty compute encoder: opening consumes the
+        * producer waits the barrier plan queued for this subgraph, closing publishes the
+        * subgraph's fence. The external effect must then wait on and update the returned fence
+        * (MTLFXTemporalScalerBase.fence does both), which orders it after this subgraph's
+        * producers and ahead of the consumers already waiting on that fence. Costs one empty
+        * encoder. Call once per subgraph, from its callback, before the external encode.
+        * @return The subgraph's fence, or nil when nothing in this graph consumes the subgraph.
+        */
+        id<MTLFence> bridgeExternalEncode();
+
     private:
         // Owned: setRHICommandBuffer() adopts the +1 reference handed over by
         // VkmCommandBufferPoolMetal::getOrCreateRHICommandBuffer().

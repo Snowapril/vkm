@@ -185,6 +185,7 @@ namespace vkmtest
         frameConstants._projection = projection;
         frameConstants._viewProjection = viewProjection;
         frameConstants._inverseViewProjection = glm::inverse(viewProjection);
+        frameConstants._viewProjectionNoJitter = viewProjection;
         frameConstants._prevViewProjection = viewProjection;
         frameConstants._cameraPositionWorld = glm::vec4(0.0f, 0.0f, 24.0f, 1.0f);
         driver->getFrameConstantManager()->update(/*frameIndex=*/0, frameConstants);

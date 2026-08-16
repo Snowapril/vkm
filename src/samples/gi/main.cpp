@@ -43,6 +43,7 @@
 #include <vkm/renderer/backend/common/sampler.h>
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/texture.h>
+#include <vkm/renderer/backend/common/upscaler.h>
 #include <vkm/renderer/camera.h>
 #include <vkm/renderer/engine.h>
 #include <vkm/renderer/gbuffer.h>
@@ -121,6 +122,10 @@ VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_technique, 0u);
 // the resampled one, whose cached radiance is the documented ReSTIR GI bias on low roughness.
 // Settable here so a screenshot run can A/B it.
 VKM_GLOBAL_VARIABLE(bool, gv_gi_restir_mis, true);
+// Render resolution as a fraction of the swapchain's, clamped to [0.25, 1]. Below 1 the scene
+// renders at the reduced extent and the tonemap pass upscales into the backbuffer -- bilinearly
+// until a temporal upscaler takes that spot.
+VKM_GLOBAL_VARIABLE(float, gv_gi_render_scale, 1.0f);
 
 namespace
 {
@@ -311,6 +316,13 @@ public:
             retired._pass->destroy(_engine->getDriver());
         }
         _retiredRestir.clear();
+        destroyUpscaler(_upscaler);
+        _upscaler = nullptr;
+        for (RetiredUpscaler& retired : _retiredUpscalers)
+        {
+            destroyUpscaler(retired._upscaler);
+        }
+        _retiredUpscalers.clear();
         _updater.destroy();
         _volume.destroy();
         _gbuffer.destroy();
@@ -323,7 +335,6 @@ public:
 
     virtual void update(const double deltaTime) override final
     {
-        (void)deltaTime;
         if (_engine == nullptr || !_sceneReady)
         {
             return;
@@ -332,8 +343,21 @@ public:
         {
             _technique = 0; // the runtime capability gate, not an #ifdef
         }
+        _lastDeltaTime = static_cast<float>(deltaTime);
         retireTables();
         ensureTargets();
+        // Runs after ensureTargets so the phase count follows a resize immediately. The camera
+        // must carry this frame's jitter before the engine publishes set 1 (update precedes
+        // render in the engine loop), and exactly the same value rides the upscale dispatch.
+        if (_upscaler != nullptr)
+        {
+            const uint32_t phaseCount = vkmUpscaleJitterPhaseCount(_renderExtent.x, _extent.x);
+            _camera.setJitterPixels(vkmUpscaleJitterPixels(_frameCounter, phaseCount));
+        }
+        else
+        {
+            _camera.setJitterPixels(glm::vec2(0.0f));
+        }
         takePendingScreenshot();
         drawUi();
     }
@@ -455,7 +479,7 @@ public:
         // technique with screen-space's view dependence baked in (restir.md section 5).
         if (_ssgiEnabled && !restirActive)
         {
-            VkmFrameBufferDescriptor ssgiFb = makeFullscreenFb(_extent, _indirectTarget);
+            VkmFrameBufferDescriptor ssgiFb = makeFullscreenFb(_renderExtent, _indirectTarget);
             ssgiFb._renderPass._colorAttachments[0]._loadAction = VkmLoadAction::Load;
             VkmRenderGraphicsSubGraph* ssgiSubGraph = renderGraph->beginGraphicsSubGraph(ssgiFb, "GiSsgi");
             ssgiSubGraph->addReferencedResource(_indirectTarget, VkmResourceAccess::ColorAttachmentWrite);
@@ -472,6 +496,25 @@ public:
         }
 
         recordFullscreen(renderGraph, "GiComposite", _compositeTarget, _compositePipeline, _tables._composite);
+
+        // 4.5 Temporal upscale of the HDR composite to the display extent, when a backend
+        // upscaler exists. The tonemap table then samples _upscaledTarget instead (buildTables).
+        if (_upscaler != nullptr)
+        {
+            VkmUpscalerDispatchDesc upscaleDesc{};
+            upscaleDesc._color = _compositeTarget;
+            upscaleDesc._depth = _gbuffer.getDepthTexture();
+            upscaleDesc._motion = _gbuffer.getTexture(VkmGBuffer::Target::MotionMetallic);
+            upscaleDesc._output = _upscaledTarget;
+            upscaleDesc._jitterPixels = _camera.getJitterPixels();
+            upscaleDesc._deltaTimeSeconds = _lastDeltaTime;
+            upscaleDesc._reset = _upscalerResetPending;
+            upscaleDesc._nearZ = _camera.getNearZ();
+            upscaleDesc._farZ = _camera.getFarZ();
+            upscaleDesc._fovYRadians = _camera.getFovYRadians();
+            _upscalerResetPending = false;
+            _upscaler->recordDispatch(renderGraph, upscaleDesc);
+        }
 
         // 5. Tone map into the backbuffer.
         VkmRenderGraphicsSubGraph* tonemapSubGraph =
@@ -546,6 +589,14 @@ private:
         std::unique_ptr<VkmRestirPass> _pass;
     };
 
+    // Same delay for a retired upscaler: its backend object is referenced by in-flight command
+    // buffers exactly like a table's descriptors.
+    struct RetiredUpscaler
+    {
+        uint64_t _retiredAtFrame = 0;
+        VkmUpscalerBase* _upscaler = nullptr;
+    };
+
     static void referenceScene(VkmRenderSubGraph* subGraph, const VkmScene& scene,
                                VkmScene::ReferencePhase phase)
     {
@@ -565,7 +616,7 @@ private:
                           VkmPipelineStateBase* pipeline, VkmResourceTableBase* table)
     {
         VkmRenderGraphicsSubGraph* subGraph =
-            renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_extent, target), name);
+            renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_renderExtent, target), name);
         subGraph->addReferencedResource(target, VkmResourceAccess::ColorAttachmentWrite);
         std::vector<VkmResourceAccessDeclaration> bound;
         table->collectReferencedResources(&bound);
@@ -587,7 +638,8 @@ private:
         options._temporalResampling = true;
         options._spatialResampling = true;
         // Scaled with the resolution, per the option's own guidance (roughly 30 px at 1080p).
-        options._neighbourRadius = std::max(8.0f, static_cast<float>(_extent.x) * (30.0f / 1920.0f));
+        // Render extent: the radius is measured in G-buffer pixels, not display ones.
+        options._neighbourRadius = std::max(8.0f, static_cast<float>(_renderExtent.x) * (30.0f / 1920.0f));
         return options;
     }
 
@@ -614,7 +666,7 @@ private:
         });
 
         VkmRenderGraphicsSubGraph* lightingSubGraph =
-            renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_extent, _indirectTarget), "GiRestirLighting");
+            renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_renderExtent, _indirectTarget), "GiRestirLighting");
         lightingSubGraph->addReferencedResource(_indirectTarget, VkmResourceAccess::ColorAttachmentWrite);
         for (uint32_t i = 0; i < VkmGBuffer::kTargetCount; ++i)
         {
@@ -661,6 +713,23 @@ private:
                 _retiredRestir[i]._pass->destroy(_engine->getDriver());
                 _retiredRestir.erase(_retiredRestir.begin() + static_cast<ptrdiff_t>(i));
             }
+        }
+        for (size_t i = _retiredUpscalers.size(); i-- > 0;)
+        {
+            if (_frameCounter >= _retiredUpscalers[i]._retiredAtFrame + FRAME_BUFFER_COUNT)
+            {
+                destroyUpscaler(_retiredUpscalers[i]._upscaler);
+                _retiredUpscalers.erase(_retiredUpscalers.begin() + static_cast<ptrdiff_t>(i));
+            }
+        }
+    }
+
+    static void destroyUpscaler(VkmUpscalerBase* upscaler)
+    {
+        if (upscaler != nullptr)
+        {
+            upscaler->destroy();
+            delete upscaler;
         }
     }
 
@@ -781,25 +850,37 @@ private:
         _sceneReady = true;
     }
 
-    // Recreates everything sized to the swapchain, and the tables that name those textures.
+    // Recreates everything sized to the swapchain (scene targets at the scaled render extent),
+    // and the tables that name those textures.
     void ensureTargets()
     {
         VkmDriverBase* driver = _engine->getDriver();
         const glm::uvec2 extent = _engine->getMainSwapChain()->getExtent();
-        if (extent.x == 0 || extent.y == 0 || extent == _extent)
+        if (extent.x == 0 || extent.y == 0)
+        {
+            return;
+        }
+        const float renderScale = std::clamp(gv_gi_render_scale.get(), 0.25f, 1.0f);
+        const glm::uvec2 renderExtent =
+            glm::max(glm::uvec2(glm::vec2(extent) * renderScale + 0.5f), glm::uvec2(1u));
+        if (extent == _extent && renderExtent == _renderExtent)
         {
             return;
         }
         _extent = extent;
+        _renderExtent = renderExtent;
+        // At scale 1 the override is released so the camera follows the swapchain again.
+        _engine->setCameraViewportOverride(renderExtent == extent ? glm::uvec2(0u) : renderExtent);
 
-        if (!_gbuffer.isValid() ? !_gbuffer.initialize(driver, extent) : !_gbuffer.resize(extent))
+        if (!_gbuffer.isValid() ? !_gbuffer.initialize(driver, renderExtent) : !_gbuffer.resize(renderExtent))
         {
             VKM_DEBUG_ERROR("Failed to size the GI sample's G-buffer");
             return;
         }
 
         VkmDeferredResourceReclaimer* reclaimer = driver->getDeferredReclaimer();
-        for (VkmResourceHandle* target : { &_directTarget, &_indirectTarget, &_compositeTarget, &_screenshotTarget })
+        for (VkmResourceHandle* target :
+             { &_directTarget, &_indirectTarget, &_compositeTarget, &_upscaledTarget, &_screenshotTarget })
         {
             if (target->isValid())
             {
@@ -807,9 +888,9 @@ private:
                 *target = VKM_INVALID_RESOURCE_HANDLE;
             }
         }
-        VkmTexture* direct = createHdrTarget(driver, extent, "GiDirect");
-        VkmTexture* indirect = createHdrTarget(driver, extent, "GiIndirect");
-        VkmTexture* composite = createHdrTarget(driver, extent, "GiComposite");
+        VkmTexture* direct = createHdrTarget(driver, renderExtent, "GiDirect");
+        VkmTexture* indirect = createHdrTarget(driver, renderExtent, "GiIndirect");
+        VkmTexture* composite = createHdrTarget(driver, renderExtent, "GiComposite");
         if (direct == nullptr || indirect == nullptr || composite == nullptr)
         {
             VKM_DEBUG_ERROR("Failed to create the GI sample's HDR targets");
@@ -818,6 +899,55 @@ private:
         _directTarget = direct->getHandle();
         _indirectTarget = indirect->getHandle();
         _compositeTarget = composite->getHandle();
+
+        // The upscaler's extents are fixed at creation, so a resize retires it like the tables:
+        // it must outlive the frames whose command buffers still reference its internal state.
+        if (_upscaler != nullptr)
+        {
+            _retiredUpscalers.push_back(RetiredUpscaler{ _frameCounter, _upscaler });
+            _upscaler = nullptr;
+        }
+        if (renderExtent != extent &&
+            (driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::TemporalUpscaling) != 0)
+        {
+            // ColorAttachment as well: MetalFX publishes render-target usage as part of its
+            // output-texture requirements (outputTextureUsage), not just shader write.
+            VkmTextureInfo upscaledInfo{};
+            upscaledInfo._flags = static_cast<VkmResourceCreateInfo>(
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderWrite) |
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowColorAttachment));
+            upscaledInfo._extent = glm::uvec3(extent, 1);
+            upscaledInfo._numMipLevels = 1;
+            upscaledInfo._numArrayLayers = 1;
+            upscaledInfo._format = kHdrFormat;
+            upscaledInfo._debugName = "GiUpscaled";
+            VkmTexture* upscaled = driver->newTexture(upscaledInfo);
+            if (upscaled != nullptr)
+            {
+                _upscaledTarget = upscaled->getHandle();
+                VkmUpscalerDescriptor upscalerDesc{};
+                upscalerDesc._renderExtent = renderExtent;
+                upscalerDesc._displayExtent = extent;
+                upscalerDesc._colorFormat = kHdrFormat;
+                upscalerDesc._depthFormat = VkmGBuffer::getDepthFormat();
+                upscalerDesc._motionFormat = kHdrFormat;
+                upscalerDesc._outputFormat = kHdrFormat;
+                upscalerDesc._debugName = "GiTemporalUpscale";
+                _upscaler = driver->newUpscaler(upscalerDesc);
+                _upscalerResetPending = true;
+            }
+            if (_upscaler == nullptr)
+            {
+                // Bilinear fallback: the tonemap samples the render-extent composite instead.
+                VKM_DEBUG_ERROR("Failed to create the GI temporal upscaler; falling back to bilinear");
+                if (_upscaledTarget.isValid())
+                {
+                    reclaimer->requestRelease(_upscaledTarget);
+                    _upscaledTarget = VKM_INVALID_RESOURCE_HANDLE;
+                }
+            }
+        }
 
         // Only when one was asked for: it is the same size as the backbuffer and would otherwise
         // cost a full swapchain-sized target for nothing. Swapchain format, because the tone map
@@ -860,8 +990,10 @@ private:
             }
             _restir = std::make_unique<VkmRestirPass>();
             std::string error;
+            // Render extent, not the swapchain's: the pass binds the G-buffer's textures and
+            // resolves into _indirectTarget, both of which are sized to the render resolution.
             if (!_restir->initialize(driver, _engine->getPipelineStateManager(), _gbuffer,
-                                     extent.x, extent.y, &error))
+                                     renderExtent.x, renderExtent.y, &error))
             {
                 VKM_DEBUG_ERROR(("Failed to size the ReSTIR pass: " + error).c_str());
                 _restir.reset();
@@ -892,8 +1024,12 @@ private:
             _compositePipeline, VkmResourceSetKind::PerPass,
             {{ 0, _directTarget }, { 1, _indirectTarget }, { 2, baseColor }, { 3, normal },
              { 4, motion }, { 5, _sampler }, { 6, _compositeBuffer }}, &error);
+        // With an upscaler the tonemap reads the display-extent upscale; without one it samples
+        // the render-extent composite directly (bilinear when the extents differ).
+        const VkmResourceHandle tonemapSource =
+            _upscaler != nullptr ? _upscaledTarget : _compositeTarget;
         _tables._tonemap = driver->newResourceTable(
-            _tonemapPipeline, VkmResourceSetKind::PerPass, {{ 0, _compositeTarget }, { 1, _sampler }, { 2, _tonemapBuffer }}, &error);
+            _tonemapPipeline, VkmResourceSetKind::PerPass, {{ 0, tonemapSource }, { 1, _sampler }, { 2, _tonemapBuffer }}, &error);
 
         if (!_tables.isComplete())
         {
@@ -1005,6 +1141,12 @@ private:
         }
 
         ImGui::Separator();
+        ImGui::Text("Render: %ux%u -> %ux%u (%s)", _renderExtent.x, _renderExtent.y,
+                    _extent.x, _extent.y,
+                    _upscaler != nullptr ? "temporal upscale"
+                                         : (_renderExtent == _extent ? "native" : "bilinear"));
+
+        ImGui::Separator();
         ImGui::Text("Probes: %u, budget %u/frame", _volume.getProbeCount(), _updater.getDescriptor()._budget);
         const uint32_t roundLength = _updater.getRoundLengthInFrames();
         ImGui::Text("Round: %u frames", roundLength);
@@ -1046,8 +1188,14 @@ private:
     VkmResourceHandle _directTarget{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _indirectTarget{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _compositeTarget{ VKM_INVALID_RESOURCE_HANDLE };
+    VkmResourceHandle _upscaledTarget{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _screenshotTarget{ VKM_INVALID_RESOURCE_HANDLE };
     bool _screenshotPending = false;
+
+    VkmUpscalerBase* _upscaler = nullptr;
+    std::vector<RetiredUpscaler> _retiredUpscalers;
+    bool _upscalerResetPending = false;
+    float _lastDeltaTime = 0.0f;
 
     Tables _tables;
     std::vector<RetiredTables> _retiredTables;
@@ -1055,7 +1203,8 @@ private:
     std::array<VkmResourceHandle, FRAME_BUFFER_COUNT> _compositeStaging{};
     std::array<VkmStagingBuffer*, FRAME_BUFFER_COUNT> _compositeStagingPointers{};
 
-    glm::uvec2 _extent{ 0, 0 };
+    glm::uvec2 _extent{ 0, 0 };       // display: the swapchain's extent
+    glm::uvec2 _renderExtent{ 0, 0 }; // scene targets: _extent scaled by gv_gi_render_scale
     uint64_t _frameCounter = 0;
     bool _sceneReady = false;
 

@@ -104,6 +104,9 @@ namespace vkmtest
         frameConstants._inverseViewProjection = glm::inverse(viewProjection);
         // A still camera: the motion vectors must come out exactly zero, which is a far stronger
         // statement than "small". Any sign error, Y-flip mistake or stale matrix breaks it.
+        // Motion is computed from the jitter-free pair, and this fixture carries no jitter, so
+        // both matrices equal viewProjection.
+        frameConstants._viewProjectionNoJitter = viewProjection;
         frameConstants._prevViewProjection = viewProjection;
         driver->getFrameConstantManager()->update(/*frameIndex=*/0, frameConstants);
 
