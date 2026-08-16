@@ -5002,3 +5002,22 @@ the motion texture at scale (-renderW, -renderH) with no jitter cancellation fla
   __declspec(dllexport)` unconditionally, shader-compiler tools present only as .exe), so a
   Linux build is a porting project, exactly the "patching balloons" case the plan's fallback
   named.
+
+## 2026-08-13 — VkmGiSystem: GI becomes an engine feature
+
+Everything technique-shaped moved out of the gi sample into `VkmGiSystem`
+(include/vkm/renderer/gi_system.h): probe volume/updater setup with the ring-budget clamp, SSGI,
+probe lighting, the ReSTIR pass lifecycle (parity pairs, resize retirement), the RT PSO
+load-once, the acceleration-structure attempt, and the runtime technique switch. The system
+produces the section-5 indirect-radiance texture; a caller owns the shared chain (G-buffer,
+direct target, composite, tone map) and drives it with initialize -> prepareScene -> resize plus
+a per-frame record/advanceFrame pair. The sample shrank to gv-flag mapping and UI.
+
+### Deviations
+
+- **Ordering:** the probe refresh used to record before the camera's scene update; it now
+  records from record(), after it. The two cull views own separate staging and device regions
+  (kVkmSceneMaxCullViews), so no dependency orders them — verified by the unchanged Cornell
+  screenshots and a validation-clean suite.
+- **The system's sampler is not released through the reclaimer** at destroy(); it stays with the
+  resource pool until teardown, matching how the sample always treated its own.

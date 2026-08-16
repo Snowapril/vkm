@@ -35,17 +35,6 @@ namespace vkm
         inline bool isHostWritable() const { return _isHostWritable; }
 
         /*
-<<<<<<< HEAD
-        * @brief Writes tightly-packed pixels straight into this texture's memory, with no staging
-        * buffer and no queue submission. Only call this when isHostWritable().
-        * @details The counterpart of VkmCommandBufferBase::copyBufferToTexture, with the same
-        * end-state contract: the texture is shader-readable once this returns.
-        * @param data Source pixels, tightly packed.
-        * @param size Number of bytes to write.
-        * @param mipLevel Mip level to write.
-        * @param arrayLayer Array layer to write.
-        * @return False if the texture's memory cannot be written directly.
-=======
         * @brief Whether this texture's contents live only in on-chip tile memory, with no
         * device memory backing at all.
         * @details Set by the backend at creation from what it actually allocated -- asking for
@@ -90,7 +79,11 @@ namespace vkm
         * the same end-state contract: the texture is shader-readable once this returns.
         * Not pure -- a backend that never reports isHostWritable() has nothing to implement,
         * and this default is the matching "should be unreachable" guard.
->>>>>>> e3e8755 (Add a Transient (tile-memory-only) resource pool type and create flag)
+        * @param data Source pixels, tightly packed.
+        * @param size Number of bytes to write.
+        * @param mipLevel Mip level to write.
+        * @param arrayLayer Array layer to write.
+        * @return False if the texture's memory cannot be written directly.
         */
         virtual bool writeRegion(const void* data, uint64_t size, uint32_t mipLevel, uint32_t arrayLayer)
         {

@@ -311,17 +311,13 @@ struct VkmResourceHandle { uint64_t id; VkmResourcePoolType poolType; VkmResourc
 - Allocated by `VkmRenderResourcePool` — do not construct raw handles manually.
 - `id == (uint64_t)-1` means invalid. Use `handle.isValid()`.
 - `VkmResourceType`: Texture=0, Buffer=1, StagingBuffer=2, Sampler=3, TextureView=4, BufferView=5.
-<<<<<<< HEAD
 - Pooled resources: `handle.isPooledResource()` true when `poolType != Undefined`. This is about
   the *render resource pool* (handle ownership) and has nothing to do with
   `VkmMemoryPlacementHint::Heap` (memory suballocation) — the collision is why that enumerator is
   spelled `Heap` rather than `Pooled`.
-=======
-- Pooled resources: `handle.isPooledResource()` true when `poolType != Undefined`.
 - `VkmResourcePoolType`: Default=0, Transient=1. Every sub-pool has its own per-type id space,
   so two handles can share an `id` and still differ. `Transient` holds textures only, and
   membership follows the *request* — see "Transient (tile-memory-only) textures" below.
->>>>>>> e3e8755 (Add a Transient (tile-memory-only) resource pool type and create flag)
 - `generation` is bumped by the pool each time a slot is released; `getResource()` only
   returns a resource when the handle's `generation` still matches the slot's, giving views a
   weak-reference liveness check. `allocateResourceLocked()` recycles released ids from a

@@ -1,0 +1,175 @@
+// Copyright (c) 2025 Snowapril
+
+#pragma once
+
+#include <vkm/renderer/backend/common/renderer_common.h>
+#include <vkm/renderer/probe_volume.h>
+#include <vkm/renderer/probe_volume_updater.h>
+#include <vkm/renderer/restir.h>
+
+#include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace vkm
+{
+    class VkmDriverBase;
+    class VkmGBuffer;
+    class VkmPipelineStateBase;
+    class VkmPipelineStateManager;
+    class VkmRenderGraph;
+    class VkmResourceTableBase;
+    class VkmScene;
+    struct VkmFrameData;
+
+    // The two interchangeable techniques behind the section-5 interface (restir.md): both fill
+    // the same indirect-radiance texture and the composite neither knows nor cares which.
+    enum class VkmGiTechnique : uint32_t
+    {
+        ProbeVolume = 0, // raster-updated probe grid + optional SSGI contact term; runs everywhere
+        Restir = 1,      // ReSTIR GI; needs VkmDriverCapabilityFlags::RayTracing
+    };
+
+    // Creation-time choices, fixed for the system's lifetime.
+    struct VkmGiSystemDescriptor
+    {
+        glm::uvec3 _probeCounts{ 20u, 10u, 20u };
+        // Probes refreshed per frame; clamped against the push-constant ring in prepareScene().
+        uint32_t _probeBudget = 32;
+        float _probeHysteresis = 0.9f;
+        // The scene cull view the probe refresh owns; the camera keeps view 0.
+        uint32_t _probeCullView = 1;
+    };
+
+    // Per-frame-mutable settings, read at record() time. UI-safe to poke between frames.
+    struct VkmGiOptions
+    {
+        VkmGiTechnique _technique = VkmGiTechnique::ProbeVolume;
+        // Probe tier: the additive screen-space contact term.
+        bool _ssgi = true;
+        // ReSTIR tier: the traced passes see emissive geometry and the environment only (the
+        // scene's directional light has no area to hit — restir.md section 12), so this is what
+        // lights the indirect term until an area-light representation exists.
+        float _environmentRadiance = 1.0f;
+        // ReSTIR tier: 8.7's roughness blend toward the pixel's own fresh sample.
+        bool _restirMisBlend = true;
+        VkmRestirDebugView _restirDebugView = VkmRestirDebugView::Lighting;
+    };
+
+    /*
+    * @brief The engine's GI: both techniques, their passes and resources, and the runtime switch
+    * between them, producing one indirect-radiance texture.
+    * @details The section-5 interface made concrete. The system owns everything a technique needs
+    * — probe volume, updater, SSGI, the ReSTIR pass with its lifecycle — and a caller owns the
+    * shared frame infrastructure it plugs into: the G-buffer, the direct-lighting target, and the
+    * composite that consumes getIndirectTexture(). ReSTIR degrades gracefully: where the device
+    * reports no ray tracing, or the pipelines or acceleration structures fail, the probe tier is
+    * the only entry and _technique is clamped to it.
+    * Call order per lifetime: initialize → prepareScene (after VkmScene::build) → resize; per
+    * frame: record between the direct-lighting pass and the composite, then advanceFrame right
+    * after the G-buffer's own advanceFrame — the ReSTIR tables come in parity pairs keyed to
+    * that flip count.
+    */
+    class VkmGiSystem
+    {
+    public:
+        VkmGiSystem() = default;
+        ~VkmGiSystem() = default;
+
+        VkmGiSystem(const VkmGiSystem&) = delete;
+        VkmGiSystem& operator=(const VkmGiSystem&) = delete;
+
+        /*
+        * @brief Creates the technique-independent pieces: pipelines, sampler, constant buffers,
+        * and — where the device reports ray tracing — the ray-tracing PSO cache, loaded exactly
+        * once. `gbuffer` must outlive the system.
+        */
+        bool initialize(VkmDriverBase* driver, VkmPipelineStateManager* pipelineStateManager,
+                        VkmGBuffer* gbuffer, const VkmGiSystemDescriptor& descriptor,
+                        std::string* outError);
+
+        /*
+        * @brief Fits the probe grid to the scene's bounds, builds the probe updater and its
+        * material tables, and attempts the acceleration structures that make ReSTIR selectable.
+        * @details Must follow VkmScene::build(). An acceleration-structure failure downgrades to
+        * the probe technique rather than failing the call. `scene` must outlive the system.
+        */
+        bool prepareScene(VkmScene* scene, std::string* outError);
+
+        /*
+        * @brief Recreates the extent-sized pieces: the indirect target, the per-pass tables and
+        * the ReSTIR pass. Call after the G-buffer has been resized to the same extent.
+        * @param directTarget The caller's direct-lighting target, sampled by the SSGI term.
+        */
+        bool resize(const glm::uvec2& extent, VkmResourceHandle directTarget, std::string* outError);
+
+        /*
+        * @brief Records the active technique's passes into `renderGraph`, filling the indirect
+        * target. Call between the direct-lighting pass and whatever consumes the texture.
+        */
+        void record(VkmRenderGraph* renderGraph, const VkmFrameData& frameData, uint32_t frameIndex);
+
+        // Call once per frame, immediately after VkmGBuffer::advanceFrame().
+        void advanceFrame();
+
+        void destroy();
+
+        inline VkmResourceHandle getIndirectTexture() const { return _indirectTarget; }
+        // Whether the ReSTIR technique can be selected on this device and scene.
+        inline bool isRestirAvailable() const { return _restirAvailable && _restir != nullptr; }
+        // Mutable: the UI pokes these between frames. A technique the device cannot run is
+        // clamped back at record() time rather than rejected here.
+        inline VkmGiOptions& options() { return _options; }
+        inline const VkmGiOptions& options() const { return _options; }
+
+        inline const VkmProbeVolume& getProbeVolume() const { return _volume; }
+        inline const VkmProbeVolumeUpdater& getProbeUpdater() const { return _updater; }
+
+    private:
+        struct Retired
+        {
+            uint64_t _retiredAtFrame = 0;
+            std::vector<VkmResourceTableBase*> _tables;
+            std::unique_ptr<VkmRestirPass> _restir;
+        };
+
+        VkmRestirOptions makeRestirOptions() const;
+        void recordProbeTier(VkmRenderGraph* renderGraph, const VkmFrameData& frameData);
+        void recordRestirTier(VkmRenderGraph* renderGraph, uint32_t frameIndex);
+        void drainRetired();
+        void releaseTables();
+
+        VkmDriverBase* _driver = nullptr;
+        VkmPipelineStateManager* _pipelineStateManager = nullptr;
+        VkmGBuffer* _gbuffer = nullptr;
+        VkmScene* _scene = nullptr;
+        VkmGiSystemDescriptor _descriptor{};
+        VkmGiOptions _options{};
+
+        VkmProbeVolume _volume;
+        VkmProbeVolumeUpdater _updater;
+        std::unique_ptr<VkmRestirPass> _restir;
+        std::vector<Retired> _retired;
+
+        VkmPipelineStateBase* _probeLightingPipeline = nullptr;
+        VkmPipelineStateBase* _ssgiPipeline = nullptr;
+        VkmResourceTableBase* _probeLightingTable = nullptr;
+        VkmResourceTableBase* _ssgiTable = nullptr;
+
+        VkmResourceHandle _sampler{ VKM_INVALID_RESOURCE_HANDLE };
+        VkmResourceHandle _volumeBuffer{ VKM_INVALID_RESOURCE_HANDLE };
+        VkmResourceHandle _ssgiBuffer{ VKM_INVALID_RESOURCE_HANDLE };
+        VkmResourceHandle _indirectTarget{ VKM_INVALID_RESOURCE_HANDLE };
+
+        glm::uvec2 _extent{ 0, 0 };
+        uint64_t _frameCounter = 0;
+        uint32_t _gbufferParity = 0;
+        bool _rtPipelinesLoaded = false;
+        bool _restirAvailable = false;
+        bool _sceneReady = false;
+    };
+} // namespace vkm
