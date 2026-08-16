@@ -49,6 +49,7 @@ set(SRCS
     ${SRC_DIR}/TestGBufferRenderVulkan.cpp
     ${SRC_DIR}/TestPathTracerMetrics.cpp
     ${SRC_DIR}/TestReservoirLayout.cpp
+    ${SRC_DIR}/TestScreenshotConversion.cpp
 )
 
 if (VKM_USE_METAL_API)
