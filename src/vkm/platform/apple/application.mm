@@ -615,7 +615,9 @@ static void createMenuBar(const char* appName)
     _metalLayer.device = _mtlDevice;
 
     _metalLayer.opaque = YES;
-    _metalLayer.framebufferOnly = YES;
+    // A framebuffer-only drawable cannot be a blit source; this window's back buffer is read
+    // back for F3 clipboard capture, so it must stay copyable.
+    _metalLayer.framebufferOnly = NO;
 
     // Configure CoreAnimation letterboxing. This is what makes a live resize look right: while
     // the user drags, the engine renders nothing and the drawable keeps its pre-drag size, so

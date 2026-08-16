@@ -151,6 +151,17 @@ namespace vkm
         */
         void recreateSwapChain(VkmWindowContext& windowContext, uint64_t packedExtent);
 
+        /*
+        * @brief Reads the given back buffer back and puts the image into the OS clipboard.
+        * @details Blocks: readbackTexture submits and waits. Call it between a render graph's
+        * execute() and the swapchain present, where the back buffer holds the finished frame and
+        * has not been presented yet. Supported on macOS (Metal) and Windows (Vulkan); on any
+        * other platform or backend it only logs.
+        * @param backBuffer Back buffer acquired for the current frame.
+        * @param format Format of that back buffer.
+        */
+        void captureBackBufferToClipboard(VkmResourceHandle backBuffer, VkmFormat format);
+
 #if defined(VKM_ENABLE_IMGUI)
         /*
         * @brief Draws the engine-wide debug overlay (FPS, CPU usage, GPU frame time, frame
@@ -368,6 +379,9 @@ namespace vkm
         bool _hasPrevViewProjection {false};
 
         std::unique_ptr<VkmRenderGraphCapture> _renderGraphCapture;
+
+        // Set by the F3 hotkey, consumed by render() on the next primary-window frame.
+        bool _clipboardCaptureArmed {false};
 
 #if defined(VKM_ENABLE_IMGUI)
         double _fpsSmoothed {0.0}; // exponential moving average, used by renderDebugOverlay()

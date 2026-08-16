@@ -214,6 +214,16 @@ namespace vkm
 
         const uint32_t minImageCountClamped = std::clamp(preferredImageCount, minImageCount, maxImageCount);
 
+        // A back buffer that is also a transfer source is what lets the engine read the presented
+        // image back; surfaces that do not support it simply stay unreadable.
+        VkImageUsageFlags imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        const bool backBufferReadable =
+            (capabilities2.surfaceCapabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+        if (backBufferReadable)
+        {
+            imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        }
+
         // Create the swapchain itself
         const VkSwapchainCreateInfoKHR swapchainCreateInfo{
             .sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -223,7 +233,7 @@ namespace vkm
             .imageColorSpace  = surfaceFormat2.surfaceFormat.colorSpace,
             .imageExtent      = currentExtent,
             .imageArrayLayers = 1,
-            .imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            .imageUsage       = imageUsage,
             .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
             .preTransform     = capabilities2.surfaceCapabilities.currentTransform,
             .compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
@@ -261,6 +271,10 @@ namespace vkm
             VkmTextureInfo textureInfo;
             textureInfo._flags = VkmResourceCreateInfo::ExternalHandleOwner | VkmResourceCreateInfo::AllowShaderRead |
                                   VkmResourceCreateInfo::AllowPresent | VkmResourceCreateInfo::AllowColorAttachment;
+            if (backBufferReadable)
+            {
+                textureInfo._flags = textureInfo._flags | VkmResourceCreateInfo::AllowTransferSrc;
+            }
             textureInfo._extent = glm::uvec3(currentExtent.width, currentExtent.height, 1);
             textureInfo._format = fromVkFormat(_imageFormat);
             textureInfo._numMipLevels = 1;
