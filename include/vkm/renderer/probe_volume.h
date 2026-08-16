@@ -10,6 +10,7 @@
 #include <glm/vec3.hpp>
 
 #include <cstdint>
+#include <vector>
 
 namespace vkm
 {
@@ -175,7 +176,47 @@ namespace vkm
         uint32_t getProbeCount() const;
         // Probe grid coordinate from a linear index, x varying fastest.
         glm::uvec3 getProbeCoord(uint32_t probeIndex) const;
+        // The grid position plus this probe's manual offset, which is what every consumer wants:
+        // the capture renders from here and the lookup measures visibility against here.
         glm::vec3 getProbePosition(uint32_t probeIndex) const;
+        // Grid position alone, ignoring the offset -- for tooling that shows where a probe would
+        // sit unedited.
+        glm::vec3 getProbeGridPosition(uint32_t probeIndex) const;
+
+        /*
+        * @brief Per-probe manual displacement, in world units.
+        * @details A probe that lands inside geometry captures that geometry's interior and hands
+        * it to the lookup, which is the documented source of saturated patches beside hard black
+        * ones on interior surfaces. Rather than detecting and relocating automatically, the
+        * offsets are authored: tooling moves a probe into open space and the volume republishes
+        * them. Zero for every probe until something sets one.
+        * @param probeIndex Linear probe index.
+        * @param offset World-space displacement from the grid position.
+        */
+        void setProbeOffset(uint32_t probeIndex, const glm::vec3& offset);
+        glm::vec3 getProbeOffset(uint32_t probeIndex) const;
+        void clearProbeOffsets();
+        // Whether any probe carries a non-zero offset -- lets a consumer skip the upload entirely.
+        inline bool hasProbeOffsets() const { return _hasProbeOffsets; }
+        /*
+        * @brief Uploads the offsets into the GPU texture the lookup reads.
+        * @details Call after editing offsets; the capture path needs no upload because it pushes
+        * getProbePosition() per probe. Cheap enough to call per edit -- one texel per probe.
+        */
+        bool uploadProbeOffsets();
+        /*
+        * @brief The offset texture the probe-lighting pass binds; valid (and zero) from
+        * initialize().
+        * @details One texel per probe, xyz = world offset, addressed by probeCellCoord() exactly as
+        * the atlases are, so a shader reuses the addressing it already does. A texture rather than
+        * a buffer because the lookup is a fragment shader and this engine's storage-buffer table
+        * type is compute-visible only; 32-bit float because a half's ULP at Sponza's 3721-unit
+        * scale is about a world unit, which is the size of the edits themselves.
+        */
+        inline VkmResourceHandle getProbeOffsetTexture() const { return _offsetTexture; }
+        static VkmFormat getProbeOffsetFormat();
+        // Texel extent of the offset texture: probeCounts.x * probeCounts.y by probeCounts.z.
+        glm::uvec2 getProbeOffsetExtent() const;
 
         /*
         * @brief Atlas dimensions in texels, borders included.
@@ -225,5 +266,11 @@ namespace vkm
         VkmDriverBase* _driver = nullptr;
         Descriptor _descriptor{};
         AtlasSet _set{};
+
+        // One float4 per probe (xyz = offset, w unused), indexed by linear probe index -- which is
+        // also the row-major texel index of probeCellCoord(), so this vector uploads verbatim.
+        std::vector<glm::vec4> _probeOffsets;
+        VkmResourceHandle _offsetTexture{ VKM_INVALID_RESOURCE_HANDLE };
+        bool _hasProbeOffsets = false;
     };
 } // namespace vkm

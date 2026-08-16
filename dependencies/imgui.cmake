@@ -1,6 +1,9 @@
 # Dear ImGui vendored as a plain static library target: upstream ships no
 # CMakeLists.txt (consumers are expected to compile the .cpp files directly).
 set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/src/imgui)
+# ImGuizmo draws through ImGui's own draw lists, so it belongs in this target rather than one of
+# its own -- it has no link dependency beyond ImGui itself.
+set(IMGUIZMO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/src/ImGuizmo/src)
 
 set(IMGUI_SRCS
     ${IMGUI_DIR}/imgui.cpp
@@ -8,6 +11,7 @@ set(IMGUI_SRCS
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
     ${IMGUI_DIR}/imgui_demo.cpp
+    ${IMGUIZMO_DIR}/ImGuizmo.cpp
 )
 
 if (VKM_USE_VULKAN_API OR VKM_USE_WEBGPU_API)
@@ -29,6 +33,7 @@ add_library(imgui STATIC ${IMGUI_SRCS})
 target_include_directories(imgui PUBLIC
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
+    ${IMGUIZMO_DIR}
 )
 
 if (VKM_USE_VULKAN_API)
