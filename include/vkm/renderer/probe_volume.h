@@ -194,9 +194,19 @@ namespace vkm
         VkmResourceHandle getIrradianceTexture() const;
         VkmResourceHandle getDistanceTexture() const;
 
-        // The parameters a shader needs to address this volume, filled from the descriptor.
-        // `normalBias` and `hysteresis` are tuning values the volume does not otherwise own.
-        VkmProbeVolumeConstants makeConstants(float normalBias = 0.25f, float hysteresis = 0.97f) const;
+        /*
+        * @brief The parameters a shader needs to address this volume, filled from the descriptor.
+        * @details `hysteresis` is a tuning value the volume does not otherwise own.
+        * `normalBiasFraction` is a fraction of the smallest probe spacing, not a world distance:
+        * a world constant is an assumption about scene scale, and 0.25 units is a quarter of a
+        * room in one scene and nothing at all in a 3721-unit Sponza. The bias has to clear a
+        * surface off its own probe's stored depth, and "how far apart the probes are" is the only
+        * scale that means anything to that test.
+        * @param normalBiasFraction Bias along the surface normal, as a fraction of min(spacing).
+        * @param hysteresis Blend retention per probe refresh.
+        */
+        VkmProbeVolumeConstants makeConstants(float normalBiasFraction = 0.25f,
+                                              float hysteresis = 0.97f) const;
 
     private:
         struct AtlasSet

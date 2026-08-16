@@ -41,6 +41,10 @@ namespace vkm
         // Probes refreshed per frame; clamped against the push-constant ring in prepareScene().
         uint32_t _probeBudget = 32;
         float _probeHysteresis = 0.9f;
+        // How far a lookup steps off its surface before consulting the probes, as a fraction of
+        // the probe spacing. Thin two-sided geometry needs this: a curtain sits exactly at the
+        // depth its own probe recorded, so a query from the surface reads as self-occluded.
+        float _probeNormalBiasFraction = 0.25f;
         // The scene cull view the probe refresh owns; the camera keeps view 0.
         uint32_t _probeCullView = 1;
     };

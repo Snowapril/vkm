@@ -9,6 +9,7 @@
 
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
+#include <glm/gtx/component_wise.hpp>
 #include <glm/trigonometric.hpp>
 
 namespace vkm
@@ -158,13 +159,18 @@ namespace vkm
     VkmResourceHandle VkmProbeVolume::getIrradianceTexture() const { return _set._irradiance; }
     VkmResourceHandle VkmProbeVolume::getDistanceTexture() const { return _set._distance; }
 
-    VkmProbeVolumeConstants VkmProbeVolume::makeConstants(float normalBias, float hysteresis) const
+    VkmProbeVolumeConstants VkmProbeVolume::makeConstants(float normalBiasFraction, float hysteresis) const
     {
         VkmProbeVolumeConstants constants{};
         constants._originAndSpacingX =
             glm::vec4(_descriptor._origin, _descriptor._spacing.x);
         constants._spacingYZ = glm::vec4(_descriptor._spacing.y, _descriptor._spacing.z, 0.0f, 0.0f);
         constants._probeCounts = glm::uvec4(_descriptor._probeCounts, 0u);
+        // Scale-relative: the shader gets a world distance, but it is derived from this volume's
+        // own spacing rather than assumed. The smallest axis, because the bias must clear the
+        // tightest cell without stepping past its neighbour.
+        const float normalBias =
+            normalBiasFraction * glm::compMin(glm::abs(_descriptor._spacing));
         constants._atlasParams = glm::vec4(static_cast<float>(_descriptor._irradianceResolution),
                                            static_cast<float>(_descriptor._distanceResolution),
                                            normalBias, hysteresis);

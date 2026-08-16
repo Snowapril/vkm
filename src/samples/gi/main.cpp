@@ -102,6 +102,10 @@ VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_screenshot_frame, 600u);
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_debug_view, 0u);
 // Off switch for the contact term, so a screenshot run can A/B it against the probes alone.
 VKM_GLOBAL_VARIABLE(bool, gv_gi_ssgi, true);
+// How far a probe lookup steps off its surface, as a fraction of the probe spacing. Exposed
+// because it is the knob thin geometry needs: at 0 a curtain self-occludes against its own
+// probe's recorded depth and renders black.
+VKM_GLOBAL_VARIABLE(float, gv_gi_probe_normal_bias, 0.25f);
 // Probes per axis. More is better lit and slower to converge, a round being probeCount/budget
 // frames. Y is lower than X and Z because scenes are wider than they are tall.
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_x, 20u);
@@ -196,7 +200,14 @@ public:
     virtual void postDriverReady(VkmEngine* engine) override final
     {
         _engine = engine;
-        _cameraController.registerTo(engine->getInputHandler());
+        // A screenshot run is a measurement, so it must not be steerable: with the controller
+        // subscribed, any stray cursor drag over the window during the run moves the camera and
+        // two "identical" captures disagree -- which is exactly what made an earlier A/B
+        // comparison meaningless. The gv camera flags are the only aim in that mode.
+        if (gv_gi_screenshot.get().empty())
+        {
+            _cameraController.registerTo(engine->getInputHandler());
+        }
         engine->setActiveCamera(&_camera);
 
         // Every pass this sample runs is an engine PSO, already loaded from the engine cache --
@@ -270,6 +281,7 @@ public:
             glm::uvec3(gv_gi_probes_x.get(), gv_gi_probes_y.get(), gv_gi_probes_z.get());
         giDescriptor._probeBudget = 32;
         giDescriptor._probeHysteresis = 0.9f;
+        giDescriptor._probeNormalBiasFraction = gv_gi_probe_normal_bias.get();
         giDescriptor._probeCullView = kProbeCullView;
         std::string giError;
         if (!_gi.initialize(driver, manager, &_gbuffer, giDescriptor, &giError))

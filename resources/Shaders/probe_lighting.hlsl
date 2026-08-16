@@ -78,7 +78,16 @@ float3 sampleProbeVolume(float3 worldPosition, float3 normal)
         float weight = trilinear.x * trilinear.y * trilinear.z;
 
         const float3 probePosition = origin + float3(probeCoord) * spacing;
-        const float3 toProbe = probePosition - worldPosition;
+        /*
+        * Measured from the BIASED point, not the surface. This is what the bias is for: a probe
+        * stores the distance to the nearest surface in each direction, and for thin two-sided
+        * geometry -- a curtain, a leaf -- that surface IS this one, so a query from the surface
+        * itself sits exactly at the stored depth and the Chebyshev test reads it as occluded by
+        * itself. Stepping off along the normal first puts the query comfortably in front of what
+        * the probe recorded. Biasing only the cell lookup (as this did) fixes which probes are
+        * consulted and none of what they answer.
+        */
+        const float3 toProbe = probePosition - biasedPosition;
         const float distanceToProbe = length(toProbe);
         const float3 directionToProbe = distanceToProbe > 1e-6 ? toProbe / distanceToProbe : normal;
 

@@ -196,7 +196,8 @@ namespace vkm
             return fail(outError, "Failed to build the probe capture's material tables: " + error);
         }
 
-        const VkmProbeVolumeConstants volumeConstants = _volume.makeConstants();
+        const VkmProbeVolumeConstants volumeConstants =
+            _volume.makeConstants(_descriptor._probeNormalBiasFraction);
         _driver->uploadToBuffer(_volumeBuffer, &volumeConstants, sizeof(volumeConstants));
 
         // The contact term covers what falls between probes, so its reach is a fraction of the
