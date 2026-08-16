@@ -262,6 +262,11 @@ namespace vkm
             {
                 outMaterial->_emissiveFactor *= source.emissive_strength.emissive_strength;
             }
+            // Only MASK carries a cutoff. BLEND is left at 0 (drawn opaque) rather than guessed
+            // at: sorted blending does not exist here, and silently masking a blended surface
+            // would trade one wrong image for another.
+            outMaterial->_alphaCutoff =
+                (source.alpha_mode == cgltf_alpha_mode_mask) ? source.alpha_cutoff : 0.0f;
             outMaterial->_normalImage = imageIndexOf(data, source.normal_texture);
             outMaterial->_emissiveImage = imageIndexOf(data, source.emissive_texture);
 

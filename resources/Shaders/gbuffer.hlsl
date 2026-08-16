@@ -207,6 +207,23 @@ PSOutput PSMain(VSOutput input)
     const VkmMaterial material = vkmLoadMaterial(g_FrameData[0].materialPoolSlot, input.materialIndex);
     const float4 baseColor = vkmSampleBaseColor(material, input.uv);
     const float2 metallicRoughness = vkmSampleMetallicRoughness(material, input.uv);
+    const float3 emissive = vkmSampleEmissive(material, input.uv);
+
+    /*
+    * glTF alphaMode MASK. A masked material's base-colour alpha is a stencil, not an opacity:
+    * a leaf or vine is a rectangle whose texture is transparent everywhere the plant is not.
+    * Without this test the whole rectangle is drawn, and because such a texture's hidden texels
+    * are near-black, it lands as a hard-edged dark card over the wall behind it. Cutoff 0 means
+    * the material is not masked, so the test costs opaque geometry nothing.
+    *
+    * After every sample, not before: the WebGPU branch samples with an implicit LOD, which WGSL
+    * only allows in uniform control flow, and a discard above them puts them downstream of a
+    * divergent branch.
+    */
+    if (baseColor.a < material.alphaCutoff)
+    {
+        discard;
+    }
 
     PSOutput output;
     output.normal = vkmPackGBufferNormals(shadingNormal, geometricNormal);
@@ -218,6 +235,6 @@ PSOutput PSMain(VSOutput input)
     output.motionMetallic = float4(vkmComputeMotionVector(input.currentClip, input.previousClip),
                                    metallicRoughness.x,
                                    distance(input.worldPosition, g_VkmFrame.cameraPositionWorld.xyz));
-    output.emissive = float4(vkmSampleEmissive(material, input.uv), 0.0);
+    output.emissive = float4(emissive, 0.0);
     return output;
 }

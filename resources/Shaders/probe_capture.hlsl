@@ -165,7 +165,14 @@ float4 PSMain(VSOutput input) : SV_TARGET0
     // albedo here is what makes indirect colour bleeding carry the scene's actual colours instead
     // of a per-material average.
     const VkmMaterial material = vkmLoadMaterial(g_FrameData[0].materialPoolSlot, input.materialIndex);
-    const float3 baseColor = vkmSampleBaseColor(material, input.uv).rgb;
+    const float4 sampledBaseColor = vkmSampleBaseColor(material, input.uv);
+    // Same alpha-mask test the G-buffer applies: a probe that captures an unmasked leaf card
+    // records a dark wall where there is open air, and hands that to every lookup around it.
+    if (sampledBaseColor.a < material.alphaCutoff)
+    {
+        discard;
+    }
+    const float3 baseColor = sampledBaseColor.rgb;
     const float nDotL = saturate(dot(normal, normalize(g_FrameData[0].lightDirection.xyz)));
 
     // Lambert only. A probe records low-frequency incoming radiance, and the specular lobe of a

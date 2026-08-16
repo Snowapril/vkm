@@ -44,6 +44,8 @@ struct VkmMaterial
 {
     float4 baseColorFactor;
     float3 emissiveFactor;
+    // glTF alphaMode MASK's cutoff; 0 means the material is drawn without an alpha test.
+    float  alphaCutoff;
     float  metallic;
     float  roughness;
     uint   baseColorSlot;
@@ -67,6 +69,7 @@ struct VkmMaterial
         material.emissiveFactor = float3(asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 4)),      \
                                          asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 5)),      \
                                          asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 6)));     \
+        material.alphaCutoff = asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 7));         \
         material.metallic  = asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 8));                  \
         material.roughness = asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 9));                  \
         material.baseColorSlot         = VKM_LOAD_VERTEX(materialPoolSlot, base + 12);              \

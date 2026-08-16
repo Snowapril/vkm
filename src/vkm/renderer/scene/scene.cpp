@@ -120,7 +120,9 @@ namespace vkm
         {
             VkmMaterialData data;
             data._baseColorFactor = material._baseColorFactor;
-            data._emissive = glm::vec4(material._emissiveFactor, 0.0f);
+            // w carries the alpha-mask cutoff: word 7 of the GPU record was unused, so a
+            // masked material costs no extra bytes and no layout change.
+            data._emissive = glm::vec4(material._emissiveFactor, material._alphaCutoff);
             data._metallicRoughness = glm::vec4(material._metallicFactor, material._roughnessFactor, 0.0f, 0.0f);
             _materials.push_back(data);
 
