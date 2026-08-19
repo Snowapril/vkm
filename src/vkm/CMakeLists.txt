@@ -372,6 +372,7 @@ if (VKM_USE_WEBGPU_API)
         ${SRC_DIR}/vkm/platform/wasm/application.cpp
         ${SRC_DIR}/vkm/platform/wasm/process_stats.cpp
         ${SRC_DIR}/vkm/platform/wasm/video_capture.cpp
+        ${SRC_DIR}/vkm/platform/wasm/hand_tracker.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_driver.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_swapchain.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_texture.cpp

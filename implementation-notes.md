@@ -5104,3 +5104,44 @@ the motion texture at scale (-renderW, -renderH) with no jitter cancellation fla
   `start()`, since `getUserMedia` resolves on a promise long after `start()` has returned. The
   alternative was suspending on it through ASYNCIFY, which would have blocked the browser's main
   thread -- the one running the render loop -- for as long as the prompt stayed up.
+
+## 2026-08-20 — Browser hand tracking (MediaPipe), fetched rather than committed
+
+- `vkmCreateHandTracker()` now returns a real tracker on wasm, backed by MediaPipe's
+  HandLandmarker. Its 21 landmarks are in the same order and the same normalized top-left space
+  `VkmHandPose` already declares, so the two zip together with no remapping and the sample needed
+  no change at all.
+- The model and the tasks-vision runtime are ~27 MB of prebuilt binaries. They are **not**
+  committed: `scripts/download_hand_model.py` fetches them into `resources/HandTracking/`, which
+  is gitignored down to a `.gitkeep`, exactly as `resources/Scenes/` and `download_scenes.py`
+  already do. The root CMakeLists copies them next to the page when present and prints a hint
+  when absent -- the same shape as the FSR DLL copy.
+- They are copied rather than `--preload-file`d into MEMFS because the tasks-vision runtime
+  fetches its own wasm and model **by URL**, so they have to be reachable over HTTP next to the
+  page rather than inside the Emscripten filesystem.
+- Without the assets the tracker still starts, never becomes ready, and the sample falls back to
+  the cursor. A checkout that never ran the script builds and runs unchanged.
+
+### Two failures worth recording, because both are invisible until run time
+
+- **MediaPipe cannot run on the main thread here.** Its runtime is itself an Emscripten module,
+  and it adopts the page's own `Module` global rather than creating its own -- then aborts the
+  entire page with `Aborted('printErr' was not exported)`. Not a diagnosable-from-source problem:
+  it presents as vkm's own runtime dying. A Web Worker has its own global scope, so the two
+  runtimes cannot see each other, which settles the question of where detection runs. Keeping it
+  off the render-loop thread was going to be the right answer anyway.
+- **The worker must be classic, not a module worker.** MediaPipe's wasm loader calls
+  `importScripts()`, which a module worker forbids outright (`Module scripts don't support
+  importScripts()`). A classic worker allows it and still supports the dynamic `import()` needed
+  for `vision_bundle.mjs` -- and that import cannot be replaced by `importScripts`, since the
+  package ships only ESM and CommonJS bundles, no UMD one. Classic worker plus dynamic import is
+  the only combination that loads both halves.
+
+### Deviations
+
+- **Planned (previous entry):** wasm gets camera only, hand tracking falls back to the cursor.
+  **Done instead:** wasm gets real hand tracking. **Why:** the objection was committing ~27 MB of
+  model binaries or depending on a CDN at run time; fetching them with a script into a gitignored
+  directory is neither, and the repo already had that pattern for sample scenes.
+- Detection is throttled by a single in-flight frame rather than by a timer: `submitFrame` drops
+  anything arriving while the worker is busy, the same backpressure the Apple tracker uses.

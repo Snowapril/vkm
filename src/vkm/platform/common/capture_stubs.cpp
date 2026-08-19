@@ -17,10 +17,11 @@ namespace vkm
     }
 #endif
 
-#if !defined(VKM_PLATFORM_APPLE)
-    // Only Apple ships a hand tracking model with the OS (Vision). Everywhere else a tracker
-    // means bundling a model and an inference runtime, which is a far larger decision than this
-    // interface and is deliberately not made here.
+#if !defined(VKM_PLATFORM_APPLE) && !defined(VKM_PLATFORM_WASM)
+    // Apple tracks hands through Vision, which ships with the OS, and the browser through a
+    // MediaPipe model fetched by scripts/download_hand_model.py. A native Windows or Linux
+    // tracker would mean bundling a model and an inference runtime into the engine itself, which
+    // is a far larger decision than this interface and is deliberately not made here.
     VkmHandTrackerBase* vkmCreateHandTracker()
     {
         return nullptr;

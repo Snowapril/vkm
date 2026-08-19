@@ -120,6 +120,19 @@ if (VKM_USE_VULKAN_API AND VKM_PLATFORM_WINDOWS AND
          DESTINATION ${CMAKE_BINARY_DIR}/bin)
 endif()
 
+# MediaPipe's hand landmarker backs VkmHandTrackerBase in the browser. Like the FSR DLL these are
+# prebuilt binaries fetched separately (scripts/download_hand_model.py) rather than committed, and
+# they are ~27 MB. They are copied rather than preloaded into MEMFS because the tasks-vision
+# runtime fetches its own wasm and model by URL, so they have to be served next to the page.
+# Absent, the browser tracker's start() fails and its caller falls back to another input.
+if (VKM_USE_WEBGPU_API AND EXISTS ${PROJECT_SOURCE_DIR}/resources/HandTracking/hand_landmarker.task)
+    file(COPY ${PROJECT_SOURCE_DIR}/resources/HandTracking/
+         DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/hand_tracking)
+    message(STATUS "vkm: hand tracking assets copied to ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/hand_tracking")
+elseif (VKM_USE_WEBGPU_API)
+    message(STATUS "vkm: no hand tracking assets; run scripts/download_hand_model.py for browser hand tracking")
+endif()
+
 if (VKM_USE_METAL_API)
     add_definitions(-DVKM_USE_METAL_API)
 endif()

@@ -445,4 +445,8 @@ dependencies/dxc-macos-build/
 resources/Scenes/*
 !resources/Scenes/.gitkeep
 
+# MediaPipe hand landmarker model and runtime fetched by scripts/download_hand_model.py
+resources/HandTracking/*
+!resources/HandTracking/.gitkeep
+
 .DS_Store
