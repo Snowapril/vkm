@@ -159,3 +159,15 @@
 - MetalFX/FSR frame generation (interpolator sibling to VkmUpscalerBase, present pacing, UI composited after interpolation).
 - Linux FSR build (ffx-api is MSVC-only as shipped; Windows uses AMD's prebuilt DLL).
 - MetalFX temporal upscaling is withheld under MTL_DEBUG_LAYER (MTL4FX cannot encode under the debug layer).
+- `VkmVideoCaptureBase` on Apple needs one restart after camera access is granted; the permission request is asynchronous and `start()` reports failure for that run.
+- `VkmHandTrackerBase` is implemented on Apple (Vision) and wasm (MediaPipe); Windows and Linux return null from `vkmCreateHandTracker` and a caller must supply its own pose.
+- The browser hand tracker needs `scripts/download_hand_model.py` to have been run before the wasm build is configured; without the assets it starts, never becomes ready, and its caller falls back.
+- The browser hand tracker runs MediaPipe in a classic Web Worker: a module worker cannot host MediaPipe's `importScripts`, and the main thread cannot host its Emscripten runtime at all (it adopts the page's `Module` and aborts it).
+- MediaPipe scores a whole hand rather than each joint, so every joint in a browser pose carries the same confidence.
+- `VkmVideoCaptureBase` is implemented on Apple (AVFoundation) and wasm (getUserMedia); Windows (Media Foundation) and Linux (V4L2) return null.
+- `VkmHandPose` carries no depth, so nothing built on it can tell how far a hand is from the camera.
+- The Apple hand tracker detects one hand (`maximumHandCount = 1`) and recognizes no gestures.
+- The wasm video capture copies each frame through a 2D canvas `getImageData`; importing the `MediaStream` as a WebGPU external texture would skip the CPU round trip but has no representation in the resource model.
+- The wasm video capture is bound to whatever resolution the browser hands back, and `getUserMedia`'s permission refusal only surfaces on a later poll rather than from `start()`.
+- Consumers re-upload the whole camera frame through `uploadToTexture` every frame rather than wrapping the `CVPixelBuffer`'s IOSurface as an `MTLTexture`.
+- The wasm build of hand_interaction holds a 720p frame twice on the CPU, which is why its `INITIAL_MEMORY` is 256 MiB against the other samples' 128 MiB.

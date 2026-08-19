@@ -1,0 +1,27 @@
+{
+    "name": "hand_background_pso",
+    "primitive_topology": "triangle_list",
+    "rasterization_state": {
+        "fill_mode": "solid",
+        "cull_mode": "none",
+        "front_face": "counter_clockwise"
+    },
+    "depth_stencil_state": {
+        "depth_test_enable": false,
+        "depth_write_enable": false
+    },
+    "color_attachments": [
+        { "format": "swapchain" }
+    ],
+    "per_pass_resources": [
+        { "binding": 0, "type": "sampled_texture" },
+        { "binding": 1, "type": "sampler" }
+    ],
+    "shaders": {
+        "vertex": { "filepath": "hand_background.hlsl", "entry_point": "VSMain" },
+        "fragment": { "filepath": "hand_background.hlsl", "entry_point": "PSMain" }
+    },
+    "options": {
+        "default": {}
+    }
+}

@@ -5002,3 +5002,146 @@ the motion texture at scale (-renderW, -renderH) with no jitter cancellation fla
   __declspec(dllexport)` unconditionally, shader-compiler tools present only as .exe), so a
   Linux build is a porting project, exactly the "patching balloons" case the plan's fallback
   named.
+
+## 2026-08-19 — hand_interaction sample: camera hand tracking versus a rendered sphere
+
+- New sample `src/samples/hand_interaction`. A camera frame is drawn as the background, a hand
+  pose is turned into six collision proxies, and a simulated ball is knocked around by them.
+- `hand_pose.h` / `ball_sim.h` / `sphere_mesh.h` are header-only and free of every engine type,
+  so `tests/TestHandInteraction.cpp` covers the whole interaction -- poses in, ball position out
+  -- with no driver, window or camera. `tests/CMakeLists.txt` adds the sample directory to the
+  test target's include path for this.
+- `HandInputSource` (`hand_input.h`) is one interface over both the frames and the poses, because
+  the Apple implementation produces them together and nothing outside has to route between them.
+  `createPlatformHandInput()` returns the AVFoundation + Vision source on Apple and null
+  elsewhere; the sample falls back to a cursor-driven stand-in on null or on a failed start, so
+  every platform stays runnable. `--gv_hand_input=cursor` forces the stand-in.
+- Simulation space is measured in window widths (x in [0, 1], y in [0, height / width]) rather
+  than normalized [0, 1] on both axes, so a simulated circle stays circular in any window and the
+  playfield re-fits on resize with no other state to update.
+- The capture's BGRA bytes are uploaded into an `R8G8B8A8_UNORM` texture and swizzled in the
+  fragment shader. There is no BGRA `VkmFormat`, and a free `.bgr` in the shader beats a
+  per-frame byte swap over a megapixel on the CPU.
+- The background is mirrored horizontally, and the Apple source mirrors the pose x to match, so
+  `HandPose` is always in the space the user sees and no consumer re-flips it. Vision normalizes
+  to a bottom-left origin, so both axes invert on the way out of the detector.
+
+### Deviations
+
+- **Planned:** the capture and tracking code sits behind a backend-neutral interface, following
+  `VkmUpscalerBase`. **Done instead:** the interface lives in the sample directory rather than in
+  `vkmcore`. **Why:** it has exactly one real implementation and one stand-in, both consumed by
+  one sample; promoting it would put AVFoundation and Vision on the link line of every vkm app on
+  macOS for no second caller's benefit (CLAUDE.md §2). Moving it to
+  `include/vkm/platform/common/` is mechanical if a second consumer appears.
+- **Planned:** a `_handImpulseScale` tunable separate from restitution. **Done instead:** one
+  `_handRestitution`. **Why:** the contact is resolved in the proxy's frame, where reflecting the
+  relative normal velocity already scales the push by the approach speed; a second multiplier
+  would have been the same knob twice.
+- **Planned:** nothing about camera permission. **Done instead:** an `AVAuthorizationStatus` of
+  `NotDetermined` requests access asynchronously and reports failure, so the sample runs on the
+  cursor stand-in for that launch and picks the camera up on the next one. **Why:**
+  `postDriverReady` runs before the app's run loop starts, so waiting on the prompt there would
+  stall the loop that has to service it. Falling back is the conservative option -- the sample is
+  always usable, and a denial degrades the same way (TODO.md line).
+- `[AVCaptureSession startRunning]` blocks until the camera powers up, which measured about four
+  seconds on the machine this was written on and stalled window creation for the same time. It
+  now runs on a serial session queue that `stop()` synchronizes against, so the window appears
+  immediately and the session delivers nothing until it is ready.
+
+## 2026-08-19 — Camera capture and hand tracking into vkm, and the sample onto WebGPU
+
+- The sample-local `HandInputSource` became two engine interfaces, because the two halves have
+  different platform support and different consumers: `VkmVideoCaptureBase`
+  (`include/vkm/platform/common/video_capture.h`) exists on Apple and in the browser, and
+  `VkmHandTrackerBase` (`hand_tracker.h`) only on Apple. A sample wanting a webcam background no
+  longer drags Vision in with it.
+- They follow the `process_stats.h` pattern -- one common header, one implementation per platform
+  picked in `src/vkm/CMakeLists.txt` -- with `platform/common/capture_stubs.cpp` carrying the
+  null factories for the combinations nothing implements.
+- Splitting them cost one frame copy: the Apple tracker used to read the `CVPixelBuffer` the
+  capture had already locked, and now takes a `VkmVideoFrame` and wraps it with
+  `CVPixelBufferCreateWithBytes`. The wrap itself is free; the copy is the one `submitFrame` makes
+  so the caller can reuse its frame immediately, and it happens only on frames that are actually
+  detected rather than on every frame captured.
+- `VkmVideoFrame` carries its own `VkmFormat` rather than normalizing the channel order.
+  AVFoundation delivers BGRA and a browser canvas RGBA; `BGRA8_UNORM` and `R8G8B8A8_UNORM` both
+  exist on all three backends, so the consumer creates a texture of whichever it was handed and
+  nothing ever reorders a megapixel on the CPU.
+- A tracker reports in image space. Mirroring belongs to whoever displays the image, so the sample
+  mirrors the pose to match its mirrored background -- and turns that off for the cursor
+  stand-in, which reports where the user already sees the pointer.
+
+### WebGPU
+
+- `hand_background.hlsl` now reaches the camera texture through descriptor set 2 (`Texture2D` +
+  `SamplerState`, declared in the PSO json as `per_pass_resources`) instead of the bindless
+  texture array. WGSL has no runtime-sized texture array, which is what kept the sample out of
+  wasm builds; the set-2 path exists on every backend, so this is one shader rather than two.
+- The sample moved out of the `NOT VKM_USE_WEBGPU_API` guard in the root CMakeLists and gained the
+  usual Emscripten packaging block.
+- `src/vkm/platform/wasm/video_capture.cpp` is the repo's first JS interop. `EM_JS` blocks drive
+  `getUserMedia` into an offscreen `<video>`, draw it into a 2D canvas and copy the pixels back
+  through `HEAPU8`.
+- A wasm sample must `add_dependencies(<target> vkm_engine_shaders)` even when it owns every PSO
+  it draws with. `VkmEngine` loads the engine PSO set at startup, and `--preload-file` packs that
+  cache into the MEMFS bundle **at link time** -- so without the dependency the bundle is packed
+  from whatever the cache directory happened to hold, and the page dies at startup on a missing
+  `deferred_lighting.vert.webgpu.vfcache`. Note that adding the dependency alone does not repack
+  an already-linked executable: ordering is not a relink trigger.
+
+### Deviations
+
+- **Planned:** hand tracking on wasm as well. **Done instead:** camera only; the cursor stands in
+  for the hand there. **Why:** no browser ships a hand tracking model, so this would have meant
+  either loading MediaPipe from a CDN (breaking every offline run, and a ~7 MB model fetch per
+  page load) or vendoring a model and runtime into the repo. Neither is a decision this change
+  should be making, and the interface leaves room for both (TODO.md line).
+- `EM_JS` bodies pass through the C preprocessor, so every single-quoted JS string in them is a
+  character constant -- `''` an empty one and `'2d'` a multi-character one, both `-Werror` under
+  this build. All JS string literals inside `EM_JS` are double-quoted for that reason.
+- The wasm capture reports a permission refusal from a later `tryAcquireFrame` rather than from
+  `start()`, since `getUserMedia` resolves on a promise long after `start()` has returned. The
+  alternative was suspending on it through ASYNCIFY, which would have blocked the browser's main
+  thread -- the one running the render loop -- for as long as the prompt stayed up.
+
+## 2026-08-20 — Browser hand tracking (MediaPipe), fetched rather than committed
+
+- `vkmCreateHandTracker()` now returns a real tracker on wasm, backed by MediaPipe's
+  HandLandmarker. Its 21 landmarks are in the same order and the same normalized top-left space
+  `VkmHandPose` already declares, so the two zip together with no remapping and the sample needed
+  no change at all.
+- The model and the tasks-vision runtime are ~27 MB of prebuilt binaries. They are **not**
+  committed: `scripts/download_hand_model.py` fetches them into `resources/HandTracking/`, which
+  is gitignored down to a `.gitkeep`, exactly as `resources/Scenes/` and `download_scenes.py`
+  already do. The root CMakeLists copies them next to the page when present and prints a hint
+  when absent -- the same shape as the FSR DLL copy.
+- They are copied rather than `--preload-file`d into MEMFS because the tasks-vision runtime
+  fetches its own wasm and model **by URL**, so they have to be reachable over HTTP next to the
+  page rather than inside the Emscripten filesystem.
+- Without the assets the tracker still starts, never becomes ready, and the sample falls back to
+  the cursor. A checkout that never ran the script builds and runs unchanged.
+
+### Two failures worth recording, because both are invisible until run time
+
+- **MediaPipe cannot run on the main thread here.** Its runtime is itself an Emscripten module,
+  and it adopts the page's own `Module` global rather than creating its own -- then aborts the
+  entire page with `Aborted('printErr' was not exported)`. Not a diagnosable-from-source problem:
+  it presents as vkm's own runtime dying. A Web Worker has its own global scope, so the two
+  runtimes cannot see each other, which settles the question of where detection runs. Keeping it
+  off the render-loop thread was going to be the right answer anyway.
+- **The worker must be classic, not a module worker.** MediaPipe's wasm loader calls
+  `importScripts()`, which a module worker forbids outright (`Module scripts don't support
+  importScripts()`). A classic worker allows it and still supports the dynamic `import()` needed
+  for `vision_bundle.mjs` -- and that import cannot be replaced by `importScripts`, since the
+  package ships only ESM and CommonJS bundles, no UMD one. Classic worker plus dynamic import is
+  the only combination that loads both halves.
+
+### Deviations
+
+- **Planned (previous entry):** wasm gets camera only, hand tracking falls back to the cursor.
+  **Done instead:** wasm gets real hand tracking. **Why:** the objection was committing ~27 MB of
+  model binaries or depending on a CDN at run time; fetching them with a script into a gitignored
+  directory is neither, and the repo already had that pattern for sample scenes.
+- Detection is throttled by a single in-flight frame rather than by a timer: `submitFrame` drops
+  anything arriving while the worker is busy, the same backpressure the Apple tracker uses.
