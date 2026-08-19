@@ -5048,3 +5048,59 @@ the motion texture at scale (-renderW, -renderH) with no jitter cancellation fla
   seconds on the machine this was written on and stalled window creation for the same time. It
   now runs on a serial session queue that `stop()` synchronizes against, so the window appears
   immediately and the session delivers nothing until it is ready.
+
+## 2026-08-19 — Camera capture and hand tracking into vkm, and the sample onto WebGPU
+
+- The sample-local `HandInputSource` became two engine interfaces, because the two halves have
+  different platform support and different consumers: `VkmVideoCaptureBase`
+  (`include/vkm/platform/common/video_capture.h`) exists on Apple and in the browser, and
+  `VkmHandTrackerBase` (`hand_tracker.h`) only on Apple. A sample wanting a webcam background no
+  longer drags Vision in with it.
+- They follow the `process_stats.h` pattern -- one common header, one implementation per platform
+  picked in `src/vkm/CMakeLists.txt` -- with `platform/common/capture_stubs.cpp` carrying the
+  null factories for the combinations nothing implements.
+- Splitting them cost one frame copy: the Apple tracker used to read the `CVPixelBuffer` the
+  capture had already locked, and now takes a `VkmVideoFrame` and wraps it with
+  `CVPixelBufferCreateWithBytes`. The wrap itself is free; the copy is the one `submitFrame` makes
+  so the caller can reuse its frame immediately, and it happens only on frames that are actually
+  detected rather than on every frame captured.
+- `VkmVideoFrame` carries its own `VkmFormat` rather than normalizing the channel order.
+  AVFoundation delivers BGRA and a browser canvas RGBA; `BGRA8_UNORM` and `R8G8B8A8_UNORM` both
+  exist on all three backends, so the consumer creates a texture of whichever it was handed and
+  nothing ever reorders a megapixel on the CPU.
+- A tracker reports in image space. Mirroring belongs to whoever displays the image, so the sample
+  mirrors the pose to match its mirrored background -- and turns that off for the cursor
+  stand-in, which reports where the user already sees the pointer.
+
+### WebGPU
+
+- `hand_background.hlsl` now reaches the camera texture through descriptor set 2 (`Texture2D` +
+  `SamplerState`, declared in the PSO json as `per_pass_resources`) instead of the bindless
+  texture array. WGSL has no runtime-sized texture array, which is what kept the sample out of
+  wasm builds; the set-2 path exists on every backend, so this is one shader rather than two.
+- The sample moved out of the `NOT VKM_USE_WEBGPU_API` guard in the root CMakeLists and gained the
+  usual Emscripten packaging block.
+- `src/vkm/platform/wasm/video_capture.cpp` is the repo's first JS interop. `EM_JS` blocks drive
+  `getUserMedia` into an offscreen `<video>`, draw it into a 2D canvas and copy the pixels back
+  through `HEAPU8`.
+- A wasm sample must `add_dependencies(<target> vkm_engine_shaders)` even when it owns every PSO
+  it draws with. `VkmEngine` loads the engine PSO set at startup, and `--preload-file` packs that
+  cache into the MEMFS bundle **at link time** -- so without the dependency the bundle is packed
+  from whatever the cache directory happened to hold, and the page dies at startup on a missing
+  `deferred_lighting.vert.webgpu.vfcache`. Note that adding the dependency alone does not repack
+  an already-linked executable: ordering is not a relink trigger.
+
+### Deviations
+
+- **Planned:** hand tracking on wasm as well. **Done instead:** camera only; the cursor stands in
+  for the hand there. **Why:** no browser ships a hand tracking model, so this would have meant
+  either loading MediaPipe from a CDN (breaking every offline run, and a ~7 MB model fetch per
+  page load) or vendoring a model and runtime into the repo. Neither is a decision this change
+  should be making, and the interface leaves room for both (TODO.md line).
+- `EM_JS` bodies pass through the C preprocessor, so every single-quoted JS string in them is a
+  character constant -- `''` an empty one and `'2d'` a multi-character one, both `-Werror` under
+  this build. All JS string literals inside `EM_JS` are double-quoted for that reason.
+- The wasm capture reports a permission refusal from a later `tryAcquireFrame` rather than from
+  `start()`, since `getUserMedia` resolves on a promise long after `start()` has returned. The
+  alternative was suspending on it through ASYNCIFY, which would have blocked the browser's main
+  thread -- the one running the render loop -- for as long as the prompt stayed up.

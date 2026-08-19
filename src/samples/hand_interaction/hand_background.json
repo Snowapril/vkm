@@ -13,6 +13,10 @@
     "color_attachments": [
         { "format": "swapchain" }
     ],
+    "per_pass_resources": [
+        { "binding": 0, "type": "sampled_texture" },
+        { "binding": 1, "type": "sampler" }
+    ],
     "shaders": {
         "vertex": { "filepath": "hand_background.hlsl", "entry_point": "VSMain" },
         "fragment": { "filepath": "hand_background.hlsl", "entry_point": "PSMain" }

@@ -13,6 +13,8 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/platform/common/input_handler.h
     ${PUBLIC_HDR_DIR}/vkm/platform/common/glfw_input.h
     ${PUBLIC_HDR_DIR}/vkm/platform/common/process_stats.h
+    ${PUBLIC_HDR_DIR}/vkm/platform/common/video_capture.h
+    ${PUBLIC_HDR_DIR}/vkm/platform/common/hand_tracker.h
     ${PUBLIC_HDR_DIR}/vkm/base/platform.h
     ${PUBLIC_HDR_DIR}/vkm/base/common.h
     ${PUBLIC_HDR_DIR}/vkm/base/logger.h
@@ -80,6 +82,7 @@ set(SRCS
     ${SRC_DIR}/vkm/base/cpu_profiler.cpp
     ${SRC_DIR}/vkm/platform/common/input_handler.cpp
     ${SRC_DIR}/vkm/platform/common/glfw_input.cpp
+    ${SRC_DIR}/vkm/platform/common/capture_stubs.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/renderer_common.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_graph.cpp
     ${SRC_DIR}/vkm/renderer/backend/common/render_graph_barrier.cpp
@@ -186,6 +189,8 @@ if (VKM_PLATFORM_APPLE)
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/apple/application.mm
         ${SRC_DIR}/vkm/platform/apple/process_stats.cpp
+        ${SRC_DIR}/vkm/platform/apple/video_capture.mm
+        ${SRC_DIR}/vkm/platform/apple/hand_tracker.mm
     )
 endif()
 
@@ -366,6 +371,7 @@ if (VKM_USE_WEBGPU_API)
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/wasm/application.cpp
         ${SRC_DIR}/vkm/platform/wasm/process_stats.cpp
+        ${SRC_DIR}/vkm/platform/wasm/video_capture.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_driver.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_swapchain.cpp
         ${SRC_DIR}/vkm/renderer/backend/webgpu/webgpu_texture.cpp
@@ -494,6 +500,10 @@ if (VKM_PLATFORM_APPLE)
         # Metal windowing surface. MetalFX backs VkmUpscalerMetal.
         target_link_libraries(${target} PUBLIC "-framework Metal -framework CoreVideo -framework QuartzCore -framework MetalFX")
     endif()
+    # AVFoundation backs VkmVideoCaptureBase and Vision backs VkmHandTrackerBase; CoreMedia and
+    # CoreVideo carry the sample and pixel buffers between them. Outside the Metal branch: these
+    # are the platform layer's, not the renderer's.
+    target_link_libraries(${target} PUBLIC "-framework AVFoundation -framework CoreMedia -framework CoreVideo -framework Vision")
     if (NOT IOS)
         # Needed for the Metal branch's NSApplication/NSWindow code, and for GLFW's Cocoa
         # backend used by the Vulkan branch.

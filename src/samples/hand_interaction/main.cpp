@@ -3,19 +3,23 @@
 // A hand, seen through the camera, knocking a rendered sphere around.
 //
 // Per frame:
-//   1. The hand input source hands over the newest camera frame, which is uploaded into one
-//      texture and drawn as the background, and the newest hand pose.
-//   2. The pose is smoothed, differenced against last frame's for velocity, and turned into six
-//      collision proxies -- five fingertips and the palm (ball_sim.h).
+//   1. VkmVideoCaptureBase hands over the newest camera frame, which is uploaded into one texture
+//      and drawn as the background, and is offered to VkmHandTrackerBase for detection.
+//   2. The newest pose is mirrored to match the mirrored background, smoothed, differenced
+//      against last frame's for velocity, and turned into six collision proxies -- five
+//      fingertips and the palm (ball_sim.h).
 //   3. The ball is advanced in fixed substeps against those proxies and the window edges.
 //   4. The ball and, optionally, the proxies are drawn as unit spheres scaled and placed by push
 //      constants, all from one mesh and one pipeline.
 //
 // The simulation is two-dimensional on purpose. Both plausible sources of a third dimension --
-// monocular depth estimation, or inferring distance from the hand's apparent size -- are
-// relative and noisy frame to frame, and feeding that into a collision test produces a ball that
-// jitters and tunnels. Constraining everything to one plane in front of the camera costs nothing
-// the interaction needs and makes it behave the same every time.
+// monocular depth estimation, or inferring distance from the hand's apparent size -- are relative
+// and noisy frame to frame, and feeding that into a collision test produces a ball that jitters
+// and tunnels. Constraining everything to one plane in front of the camera costs nothing the
+// interaction needs and makes it behave the same every time.
+//
+// Where no hand tracker exists -- everywhere but Apple, including the browser -- the cursor stands
+// in for the hand and the camera background still runs.
 
 #include <algorithm>
 #include <array>
@@ -31,7 +35,9 @@
 #include <vkm/base/common.h>
 #include <vkm/base/global_variable.h>
 #include <vkm/platform/common/app_delegate.h>
+#include <vkm/platform/common/hand_tracker.h>
 #include <vkm/platform/common/input_handler.h>
+#include <vkm/platform/common/video_capture.h>
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/buffer.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
@@ -40,6 +46,8 @@
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/render_graph.h>
+#include <vkm/renderer/backend/common/resource_table.h>
+#include <vkm/renderer/backend/common/sampler.h>
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/camera.h>
@@ -56,13 +64,13 @@
 #endif // defined(VKM_PLATFORM_WINDOWS)
 
 #include "ball_sim.h"
-#include "hand_input.h"
+#include "cursor_hand_tracker.h"
 #include "sphere_mesh.h"
 
 using namespace vkm;
 
-// "cursor" forces the mouse-driven stand-in even where a camera source exists, which is the only
-// way to exercise the fallback path on a machine that has a working camera.
+// "cursor" forces the stand-in even where a hand tracker exists, which is the only way to
+// exercise the fallback path on a machine whose camera tracking works.
 VKM_GLOBAL_VARIABLE(std::string, gv_hand_input, "auto");
 
 namespace
@@ -79,7 +87,7 @@ namespace
     constexpr uint32_t kSphereStacks = 24;
     constexpr uint32_t kSphereSlices = 32;
 
-    // Time constant of the pose smoothing. Long enough to swallow Vision's per-frame jitter,
+    // Time constant of the pose smoothing. Long enough to swallow a detector's per-frame jitter,
     // short enough that a fast swipe still reads as a fast swipe.
     constexpr float kPoseSmoothingSeconds = 0.06f;
     // A pose older than this is dropped rather than left pushing the ball from a stale position.
@@ -97,11 +105,6 @@ namespace
         float color[4];
         uint32_t vertexBufferIndex;
         uint32_t indexBufferIndex;
-    };
-
-    struct BackgroundPushConstants
-    {
-        uint32_t cameraTextureSlot;
     };
 
     constexpr uint32_t kMaxSphereDraws = 1 + kHandColliderCount;
@@ -136,16 +139,26 @@ public:
         engine->setActiveCamera(&_camera);
 
         createSphereGeometry();
-        createHandInput();
+        createSampler();
+        createCapture();
+        createHandTracker();
     }
 
     virtual void preShutdown() override final
     {
-        if (_handInput != nullptr)
+        if (_capture != nullptr)
         {
-            _handInput->stop();
-            _handInput.reset();
+            _capture->stop();
+            _capture.reset();
         }
+        if (_handTracker != nullptr)
+        {
+            _handTracker->stop();
+            _handTracker.reset();
+        }
+        _cursorTracker = nullptr;
+
+        releaseBackgroundTable();
 
         if (_engine != nullptr)
         {
@@ -180,14 +193,15 @@ public:
         _simParams._boundsMin = glm::vec2(0.0f, 0.0f);
         _simParams._boundsMax = glm::vec2(1.0f, invAspect);
 
-        if (_handInput != nullptr)
+        if (_cursorTracker != nullptr)
         {
-            _handInput->setViewportSize(extent.x, extent.y);
-            acquireCameraFrame();
-            acquirePose(step);
+            _cursorTracker->setViewportSize(extent.x, extent.y);
         }
 
-        const HandPose previousPose = _smoothedPose;
+        acquireCameraFrame();
+        acquirePose(step);
+
+        const VkmHandPose previousPose = _smoothedPose;
         updateSmoothedPose(step);
         buildHandColliders(_smoothedPose, previousPose, step, invAspect,
                            kFingertipRadius, kPalmRadius, &_handColliders);
@@ -223,8 +237,8 @@ private:
 
         VkmDriverBase* driver = _engine->getDriver();
 
-        // AllowShaderWrite rather than AllowShaderRead: the latter maps to a uniform buffer,
-        // which cannot back a bindless storage-buffer array element. AllowTransferSrc is what the
+        // AllowShaderWrite rather than AllowShaderRead: the latter maps to a uniform buffer, which
+        // cannot back a bindless storage-buffer array element. AllowTransferSrc is what the
         // WebGPU backend's registerBuffer copy needs and costs nothing elsewhere. Same reasoning
         // as the triangle sample's buffers.
         const VkmResourceCreateInfo bufferFlags = VkmResourceCreateInfo::AllowShaderWrite |
@@ -266,52 +280,97 @@ private:
         _sphereIndexCount = static_cast<uint32_t>(mesh._indices.size());
     }
 
-    void createHandInput()
+    void createSampler()
+    {
+        VkmSamplerInfo samplerInfo{};
+        samplerInfo._debugName = "HandInteractionSampler";
+        VkmSampler* sampler = _engine->getDriver()->newSampler(samplerInfo);
+        if (sampler == nullptr)
+        {
+            VKM_DEBUG_ERROR("Failed to create the camera frame sampler");
+            return;
+        }
+        _sampler = sampler->getHandle();
+    }
+
+    void createCapture()
+    {
+        std::unique_ptr<VkmVideoCaptureBase> capture(vkmCreateVideoCapture());
+        if (capture == nullptr)
+        {
+            _cameraStatus = "no camera capture on this platform";
+            return;
+        }
+
+        std::string error;
+        if (!capture->start(&error))
+        {
+            _cameraStatus = error;
+            VKM_DEBUG_LOG(("Camera unavailable: " + error).c_str());
+            return;
+        }
+        _capture = std::move(capture);
+        _cameraStatus = "waiting for the first frame";
+    }
+
+    void createHandTracker()
     {
         const bool forceCursor = gv_hand_input.get() == "cursor";
         if (!forceCursor)
         {
-            std::unique_ptr<HandInputSource> platformSource(createPlatformHandInput());
+            std::unique_ptr<VkmHandTrackerBase> tracker(vkmCreateHandTracker());
             std::string error;
-            if (platformSource != nullptr && platformSource->start(&error))
+            if (tracker != nullptr && tracker->start(&error))
             {
-                _handInput = std::move(platformSource);
+                _handTracker = std::move(tracker);
                 return;
             }
-            if (platformSource != nullptr)
+            if (tracker != nullptr)
             {
-                _handInputFallbackReason = error;
-                VKM_DEBUG_LOG(("Camera hand input unavailable, falling back to the cursor: " + error).c_str());
+                _trackerFallbackReason = error;
+                VKM_DEBUG_LOG(("Hand tracking unavailable, falling back to the cursor: " + error).c_str());
             }
             else
             {
-                _handInputFallbackReason = "no camera hand tracking on this platform";
+                _trackerFallbackReason = "no hand tracking on this platform";
             }
         }
         else
         {
-            _handInputFallbackReason = "forced by --gv_hand_input=cursor";
+            _trackerFallbackReason = "forced by --gv_hand_input=cursor";
         }
 
-        std::unique_ptr<HandInputSource> cursorSource(createMouseHandInput(&_engine->getInputHandler()));
+        // The cursor tracker already reports where the user sees the pointer, so unlike a camera
+        // tracker its pose must not be mirrored.
+        _mirrorPose = false;
+
+        auto cursorTracker = std::make_unique<CursorHandTracker>(&_engine->getInputHandler());
         std::string error;
-        if (!cursorSource->start(&error))
+        if (!cursorTracker->start(&error))
         {
-            VKM_DEBUG_ERROR(("Failed to start the cursor hand input: " + error).c_str());
+            VKM_DEBUG_ERROR(("Failed to start the cursor hand tracker: " + error).c_str());
             return;
         }
-        _handInput = std::move(cursorSource);
+        _cursorTracker = cursorTracker.get();
+        _handTracker = std::move(cursorTracker);
     }
 
     void acquireCameraFrame()
     {
-        if (!_handInput->tryAcquireFrame(&_cameraFrame))
+        if (_capture == nullptr || !_capture->tryAcquireFrame(&_cameraFrame))
         {
             return;
         }
         if (_cameraFrame._width == 0 || _cameraFrame._height == 0)
         {
             return;
+        }
+
+        // Offered to the tracker before the upload: detection runs off-thread from here, so the
+        // sooner it starts the fresher its answer is when it lands.
+        if (_handTracker != nullptr)
+        {
+            _handTracker->submitFrame(_cameraFrame);
         }
 
         VkmDriverBase* driver = _engine->getDriver();
@@ -322,8 +381,9 @@ private:
             textureInfo._extent = glm::uvec3(_cameraFrame._width, _cameraFrame._height, 1);
             textureInfo._numMipLevels = 1;
             textureInfo._numArrayLayers = 1;
-            // The capture's BGRA bytes go in untouched; hand_background.hlsl swizzles them back.
-            textureInfo._format = VkmFormat::R8G8B8A8_UNORM;
+            // The capture's own channel order, so its bytes go in untouched: BGRA from
+            // AVFoundation, RGBA from a browser canvas.
+            textureInfo._format = _cameraFrame._format;
             textureInfo._debugName = "HandInteractionCameraFrame";
 
             VkmTexture* texture = driver->newTexture(textureInfo);
@@ -333,26 +393,65 @@ private:
                 return;
             }
             _cameraTexture = texture->getHandle();
-
-            _cameraTextureSlot = driver->getBindlessResourceManager()->registerTexture(_cameraTexture);
-            if (_cameraTextureSlot == INVALID_VALUE32)
-            {
-                VKM_DEBUG_ERROR("Failed to register the camera frame texture into the bindless set");
-                return;
-            }
+            buildBackgroundTable();
         }
 
         if (!driver->uploadToTexture(_cameraTexture, _cameraFrame._pixels.data(), _cameraFrame._pixels.size()))
         {
             VKM_DEBUG_ERROR("Failed to upload a camera frame");
+            return;
+        }
+        _cameraStatus.clear();
+    }
+
+    void buildBackgroundTable()
+    {
+        if (_backgroundPso == nullptr || _sampler == VKM_INVALID_RESOURCE_HANDLE)
+        {
+            return;
+        }
+
+        std::string error;
+        // Set 2 rather than the bindless set: WGSL has no runtime-sized texture array, so this is
+        // the only route that exists on every backend.
+        _backgroundTable = _engine->getDriver()->newResourceTable(
+            _backgroundPso, VkmResourceSetKind::PerPass,
+            { { 0, _cameraTexture }, { 1, _sampler } }, &error);
+        if (_backgroundTable == nullptr)
+        {
+            VKM_DEBUG_ERROR(("Failed to build the background resource table: " + error).c_str());
+        }
+    }
+
+    void releaseBackgroundTable()
+    {
+        if (_backgroundTable != nullptr)
+        {
+            _backgroundTable->destroy();
+            delete _backgroundTable;
+            _backgroundTable = nullptr;
         }
     }
 
     void acquirePose(float deltaTime)
     {
-        HandPose pose;
-        if (_handInput->tryAcquirePose(&pose))
+        if (_handTracker == nullptr)
         {
+            return;
+        }
+
+        VkmHandPose pose;
+        if (_handTracker->tryAcquirePose(&pose))
+        {
+            // A tracker reports in image space; the background is drawn mirrored, so the pose is
+            // mirrored to match and everything downstream works in what the user sees.
+            if (_mirrorPose)
+            {
+                for (uint32_t i = 0; i < kVkmHandJointCount; ++i)
+                {
+                    pose._joints[i].x = 1.0f - pose._joints[i].x;
+                }
+            }
             _rawPose = pose;
             _rawPoseAgeSeconds = 0.0f;
             return;
@@ -384,7 +483,7 @@ private:
         }
 
         const float alpha = 1.0f - std::exp(-deltaTime / kPoseSmoothingSeconds);
-        for (uint32_t i = 0; i < kHandJointCount; ++i)
+        for (uint32_t i = 0; i < kVkmHandJointCount; ++i)
         {
             _smoothedPose._joints[i] += (_rawPose._joints[i] - _smoothedPose._joints[i]) * alpha;
             _smoothedPose._confidence[i] = _rawPose._confidence[i];
@@ -450,19 +549,21 @@ private:
 
         VkmRenderGraphicsSubGraph* subGraph = renderGraph->beginGraphicsSubGraph(frameBufferDesc, "HandBackgroundPass");
 
-        // No camera behind this source, or no frame delivered yet: the clear is the background.
-        if (_cameraTextureSlot == INVALID_VALUE32 || _backgroundPso == nullptr)
+        // No camera, or no frame delivered yet: the clear is the background.
+        if (_backgroundTable == nullptr || _backgroundPso == nullptr)
         {
             return;
         }
 
-        subGraph->addReferencedResource(_cameraTexture, VkmResourceAccess::ShaderSampledRead);
+        std::vector<VkmResourceAccessDeclaration> referenced;
+        _backgroundTable->collectReferencedResources(&referenced);
+        subGraph->addReferencedResources(referenced);
 
         VkmPipelineStateBase* pipeline = _backgroundPso;
-        const BackgroundPushConstants pushConstants{ _cameraTextureSlot };
-        subGraph->setRenderCallback([pipeline, pushConstants](VkmCommandBufferBase* commandBuffer) {
+        VkmResourceTableBase* table = _backgroundTable;
+        subGraph->setRenderCallback([pipeline, table](VkmCommandBufferBase* commandBuffer) {
             commandBuffer->bindPipeline(pipeline);
-            commandBuffer->setPushConstants(&pushConstants, sizeof(pushConstants));
+            commandBuffer->bindResourceTable(table);
             commandBuffer->draw(3, 1, 0, 0);
         });
     }
@@ -557,20 +658,25 @@ private:
 #if defined(VKM_ENABLE_IMGUI)
         ImGui::Begin("Hand Interaction");
 
-        ImGui::Text("Source: %s", _handInput != nullptr ? _handInput->getName() : "none");
-        if (!_handInputFallbackReason.empty())
+        ImGui::Text("Camera: %s", _capture != nullptr ? _capture->getName() : "none");
+        if (!_cameraStatus.empty())
         {
-            ImGui::TextWrapped("Fallback: %s", _handInputFallbackReason.c_str());
+            ImGui::TextWrapped("  %s", _cameraStatus.c_str());
+        }
+        ImGui::Text("Tracker: %s", _handTracker != nullptr ? _handTracker->getName() : "none");
+        if (!_trackerFallbackReason.empty())
+        {
+            ImGui::TextWrapped("  %s", _trackerFallbackReason.c_str());
         }
         ImGui::Text("Hand: %s", _smoothedPose._valid ? "tracked" : "not detected");
         if (_smoothedPose._valid)
         {
             float meanConfidence = 0.0f;
-            for (uint32_t i = 0; i < kHandJointCount; ++i)
+            for (uint32_t i = 0; i < kVkmHandJointCount; ++i)
             {
                 meanConfidence += _smoothedPose._confidence[i];
             }
-            ImGui::Text("Mean confidence: %.2f", meanConfidence / static_cast<float>(kHandJointCount));
+            ImGui::Text("Mean confidence: %.2f", meanConfidence / static_cast<float>(kVkmHandJointCount));
         }
 
         ImGui::Separator();
@@ -582,6 +688,8 @@ private:
         ImGui::SliderFloat("Hand bounce", &_simParams._handRestitution, 0.0f, 1.0f);
         ImGui::SliderFloat("Ball radius", &_ball._radius, 0.02f, 0.20f);
         ImGui::Checkbox("Show hand proxies", &_showHandProxies);
+        // On for a camera tracker, which reports in image space, and off for the cursor.
+        ImGui::Checkbox("Mirror hand", &_mirrorPose);
         if (ImGui::Button("Reset ball"))
         {
             _ball._position = glm::vec2(0.5f, 0.2f);
@@ -607,20 +715,28 @@ private:
     VkmResourceHandle _depthTexture{ VKM_INVALID_RESOURCE_HANDLE };
     glm::uvec2 _depthExtent{ 0, 0 };
 
-    std::unique_ptr<HandInputSource> _handInput;
-    std::string _handInputFallbackReason;
-    CameraFrame _cameraFrame;
-    VkmResourceHandle _cameraTexture{ VKM_INVALID_RESOURCE_HANDLE };
-    uint32_t _cameraTextureSlot{ INVALID_VALUE32 };
+    std::unique_ptr<VkmVideoCaptureBase> _capture;
+    std::unique_ptr<VkmHandTrackerBase> _handTracker;
+    // Non-owning; set only when _handTracker is the cursor stand-in, which is the one kind that
+    // has to be told how large the window is.
+    CursorHandTracker* _cursorTracker{ nullptr };
+    std::string _cameraStatus;
+    std::string _trackerFallbackReason;
 
-    HandPose _rawPose;
-    HandPose _smoothedPose;
+    VkmVideoFrame _cameraFrame;
+    VkmResourceHandle _cameraTexture{ VKM_INVALID_RESOURCE_HANDLE };
+    VkmResourceHandle _sampler{ VKM_INVALID_RESOURCE_HANDLE };
+    VkmResourceTableBase* _backgroundTable{ nullptr };
+
+    VkmHandPose _rawPose;
+    VkmHandPose _smoothedPose;
     float _rawPoseAgeSeconds{ 0.0f };
     HandColliders _handColliders;
 
     BallState _ball;
     BallSimParams _simParams;
     bool _showHandProxies{ true };
+    bool _mirrorPose{ true };
 };
 
 int main(int argc, char* argv[])

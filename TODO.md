@@ -159,8 +159,12 @@
 - MetalFX/FSR frame generation (interpolator sibling to VkmUpscalerBase, present pacing, UI composited after interpolation).
 - Linux FSR build (ffx-api is MSVC-only as shipped; Windows uses AMD's prebuilt DLL).
 - MetalFX temporal upscaling is withheld under MTL_DEBUG_LAYER (MTL4FX cannot encode under the debug layer).
-- hand_interaction needs one restart after camera access is granted; the permission request is asynchronous and the sample falls back to the cursor for that run.
-- hand_interaction's interaction is planar: VNDetectHumanHandPoseRequest reports no depth and none is inferred, so a hand cannot push the ball towards or away from the camera.
-- hand_interaction tracks one hand and recognizes no gestures (`maximumHandCount = 1`).
-- hand_interaction's camera capture and hand tracking are Apple-only; every other platform gets the cursor stand-in, and the sample is excluded from WebGPU entirely.
-- hand_interaction re-uploads the whole camera frame through `uploadToTexture` every frame rather than wrapping the `CVPixelBuffer`'s IOSurface as an `MTLTexture`.
+- `VkmVideoCaptureBase` on Apple needs one restart after camera access is granted; the permission request is asynchronous and `start()` reports failure for that run.
+- `VkmHandTrackerBase` is implemented on Apple only (Vision); Windows, Linux and wasm return null from `vkmCreateHandTracker` and a caller must supply its own pose.
+- `VkmVideoCaptureBase` is implemented on Apple (AVFoundation) and wasm (getUserMedia); Windows (Media Foundation) and Linux (V4L2) return null.
+- `VkmHandPose` carries no depth, so nothing built on it can tell how far a hand is from the camera.
+- The Apple hand tracker detects one hand (`maximumHandCount = 1`) and recognizes no gestures.
+- The wasm video capture copies each frame through a 2D canvas `getImageData`; importing the `MediaStream` as a WebGPU external texture would skip the CPU round trip but has no representation in the resource model.
+- The wasm video capture is bound to whatever resolution the browser hands back, and `getUserMedia`'s permission refusal only surfaces on a later poll rather than from `start()`.
+- Consumers re-upload the whole camera frame through `uploadToTexture` every frame rather than wrapping the `CVPixelBuffer`'s IOSurface as an `MTLTexture`.
+- The wasm build of hand_interaction holds a 720p frame twice on the CPU, which is why its `INITIAL_MEMORY` is 256 MiB against the other samples' 128 MiB.

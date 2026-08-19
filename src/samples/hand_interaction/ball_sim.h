@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Snowapril
 //
-// The interactive part of the sample, kept free of every engine type so it can be unit-tested
-// headlessly (tests/TestHandInteraction.cpp).
+// The interactive part of the sample. Its only engine dependency is VkmHandPose, which is a plain
+// struct needing no driver, window or camera, so the whole interaction -- poses in, ball position
+// out -- is unit-testable headlessly (tests/TestHandInteraction.cpp).
 //
 // Everything here lives in "sim space": a 2D space measured in units of the window's *width*,
 // so x runs [0, 1] and y runs [0, invAspect] where invAspect = height / width, y pointing down.
@@ -11,7 +12,7 @@
 
 #pragma once
 
-#include "hand_pose.h"
+#include <vkm/platform/common/hand_tracker.h>
 
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
@@ -99,7 +100,7 @@ namespace vkm
     * @param palmRadius Proxy radius for the palm centroid, in sim units.
     * @param outColliders Receives the proxies.
     */
-    inline void buildHandColliders(const HandPose& current, const HandPose& previous,
+    inline void buildHandColliders(const VkmHandPose& current, const VkmHandPose& previous,
                                    float deltaTime, float invAspect,
                                    float fingertipRadius, float palmRadius,
                                    HandColliders* outColliders)
@@ -117,7 +118,7 @@ namespace vkm
             return glm::vec2(normalized.x, normalized.y * invAspect);
         };
 
-        for (const HandJoint joint : kHandFingertips)
+        for (const VkmHandJoint joint : kVkmHandFingertips)
         {
             const size_t index = static_cast<size_t>(joint);
             HandCollider& collider = outColliders->_colliders[outColliders->_count++];
@@ -130,13 +131,13 @@ namespace vkm
 
         glm::vec2 palmNow(0.0f, 0.0f);
         glm::vec2 palmBefore(0.0f, 0.0f);
-        for (const HandJoint joint : kHandPalmJoints)
+        for (const VkmHandJoint joint : kVkmHandPalmJoints)
         {
             const size_t index = static_cast<size_t>(joint);
             palmNow += toSim(current._joints[index]);
             palmBefore += toSim(previous._joints[index]);
         }
-        const float palmJointCount = static_cast<float>(std::size(kHandPalmJoints));
+        const float palmJointCount = static_cast<float>(std::size(kVkmHandPalmJoints));
         palmNow /= palmJointCount;
         palmBefore /= palmJointCount;
 

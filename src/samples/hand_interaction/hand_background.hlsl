@@ -3,30 +3,21 @@
 // Draws the captured camera frame behind everything else, as one oversized clip-space triangle
 // generated from SV_VertexID -- no vertex buffer, no index buffer.
 //
-// The image is mirrored horizontally. A camera pointed at its own user is expected to behave
-// like a mirror: without the flip, moving a hand right moves the on-screen hand left, and the
-// whole interaction stops making sense.
+// The texture comes through descriptor set 2 rather than the bindless set, which is what lets
+// this build on WebGPU: WGSL has no runtime-sized texture array for set 0 binding 0 to be. The
+// set-2 path exists on every backend, so there is one shader rather than two.
 //
-// The texture slot reaches the fragment stage as a flat varying rather than through the push
-// constants, because the push-constant range is vertex-only (see VkmPipelineStateVulkan
-// ::createInner). It is uniform per draw, so it cannot be interpolated either.
+// The image is mirrored horizontally. A camera pointed at its own user is expected to behave like
+// a mirror: without the flip, moving a hand right moves the on-screen hand left and the whole
+// interaction stops making sense. The pose is mirrored to match on the CPU side.
 
-#include "vkm_bindless.hlsli"
-
-struct PushConstants
-{
-    uint cameraTextureSlot;
-};
-
-VKM_PUSH_CONSTANTS(PushConstants, g_PushConstants);
-VKM_BINDLESS_TEXTURE_2D_ARRAY(g_BindlessTextures);
-VKM_BINDLESS_SAMPLER(g_DefaultSampler);
+[[vk::binding(0, 2)]] Texture2D    g_CameraFrame : register(t0, space2);
+[[vk::binding(1, 2)]] SamplerState g_Sampler     : register(s0, space2);
 
 struct VSOutput
 {
     float4 position : SV_POSITION;
     [[vk::location(0)]] float2 uv : TEXCOORD0;
-    [[vk::location(1)]] nointerpolation uint cameraTextureSlot : TEXCOORD1;
 };
 
 VSOutput VSMain(uint vertexId : SV_VertexID)
@@ -39,15 +30,13 @@ VSOutput VSMain(uint vertexId : SV_VertexID)
     // +Y up in clip space, the engine convention on every backend.
     output.position = float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
     output.uv = float2(1.0 - uv.x, uv.y);
-    output.cameraTextureSlot = g_PushConstants.cameraTextureSlot;
     return output;
 }
 
 float4 PSMain(VSOutput input) : SV_TARGET
 {
-    const float4 texel = g_BindlessTextures[input.cameraTextureSlot].Sample(g_DefaultSampler, input.uv);
-    // The capture delivers BGRA and there is no BGRA VkmFormat to upload into, so the bytes go
-    // into an RGBA texture as-is and the channel order is undone here. A free swizzle in the
-    // fragment stage beats a per-frame byte swap over a megapixel on the CPU.
-    return float4(texel.bgr, 1.0);
+    // The frame's own channel order is carried by the texture's format -- BGRA8_UNORM from an
+    // AVFoundation capture, RGBA8 from a browser canvas -- so the sample never reorders bytes and
+    // this shader never has to know which one it got.
+    return float4(g_CameraFrame.Sample(g_Sampler, input.uv).rgb, 1.0);
 }

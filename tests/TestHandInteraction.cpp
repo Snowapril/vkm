@@ -4,9 +4,9 @@
 
 #include <cmath>
 
-// ball_sim.h and sphere_mesh.h are the hand_interaction sample's simulation core, deliberately
-// free of every engine type so the whole interaction -- poses in, ball position out -- is
-// testable without a driver, a window or a camera.
+// ball_sim.h and sphere_mesh.h are the hand_interaction sample's simulation core. Their only
+// engine dependency is VkmHandPose, a plain struct, so the whole interaction -- poses in, ball
+// position out -- is testable without a driver, a window or a camera.
 #include "ball_sim.h"
 #include "sphere_mesh.h"
 
@@ -16,10 +16,10 @@ namespace
 
     // A pose whose every joint sits at the same place. Enough for the collision tests, which care
     // only about where the proxies land and how fast they move.
-    vkm::HandPose uniformPose(const glm::vec2& position, bool valid = true)
+    vkm::VkmHandPose uniformPose(const glm::vec2& position, bool valid = true)
     {
-        vkm::HandPose pose;
-        for (uint32_t i = 0; i < vkm::kHandJointCount; ++i)
+        vkm::VkmHandPose pose;
+        for (uint32_t i = 0; i < vkm::kVkmHandJointCount; ++i)
         {
             pose._joints[i] = position;
             pose._confidence[i] = 1.0f;
@@ -39,8 +39,8 @@ namespace
 }
 
 TEST_CASE("buildHandColliders - an invalid pose produces no proxies") {
-    const vkm::HandPose current = uniformPose(glm::vec2(0.5f, 0.5f), false);
-    const vkm::HandPose previous = uniformPose(glm::vec2(0.4f, 0.5f));
+    const vkm::VkmHandPose current = uniformPose(glm::vec2(0.5f, 0.5f), false);
+    const vkm::VkmHandPose previous = uniformPose(glm::vec2(0.4f, 0.5f));
 
     vkm::HandColliders colliders;
     vkm::buildHandColliders(current, previous, 1.0f / 60.0f, kInvAspect, 0.03f, 0.07f, &colliders);
@@ -51,10 +51,10 @@ TEST_CASE("buildHandColliders - an invalid pose produces no proxies") {
 }
 
 TEST_CASE("buildHandColliders - a valid pose produces five fingertips and a palm") {
-    const vkm::HandPose current = uniformPose(glm::vec2(0.5f, 0.25f));
+    const vkm::VkmHandPose current = uniformPose(glm::vec2(0.5f, 0.25f));
 
     vkm::HandColliders colliders;
-    vkm::buildHandColliders(current, vkm::HandPose{}, 1.0f / 60.0f, kInvAspect, 0.03f, 0.07f, &colliders);
+    vkm::buildHandColliders(current, vkm::VkmHandPose{}, 1.0f / 60.0f, kInvAspect, 0.03f, 0.07f, &colliders);
 
     REQUIRE(colliders._count == vkm::kHandColliderCount);
     for (uint32_t i = 0; i < 5; ++i)
@@ -73,8 +73,8 @@ TEST_CASE("buildHandColliders - a valid pose produces five fingertips and a palm
 
 TEST_CASE("buildHandColliders - velocity is the finite difference, and zero without a previous pose") {
     const float deltaTime = 1.0f / 60.0f;
-    const vkm::HandPose previous = uniformPose(glm::vec2(0.30f, 0.50f));
-    const vkm::HandPose current = uniformPose(glm::vec2(0.42f, 0.50f));
+    const vkm::VkmHandPose previous = uniformPose(glm::vec2(0.30f, 0.50f));
+    const vkm::VkmHandPose current = uniformPose(glm::vec2(0.42f, 0.50f));
 
     vkm::HandColliders colliders;
     vkm::buildHandColliders(current, previous, deltaTime, kInvAspect, 0.03f, 0.07f, &colliders);
@@ -89,7 +89,7 @@ TEST_CASE("buildHandColliders - velocity is the finite difference, and zero with
     // The first frame of a detection has nothing to difference against; reporting a velocity
     // there would fling the ball on every re-acquisition.
     vkm::HandColliders firstFrame;
-    vkm::buildHandColliders(current, vkm::HandPose{}, deltaTime, kInvAspect, 0.03f, 0.07f, &firstFrame);
+    vkm::buildHandColliders(current, vkm::VkmHandPose{}, deltaTime, kInvAspect, 0.03f, 0.07f, &firstFrame);
     REQUIRE(firstFrame._count == vkm::kHandColliderCount);
     for (uint32_t i = 0; i < firstFrame._count; ++i)
     {
