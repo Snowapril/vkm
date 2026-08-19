@@ -29,6 +29,7 @@ set(SRCS
     ${SRC_DIR}/TestTimeBudget.cpp
     ${SRC_DIR}/TestCamera.cpp
     ${SRC_DIR}/TestUpscalerJitter.cpp
+    ${SRC_DIR}/TestHandInteraction.cpp
     ${SRC_DIR}/TestClipSpaceOrientation.cpp
     ${SRC_DIR}/TestRasterState.cpp
     ${SRC_DIR}/TestGlobalVariable.cpp
@@ -199,6 +200,9 @@ target_include_directories(${target}
     ${ROOT_DIR}/dependencies/src/taskflow
     ${ROOT_DIR}/dependencies/src/stb
     ${ROOT_DIR}/include
+    # TestHandInteraction.cpp covers the hand_interaction sample's simulation core, which is
+    # header-only and engine-free precisely so it can be tested from here.
+    ${ROOT_DIR}/src/samples/hand_interaction
 )
 
 # Compile options

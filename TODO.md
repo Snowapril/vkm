@@ -159,3 +159,8 @@
 - MetalFX/FSR frame generation (interpolator sibling to VkmUpscalerBase, present pacing, UI composited after interpolation).
 - Linux FSR build (ffx-api is MSVC-only as shipped; Windows uses AMD's prebuilt DLL).
 - MetalFX temporal upscaling is withheld under MTL_DEBUG_LAYER (MTL4FX cannot encode under the debug layer).
+- hand_interaction needs one restart after camera access is granted; the permission request is asynchronous and the sample falls back to the cursor for that run.
+- hand_interaction's interaction is planar: VNDetectHumanHandPoseRequest reports no depth and none is inferred, so a hand cannot push the ball towards or away from the camera.
+- hand_interaction tracks one hand and recognizes no gestures (`maximumHandCount = 1`).
+- hand_interaction's camera capture and hand tracking are Apple-only; every other platform gets the cursor stand-in, and the sample is excluded from WebGPU entirely.
+- hand_interaction re-uploads the whole camera frame through `uploadToTexture` every frame rather than wrapping the `CVPixelBuffer`'s IOSurface as an `MTLTexture`.

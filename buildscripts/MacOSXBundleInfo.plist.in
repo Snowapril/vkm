@@ -26,5 +26,10 @@
 	     which would make every Metal/Vulkan swapchain render at half resolution on Retina. -->
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<!-- Requesting camera access without this key terminates the process outright. Only the
+	     hand_interaction sample asks for the camera; in every other bundle the key is inert,
+	     since the prompt appears when access is requested and not before. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Tracks your hand so it can interact with the rendered scene.</string>
 </dict>
 </plist>

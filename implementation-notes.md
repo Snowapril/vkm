@@ -5002,3 +5002,49 @@ the motion texture at scale (-renderW, -renderH) with no jitter cancellation fla
   __declspec(dllexport)` unconditionally, shader-compiler tools present only as .exe), so a
   Linux build is a porting project, exactly the "patching balloons" case the plan's fallback
   named.
+
+## 2026-08-19 — hand_interaction sample: camera hand tracking versus a rendered sphere
+
+- New sample `src/samples/hand_interaction`. A camera frame is drawn as the background, a hand
+  pose is turned into six collision proxies, and a simulated ball is knocked around by them.
+- `hand_pose.h` / `ball_sim.h` / `sphere_mesh.h` are header-only and free of every engine type,
+  so `tests/TestHandInteraction.cpp` covers the whole interaction -- poses in, ball position out
+  -- with no driver, window or camera. `tests/CMakeLists.txt` adds the sample directory to the
+  test target's include path for this.
+- `HandInputSource` (`hand_input.h`) is one interface over both the frames and the poses, because
+  the Apple implementation produces them together and nothing outside has to route between them.
+  `createPlatformHandInput()` returns the AVFoundation + Vision source on Apple and null
+  elsewhere; the sample falls back to a cursor-driven stand-in on null or on a failed start, so
+  every platform stays runnable. `--gv_hand_input=cursor` forces the stand-in.
+- Simulation space is measured in window widths (x in [0, 1], y in [0, height / width]) rather
+  than normalized [0, 1] on both axes, so a simulated circle stays circular in any window and the
+  playfield re-fits on resize with no other state to update.
+- The capture's BGRA bytes are uploaded into an `R8G8B8A8_UNORM` texture and swizzled in the
+  fragment shader. There is no BGRA `VkmFormat`, and a free `.bgr` in the shader beats a
+  per-frame byte swap over a megapixel on the CPU.
+- The background is mirrored horizontally, and the Apple source mirrors the pose x to match, so
+  `HandPose` is always in the space the user sees and no consumer re-flips it. Vision normalizes
+  to a bottom-left origin, so both axes invert on the way out of the detector.
+
+### Deviations
+
+- **Planned:** the capture and tracking code sits behind a backend-neutral interface, following
+  `VkmUpscalerBase`. **Done instead:** the interface lives in the sample directory rather than in
+  `vkmcore`. **Why:** it has exactly one real implementation and one stand-in, both consumed by
+  one sample; promoting it would put AVFoundation and Vision on the link line of every vkm app on
+  macOS for no second caller's benefit (CLAUDE.md §2). Moving it to
+  `include/vkm/platform/common/` is mechanical if a second consumer appears.
+- **Planned:** a `_handImpulseScale` tunable separate from restitution. **Done instead:** one
+  `_handRestitution`. **Why:** the contact is resolved in the proxy's frame, where reflecting the
+  relative normal velocity already scales the push by the approach speed; a second multiplier
+  would have been the same knob twice.
+- **Planned:** nothing about camera permission. **Done instead:** an `AVAuthorizationStatus` of
+  `NotDetermined` requests access asynchronously and reports failure, so the sample runs on the
+  cursor stand-in for that launch and picks the camera up on the next one. **Why:**
+  `postDriverReady` runs before the app's run loop starts, so waiting on the prompt there would
+  stall the loop that has to service it. Falling back is the conservative option -- the sample is
+  always usable, and a denial degrades the same way (TODO.md line).
+- `[AVCaptureSession startRunning]` blocks until the camera powers up, which measured about four
+  seconds on the machine this was written on and stalled window creation for the same time. It
+  now runs on a serial session queue that `stop()` synchronizes against, so the window appears
+  immediately and the session delivers nothing until it is ready.

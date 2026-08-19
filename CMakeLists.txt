@@ -510,5 +510,8 @@ if (BUILD_SAMPLES)
         # WGSL equivalent, so Tint would fail the build rather than the sample failing at run
         # time (see VkmDriverCapabilityFlags::TextureUpload).
         add_subdirectory(src/samples/skybox)
+        # Excluded for the same reason as skybox: hand_background.hlsl samples the camera frame
+        # out of the unsized bindless Texture2D array, which WGSL cannot express.
+        add_subdirectory(src/samples/hand_interaction)
     endif()
 endif()
