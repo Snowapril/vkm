@@ -27,6 +27,12 @@ namespace vkm
     * The tabs share one selection, so a node picked in the Graph or Spatial tab is the structure
     * detailed in the Structures tab. Instance lists stay live across rebuilds because
     * VkmAccelerationStructure::updateInstances refreshes the info this window draws from.
+    *
+    * A checkbox above the tabs drives a fourth view that is not a tab: the in-scene wireframe
+    * overlay VkmAccelerationStructureDebugRenderer draws, which shows the same instances the
+    * Spatial tab flattens as oriented boxes in the 3D scene. This window only holds that toggle
+    * and the shared selection; the engine reads both every frame, so the overlay keeps drawing
+    * while this window is closed.
     */
     class VkmAccelerationStructureInspector
     {
@@ -41,12 +47,19 @@ namespace vkm
         void toggleVisible() { _visible = !_visible; }
         bool isVisible() const { return _visible; }
 
+        // Independent of window visibility: closing this window leaves the overlay drawing.
+        bool isSceneOverlayEnabled() const { return _sceneOverlay; }
+        // The structure the overlay highlights, shared with the tabs.
+        VkmResourceHandle getSelected() const { return _selected; }
+
     private:
         void drawStructuresTab(VkmDriverBase* driver);
         void drawGraphTab(VkmDriverBase* driver);
         void drawSpatialTab(VkmDriverBase* driver);
 
         bool _visible = false;
+        // Whether the engine draws the in-scene wireframe overlay this frame.
+        bool _sceneOverlay = false;
         // Shared by all three tabs: the handle of the structure being detailed.
         VkmResourceHandle _selected = VKM_INVALID_RESOURCE_HANDLE;
         VkmImGuiCanvas _graphCanvas;
