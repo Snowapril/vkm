@@ -32,7 +32,8 @@ struct VkmPunctualLight
     float  cosInner;
     uint   type;
     int    shadowTile;      // first atlas tile, or -1 when the light casts no shadow
-    float2 pad;
+    uint   shadowTileCount; // 6 for a point light's faces, one per cascade for a directional
+    float  pad;
 };
 
 /*

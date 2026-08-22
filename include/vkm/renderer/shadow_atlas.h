@@ -32,6 +32,11 @@ namespace vkm
     // frame can hold, not the lights: a point light owns six.
     constexpr uint32_t kVkmMaxShadowTiles = 16;
 
+    // Cascades one directional light may own. Four is the usual ceiling: each is a full scene
+    // draw into its own tile, and the resolution a fifth would add is already past what the
+    // near cascades resolve.
+    constexpr uint32_t kVkmMaxShadowCascades = 4;
+
     /*
     * @brief Push-constant ring entries reserved for the shadow pass in a frame.
     * @details The ring is one shared budget (kVkmPushConstantRingEntryCount per frame region) and
@@ -110,6 +115,24 @@ namespace vkm
             // Near plane for the perspective tiles. World units, so a scene-scale-relative
             // default is impossible -- the caller knows its scale and this does not.
             float _nearZ = 0.05f;
+            /*
+            * @brief Cascades the directional light is split into.
+            * @details One tile cannot serve a whole view: fitted tightly it runs out before the
+            * far geometry, fitted loosely it wastes every texel on distance nothing needs. Each
+            * cascade covers a slice of the view and gets a tile of its own, so the near slice --
+            * where a texel is worth the most -- gets the same resolution as the far one.
+            * Clamped to kVkmMaxShadowCascades, and to 1 for a caller that wants the old
+            * single-tile behaviour.
+            */
+            uint32_t _cascadeCount = 3u;
+            /*
+            * @brief How the view distance is split between cascades: 0 uniform, 1 logarithmic.
+            * @details A uniform split wastes the near cascades on distance the eye barely
+            * resolves; a purely logarithmic one crams the far cascades so tightly that the last
+            * covers almost everything. The practical scheme blends the two, and 0.6 leans
+            * towards logarithmic, which is where perspective actually puts the detail.
+            */
+            float _cascadeSplitLambda = 0.6f;
         };
 
         VkmShadowAtlas() = default;
@@ -160,6 +183,22 @@ namespace vkm
         void setDirectionalFocus(const glm::vec3& center, float radius);
 
         /*
+        * @brief Refits every directional cascade around the camera's view.
+        * @details Splits [nearDistance, shadowDistance] between the cascades with the practical
+        * scheme, bounds each slice's frustum with a sphere, and fits that cascade's tile to it --
+        * each snapped to its own texel grid, since each has its own texel size.
+        * Beyond shadowDistance nothing casts, which reads as flat lighting rather than a black
+        * band: the lookup returns lit when no cascade contains the point.
+        * @param cameraPosition World-space eye.
+        * @param cameraForward Normalized view direction.
+        * @param fovYRadians Vertical field of view.
+        * @param aspect Width over height.
+        * @param shadowDistance How far from the eye shadows are wanted, in world units.
+        */
+        void setDirectionalView(const glm::vec3& cameraPosition, const glm::vec3& cameraForward,
+                                float fovYRadians, float aspect, float shadowDistance);
+
+        /*
         * @brief Records the atlas fill: scene update, cull, then one graphics pass over all tiles.
         * @details Must precede any pass that reads the atlas. `frameData` is the caller's, copied
         * and re-culled against a box covering every shadow caster.
@@ -189,6 +228,8 @@ namespace vkm
         };
 
         void rebuildDirectionalTile();
+        // Fits one cascade's tile to a world-space sphere, snapped to that cascade's texel grid.
+        void fitDirectionalCascade(uint32_t tileIndex, const glm::vec3& center, float radius);
         bool createTargets(std::string* outError);
         bool createConstantBuffer(std::string* outError);
         bool createTable(VkmPipelineStateManager* pipelineStateManager, std::string* outError);
@@ -208,12 +249,16 @@ namespace vkm
 
         std::vector<Tile> _tiles;
         VkmShadowAtlasConstants _constants{};
-        // Which tile the directional light owns, so a refit rewrites only that one.
+        // The directional light's first tile and how many cascades follow it, so a refit
+        // rewrites exactly those.
         int32_t _directionalTile = -1;
+        uint32_t _directionalCascades = 0u;
         glm::vec3 _directionalDirection{ 0.0f, -1.0f, 0.0f };
-        glm::vec3 _focusCenter{ 0.0f };
-        // 0 means "no focus set": fit to the scene, as before any camera told us otherwise.
-        float _focusRadius = 0.0f;
+        // The spheres each cascade is fitted to. Empty until a camera says otherwise, in which
+        // case every cascade falls back to the scene fit.
+        std::array<glm::vec3, kVkmMaxShadowCascades> _cascadeCenters{};
+        std::array<float, kVkmMaxShadowCascades> _cascadeRadii{};
+        bool _hasFocus = false;
         // The scene fit, kept so a refit can fall back to it and so the caster box stays valid.
         glm::vec3 _sceneCenter{ 0.0f };
         float _sceneRadius = 1.0f;

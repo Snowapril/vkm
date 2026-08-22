@@ -347,12 +347,15 @@ public:
         // The technique's own capability gate lives in VkmGiSystem now, clamped at record().
         _lastDeltaTime = static_cast<float>(deltaTime);
 
-        // Aim the directional shadow at what the camera is looking at. Fitted to the whole scene
-        // it spends 7 world units per texel on Sponza, which is a staircase several units wide on
-        // every silhouette; a sphere around the camera's focus spends the same texels on the part
-        // being looked at. The atlas snaps the fit to whole texels, so this moving every frame
-        // does not make the shadows crawl.
-        _shadowAtlas.setDirectionalFocus(_camera.getTarget(), _shadowFocusRadius);
+        // Split the directional shadow into cascades across the camera's view. One tile cannot
+        // serve a whole view -- fitted tightly it runs out before the far geometry, fitted loosely
+        // it spends every texel on distance nothing needs. The atlas snaps each cascade to its own
+        // texel grid, so refitting every frame does not make the shadows crawl.
+        _shadowAtlas.setDirectionalView(_camera.getPosition(),
+                                        glm::normalize(_camera.getTarget() - _camera.getPosition()),
+                                        _camera.getFovYRadians(),
+                                        static_cast<float>(_extent.x) / static_cast<float>(glm::max(_extent.y, 1u)),
+                                        _shadowDistance);
         retireTables();
         ensureTargets();
         // Runs after ensureTargets so the phase count follows a resize immediately. The camera
@@ -675,12 +678,12 @@ private:
             _shadowLights.push_back(light);
         }
         _shadowAtlas.allocate(_scene, &_shadowLights);
-        // A fraction of the scene, so the shadow covers a useful neighbourhood of the camera on
-        // any scale of model. Sponza lands at roughly 90 units, i.e. 0.35 units per shadow texel
-        // against the 7.3 a scene-wide fit would spend.
+        // A fraction of the scene, so the cascades cover a useful depth range on any scale of
+        // model. Sponza lands at roughly 370 units of shadow distance, which the three cascades
+        // split so the nearest spends its texels on what is closest to the eye.
         const VkmSceneAABB shadowBounds = _scene.computeWorldBounds();
-        _shadowFocusRadius =
-            shadowBounds._valid ? glm::max(glm::length(shadowBounds.getExtent()) * 0.025f, 1.0f) : 8.0f;
+        _shadowDistance =
+            shadowBounds._valid ? glm::max(glm::length(shadowBounds.getExtent()) * 0.1f, 1.0f) : 32.0f;
 
         // Now that a tile is assigned, the probe capture can shade shadowed too -- which is what
         // stops probes reporting a wall as sunlit when the sun cannot reach it.
@@ -1152,9 +1155,10 @@ private:
 
     // The atlas's tile assignments, kept because the deferred constants are derived from them.
     std::vector<VkmPunctualLight> _shadowLights;
-    // Radius of the region the directional shadow covers, in world units. Derived from the scene
-    // at load rather than fixed: a constant here would be a guess about scene scale.
-    float _shadowFocusRadius = 1.0f;
+    // How far from the eye the directional shadow reaches, in world units. Derived from the
+    // scene at load rather than fixed: a constant here would be a guess about scene scale.
+    // Past it nothing casts, which reads as flat lighting rather than a black band.
+    float _shadowDistance = 1.0f;
 
     VkmGiDebugView _debugView = VkmGiDebugView::Composite;
     float _indirectIntensity = 1.0f;

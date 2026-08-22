@@ -172,7 +172,8 @@
 - Stale .gcda files left by a recompiled coverage build crash UnitTests inside __llvm_gcov_writeout at exit, which run_tests.py reports as FAIL even though doctest printed SUCCESS; deleting build/<backend>/**/*.gcda clears it.
 - The traced tier's NEE does not see punctual lights, so ReSTIR and the reference path tracer light a point-lit scene differently from the deferred image.
 - Area lights are shadowed only in the traced tier; the raster tier neither shades nor shadows emissive triangles.
-- The directional shadow map is a single ortho tile fitted to the whole scene, with no cascades, so it is coarse on a scene the size of Sponza.
-- Shadow-casting lights are capped by kVkmMaxShadowTiles (16 tiles: one per directional or spot light, six per point light); past that a light shades unshadowed.
+- Cascades do not blend at their boundaries, so a receiver crossing one can show a visible step in shadow softness and bias.
+- Beyond the caller's shadow distance nothing casts: the lookup returns lit rather than dark, so distant geometry is unshadowed rather than wrong.
+- Shadow-casting lights are capped by kVkmMaxShadowTiles (16 tiles: one per cascade for a directional light, six per point light, one per spot); past that a light shades unshadowed.
 - The shadow atlas culls every light against one union box, so a caster outside a given light's frustum is still submitted to that light's tile and clipped there.
 - Point-light shadow taps clamp at a cube-face edge rather than continuing into the adjacent face, so a receiver straddling a seam samples one face twice.

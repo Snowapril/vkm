@@ -70,9 +70,16 @@ namespace vkm
         float _cosInner = -1.0f;
         uint32_t _type = 0; // VkmLightType
         // Index of this light's first tile in the shadow atlas, or -1 when it casts none.
-        // A point light owns six consecutive tiles, one per cube face.
         int32_t _shadowTile = -1;
-        float _pad[2] = { 0.0f, 0.0f };
+        /*
+        * @brief How many consecutive tiles from _shadowTile this light owns.
+        * @details Six for a point light, one per cube face; one for a spot; and one per cascade
+        * for a directional light. Explicit rather than implied by the type, because the cascade
+        * count is a runtime choice and a lookup that assumed one would silently read a
+        * neighbouring light's tile.
+        */
+        uint32_t _shadowTileCount = 0u;
+        float _pad = 0.0f;
     };
     static_assert(sizeof(VkmPunctualLight) == 64,
                   "VkmPunctualLight must match VkmPunctualLight in shaders/vkm_punctual_lights.hlsli");

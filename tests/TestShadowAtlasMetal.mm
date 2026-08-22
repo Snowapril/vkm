@@ -75,4 +75,10 @@ TEST_CASE("Metal shadow atlas - the directional fit follows the camera and snaps
     vkmtest::runShadowFocusTest(fixture.driver.get());
 }
 
+TEST_CASE("Metal shadow atlas - cascades split the view by resolution") {
+    MetalShadowAtlasFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runShadowCascadeTest(fixture.driver.get());
+}
+
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE
