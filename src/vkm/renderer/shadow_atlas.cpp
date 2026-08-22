@@ -212,6 +212,20 @@ namespace vkm
         _tiles.clear();
         _constants = VkmShadowAtlasConstants{};
 
+        // The pass pushes once per (tile, draw batch), plus once per batch for its own cull, so
+        // its share of the shared ring is what caps the tiles a frame can fill. Clamped and
+        // logged rather than silently overflowing, which reuses live entries.
+        const uint32_t batchCount = static_cast<uint32_t>(scene.getDrawBatches().size());
+        const uint32_t ringTiles =
+            batchCount > 0u ? (kVkmShadowPushConstantReserve / batchCount) : kVkmMaxShadowTiles;
+        const uint32_t tileBudget = std::clamp(ringTiles, 1u, kVkmMaxShadowTiles);
+        if (tileBudget < kVkmMaxShadowTiles)
+        {
+            VKM_DEBUG_INFO(("Shadow tiles limited to " + std::to_string(tileBudget) + " (from " +
+                            std::to_string(kVkmMaxShadowTiles) + ") by the push-constant ring at " +
+                            std::to_string(batchCount) + " draw batches").c_str());
+        }
+
         const VkmSceneAABB bounds = scene.computeWorldBounds();
         const glm::vec3 sceneMin = bounds._valid ? bounds._min : glm::vec3(-1.0f);
         const glm::vec3 sceneMax = bounds._valid ? bounds._max : glm::vec3(1.0f);
@@ -232,7 +246,7 @@ namespace vkm
 
             const uint32_t type = light._type;
             const uint32_t needed = (type == static_cast<uint32_t>(VkmLightType::Point)) ? 6u : 1u;
-            if (_tiles.size() + needed > kVkmMaxShadowTiles)
+            if (_tiles.size() + needed > tileBudget)
             {
                 // Out of tiles: the light still shades, it just casts no shadow. A dropped light
                 // would be a hole in the image; an unshadowed one is only a missing shadow.

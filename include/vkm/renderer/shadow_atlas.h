@@ -30,6 +30,17 @@ namespace vkm
     // frame can hold, not the lights: a point light owns six.
     constexpr uint32_t kVkmMaxShadowTiles = 16;
 
+    /*
+    * @brief Push-constant ring entries reserved for the shadow pass in a frame.
+    * @details The ring is one shared budget (kVkmPushConstantRingEntryCount per frame region) and
+    * no subsystem owns it, so each one that pushes per draw has to size itself against a share
+    * rather than against the whole. This is the shadow pass's: it pushes once per (tile, draw
+    * batch) plus once per batch for its cull, so the reserve is what bounds its tile count on a
+    * scene with many batches. VkmGiSystem subtracts it before sizing the probe refresh's budget,
+    * which is the other per-draw pusher.
+    */
+    constexpr uint32_t kVkmShadowPushConstantReserve = 320;
+
     // Matches VKM_SHADOW_FAR_SENTINEL in shaders/vkm_shadow.hlsli: what the atlas clears to, so
     // an untouched texel reads as "nothing occludes" rather than "an occluder at the light".
     // Finite in a half-float, whose largest value is 65504.
