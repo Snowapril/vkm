@@ -165,12 +165,7 @@ namespace vkmtest
 
         // One run: fill the atlas, fill the G-buffer, shade. `shadowed` chooses whether the
         // light's tile assignment survives into the constants.
-        const auto render = [&](bool shadowed) {
-            std::vector<vkm::VkmPunctualLight> passLights = lights;
-            if (!shadowed)
-            {
-                passLights[0]._shadowTile = -1;
-            }
+        const auto renderWith = [&](const std::vector<vkm::VkmPunctualLight>& passLights) {
             vkm::VkmDeferredLightConstants lightConstants{};
             vkm::vkmBuildDeferredLightConstants(passLights, atlas.getTilesPerRow(),
                                                 atlas.getDescriptor()._tileSize, &lightConstants);
@@ -244,6 +239,15 @@ namespace vkmtest
             return readback;
         };
 
+        const auto render = [&](bool shadowed) {
+            std::vector<vkm::VkmPunctualLight> passLights = lights;
+            if (!shadowed)
+            {
+                passLights[0]._shadowTile = -1;
+            }
+            return renderWith(passLights);
+        };
+
         const vkm::VkmTextureReadbackResult shadowed = render(true);
         const vkm::VkmTextureReadbackResult unshadowed = render(false);
         REQUIRE(shadowed.channels == 8); // bytes per texel, RGBA16F
@@ -312,6 +316,54 @@ namespace vkmtest
         // The patch spans real distance from the light, so its brightness genuinely varies by
         // 1/d^2; what acne would add is speckle far beyond that gradient.
         CHECK(patchMax / patchMin < 1.6f);
+
+        // Grazing incidence: nDotL near zero, so the depth across one shadow texel changes by
+        // many times the texel's own size. This covers a regime the patch above does not reach.
+        //
+        // Stated honestly, because it was checked: this does NOT reproduce the acne Sponza's roof
+        // showed, and it passes with the slope-scaled normal offset removed. A flat receiver
+        // cannot -- its depth varies linearly across a texel, which even a flat offset covers.
+        // The roof acnes because its corrugated tiles put several ridges inside one shadow texel,
+        // so the in-texel depth range is the ridge height rather than a fraction of a texel. A
+        // fixture with geometry that fine, lit so that no ridge genuinely occludes another, is
+        // what that regime would need; TODO.md carries it.
+        {
+            std::vector<vkm::VkmPunctualLight> grazing = lights;
+            grazing[0]._positionWorld[0] = 30.0f;
+            grazing[0]._positionWorld[1] = 2.0f;
+            grazing[0]._positionWorld[2] = 0.0f;
+            // Brighter, because 1/d^2 at this distance would otherwise put the whole patch near
+            // zero and make "nothing is fully dark" trivially true.
+            grazing[0]._radiance[0] = 4000.0f;
+            grazing[0]._radiance[1] = 4000.0f;
+            grazing[0]._radiance[2] = 4000.0f;
+
+            atlas.allocate(scene, &grazing);
+            const vkm::VkmTextureReadbackResult grazingShade = renderWith(grazing);
+
+            // Floor well clear of the occluder's long shadow, which at this light height reaches
+            // far along -x.
+            uint32_t litSamples = 0;
+            uint32_t blackSamples = 0;
+            for (int i = 0; i <= 8; ++i)
+            {
+                for (int j = 0; j <= 8; ++j)
+                {
+                    const float wx = 2.0f + 1.5f * (static_cast<float>(i) / 8.0f);
+                    const float wz = -0.75f + 1.5f * (static_cast<float>(j) / 8.0f);
+                    const float value = luminanceAt(grazingShade, texelFor(wx, wz));
+                    if (value > 0.0f) { ++litSamples; } else { ++blackSamples; }
+                }
+            }
+            // Acne at grazing incidence is a stipple of fully-shadowed texels among lit ones.
+            // Attenuation and nDotL both vary smoothly across this patch and neither can take a
+            // sample to exactly zero, so a single black sample here is self-shadowing.
+            REQUIRE(litSamples > 0);
+            CHECK(blackSamples == 0);
+
+            // Restore the tile assignment the rest of the test's lights rely on.
+            atlas.allocate(scene, &lights);
+        }
 
         atlas.destroy();
         driver->getRenderResourcePool()->releaseResource(lightBuffer->getHandle());

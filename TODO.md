@@ -179,3 +179,5 @@
 - Shadow-casting lights are capped by kVkmMaxShadowTiles (16 tiles: one per cascade for a directional light, six per point light, one per spot); past that a light shades unshadowed.
 - The shadow atlas culls every light against one union box, so a caster outside a given light's frustum is still submitted to that light's tile and clipped there.
 - Point-light shadow taps clamp at a cube-face edge rather than continuing into the adjacent face, so a receiver straddling a seam samples one face twice.
+- The shadow acne gates use flat receivers, so neither reproduces acne from geometry finer than a shadow texel, which is the case Sponza's roof showed.
+- Vulkan teardown destroys buffers, descriptor sets, samplers and pipelines still in use by RenderGraph.Frame1, raising five validation errors per UnitTests run.

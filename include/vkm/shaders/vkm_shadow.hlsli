@@ -14,6 +14,19 @@
 // owns six.
 #define VKM_MAX_SHADOW_TILES 16
 
+/*
+* @brief How far the PCF kernel reaches, in texels, and how much depth bias one texel of slope
+* buys.
+* @details Both are measured rather than derived. The kernel radius is geometry: a 3x3 kernel
+* reaches 1.5 texels from its centre once the half-texel of the centre tap is counted. The depth
+* scale is the one free constant, and it was raised to 4 against Sponza's roof, whose corrugated
+* tiles put a full ridge inside a single shadow texel at any resolution the atlas can afford --
+* the in-texel depth range is then the ridge height, not a fraction of a texel, and no smaller
+* bias removes the acne. Raising it further starts to detach contact shadows.
+*/
+#define VKM_SHADOW_KERNEL_RADIUS 1.5
+#define VKM_SHADOW_DEPTH_BIAS_SCALE 4.0
+
 // What an untouched atlas texel holds. Far enough that every real query reads as unoccluded, and
 // finite in a half-float, whose largest value is 65504.
 #define VKM_SHADOW_FAR_SENTINEL 60000.0
@@ -117,6 +130,16 @@ float4 vkmShadowTileRect(uint tileIndex, uint tilesPerRow)
         const uint tileCount = max(light.shadowTileCount, 1u);                                     \
         float2 tileUv = float2(0.0, 0.0);                                                          \
                                                                                                    \
+        /* tan of the angle between the surface and the light. Both the depth bias and the      */  \
+        /* normal offset scale with it, because both are correcting the same thing: across one  */  \
+        /* shadow texel a surface's true depth changes by texelWorld * slope, and at grazing    */  \
+        /* incidence that dwarfs the texel itself.                                              */  \
+        const float slope = clamp(sqrt(saturate(1.0 - nDotL * nDotL)) / max(nDotL, 1e-3), 0.0, 24.0); \
+        /* The 3x3 kernel reaches a texel and a half from the centre, and a tap out there lands */  \
+        /* on a surface point whose depth differs by that much again -- so the correction has   */  \
+        /* to cover the kernel, not just the centre texel.                                      */  \
+        const float slopeScale = VKM_SHADOW_KERNEL_RADIUS * (1.0 + slope);                         \
+                                                                                                   \
         if (light.type == VKM_LIGHT_TYPE_POINT)                                                    \
         {                                                                                          \
             /* A cube face is chosen, not searched: the six 90-degree frusta tile every        */  \
@@ -124,7 +147,7 @@ float4 vkmShadowTileRect(uint tileIndex, uint tilesPerRow)
             tile += vkmShadowCubeFace(worldPosition - light.positionWorld);                        \
             const float texelGuess = AtlasConstants.tileLightDirection[tile].w *                   \
                                      length(worldPosition - light.positionWorld);                  \
-            const float3 faceQuery = worldPosition + geometricNormal * texelGuess;                 \
+            const float3 faceQuery = worldPosition + geometricNormal * texelGuess * slopeScale;    \
             const float4 faceClip =                                                                \
                 mul(AtlasConstants.tileViewProjection[tile], float4(faceQuery, 1.0));               \
             if (faceClip.w <= 0.0)                                                                 \
@@ -152,7 +175,7 @@ float4 vkmShadowTileRect(uint tileIndex, uint tilesPerRow)
             {                                                                                      \
                 const uint candidate = uint(light.shadowTile) + cascade;                           \
                 const float texelGuess = AtlasConstants.tileLightDirection[candidate].w;           \
-                const float3 query = worldPosition + geometricNormal * texelGuess;                 \
+                const float3 query = worldPosition + geometricNormal * texelGuess * slopeScale;    \
                 const float4 clip =                                                                \
                     mul(AtlasConstants.tileViewProjection[candidate], float4(query, 1.0));          \
                 if (clip.w <= 0.0)                                                                 \
@@ -188,10 +211,7 @@ float4 vkmShadowTileRect(uint tileIndex, uint tilesPerRow)
         const float perDistance = AtlasConstants.tileLightDirection[tile].w;                       \
         const float texelWorld =                                                                   \
             max(lightPosition.w > 0.5 ? perDistance * receiverDistance : perDistance, 1e-6);       \
-        /* Slope-scaled: a surface seen edge-on by the light spans many texels of depth in one  */  \
-        /* texel of area, and needs proportionally more room.                                   */  \
-        const float slope = sqrt(saturate(1.0 - nDotL * nDotL)) / max(nDotL, 1e-3);                \
-        const float bias = texelWorld * (1.0 + 2.0 * clamp(slope, 0.0, 8.0));                      \
+        const float bias = texelWorld * slopeScale * VKM_SHADOW_DEPTH_BIAS_SCALE;                  \
                                                                                                    \
         /* 3x3 PCF. Enough to soften the staircase a tile's resolution puts on a shadow edge    */  \
         /* without pretending to be a soft shadow, which needs a light with area.               */  \

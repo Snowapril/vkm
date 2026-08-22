@@ -106,6 +106,10 @@ struct VSOutput
     [[vk::location(1)]] float3 worldNormal : NORMAL0;
     [[vk::location(2)]] nointerpolation uint materialIndex : TEXCOORD1;
     [[vk::location(3)]] float2 uv : TEXCOORD2;
+    // The probe position the offsets above are relative to. Carried as a varying for the same
+    // reason they are relative in the first place: the fragment stage cannot read the push
+    // constant that holds it. Constant across the primitive, so it interpolates to itself.
+    [[vk::location(4)]] nointerpolation float3 probePositionWorld : TEXCOORD3;
 };
 
 float3 loadFloat3(uint slot, uint wordBase)
@@ -160,6 +164,7 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
     VSOutput output;
     output.position = mul(g_Capture.faceViewProjection[g_Face.faceIndex], float4(probeRelative, 1.0));
     output.probeRelativePosition = probeRelative;
+    output.probePositionWorld = g_Face.probePositionWorld;
     output.worldNormal = mul((float3x3)obj.normalTransform, fetchNormal(obj, wordBase));
     output.materialIndex = obj.materialIndex;
     output.uv = fetchUV(obj, wordBase);
@@ -196,7 +201,7 @@ float4 PSMain(VSOutput input) : SV_TARGET0
     float visibility = 1.0;
     if (g_Capture.shadowParams.x > 0u && g_Capture.shadowParams.y > 0u)
     {
-        const float3 worldPosition = input.probeRelativePosition + g_Face.probePositionWorld;
+        const float3 worldPosition = input.probeRelativePosition + input.probePositionWorld;
         visibility = vkmShadowFactor(g_Capture.sun, worldPosition, geometricNormal, nDotL,
                                      g_Capture.shadowParams.x, g_Capture.shadowParams.y);
     }

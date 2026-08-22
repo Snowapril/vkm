@@ -104,6 +104,9 @@ struct VSOutput
     // Which tile this fragment belongs to, so the fragment stage can pick the same light the
     // vertex stage did without re-reading a push constant Vulkan does not give it.
     [[vk::location(3)]] nointerpolation uint tileIndex : TEXCOORD3;
+    // Resolved in the vertex stage for the same reason as tileIndex: the alpha-mask test below
+    // needs it, and the fragment stage cannot reach the push constant naming the view.
+    [[vk::location(4)]] nointerpolation uint materialPoolSlot : TEXCOORD4;
 };
 
 float3 loadFloat3(uint slot, uint wordBase)
@@ -145,6 +148,7 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
     output.uv = fetchUV(obj, wordBase);
     output.materialIndex = obj.materialIndex;
     output.tileIndex = tile;
+    output.materialPoolSlot = g_FrameData[g_Tile.frameDataIndex].materialPoolSlot;
     return output;
 }
 
@@ -153,7 +157,7 @@ float4 PSMain(VSOutput input) : SV_TARGET0
     // The same alpha-mask test the G-buffer and the probe capture apply. Without it a leaf card
     // casts the shadow of its whole quad, which is the most visible way a masked material goes
     // wrong -- and unlike the colour passes, here it would be a hard black rectangle on the floor.
-    const VkmMaterial material = vkmLoadMaterial(g_FrameData[g_Tile.frameDataIndex].materialPoolSlot, input.materialIndex);
+    const VkmMaterial material = vkmLoadMaterial(input.materialPoolSlot, input.materialIndex);
     if (vkmSampleBaseColor(material, input.uv).a < material.alphaCutoff)
     {
         discard;
