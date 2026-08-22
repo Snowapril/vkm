@@ -5070,3 +5070,46 @@ planned:
   the orbit controller's drag; the gizmo is what the user asked for and a slider reaches it.
 - **The probe view has no depth test.** A probe buried in a wall is the case the view exists to
   find, and depth testing would hide exactly those.
+## 2026-08-22 — Upscale mode moves into the engine; Native AA becomes the default
+
+The upscaler shipped switched off: the ratio was `gv_gi_render_scale` inside the gi sample, where no
+engine shortcut could reach it, and it only ran below 1.0. Two changes follow from making it vkm's
+default anti-aliasing — vkm had none at all, MSAA included.
+
+`VkmUpscaleMode` (Off, Native, Quality 0.67, Balanced 0.59, Performance 0.50) lives beside the jitter
+helpers in `upscaler.h`, with `vkmUpscaleModeScale/Name`, `vkmNextUpscaleMode` and
+`vkmUpscaleRenderExtent`. The last one carries the rounding rule the gi sample used to own, so the
+engine's camera viewport and a sample's render targets derive the extent from one function and cannot
+disagree by a pixel. `VkmEngine` holds the live value and `setCameraViewportOverride` is gone — the
+engine now derives the camera extent from the mode itself, which removes the second source of truth
+rather than deprecating it. `--gv_upscale_mode=N` only seeds the member, keeping
+`global_variable.h`'s "applied once at startup" contract intact while F2 mutates the member.
+
+Native is the default wherever the driver reports `TemporalUpscaling`. The presets stop at 0.50
+because MetalFX reports `supportedInputContentMinScale = 1.0, max = 3.0` on an M3 Pro: the old
+`[0.25, 1.0]` clamp allowed a 4x ratio, past that ceiling, which would have surfaced as a nil scaler
+rather than a rejection.
+
+Two things needed care:
+
+**Off and Native share a render extent.** Both render at the display extent, so a rebuild test
+keyed on extents alone (gi's was) returns early on the Off↔Native transition and the upscaler is
+never created or destroyed. The mode is now part of gi's rebuild key, and the gate is
+`upscaleMode != Off` rather than `renderExtent != extent` — the latter being exactly the expression
+that made Native AA impossible. `TestUpscaleMode.cpp` asserts the two modes yield an identical
+extent, so the precondition that makes the key necessary is pinned rather than remembered.
+
+**A preset must not shrink a viewport nobody honors.** `AppDelegate::consumesUpscaleMode()` (non-pure,
+false by default) gates both the F2 cycle and the overlay line. Without it a stray
+`--gv_upscale_mode=4` under triangle would shrink the camera viewport in set 1 while the sample kept
+rendering full-screen — a correctness bug, not an inert menu entry. gi is the only sample that
+returns true; it is also the only one producing the motion vectors an upscaler needs.
+
+`scripts/run_sample.py` gained `--no-mtl-debug-layer`. It injects `MTL_DEBUG_LAYER=1` on Metal, and
+`VkmDriverMetal` withholds `TemporalUpscaling` under the debug layer, so the standard runner could
+never show the new default. The layer stays on by default; the flag exists solely because MTL4FX
+cannot encode under it.
+
+### Deviations
+
+(none)

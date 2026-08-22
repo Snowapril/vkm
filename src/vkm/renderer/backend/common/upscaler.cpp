@@ -5,10 +5,52 @@
 #include <vkm/base/common.h>
 #include <vkm/renderer/backend/common/render_graph.h>
 
+#include <glm/common.hpp>
+
 #include <cmath>
 
 namespace vkm
 {
+    float vkmUpscaleModeScale(const VkmUpscaleMode mode)
+    {
+        switch (mode)
+        {
+            // No upscaler runs, so the scene renders at the display extent.
+            case VkmUpscaleMode::Off:         return 1.0f;
+            case VkmUpscaleMode::Native:      return 1.0f;
+            case VkmUpscaleMode::Quality:     return 0.67f;
+            case VkmUpscaleMode::Balanced:    return 0.59f;
+            case VkmUpscaleMode::Performance: return 0.50f;
+            default:                          return 1.0f;
+        }
+    }
+
+    const char* vkmUpscaleModeName(const VkmUpscaleMode mode)
+    {
+        switch (mode)
+        {
+            case VkmUpscaleMode::Off:         return "Off";
+            case VkmUpscaleMode::Native:      return "Native AA";
+            case VkmUpscaleMode::Quality:     return "Quality";
+            case VkmUpscaleMode::Balanced:    return "Balanced";
+            case VkmUpscaleMode::Performance: return "Performance";
+            default:                          return "Unknown";
+        }
+    }
+
+    VkmUpscaleMode vkmNextUpscaleMode(const VkmUpscaleMode mode)
+    {
+        const uint32_t next = static_cast<uint32_t>(mode) + 1u;
+        return next < static_cast<uint32_t>(VkmUpscaleMode::Count) ? static_cast<VkmUpscaleMode>(next)
+                                                                  : VkmUpscaleMode::Off;
+    }
+
+    glm::uvec2 vkmUpscaleRenderExtent(const glm::uvec2& displayExtent, const VkmUpscaleMode mode)
+    {
+        const float scale = vkmUpscaleModeScale(mode);
+        return glm::max(glm::uvec2(glm::vec2(displayExtent) * scale + 0.5f), glm::uvec2(1u));
+    }
+
     float vkmHalton(uint32_t index, uint32_t base)
     {
         float result = 0.0f;

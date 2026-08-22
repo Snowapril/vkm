@@ -29,6 +29,7 @@ set(SRCS
     ${SRC_DIR}/TestTimeBudget.cpp
     ${SRC_DIR}/TestCamera.cpp
     ${SRC_DIR}/TestUpscalerJitter.cpp
+    ${SRC_DIR}/TestUpscaleMode.cpp
     ${SRC_DIR}/TestClipSpaceOrientation.cpp
     ${SRC_DIR}/TestRasterState.cpp
     ${SRC_DIR}/TestGlobalVariable.cpp

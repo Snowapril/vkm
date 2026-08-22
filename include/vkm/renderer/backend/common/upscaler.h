@@ -15,6 +15,49 @@ namespace vkm
     class VkmCommandBufferBase;
 
     /*
+    * @brief Anti-aliasing / upscale preset, in the order VkmEngine cycles them.
+    * @details Off runs no upscaler at all: the scene renders at the display extent, unjittered.
+    * Every other mode runs the temporal upscaler. Native renders at the display extent too and
+    * uses the upscaler purely as anti-aliasing; the remaining three trade render resolution for
+    * speed. The scales stop at 0.5 because both vendors cap the ratio at 3x, and a preset that
+    * asked for more would fail as a null upscaler rather than a clear rejection.
+    */
+    enum class VkmUpscaleMode : uint32_t
+    {
+        Off = 0,
+        Native,
+        Quality,
+        Balanced,
+        Performance,
+        Count,
+    };
+
+    /*
+    * @brief Render extent as a fraction of the display extent. Off and Native both report 1.
+    */
+    float vkmUpscaleModeScale(VkmUpscaleMode mode);
+
+    /*
+    * @brief Human-readable preset name, for the debug overlay and logs.
+    */
+    const char* vkmUpscaleModeName(VkmUpscaleMode mode);
+
+    /*
+    * @brief The next preset in cycle order, wrapping Performance back to Off.
+    */
+    VkmUpscaleMode vkmNextUpscaleMode(VkmUpscaleMode mode);
+
+    /*
+    * @brief The extent the scene renders at for a display extent and preset.
+    * @details The one rounding rule every consumer shares, so the engine's camera viewport and a
+    * sample's render targets can never disagree by a pixel.
+    * @param displayExtent Swapchain extent in pixels.
+    * @param mode Preset selecting the scale.
+    * @return displayExtent scaled and rounded to nearest, never below 1x1.
+    */
+    glm::uvec2 vkmUpscaleRenderExtent(const glm::uvec2& displayExtent, VkmUpscaleMode mode);
+
+    /*
     * @brief Radical-inverse of `index` in the given base, the classic low-discrepancy sequence.
     * @param index One-based sequence position; index 0 returns 0.
     * @param base Radix, at least 2. Bases 2 and 3 form the standard 2D Halton pair.

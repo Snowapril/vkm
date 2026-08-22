@@ -164,3 +164,9 @@
 - Probe placement is manual and per-probe: no automatic relocation, no way to save or load an authored offset set.
 - The probe debug view has no depth test and no picking; selection is by linear index.
 - Probe offsets upload through a device drain, not through the frame's transfer subgraph.
+- Native AA pays a full display-extent RGBA16F upscale target that Off does not, and an Off<->Native F2 press rebuilds every render-extent target at an unchanged size.
+- A gi debug view other than Composite renders through the temporal upscaler at the default Native AA mode and ghosts.
+- The Metal ratio-1.0 upscaler case never runs under scripts/run_tests.py, which injects MTL_DEBUG_LAYER=1 and withholds TemporalUpscaling.
+- VkmUpscalerMetal never queries MTLFXTemporalScalerDescriptor's supportedInputContentMin/MaxScale (1.0-3.0 on M3 Pro), so an out-of-range ratio fails as a nil scaler rather than a clear rejection.
+- model_viewer sizes its depth texture from the swapchain extent, so it cannot consume the engine's upscale mode until that follows getRenderExtent().
+- Stale .gcda files left by a recompiled coverage build crash UnitTests inside __llvm_gcov_writeout at exit, which run_tests.py reports as FAIL even though doctest printed SUCCESS; deleting build/<backend>/**/*.gcda clears it.

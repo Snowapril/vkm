@@ -7,6 +7,7 @@
 #include <vkm/platform/common/input_handler.h>
 #include <vkm/platform/common/window.h>
 #include <vkm/renderer/backend/common/render_graph.h>
+#include <vkm/renderer/backend/common/upscaler.h>
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
@@ -260,14 +261,35 @@ namespace vkm
         inline VkmCamera* getActiveCamera() const { return _activeCamera; }
 
         /*
-        * @brief Decouples the active camera's viewport from the main swapchain's extent.
-        * @details While non-zero, the engine drives the camera (and therefore set 1's
-        * _viewportSize) from this extent instead of the swapchain's -- what a sample rendering
-        * at a reduced resolution and upscaling to the backbuffer needs. A zero extent restores
-        * the default swapchain-driven behavior.
-        * @param extent Render extent in pixels, or zero to follow the swapchain.
+        * @brief The engine-wide anti-aliasing / upscale preset, cycled by F2.
+        * @details Every mode but Off runs the temporal upscaler, Native at the display extent as
+        * pure anti-aliasing. Native is the default wherever the driver reports
+        * VkmDriverCapabilityFlags::TemporalUpscaling and the app consumes the mode; anywhere else
+        * this is pinned to Off.
         */
-        inline void setCameraViewportOverride(const glm::uvec2& extent) { _cameraViewportOverride = extent; }
+        inline VkmUpscaleMode getUpscaleMode() const { return _upscaleMode; }
+
+        /*
+        * @brief Selects a preset, clamped to Off where upscaling is unavailable.
+        * @details A change is not free: every consumer rebuilds its render-extent-sized targets
+        * and its upscaler. Ignored when the mode already holds that value.
+        * @param mode Preset to select.
+        */
+        void setUpscaleMode(VkmUpscaleMode mode);
+
+        /*
+        * @brief Whether any mode other than Off would do anything in this run.
+        */
+        inline bool isUpscaleModeAvailable() const { return _upscaleModeAvailable; }
+
+        /*
+        * @brief The extent the scene renders at: the main swapchain's, scaled by the current mode.
+        * @details The camera's viewport and set 1's _viewportSize follow this, so an app that
+        * sizes its scene targets from it stays consistent with the engine by construction.
+        * @return Render extent in pixels, or zero while no swapchain exists or the window is
+        * minimized.
+        */
+        glm::uvec2 getRenderExtent();
 
         /*
         * @brief engine loop exit condition. True once the input handler has received an exit request.
@@ -304,7 +326,10 @@ namespace vkm
         VkmInputHandler _inputHandler;
 
         VkmCamera* _activeCamera {nullptr}; // non-owning, see setActiveCamera()
-        glm::uvec2 _cameraViewportOverride {0, 0}; // zero = follow the swapchain extent
+        VkmUpscaleMode _upscaleMode {VkmUpscaleMode::Off};
+        // Both halves of "would a mode other than Off do anything here": the driver has an
+        // upscaler, and the app renders at getRenderExtent().
+        bool _upscaleModeAvailable {false};
 
         // One entry per window; each owns its swapchain and per-frame-slot render graphs.
         // A deque, not a vector: VkmWindowContext holds atomics (so it is neither copyable nor

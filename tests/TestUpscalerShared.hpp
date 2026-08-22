@@ -43,7 +43,14 @@ namespace vkmtest
         return sign != 0 ? -value : value;
     }
 
-    inline void runTemporalUpscalerTest(vkm::VkmDriverBase* driver)
+    /*
+    * @brief Drives a real upscaler for a few jittered frames and reads the result back.
+    * @details Defaults to a 2x ratio; pass equal extents for the Native AA case the engine
+    * defaults to, where the upscaler is anti-aliasing rather than a resolution change.
+    */
+    inline void runTemporalUpscalerTest(vkm::VkmDriverBase* driver,
+                                        const glm::uvec2 renderExtent = glm::uvec2(320u, 180u),
+                                        const glm::uvec2 displayExtent = glm::uvec2(640u, 360u))
     {
         if ((driver->getDriverCapabilityFlags() & vkm::VkmDriverCapabilityFlags::TemporalUpscaling) == 0)
         {
@@ -55,9 +62,6 @@ namespace vkmtest
             MESSAGE("Skipping: this backend does not implement texture upload");
             return;
         }
-
-        const glm::uvec2 renderExtent{ 320u, 180u };
-        const glm::uvec2 displayExtent{ 640u, 360u };
 
         // Depth (cleared to 1.0) and motion (cleared to zero) come from a real VkmGBuffer, the
         // exact textures the gi sample feeds the upscaler.

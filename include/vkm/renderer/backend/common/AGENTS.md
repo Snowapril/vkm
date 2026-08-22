@@ -675,8 +675,18 @@ Vulkan builds that include the FidelityFX SDK; WebGPU has none).
   in `initializeInner()` overrides it. `newUpscaler()` checks the flag and logs, so callers check
   the flag where absence is expected (the `newAccelerationStructure` shape).
 - **Caller-owned lifetime.** Same contract as `newResourceTable`: `destroy()` then `delete`, only
-  once no in-flight frame can still reference it. Extents are fixed at creation — a resize
-  retires the old upscaler (FRAME_COUNT-frame delay) and creates a new one.
+  once no in-flight frame can still reference it. Extents are fixed at creation — a resize **or a
+  mode change** retires the old upscaler (FRAME_COUNT-frame delay) and creates a new one.
+- **The engine owns the preset, not the app.** `VkmUpscaleMode` (Off, Native, Quality, Balanced,
+  Performance) lives beside the jitter helpers in `upscaler.h`, and `VkmEngine` holds the live
+  value: `getUpscaleMode()`, `setUpscaleMode()`, and `getRenderExtent()`, which is the single
+  rounding rule the engine's camera viewport and an app's render targets both follow.
+  **Native AA is the default wherever the driver reports `TemporalUpscaling` and the app returns
+  true from `AppDelegate::consumesUpscaleMode()`** — at ratio 1 the render extent equals the
+  display extent and the upscaler is anti-aliasing, vkm's only AA. **F2** cycles the presets and
+  `--gv_upscale_mode=N` seeds one. An app that consumes the mode must include it in whatever test
+  decides to rebuild its targets: Off and Native share a render extent, so extents alone cannot
+  tell them apart.
 - **Render-graph integration.** `recordDispatch()` appends one compute subgraph that declares
   color/depth/motion as `ShaderSampledRead` and the output as `ShaderStorageReadWrite`; the
   backend encode runs inside the subgraph callback against barriers the ordinary plan placed.

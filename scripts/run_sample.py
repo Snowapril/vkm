@@ -225,7 +225,8 @@ def cmake_build_target(build_dir: Path, target: str, jobs: int, env=None) -> boo
 
 
 def run_native_sample(backend: str, sample: str, build_type: str,
-                       build_dir: Path, jobs: int, system: str) -> int:
+                       build_dir: Path, jobs: int, system: str,
+                       mtl_debug_layer: bool = True) -> int:
     backend_build_dir = build_dir / backend
 
     if not cmake_configure_for_sample(backend_build_dir, build_type,
@@ -252,7 +253,15 @@ def run_native_sample(backend: str, sample: str, build_type: str,
 
     # Metal has no runtime-togglable validation layer — it's only enabled via the
     # MTL_DEBUG_LAYER env var read at process start.
-    env = {**os.environ, "MTL_DEBUG_LAYER": "1"} if backend == "metal" else None
+    env = None
+    if backend == "metal":
+        if mtl_debug_layer:
+            env = {**os.environ, "MTL_DEBUG_LAYER": "1"}
+        else:
+            # MTL4FX cannot encode under the debug layer, so VkmDriverMetal withholds
+            # TemporalUpscaling there and the upscale modes are all pinned to Off. Turning the
+            # layer off is the only way to see them.
+            print("[WARN] Metal validation layer disabled; temporal upscaling is reachable.")
 
     print(f"[INFO] Launching {binary} ...")
     return run_cmd([str(binary)], env=env).returncode
@@ -386,6 +395,12 @@ def main() -> None:
         "--jobs", type=int, default=os.cpu_count() or 1,
         help="Parallel build jobs (default: cpu count)",
     )
+    parser.add_argument(
+        "--no-mtl-debug-layer", action="store_true",
+        help="Launch without MTL_DEBUG_LAYER=1 (metal only). Needed to exercise temporal "
+             "upscaling: MTL4FX cannot encode under the debug layer, so the driver withholds "
+             "the capability there and every upscale mode falls back to Off.",
+    )
     args = parser.parse_args()
 
     validate_sample(args.sample)
@@ -398,7 +413,8 @@ def main() -> None:
         sys.exit(run_webgpu_sample(args.sample, args.build_type, args.jobs, system))
     else:
         sys.exit(run_native_sample(args.backend, args.sample, args.build_type,
-                                    Path(args.build_dir), args.jobs, system))
+                                    Path(args.build_dir), args.jobs, system,
+                                    not args.no_mtl_debug_layer))
 
 
 if __name__ == "__main__":

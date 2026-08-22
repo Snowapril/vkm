@@ -132,10 +132,7 @@ VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_technique, 0u);
 // the resampled one, whose cached radiance is the documented ReSTIR GI bias on low roughness.
 // Settable here so a screenshot run can A/B it.
 VKM_GLOBAL_VARIABLE(bool, gv_gi_restir_mis, true);
-// Render resolution as a fraction of the swapchain's, clamped to [0.25, 1]. Below 1 the scene
-// renders at the reduced extent and the tonemap pass upscales into the backbuffer -- bilinearly
-// until a temporal upscaler takes that spot.
-VKM_GLOBAL_VARIABLE(float, gv_gi_render_scale, 1.0f);
+// Render resolution follows the engine's upscale mode (F2, or --gv_upscale_mode=N at startup).
 
 namespace
 {
@@ -201,6 +198,10 @@ public:
     virtual ~GiApplication() = default;
 
     virtual const char* getAppName() const override final { return "gi"; }
+
+    // Every scene target here is sized from VkmEngine::getRenderExtent(), and this is the one
+    // sample that produces the motion vectors and depth a temporal upscaler needs.
+    virtual bool consumesUpscaleMode() const override final { return true; }
 
     virtual void postDriverReady(VkmEngine* engine) override final
     {
@@ -684,17 +685,17 @@ private:
         {
             return;
         }
-        const float renderScale = std::clamp(gv_gi_render_scale.get(), 0.25f, 1.0f);
-        const glm::uvec2 renderExtent =
-            glm::max(glm::uvec2(glm::vec2(extent) * renderScale + 0.5f), glm::uvec2(1u));
-        if (extent == _extent && renderExtent == _renderExtent)
+        // The mode belongs in the test, not just the extents: Off and Native AA both render at the
+        // display extent, so only the mode says whether an upscaler should exist.
+        const VkmUpscaleMode upscaleMode = _engine->getUpscaleMode();
+        const glm::uvec2 renderExtent = _engine->getRenderExtent();
+        if (extent == _extent && renderExtent == _renderExtent && upscaleMode == _upscaleMode)
         {
             return;
         }
         _extent = extent;
         _renderExtent = renderExtent;
-        // At scale 1 the override is released so the camera follows the swapchain again.
-        _engine->setCameraViewportOverride(renderExtent == extent ? glm::uvec2(0u) : renderExtent);
+        _upscaleMode = upscaleMode;
 
         if (!_gbuffer.isValid() ? !_gbuffer.initialize(driver, renderExtent) : !_gbuffer.resize(renderExtent))
         {
@@ -733,15 +734,17 @@ private:
             return;
         }
 
-        // The upscaler's extents are fixed at creation, so a resize retires it like the tables:
-        // it must outlive the frames whose command buffers still reference its internal state.
+        // The upscaler's extents are fixed at creation, so a resize or a mode change retires it
+        // like the tables: it must outlive the frames whose command buffers still reference its
+        // internal state.
         if (_upscaler != nullptr)
         {
             _retiredUpscalers.push_back(RetiredUpscaler{ _frameCounter, _upscaler });
             _upscaler = nullptr;
         }
-        if (renderExtent != extent &&
-            (driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::TemporalUpscaling) != 0)
+        // The engine already pinned the mode to Off where the driver has no upscaler, so the
+        // capability is not re-tested here.
+        if (upscaleMode != VkmUpscaleMode::Off)
         {
             // ColorAttachment as well: MetalFX publishes render-target usage as part of its
             // output-texture requirements (outputTextureUsage), not just shader write.
@@ -981,10 +984,12 @@ private:
         }
 
         ImGui::Separator();
-        ImGui::Text("Render: %ux%u -> %ux%u (%s)", _renderExtent.x, _renderExtent.y,
-                    _extent.x, _extent.y,
+        // "no upscaler" rather than "native" at equal extents: that is what distinguishes a
+        // healthy Off from a Native AA whose upscaler failed to create.
+        ImGui::Text("Render: %ux%u -> %ux%u (%s, %s)", _renderExtent.x, _renderExtent.y,
+                    _extent.x, _extent.y, vkmUpscaleModeName(_upscaleMode),
                     _upscaler != nullptr ? "temporal upscale"
-                                         : (_renderExtent == _extent ? "native" : "bilinear"));
+                                         : (_renderExtent == _extent ? "no upscaler" : "bilinear"));
 
         ImGui::Separator();
         const VkmProbeVolume& volume = _gi.getProbeVolume();
@@ -1092,7 +1097,10 @@ private:
     std::array<VkmStagingBuffer*, FRAME_BUFFER_COUNT> _compositeStagingPointers{};
 
     glm::uvec2 _extent{ 0, 0 };       // display: the swapchain's extent
-    glm::uvec2 _renderExtent{ 0, 0 }; // scene targets: _extent scaled by gv_gi_render_scale
+    glm::uvec2 _renderExtent{ 0, 0 }; // scene targets: _extent scaled by the engine's upscale mode
+    // The mode the current targets and upscaler were built for; part of the rebuild test because
+    // Off and Native AA share a render extent.
+    VkmUpscaleMode _upscaleMode{ VkmUpscaleMode::Off };
     uint64_t _frameCounter = 0;
     bool _sceneReady = false;
 
