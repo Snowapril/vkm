@@ -24,5 +24,14 @@ namespace vkm
         // (see VkmEngine::addSwapChain), letting an app render different content per window.
         virtual void render(uint32_t windowIndex, VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) = 0;
         virtual const char* getAppName() const = 0;
+
+        /*
+        * @brief Whether this app sizes its scene targets from VkmEngine::getRenderExtent() and
+        * runs the engine's temporal upscaler.
+        * @details Only such an app is offered the F2 upscale-mode cycle. Anything else would
+        * cycle a setting nothing reads, and a non-Off mode would shrink the camera viewport out
+        * from under an app still rendering at the display extent.
+        */
+        virtual bool consumesUpscaleMode() const { return false; }
     };
 }

@@ -54,6 +54,11 @@ namespace vkm
     // (and starts keeping frame history) from frame 0.
     VKM_GLOBAL_VARIABLE(bool, gv_gpu_profile, false);
 
+    // The upscale preset the engine starts in, as a VkmUpscaleMode: 0 off, 1 native AA, 2 quality,
+    // 3 balanced, 4 performance. F2 cycles it at run time, so this only seeds the value --
+    // ./gi --gv_upscale_mode=0 is how a run gets no temporal anti-aliasing at all.
+    VKM_GLOBAL_VARIABLE(uint32_t, gv_upscale_mode, static_cast<uint32_t>(VkmUpscaleMode::Native));
+
     namespace
     {
         /*
@@ -139,6 +144,18 @@ namespace vkm
         }
         VKM_DEBUG_INFO("Renderer backend driver initialized");
 
+        // Both halves decide whether a preset can do anything: the driver must have an upscaler,
+        // and the app must render at getRenderExtent(). Without the second test a preset would
+        // shrink the camera viewport under an app that keeps rendering full-screen.
+        _upscaleModeAvailable =
+            (_driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::TemporalUpscaling) != 0 &&
+            _appDelegate->consumesUpscaleMode();
+        // Chosen before postDriverReady() below, so the app sees the final value. Native AA is the
+        // default wherever the upscaler exists: at ratio 1 the render extent is the display extent
+        // and the upscaler is anti-aliasing rather than a performance preset.
+        setUpscaleMode(static_cast<VkmUpscaleMode>(
+            std::min(gv_upscale_mode.get(), static_cast<uint32_t>(VkmUpscaleMode::Count) - 1u)));
+
         _pipelineStateManager = std::make_unique<VkmPipelineStateManager>(_driver);
         std::string psoError;
         if (!_pipelineStateManager->loadPipelineStatesFromDirectory(
@@ -162,6 +179,34 @@ namespace vkm
         _appDelegate->postDriverReady(this);
 
         return result;
+    }
+
+    void VkmEngine::setUpscaleMode(const VkmUpscaleMode mode)
+    {
+        const VkmUpscaleMode resolved = _upscaleModeAvailable ? mode : VkmUpscaleMode::Off;
+        if (resolved == _upscaleMode)
+        {
+            return;
+        }
+        _upscaleMode = resolved;
+        // Logged because a change is a visible hitch: every consumer rebuilds its
+        // render-extent-sized targets, its resource tables and its upscaler.
+        VKM_DEBUG_INFO(fmt::format("Upscale mode: {} ({:.2f}x render scale)",
+                                   vkmUpscaleModeName(_upscaleMode),
+                                   vkmUpscaleModeScale(_upscaleMode))
+                           .c_str());
+    }
+
+    glm::uvec2 VkmEngine::getRenderExtent()
+    {
+        VkmSwapChainBase* swapChain = getMainSwapChain();
+        // Called before the first addSwapChain() during startup, and while a window is minimized.
+        const glm::uvec2 displayExtent = swapChain != nullptr ? swapChain->getExtent() : glm::uvec2(0u);
+        if (displayExtent.x == 0 || displayExtent.y == 0)
+        {
+            return displayExtent;
+        }
+        return vkmUpscaleRenderExtent(displayExtent, _upscaleMode);
     }
 
     void VkmEngine::loopInner(const double currentUpdateTime)
@@ -457,6 +502,13 @@ namespace vkm
             _pipelineStateManager->pollSourceChanges(deltaTime);
             renderDebugOverlay(deltaTime);
 
+            // Gated so a driver with no upscaler, or an app that does not consume the mode, never
+            // cycles a setting with no visible effect. No auto-repeat: each step rebuilds every
+            // render-extent target and recreates the upscaler.
+            if (_upscaleModeAvailable && ImGui::IsKeyPressed(ImGuiKey_F2, false))
+            {
+                setUpscaleMode(vkmNextUpscaleMode(_upscaleMode));
+            }
             if (ImGui::IsKeyPressed(ImGuiKey_F4, false))
             {
                 _accelerationStructureInspector->toggleVisible();
@@ -556,6 +608,10 @@ namespace vkm
                         formatByteSize(memory._gpu._deviceBudgetBytes).c_str());
         }
 
+        if (_upscaleModeAvailable)
+        {
+            ImGui::Text("F2: upscale mode (%s)", vkmUpscaleModeName(_upscaleMode));
+        }
         ImGui::Text("F4: acceleration structures");
         ImGui::Text("F5: render graph inspector");
         ImGui::Text("F6: GPU profiler");
@@ -654,13 +710,11 @@ namespace vkm
                 VkmFrameConstants frameConstants{}; // identity while no camera is registered
                 if (_activeCamera != nullptr)
                 {
-                    // The override lets a sample render at a reduced resolution: the camera's
-                    // aspect and set 1's _viewportSize then describe the render extent while the
-                    // swapchain keeps its own.
-                    const bool hasViewportOverride =
-                        _cameraViewportOverride.x != 0 && _cameraViewportOverride.y != 0;
+                    // The upscale mode owns the render extent: below the display extent, the
+                    // camera's aspect and set 1's _viewportSize describe the render extent while
+                    // the swapchain keeps its own. Off and Native both leave them equal.
                     const glm::uvec2 cameraExtent =
-                        hasViewportOverride ? _cameraViewportOverride : windowContext._swapChain->getExtent();
+                        vkmUpscaleRenderExtent(windowContext._swapChain->getExtent(), _upscaleMode);
                     _activeCamera->setViewportSize(cameraExtent.x, cameraExtent.y);
                     _activeCamera->fillFrameConstants(frameConstants);
 

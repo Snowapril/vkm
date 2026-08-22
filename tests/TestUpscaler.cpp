@@ -49,11 +49,15 @@ namespace
 // Above the default budget: FSR's context creation compiles its pipeline permutations on first
 // use, a one-time cost this test pays on every run.
 TEST_CASE("Vulkan temporal upscaler - upscales a jittered sequence to the display extent" *
-          doctest::timeout(60.0))
+          doctest::timeout(90.0))
 {
     VulkanUpscalerFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
     vkmtest::runTemporalUpscalerTest(fixture.driver.get());
+    // Ratio 1.0, the mode the engine defaults to: FSR's own native-AA mode, where maxRenderSize
+    // equals maxUpscaleSize.
+    vkmtest::runTemporalUpscalerTest(fixture.driver.get(), glm::uvec2(640u, 360u),
+                                     glm::uvec2(640u, 360u));
 }
 
 #endif // VKM_USE_VULKAN_API
