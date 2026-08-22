@@ -863,7 +863,7 @@ private:
         const VkmResourceHandle tonemapSource =
             _upscaler != nullptr ? _upscaledTarget : _compositeTarget;
         _tables._tonemap = driver->newResourceTable(
-            _tonemapPipeline, VkmResourceSetKind::PerPass, {{ 0, _compositeTarget }, { 1, _sampler }, { 2, _tonemapBuffer }}, &error);
+            _tonemapPipeline, VkmResourceSetKind::PerPass, {{ 0, tonemapSource }, { 1, _sampler }, { 2, _tonemapBuffer }}, &error);
         _tables._probeDebug = driver->newResourceTable(
             _probeDebugPipeline, VkmResourceSetKind::PerPass,
             {{ 0, _gi.getProbeVolume().getProbeOffsetTexture() },
