@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The one place that knows how a material's textures reach a shader, so no drawing shader has to.
 // Same role vkm_bindless.hlsli plays for the resource arrays: a shader writes VKM_MATERIAL_DECLARE()
@@ -44,6 +44,8 @@ struct VkmMaterial
 {
     float4 baseColorFactor;
     float3 emissiveFactor;
+    // glTF alphaMode MASK's cutoff; 0 means the material is drawn without an alpha test.
+    float  alphaCutoff;
     float  metallic;
     float  roughness;
     uint   baseColorSlot;
@@ -67,6 +69,7 @@ struct VkmMaterial
         material.emissiveFactor = float3(asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 4)),      \
                                          asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 5)),      \
                                          asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 6)));     \
+        material.alphaCutoff = asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 7));         \
         material.metallic  = asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 8));                  \
         material.roughness = asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 9));                  \
         material.baseColorSlot         = VKM_LOAD_VERTEX(materialPoolSlot, base + 12);              \
@@ -87,6 +90,10 @@ struct VkmMaterial
     {                                                                                               \
         const float4 s = vkmSampleMaterialTexture(material.metallicRoughnessSlot, uv);              \
         return float2(material.metallic * s.b, material.roughness * s.g);                           \
+    }                                                                                               \
+    float3 vkmSampleEmissive(VkmMaterial material, float2 uv)                                       \
+    {                                                                                               \
+        return material.emissiveFactor * vkmSampleMaterialTexture(material.emissiveSlot, uv).rgb;   \
     }
 
 #if defined(VKM_BACKEND_WEBGPU)
@@ -112,6 +119,7 @@ struct VkmMaterial
     [[vk::binding(0, 3)]] Texture2D    g_VkmMaterialBaseColor         : register(t0, space3);       \
     [[vk::binding(1, 3)]] Texture2D    g_VkmMaterialMetallicRoughness : register(t1, space3);       \
     [[vk::binding(2, 3)]] SamplerState g_VkmMaterialSampler           : register(s0, space3);       \
+    [[vk::binding(3, 3)]] Texture2D    g_VkmMaterialEmissive          : register(t2, space3);       \
     VKM_MATERIAL_LOADER()                                                                           \
     float4 vkmSampleBaseColor(VkmMaterial material, float2 uv)                                      \
     {                                                                                               \
@@ -122,6 +130,10 @@ struct VkmMaterial
     {                                                                                               \
         const float4 s = g_VkmMaterialMetallicRoughness.Sample(g_VkmMaterialSampler, uv);           \
         return float2(material.metallic * s.b, material.roughness * s.g);                           \
+    }                                                                                               \
+    float3 vkmSampleEmissive(VkmMaterial material, float2 uv)                                       \
+    {                                                                                               \
+        return material.emissiveFactor * g_VkmMaterialEmissive.Sample(g_VkmMaterialSampler, uv).rgb; \
     }
 
 #else

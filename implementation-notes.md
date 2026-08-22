@@ -5002,3 +5002,71 @@ the motion texture at scale (-renderW, -renderH) with no jitter cancellation fla
   __declspec(dllexport)` unconditionally, shader-compiler tools present only as .exe), so a
   Linux build is a porting project, exactly the "patching balloons" case the plan's fallback
   named.
+
+## 2026-08-13 — VkmGiSystem: GI becomes an engine feature
+
+Everything technique-shaped moved out of the gi sample into `VkmGiSystem`
+(include/vkm/renderer/gi_system.h): probe volume/updater setup with the ring-budget clamp, SSGI,
+probe lighting, the ReSTIR pass lifecycle (parity pairs, resize retirement), the RT PSO
+load-once, the acceleration-structure attempt, and the runtime technique switch. The system
+produces the section-5 indirect-radiance texture; a caller owns the shared chain (G-buffer,
+direct target, composite, tone map) and drives it with initialize -> prepareScene -> resize plus
+a per-frame record/advanceFrame pair. The sample shrank to gv-flag mapping and UI.
+
+### Deviations
+
+- **Ordering:** the probe refresh used to record before the camera's scene update; it now
+  records from record(), after it. The two cull views own separate staging and device regions
+  (kVkmSceneMaxCullViews), so no dependency orders them — verified by the unchanged Cornell
+  screenshots and a validation-clean suite.
+- **The system's sampler is not released through the reclaimer** at destroy(); it stays with the
+  resource pool until teardown, matching how the sample always treated its own.
+
+## 2026-08-15 — Area/emissive lights + NEE + the emissive G-buffer channel
+
+The full arc is in restir.md's progress row. Deviations from the approved plan:
+
+- **The environment-flag Jacobian analogue never came up** (area sampling reconnects to real
+  triangle points; no environment stand-in exists in the light table).
+- **`gi_reservoir_spatial.hlsl` also gained the FrameData light words.** The plan said three
+  readers; the seam macro textually expands in the spatial shader too, so its mirror had to
+  match even though its own code never reads the fields.
+- **The Cornell MSE bound is 1.5e-3/2.5e-3, not the not-regress shape.** Measured floor 8.8e-4:
+  the deferred side finds the small ceiling patch by BSDF sampling (high variance) while the
+  reference uses NEE (low), so the comparison's floor sits far above the environment-lit
+  Cornell's. The 2% mean-ratio check inside the gate is the bias detector.
+- **Two pre-existing defects fixed en route, in their own commits:** `unbindPipeline()` treated
+  as a barrier in `recordResample` (not one under the Metal fence model — generate and resolve
+  overlapped, wobbling the 8.3 gate 2-5e-6 across identical runs; explicit `resourceBarrier`
+  per hand-off restored bit-exact 9.68e-7) and the reservoir buffer created unzeroed (the
+  first temporal frame read garbage history whose garbage M could pass validation).
+- **The `captureMemorySnapshot` budget moved to 120 s** — its tag-table copy grows with every
+  allocation prior tests made, and 30 s was still not enough at the end of a full suite.
+
+## 2026-08-16 — Probe placement: normal bias, alpha masking, authored probe offsets
+
+Three things came out of chasing the black patches in the Sponza view. Deviations from what was
+planned:
+
+- **The normal bias did not fix the dark curtains.** Making the bias reach the visibility test
+  (it had only ever offset the cell lookup) and making it scale-relative are both correct, and
+  neither moved the region's mean luminance: 24.858 -> 24.859. ReSTIR lights the same region 34%
+  brighter from an identical viewpoint, so what remains is the probe tier's, not a tuning value.
+  The fix stands on its own merits and is not the answer to the reported artifact.
+- **The reported artifact was alpha masking, which the engine did not have at all.** Sponza's
+  three doubleSided materials are all `alphaMode: MASK`, and their masked texels are dark, so
+  they rasterized as hard-edged dark cards. The cutoff rides word 7 of the GPU material record,
+  which was unused, rather than growing the record.
+- **Probe offsets are a texture, not the planned buffer.** The consumer that has to read them is
+  `probe_lighting`'s fragment shader, and `VkmTableResourceType::StorageBuffer` is compute-visible
+  only (WebGPU forbids writable storage in the vertex stage). One texel per probe, addressed by
+  `probeCellCoord()` exactly as the atlases are.
+- **`VkmGiSystem::setProbeOffset` drains the device before uploading.** The upload copies into a
+  texture that frames already submitted are still sampling, and it runs outside the render graph.
+  A staging buffer copied inside the frame's transfer subgraph would avoid the stall, but this is
+  a manual placement action, not a per-frame path, and `waitIdle()` is what the pipeline-reload
+  path already uses for the same hazard.
+- **Probe selection is an index slider, not click-to-pick.** Picking would have to arbitrate with
+  the orbit controller's drag; the gizmo is what the user asked for and a slider reaches it.
+- **The probe view has no depth test.** A probe buried in a wall is the case the view exists to
+  find, and depth testing would hide exactly those.

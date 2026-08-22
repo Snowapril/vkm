@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Bindless, GPU-driven vertex-pulling glTF shader. The pipeline declares no vertex input
 // attributes and pushes no constants at all:

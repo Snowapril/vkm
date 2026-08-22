@@ -299,6 +299,7 @@ namespace vkmtest
                 { 3, volume.getDistanceTexture() },
                 { 4, sampler->getHandle() },
                 { 5, volumeBuffer->getHandle() },
+                { 6, volume.getProbeOffsetTexture() },
             };
             std::string tableError;
             vkm::VkmResourceTableBase* table = driver->newResourceTable(pso, vkm::VkmResourceSetKind::PerPass, entries, &tableError);
@@ -307,7 +308,8 @@ namespace vkmtest
             vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
             auto* subGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
             for (vkm::VkmResourceHandle sampled : { normalTexture->getHandle(), motionTexture->getHandle(),
-                                                    volume.getIrradianceTexture(), volume.getDistanceTexture() })
+                                                    volume.getIrradianceTexture(), volume.getDistanceTexture(),
+                                                    volume.getProbeOffsetTexture() })
             {
                 subGraph->addReferencedResource(sampled, vkm::VkmResourceAccess::ShaderSampledRead);
             }
@@ -363,6 +365,39 @@ namespace vkmtest
             CHECK(readHalfComponent(texel, 0) < 0.02f);
             CHECK(readHalfComponent(texel, 1) < 0.02f);
             CHECK(readHalfComponent(texel, 2) < 0.02f);
+        }
+
+        SUBCASE("an authored probe offset moves what the visibility test measures against")
+        {
+            fillAtlas(volume.getIrradianceTexture(), volume.getIrradianceAtlasExtent(), 0.25f, 0.5f, 0.75f, 1.0f);
+            // Every probe reports a surface 1 unit away with no variance, so it accepts a query
+            // closer than that and rejects anything further. The eight probes around the shaded
+            // point sit 2.9 to 4.5 units from it on the grid, so on the grid every one is rejected.
+            fillAtlas(volume.getDistanceTexture(), volume.getDistanceAtlasExtent(), 1.0f, 1.0f, 0.0f, 1.0f);
+
+            const vkm::VkmTextureReadbackResult onGrid = shade();
+            CHECK(readHalfComponent(centerTexel(onGrid), 0) < 0.02f);
+
+            // Same probes, same atlases, moved to half a unit from the query point. The only thing
+            // that can turn the rejection into an acceptance is the lookup measuring against the
+            // moved position; a lookup that offsets only the capture would still read black here.
+            // The bias is 0.25 * min(spacing) = 1.0, so the query sits at (0, 0, 1.5).
+            const glm::vec3 nearQuery(0.0f, 0.0f, 2.0f);
+            for (uint32_t probeIndex = 0; probeIndex < volume.getProbeCount(); ++probeIndex)
+            {
+                volume.setProbeOffset(probeIndex, nearQuery - volume.getProbeGridPosition(probeIndex));
+            }
+            REQUIRE(volume.uploadProbeOffsets());
+            CHECK(volume.hasProbeOffsets());
+
+            const vkm::VkmTextureReadbackResult offGrid = shade();
+            const uint8_t* texel = centerTexel(offGrid);
+            CHECK(readHalfComponent(texel, 0) == doctest::Approx(0.25f).epsilon(0.02));
+            CHECK(readHalfComponent(texel, 1) == doctest::Approx(0.5f).epsilon(0.02));
+            CHECK(readHalfComponent(texel, 2) == doctest::Approx(0.75f).epsilon(0.02));
+
+            volume.clearProbeOffsets();
+            REQUIRE(volume.uploadProbeOffsets());
         }
 
         driver->getRenderResourcePool()->releaseResource(target->getHandle());

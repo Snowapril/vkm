@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #pragma once
 
@@ -27,11 +27,13 @@ namespace vkm
     *   BaseColorRoughness  RGBA8    rgb = base colour, a = roughness
     *   MotionMetallic      RGBA16F  xy = screen-space motion vector, z = metallic,
     *                                w = distance from the camera
-    *   depth               D32      hardware depth. Sampled only as a temporal upscaler's input
-    *                                on Metal/Vulkan; every other consumer reconstructs world
-    *                                positions from the camera distance above, because WebGPU
-    *                                validates a depth-format view against a depth sample type and
-    *                                rejects it as an ordinary sampled texture.
+    *   Emissive            RGBA16F  rgb = emitted radiance (factor x texture), a unused.
+    *                                Half-float because KHR_materials_emissive_strength lifts it
+    *                                past [0,1]; costs ~33 MB per double-buffered pair at 1080p
+    *   depth               D32      hardware depth, for depth testing only -- never bound as a
+    *                                texture. WebGPU validates a depth-format view against a depth
+    *                                sample type, so consumers reconstruct world positions from the
+    *                                camera distance above instead of sampling this.
     *
     * Both normals are carried because they answer different questions: the shading normal is what
     * lighting and temporal-tap rejection use, while the geometric normal is what a secondary ray
@@ -51,7 +53,8 @@ namespace vkm
             Normal = 0,
             BaseColorRoughness = 1,
             MotionMetallic = 2,
-            Count = 3,
+            Emissive = 3,
+            Count = 4,
         };
 
         static constexpr uint32_t kTargetCount = static_cast<uint32_t>(Target::Count);

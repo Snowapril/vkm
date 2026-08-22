@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/base/logger.h>
 #include <vkm/base/global_variable.h>

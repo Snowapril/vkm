@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Exercises the two PSO-declared descriptor sets end to end, with nothing from sets 0 or 1
 // involved.

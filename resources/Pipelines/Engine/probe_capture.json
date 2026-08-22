@@ -40,6 +40,10 @@
             {
                 "binding": 2,
                 "type": "sampler"
+            },
+            {
+                "binding": 3,
+                "type": "sampled_texture"
             }
         ]
     },

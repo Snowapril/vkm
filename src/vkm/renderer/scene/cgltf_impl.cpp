@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 // Single translation unit holding cgltf's implementation. It lives apart from
 // gltf_importer.cpp so the third-party code can be compiled with the project's

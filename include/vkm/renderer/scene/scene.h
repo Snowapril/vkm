@@ -1,8 +1,9 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #pragma once
 
 #include <vkm/renderer/backend/common/renderer_common.h>
+#include <vkm/renderer/scene/light_table.h>
 #include <vkm/renderer/scene/scene_geometry_pool.h>
 #include <vkm/renderer/scene/scene_model.h>
 
@@ -18,6 +19,7 @@
 namespace vkm
 {
     class VkmCommandBufferBase;
+    class VkmBindlessResourceManagerBase;
     class VkmDriverBase;
     class VkmPipelineStateBase;
     class VkmPipelineStateManager;
@@ -80,7 +82,11 @@ namespace vkm
         * sample's DebugMode).
         */
         uint32_t _debugMode = 0;
-        uint32_t _pad0[2]{ 0, 0 };
+        // offset 120/124: the scene's emissive-triangle light table -- bindless Buffer-array slot
+        // and record count past the header. Overwritten by recordUpdate() from the scene's own
+        // registration, like _materialPoolSlot; a caller never fills them.
+        uint32_t _lightPoolSlot = 0;
+        uint32_t _lightCount = 0;
     };
     static_assert(sizeof(VkmFrameData) == 128, "VkmFrameData must match the shader-side FrameData layout");
 
@@ -315,9 +321,22 @@ namespace vkm
         {
             VkmResourceHandle _baseColor{ VKM_INVALID_RESOURCE_HANDLE };
             VkmResourceHandle _metallicRoughness{ VKM_INVALID_RESOURCE_HANDLE };
+            VkmResourceHandle _emissive{ VKM_INVALID_RESOURCE_HANDLE };
         };
 
         inline uint32_t getMaterialCount() const { return static_cast<uint32_t>(_materials.size()); }
+
+        /*
+        * @brief Sets the directional light's radiance, carried in the light table's header so the
+        * traced passes can sample it.
+        * @details Must precede build() -- the table uploads once. The per-frame direction stays in
+        * VkmFrameData::_lightDirection; radiance is the static half of the pair.
+        */
+        void setDirectionalRadiance(const glm::vec3& radiance);
+
+        // Emissive triangles the built light table holds, past its header. CPU-known after
+        // build(), so tests can assert the gather without a GPU readback.
+        inline uint32_t getLightTriangleCount() const { return _lightTriangleCount; }
 
         /*
         * @brief The textures a material samples, for building a per-draw (set 3) table.
@@ -360,6 +379,10 @@ namespace vkm
             VkmSceneGeometryPool::MeshRange _range{};
             uint32_t _materialIndex = 0;
             VkmSceneAABB _bounds;
+            // Object-space emissive triangles, gathered at addModel while the model still owns
+            // its CPU vertex bytes (the pool clears its own at upload). Expanded per placed
+            // object in build(), where the world transforms are final.
+            std::vector<VkmLightTableTriangle> _emissiveTriangles;
         };
 
         // Sorts _objects by (pipelineId, layout, materialIndex) and emits one batch per run of
@@ -367,6 +390,8 @@ namespace vkm
         // exists so a backend that binds material textures per draw has somewhere to bind them.
         void buildDrawBatches();
         void fillObjectData();
+        bool buildLightTable(VkmDriverBase* driver, VkmBindlessResourceManagerBase* bindlessManager,
+                             std::string* outError);
         // Assigns each batch its word regions and returns the two buffers' sizes in bytes.
         void assignBatchRegions(uint64_t* outVisibleListSize, uint64_t* outArgumentSize);
 
@@ -389,6 +414,11 @@ namespace vkm
 
         VkmResourceHandle _materialBuffer{ VKM_INVALID_RESOURCE_HANDLE };
         uint32_t _materialPoolSlot = INVALID_VALUE32;
+
+        VkmResourceHandle _lightBuffer{ VKM_INVALID_RESOURCE_HANDLE };
+        uint32_t _lightPoolSlot = INVALID_VALUE32;
+        uint32_t _lightTriangleCount = 0;
+        glm::vec3 _directionalRadiance{ 0.0f };
 
         VkmResourceHandle _objectDataBuffer{ VKM_INVALID_RESOURCE_HANDLE };
         VkmResourceHandle _frameDataBuffer{ VKM_INVALID_RESOURCE_HANDLE };

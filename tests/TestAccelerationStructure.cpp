@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include "UnitTestUtils.hpp"
 
@@ -15,6 +15,7 @@
 #include "TestRayQueryShared.hpp"
 #include "TestPathTracerShared.hpp"
 #include "TestIndirectPassShared.hpp"
+#include "TestNeeShared.hpp"
 
 #include <memory>
 
@@ -83,6 +84,22 @@ TEST_CASE("Indirect pass - 1 spp converges to the reference path tracer on Vulka
     // so no shared threshold separates a one-bounce error from the noise on both. This one
     // still does on lavapipe: that sabotage adds ~4.9e-4, which reads about 1.28e-3 there.
     vkmtest::runIndirectConvergenceTest(fixture.driver.get(), /*mseThreshold=*/1.0e-3f);
+}
+
+TEST_CASE("NEE - the area estimator matches the analytic plane on Vulkan" * doctest::timeout(400.0))
+{
+    VulkanAccelerationStructureFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runNeeAnalyticPlaneTest(fixture.driver.get());
+}
+
+TEST_CASE("NEE - the emissive Cornell converges deferred against reference on Vulkan" * doctest::timeout(400.0))
+{
+    VulkanAccelerationStructureFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    // Same shape as Metal's bound (measured floor 8.8e-4 there, see the .mm), plus the
+    // lavapipe systematic-difference headroom the environment-lit Cornell gate carries.
+    vkmtest::runNeeEmissiveCornellTest(fixture.driver.get(), /*mseThreshold=*/2.5e-3f);
 }
 
 #endif // VKM_USE_VULKAN_API

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The Vulkan half of the scene-render coverage that was Metal-only until now.
 //

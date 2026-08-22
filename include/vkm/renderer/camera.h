@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #pragma once
 
@@ -122,6 +122,13 @@ namespace vkm
 
         inline void setRotateSensitivity(float radiansPerViewportHeight) { _rotateSensitivity = radiansPerViewportHeight; }
         inline void setZoomFactorPerScrollUnit(float factor) { _zoomFactor = factor; }
+
+        /*
+        * @brief Points the orbit without input events, for scripted or headless runs.
+        * @param yaw Radians around the vertical axis.
+        * @param pitch Radians above the horizon, clamped to the same range dragging allows.
+        */
+        void setOrientation(float yaw, float pitch);
 
         inline float getDistance() const { return _distance; }
         inline float getYaw() const { return _yaw; }

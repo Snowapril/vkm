@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/scene/gltf_importer.h>
 
@@ -256,6 +256,17 @@ namespace vkm
         {
             outMaterial->_name = source.name != nullptr ? source.name : "";
             outMaterial->_emissiveFactor = glm::make_vec3(source.emissive_factor);
+            // KHR_materials_emissive_strength: the factor itself is clamped to [0,1] by the core
+            // spec, so this extension is the only way an asset expresses a bright emitter.
+            if (source.has_emissive_strength)
+            {
+                outMaterial->_emissiveFactor *= source.emissive_strength.emissive_strength;
+            }
+            // Only MASK carries a cutoff. BLEND is left at 0 (drawn opaque) rather than guessed
+            // at: sorted blending does not exist here, and silently masking a blended surface
+            // would trade one wrong image for another.
+            outMaterial->_alphaCutoff =
+                (source.alpha_mode == cgltf_alpha_mode_mask) ? source.alpha_cutoff : 0.0f;
             outMaterial->_normalImage = imageIndexOf(data, source.normal_texture);
             outMaterial->_emissiveImage = imageIndexOf(data, source.emissive_texture);
 

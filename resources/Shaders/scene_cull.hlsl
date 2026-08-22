@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Frustum-culls one draw batch and writes the survivors as a compacted list of ObjectData indices
 // plus their count.

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The low-spec GI tier's output pass: reads the G-buffer, samples the probe volume, and writes the
 // indirect diffuse radiance the composite consumes.
@@ -29,6 +29,9 @@ VKM_FRAME_CONSTANTS(g_VkmFrame);
 [[vk::binding(3, 2)]] Texture2D    g_Distance      : register(t3, space2);
 [[vk::binding(4, 2)]] SamplerState g_Sampler       : register(s0, space2);
 [[vk::binding(5, 2)]] ConstantBuffer<VkmProbeVolumeConstants> g_Volume : register(b0, space2);
+// One texel per probe, xyz = the authored world offset from its grid position. Same cell
+// addressing as the atlases, so it is a Load at the probe's cell coordinate.
+[[vk::binding(6, 2)]] Texture2D    g_ProbeOffsets  : register(t4, space2);
 
 typedef VkmFullscreenVSOutput VSOutput;
 
@@ -77,8 +80,23 @@ float3 sampleProbeVolume(float3 worldPosition, float3 normal)
         const float3 trilinear = lerp(1.0 - alpha, alpha, float3(offset));
         float weight = trilinear.x * trilinear.y * trilinear.z;
 
-        const float3 probePosition = origin + float3(probeCoord) * spacing;
-        const float3 toProbe = probePosition - worldPosition;
+        // Which probes surround the surface is decided on the regular grid above; where each of
+        // them actually sits is not. An authored offset moves the probe the capture rendered from,
+        // so the visibility test has to measure against the moved position or it compares this
+        // frame's distances to somewhere the probe no longer is.
+        const int2 offsetTexel = int2(probeCoord.y * counts.x + probeCoord.x, probeCoord.z);
+        const float3 probeOffset = g_ProbeOffsets.Load(int3(offsetTexel, 0)).xyz;
+        const float3 probePosition = origin + float3(probeCoord) * spacing + probeOffset;
+        /*
+        * Measured from the BIASED point, not the surface. This is what the bias is for: a probe
+        * stores the distance to the nearest surface in each direction, and for thin two-sided
+        * geometry -- a curtain, a leaf -- that surface IS this one, so a query from the surface
+        * itself sits exactly at the stored depth and the Chebyshev test reads it as occluded by
+        * itself. Stepping off along the normal first puts the query comfortably in front of what
+        * the probe recorded. Biasing only the cell lookup (as this did) fixes which probes are
+        * consulted and none of what they answer.
+        */
+        const float3 toProbe = probePosition - biasedPosition;
         const float distanceToProbe = length(toProbe);
         const float3 directionToProbe = distanceToProbe > 1e-6 ? toProbe / distanceToProbe : normal;
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Fills the G-buffer both GI tiers read (see renderer/gbuffer.h for the channel layout, and
 // vkm_gbuffer.hlsli for the packing this shader and its readers share).
@@ -94,6 +94,7 @@ struct PSOutput
     float4 normal : SV_TARGET0;             // xy = shading normal, zw = geometric normal
     float4 baseColorRoughness : SV_TARGET1; // rgb = base colour, a = roughness
     float4 motionMetallic : SV_TARGET2;     // xy = motion (UV), z = metallic, w = camera distance
+    float4 emissive : SV_TARGET3;           // rgb = emitted radiance (factor x texture), a unused
 };
 
 float3 loadFloat3(uint slot, uint wordBase)
@@ -189,13 +190,40 @@ PSOutput PSMain(VSOutput input)
     }
 
     // PositionOnly geometry has no vertex normal, so the two normals coincide there.
-    const float3 shadingNormal = (dot(input.worldNormal, input.worldNormal) > 0.0)
-                                     ? normalize(input.worldNormal)
-                                     : geometricNormal;
+    float3 shadingNormal = (dot(input.worldNormal, input.worldNormal) > 0.0)
+                               ? normalize(input.worldNormal)
+                               : geometricNormal;
+    // Into the geometric normal's hemisphere, which is already camera-facing: the back side of
+    // thin two-sided geometry (curtains, leaves) otherwise records a normal pointing away from
+    // every viewer, and the deferred pass shades it black. Aligning against the geometric normal
+    // rather than the view direction leaves grazing front faces untouched -- their vertex
+    // normals already share the face's hemisphere. Same two-sided convention the traced path
+    // applies to its own hits.
+    if (dot(shadingNormal, geometricNormal) < 0.0)
+    {
+        shadingNormal = -shadingNormal;
+    }
 
     const VkmMaterial material = vkmLoadMaterial(g_FrameData[0].materialPoolSlot, input.materialIndex);
     const float4 baseColor = vkmSampleBaseColor(material, input.uv);
     const float2 metallicRoughness = vkmSampleMetallicRoughness(material, input.uv);
+    const float3 emissive = vkmSampleEmissive(material, input.uv);
+
+    /*
+    * glTF alphaMode MASK. A masked material's base-colour alpha is a stencil, not an opacity:
+    * a leaf or vine is a rectangle whose texture is transparent everywhere the plant is not.
+    * Without this test the whole rectangle is drawn, and because such a texture's hidden texels
+    * are near-black, it lands as a hard-edged dark card over the wall behind it. Cutoff 0 means
+    * the material is not masked, so the test costs opaque geometry nothing.
+    *
+    * After every sample, not before: the WebGPU branch samples with an implicit LOD, which WGSL
+    * only allows in uniform control flow, and a discard above them puts them downstream of a
+    * divergent branch.
+    */
+    if (baseColor.a < material.alphaCutoff)
+    {
+        discard;
+    }
 
     PSOutput output;
     output.normal = vkmPackGBufferNormals(shadingNormal, geometricNormal);
@@ -207,5 +235,6 @@ PSOutput PSMain(VSOutput input)
     output.motionMetallic = float4(vkmComputeMotionVector(input.currentClip, input.previousClip),
                                    metallicRoughness.x,
                                    distance(input.worldPosition, g_VkmFrame.cameraPositionWorld.xyz));
+    output.emissive = float4(emissive, 0.0);
     return output;
 }

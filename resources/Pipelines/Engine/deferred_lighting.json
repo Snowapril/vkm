@@ -19,7 +19,8 @@
         { "binding": 1, "type": "sampled_texture" },
         { "binding": 2, "type": "sampled_texture" },
         { "binding": 3, "type": "sampler" },
-        { "binding": 4, "type": "uniform_buffer" }
+        { "binding": 4, "type": "uniform_buffer" },
+        { "binding": 5, "type": "sampled_texture" }
     ],
     "shaders": {
         "vertex": { "filepath": "deferred_lighting.hlsl", "entry_point": "VSMain" },

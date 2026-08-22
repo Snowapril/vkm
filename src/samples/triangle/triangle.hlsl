@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Bindless vertex-pulling triangle shader: the pipeline declares no vertex input
 // attributes at all (see renderpass.json) -- SV_VertexID is used to fetch the real index

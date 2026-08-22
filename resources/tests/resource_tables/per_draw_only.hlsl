@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The companion to resource_tables.hlsl: a compute shader whose only resources live in descriptor
 // set 3, with NO set 2 declared at all. That is the shape a G-buffer pass wanting only per-material

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/probe_volume_updater.h>
 
@@ -58,6 +58,14 @@ namespace vkm
     VkmProbeVolumeUpdater::~VkmProbeVolumeUpdater()
     {
         destroy();
+    }
+
+    void VkmProbeVolumeUpdater::invalidateProbe(uint32_t probeIndex)
+    {
+        if (probeIndex < _everRefreshed.size())
+        {
+            _everRefreshed[probeIndex] = false;
+        }
     }
 
     uint32_t VkmProbeVolumeUpdater::getRoundLengthInFrames() const

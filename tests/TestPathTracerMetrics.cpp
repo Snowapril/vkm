@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The MSE / RelMSE comparison utility Phase 6 exists to make later phases quotable with. No GPU:
 // the path tracer cannot produce an image without a device, so the metric is exercised from

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/probe_volume.h>
 
@@ -9,7 +9,10 @@
 
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
+#include <glm/gtx/component_wise.hpp>
 #include <glm/trigonometric.hpp>
+
+#include <algorithm>
 
 namespace vkm
 {
@@ -54,6 +57,12 @@ namespace vkm
         return VkmFormat::R16G16B16A16_SFLOAT;
     }
 
+    VkmFormat VkmProbeVolume::getProbeOffsetFormat()
+    {
+        // Full precision, unlike the atlases: these are world positions, not radiance.
+        return VkmFormat::R32G32B32A32_SFLOAT;
+    }
+
     VkmProbeVolume::~VkmProbeVolume()
     {
         destroy();
@@ -81,6 +90,33 @@ namespace vkm
             destroy();
             return false;
         }
+
+        // Zero-filled from the start, and always created: the lookup binds this unconditionally,
+        // so an unedited volume is a texture of zeroes rather than a branch in the shader.
+        _probeOffsets.assign(getProbeCount(), glm::vec4(0.0f));
+        VkmTextureInfo offsetInfo{};
+        offsetInfo._flags = static_cast<VkmResourceCreateInfo>(
+            static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
+            static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst));
+        offsetInfo._extent = glm::uvec3(getProbeOffsetExtent(), 1);
+        offsetInfo._numMipLevels = 1;
+        offsetInfo._numArrayLayers = 1;
+        offsetInfo._format = getProbeOffsetFormat();
+        offsetInfo._debugName = "VkmProbeOffsets";
+        VkmTexture* offsets = _driver->newTexture(offsetInfo);
+        if (offsets == nullptr)
+        {
+            VKM_DEBUG_ERROR("Failed to create the probe offset texture");
+            destroy();
+            return false;
+        }
+        _offsetTexture = offsets->getHandle();
+        if (!uploadProbeOffsets())
+        {
+            VKM_DEBUG_ERROR("Failed to clear the probe offset texture");
+            destroy();
+            return false;
+        }
         return true;
     }
 
@@ -91,6 +127,14 @@ namespace vkm
             return;
         }
         releaseSet(_set);
+        // Released the same way the atlases are, and for the same reason: see releaseSet().
+        if (_offsetTexture.isValid())
+        {
+            _driver->getRenderResourcePool()->releaseResource(_offsetTexture);
+            _offsetTexture = VKM_INVALID_RESOURCE_HANDLE;
+        }
+        _probeOffsets.clear();
+        _hasProbeOffsets = false;
         _driver = nullptr;
         _descriptor = Descriptor{};
     }
@@ -109,10 +153,48 @@ namespace vkm
                           probeIndex / (countX * countY));
     }
 
-    glm::vec3 VkmProbeVolume::getProbePosition(uint32_t probeIndex) const
+    glm::vec3 VkmProbeVolume::getProbeGridPosition(uint32_t probeIndex) const
     {
         const glm::uvec3 coord = getProbeCoord(probeIndex);
         return _descriptor._origin + glm::vec3(coord) * _descriptor._spacing;
+    }
+
+    glm::vec3 VkmProbeVolume::getProbePosition(uint32_t probeIndex) const
+    {
+        return getProbeGridPosition(probeIndex) + getProbeOffset(probeIndex);
+    }
+
+    void VkmProbeVolume::setProbeOffset(uint32_t probeIndex, const glm::vec3& offset)
+    {
+        if (probeIndex >= _probeOffsets.size())
+        {
+            VKM_DEBUG_ERROR("setProbeOffset was given an index outside the volume");
+            return;
+        }
+        _probeOffsets[probeIndex] = glm::vec4(offset, 0.0f);
+        _hasProbeOffsets = _hasProbeOffsets || glm::dot(offset, offset) > 0.0f;
+    }
+
+    glm::vec3 VkmProbeVolume::getProbeOffset(uint32_t probeIndex) const
+    {
+        return probeIndex < _probeOffsets.size() ? glm::vec3(_probeOffsets[probeIndex])
+                                                : glm::vec3(0.0f);
+    }
+
+    void VkmProbeVolume::clearProbeOffsets()
+    {
+        std::fill(_probeOffsets.begin(), _probeOffsets.end(), glm::vec4(0.0f));
+        _hasProbeOffsets = false;
+    }
+
+    bool VkmProbeVolume::uploadProbeOffsets()
+    {
+        if (_driver == nullptr || !_offsetTexture.isValid())
+        {
+            return false;
+        }
+        return _driver->uploadToTexture(_offsetTexture, _probeOffsets.data(),
+                                        _probeOffsets.size() * sizeof(glm::vec4));
     }
 
     uint32_t VkmProbeVolume::irradianceCellSize() const
@@ -145,6 +227,13 @@ namespace vkm
         return glm::uvec2(cellsX * distanceCellSize(), _descriptor._probeCounts.z * distanceCellSize());
     }
 
+    glm::uvec2 VkmProbeVolume::getProbeOffsetExtent() const
+    {
+        // The atlas cell layout with a one-texel cell: probeCellCoord() addresses this directly.
+        return glm::uvec2(_descriptor._probeCounts.x * _descriptor._probeCounts.y,
+                          _descriptor._probeCounts.z);
+    }
+
     glm::uvec2 VkmProbeVolume::getIrradianceProbeTexelOrigin(uint32_t probeIndex) const
     {
         return probeCellCoord(probeIndex) * irradianceCellSize();
@@ -158,13 +247,18 @@ namespace vkm
     VkmResourceHandle VkmProbeVolume::getIrradianceTexture() const { return _set._irradiance; }
     VkmResourceHandle VkmProbeVolume::getDistanceTexture() const { return _set._distance; }
 
-    VkmProbeVolumeConstants VkmProbeVolume::makeConstants(float normalBias, float hysteresis) const
+    VkmProbeVolumeConstants VkmProbeVolume::makeConstants(float normalBiasFraction, float hysteresis) const
     {
         VkmProbeVolumeConstants constants{};
         constants._originAndSpacingX =
             glm::vec4(_descriptor._origin, _descriptor._spacing.x);
         constants._spacingYZ = glm::vec4(_descriptor._spacing.y, _descriptor._spacing.z, 0.0f, 0.0f);
         constants._probeCounts = glm::uvec4(_descriptor._probeCounts, 0u);
+        // Scale-relative: the shader gets a world distance, but it is derived from this volume's
+        // own spacing rather than assumed. The smallest axis, because the bias must clear the
+        // tightest cell without stepping past its neighbour.
+        const float normalBias =
+            normalBiasFraction * glm::compMin(glm::abs(_descriptor._spacing));
         constants._atlasParams = glm::vec4(static_cast<float>(_descriptor._irradianceResolution),
                                            static_cast<float>(_descriptor._distanceResolution),
                                            normalBias, hysteresis);

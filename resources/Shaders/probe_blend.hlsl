@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Turns one probe's cube capture into atlas contents: integrates the capture into an octahedral
 // map and blends it into the previous frame's values.

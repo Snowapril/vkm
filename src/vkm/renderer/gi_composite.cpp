@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/gi_composite.h>
 
@@ -18,6 +18,7 @@ namespace vkm
             case VkmGiDebugView::Metallic:        return "Metallic";
             case VkmGiDebugView::Motion:          return "Motion vectors";
             case VkmGiDebugView::CameraDistance:  return "Camera distance";
+            case VkmGiDebugView::Emissive:        return "Emissive";
             case VkmGiDebugView::Count:           break;
         }
         return "Unknown";

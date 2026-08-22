@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/backend/vulkan/vulkan_pipeline_state.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>

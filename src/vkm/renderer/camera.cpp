@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/camera.h>
 
@@ -228,6 +228,13 @@ namespace vkm
                 return;
         }
 
+        applyToCamera();
+    }
+
+    void VkmOrbitCameraController::setOrientation(float yaw, float pitch)
+    {
+        _yaw = yaw;
+        _pitch = std::clamp(pitch, -1.5f, 1.5f);
         applyToCamera();
     }
 

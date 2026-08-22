@@ -53,6 +53,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/memory_report.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/vertex_layout.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_model.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/scene/light_table.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/gltf_importer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/image_loader.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/camera.h
@@ -61,6 +62,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/indirect_pass.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/restir.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/gi_composite.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/gi_system.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/probe_volume.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/screenshot.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/probe_volume_updater.h
@@ -124,6 +126,8 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/indirect_pass.cpp
     ${SRC_DIR}/vkm/renderer/restir.cpp
     ${SRC_DIR}/vkm/renderer/gi_composite.cpp
+    ${SRC_DIR}/vkm/renderer/gi_system.cpp
+    ${SRC_DIR}/vkm/renderer/scene/light_table.cpp
     ${SRC_DIR}/vkm/renderer/probe_volume.cpp
     ${SRC_DIR}/vkm/renderer/probe_volume_updater.cpp
     ${SRC_DIR}/vkm/renderer/scene/stb_image_impl.cpp

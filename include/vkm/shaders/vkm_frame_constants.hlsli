@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Shader-side mirror of the engine-global per-frame constant set (set 1). See
 // renderer/backend/common/frame_constants.h -- the single source of truth for the struct

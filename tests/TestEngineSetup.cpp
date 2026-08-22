@@ -450,7 +450,12 @@ TEST_CASE("VkmRenderResourcePool - the Transient sub-pool is tracked independent
     driver.destroy();
 }
 
-TEST_CASE("captureMemorySnapshot aggregates the CPU tracker and the GPU pool into one sample") {
+// Its own budget, far above the default: the snapshot copies the whole tag table under
+// MemoryTracker's global mutex (TODO.md), so its duration grows with every allocation prior
+// tests made in the process -- 5 s standalone, past 30 s at the end of a full suite. The budget
+// is a hang detector here, not a performance bound; the cost itself is the TODO entry.
+TEST_CASE("captureMemorySnapshot aggregates the CPU tracker and the GPU pool into one sample" *
+          doctest::timeout(120.0)) {
     FakeDriver driver;
     REQUIRE(driver.initialize(nullptr).code == vkm::VkmInitResultCode::Success);
     vkm::VkmRenderResourcePool* pool = driver.getRenderResourcePool();

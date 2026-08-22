@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The GI sample: the first application to drive the deferred chain end to end, and the first place
 // the low-spec GI tier appears on screen.
@@ -23,10 +23,12 @@
 #include <glm/gtx/component_wise.hpp>
 #include <glm/geometric.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/component_wise.hpp>
 #include <glm/matrix.hpp>
 
 #if defined(VKM_ENABLE_IMGUI)
 #include <imgui.h>
+#include <ImGuizmo.h>
 #endif
 
 #include <vkm/base/common.h>
@@ -48,10 +50,7 @@
 #include <vkm/renderer/engine.h>
 #include <vkm/renderer/gbuffer.h>
 #include <vkm/renderer/gi_composite.h>
-#include <vkm/renderer/path_tracer.h>
-#include <vkm/renderer/probe_volume.h>
-#include <vkm/renderer/probe_volume_updater.h>
-#include <vkm/renderer/restir.h>
+#include <vkm/renderer/gi_system.h>
 #include <vkm/renderer/screenshot.h>
 
 #include <cstdio>
@@ -105,6 +104,13 @@ VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_screenshot_frame, 600u);
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_debug_view, 0u);
 // Off switch for the contact term, so a screenshot run can A/B it against the probes alone.
 VKM_GLOBAL_VARIABLE(bool, gv_gi_ssgi, true);
+// Draw the probe grid as shaded spheres. Settable here as well as through the UI so a screenshot
+// run can capture the placement view without anyone touching the window.
+VKM_GLOBAL_VARIABLE(bool, gv_gi_show_probes, false);
+// How far a probe lookup steps off its surface, as a fraction of the probe spacing. Exposed
+// because it is the knob thin geometry needs: at 0 a curtain self-occludes against its own
+// probe's recorded depth and renders black.
+VKM_GLOBAL_VARIABLE(float, gv_gi_probe_normal_bias, 0.25f);
 // Probes per axis. More is better lit and slower to converge, a round being probeCount/budget
 // frames. Y is lower than X and Z because scenes are wider than they are tall.
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_x, 20u);
@@ -114,6 +120,10 @@ VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_z, 20u);
 // is where a probe volume is actually judged -- an exterior view can look right while the interior
 // is black, which is exactly how the scene-scale bug got past a screenshot.
 VKM_GLOBAL_VARIABLE(float, gv_gi_camera_distance, 1.0f);
+// Initial orbit orientation in degrees, so a headless screenshot run can aim the camera at a
+// reported artifact instead of hoping the default orbit sweeps past it.
+VKM_GLOBAL_VARIABLE(float, gv_gi_camera_yaw, 34.4f);   // the controller's 0.6 rad default
+VKM_GLOBAL_VARIABLE(float, gv_gi_camera_pitch, 17.2f); // the controller's 0.3 rad default
 // Which GI technique fills the indirect target: 0 = probe volume (+SSGI), 1 = ReSTIR. Clamped to
 // 0 on a device without ray tracing -- the selection is a runtime capability question, not a
 // build-time one (restir.md section 5).
@@ -195,7 +205,15 @@ public:
     virtual void postDriverReady(VkmEngine* engine) override final
     {
         _engine = engine;
-        _cameraController.registerTo(engine->getInputHandler());
+        _showProbes = gv_gi_show_probes.get();
+        // A screenshot run is a measurement, so it must not be steerable: with the controller
+        // subscribed, any stray cursor drag over the window during the run moves the camera and
+        // two "identical" captures disagree -- which is exactly what made an earlier A/B
+        // comparison meaningless. The gv camera flags are the only aim in that mode.
+        if (gv_gi_screenshot.get().empty())
+        {
+            _cameraController.registerTo(engine->getInputHandler());
+        }
         engine->setActiveCamera(&_camera);
 
         // Every pass this sample runs is an engine PSO, already loaded from the engine cache --
@@ -209,12 +227,11 @@ public:
             _gbufferPipelines[i] = manager->getPipelineState(name, VkmPipelineStateOrigin::Engine);
         }
         _lightingPipeline = manager->getPipelineState("deferred_lighting_pso", VkmPipelineStateOrigin::Engine);
-        _probeLightingPipeline = manager->getPipelineState("probe_lighting_pso", VkmPipelineStateOrigin::Engine);
-        _ssgiPipeline = manager->getPipelineState("ssgi_pso", VkmPipelineStateOrigin::Engine);
         _compositePipeline = manager->getPipelineState("gi_composite_pso", VkmPipelineStateOrigin::Engine);
         _tonemapPipeline = manager->getPipelineState("tonemap_pso", VkmPipelineStateOrigin::Engine);
-        if (_lightingPipeline == nullptr || _probeLightingPipeline == nullptr || _ssgiPipeline == nullptr ||
-            _compositePipeline == nullptr || _tonemapPipeline == nullptr)
+        _probeDebugPipeline = manager->getPipelineState("probe_debug_pso", VkmPipelineStateOrigin::Engine);
+        if (_lightingPipeline == nullptr || _compositePipeline == nullptr || _tonemapPipeline == nullptr ||
+            _probeDebugPipeline == nullptr)
         {
             VKM_DEBUG_ERROR("The GI sample needs the engine PSO cache; run a build that generates it");
             return;
@@ -229,10 +246,7 @@ public:
         VkmBuffer* lightBuffer = createUniformBuffer(driver, sizeof(LightConstants), "GiLightConstants");
         VkmBuffer* tonemapBuffer = createUniformBuffer(driver, sizeof(TonemapConstants), "GiTonemapConstants");
         VkmBuffer* compositeBuffer = createUniformBuffer(driver, sizeof(VkmGiCompositeConstants), "GiCompositeConstants");
-        VkmBuffer* volumeBuffer = createUniformBuffer(driver, sizeof(VkmProbeVolumeConstants), "GiProbeVolumeConstants");
-        VkmBuffer* ssgiBuffer = createUniformBuffer(driver, sizeof(VkmSsgiConstants), "GiSsgiConstants");
-        if (lightBuffer == nullptr || tonemapBuffer == nullptr || compositeBuffer == nullptr ||
-            volumeBuffer == nullptr || ssgiBuffer == nullptr)
+        if (lightBuffer == nullptr || tonemapBuffer == nullptr || compositeBuffer == nullptr)
         {
             VKM_DEBUG_ERROR("Failed to create the GI sample's uniform buffers");
             return;
@@ -240,8 +254,6 @@ public:
         _lightBuffer = lightBuffer->getHandle();
         _tonemapBuffer = tonemapBuffer->getHandle();
         _compositeBuffer = compositeBuffer->getHandle();
-        _volumeBuffer = volumeBuffer->getHandle();
-        _ssgiBuffer = ssgiBuffer->getHandle();
 
         for (uint32_t frame = 0; frame < FRAME_BUFFER_COUNT; ++frame)
         {
@@ -265,29 +277,29 @@ public:
         driver->uploadToBuffer(_tonemapBuffer, &tonemap, sizeof(tonemap));
         // Uploaded once the scene's scale is known; see loadScene.
 
-        _ssgiEnabled = gv_gi_ssgi.get();
         if (gv_gi_debug_view.get() < static_cast<uint32_t>(VkmGiDebugView::Count))
         {
             _debugView = static_cast<VkmGiDebugView>(gv_gi_debug_view.get());
         }
 
-        // The second technique needs ray tracing; on a device without it the switcher never
-        // appears and the probe tier is the only entry. Loaded exactly once -- a second load of
-        // the same directory destroys pipelines live passes still hold pointers to.
-        if ((driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::RayTracing) != 0)
+        // The engine owns both GI techniques and the switch between them; the sample only maps
+        // its command-line surface onto the system's descriptor and options.
+        VkmGiSystemDescriptor giDescriptor{};
+        giDescriptor._probeCounts =
+            glm::uvec3(gv_gi_probes_x.get(), gv_gi_probes_y.get(), gv_gi_probes_z.get());
+        giDescriptor._probeBudget = 32;
+        giDescriptor._probeHysteresis = 0.9f;
+        giDescriptor._probeNormalBiasFraction = gv_gi_probe_normal_bias.get();
+        giDescriptor._probeCullView = kProbeCullView;
+        std::string giError;
+        if (!_gi.initialize(driver, manager, &_gbuffer, giDescriptor, &giError))
         {
-            std::string rtError;
-            if (vkmLoadRayTracingPipelineStates(manager, &rtError))
-            {
-                _rtPipelinesLoaded = true;
-            }
-            else
-            {
-                VKM_DEBUG_ERROR(("ReSTIR unavailable: " + rtError).c_str());
-            }
+            VKM_DEBUG_ERROR(("Failed to create the GI system: " + giError).c_str());
+            return;
         }
-        _technique = gv_gi_technique.get();
-        _misBlend = gv_gi_restir_mis.get();
+        _gi.options()._technique = static_cast<VkmGiTechnique>(gv_gi_technique.get() != 0 ? 1 : 0);
+        _gi.options()._ssgi = gv_gi_ssgi.get();
+        _gi.options()._restirMisBlend = gv_gi_restir_mis.get();
 
         loadScene(gv_gi_model_path.get());
     }
@@ -306,16 +318,6 @@ public:
             destroyTables(retired._tables);
         }
         _retiredTables.clear();
-        if (_restir != nullptr)
-        {
-            _restir->destroy(_engine->getDriver());
-            _restir.reset();
-        }
-        for (RetiredRestir& retired : _retiredRestir)
-        {
-            retired._pass->destroy(_engine->getDriver());
-        }
-        _retiredRestir.clear();
         destroyUpscaler(_upscaler);
         _upscaler = nullptr;
         for (RetiredUpscaler& retired : _retiredUpscalers)
@@ -323,8 +325,7 @@ public:
             destroyUpscaler(retired._upscaler);
         }
         _retiredUpscalers.clear();
-        _updater.destroy();
-        _volume.destroy();
+        _gi.destroy();
         _gbuffer.destroy();
         for (VkmSceneMaterialTables& tables : _gbufferMaterialTables)
         {
@@ -339,10 +340,7 @@ public:
         {
             return;
         }
-        if (!_restirAvailable)
-        {
-            _technique = 0; // the runtime capability gate, not an #ifdef
-        }
+        // The technique's own capability gate lives in VkmGiSystem now, clamped at record().
         _lastDeltaTime = static_cast<float>(deltaTime);
         retireTables();
         ensureTargets();
@@ -382,18 +380,8 @@ public:
         VkmFrameData frameData;
         frameData._lightDirection = glm::vec4(glm::normalize(kLightDirection), 0.0f);
 
-        const bool restirActive = _technique == 1 && _restirAvailable && _restir != nullptr;
-
-        // 1. The probe refresh owns cull view 1 and records its own update, cull, capture and blend.
-        // Skipped entirely while ReSTIR fills the indirect target: the probes would spend a frame's
-        // rasterization feeding a lookup nothing runs, and they reconverge over a round anyway
-        // when the technique switches back.
-        if (!restirActive)
-        {
-            _updater.record(renderGraph, &_scene, frameData);
-        }
-
-        // 2. The camera's own update and cull, in view 0.
+        // 1. The camera's own update and cull, in view 0. (The GI system records its own
+        // subgraphs — including the probe refresh's second cull view — from record() below.)
         const uint32_t frameIndex = renderGraph->frameIndex();
         VkmFrameData cameraFrameData = frameData;
         vkmExtractFrustumPlanes(_camera.getViewProjection(), cameraFrameData._frustumPlanes);
@@ -402,15 +390,7 @@ public:
         referenceScene(updateSubGraph, _scene, VkmScene::ReferencePhase::Update);
         updateSubGraph->addReferencedResource(_compositeBuffer, VkmResourceAccess::TransferWrite);
         updateSubGraph->addReferencedResource(_compositeStaging[frameIndex], VkmResourceAccess::TransferRead);
-        if (restirActive)
-        {
-            updateSubGraph->addReferencedResource(_restir->getLightingConstantBuffer(),
-                                                  VkmResourceAccess::TransferWrite);
-            updateSubGraph->addReferencedResource(_restir->getLightingStagingBuffer(frameIndex),
-                                                  VkmResourceAccess::TransferRead);
-        }
-        updateSubGraph->setTransferCallback([this, frameIndex, cameraFrameData,
-                                             restirActive](VkmCommandBufferBase* commandBuffer) {
+        updateSubGraph->setTransferCallback([this, frameIndex, cameraFrameData](VkmCommandBufferBase* commandBuffer) {
             _scene.recordUpdate(commandBuffer, frameIndex, cameraFrameData, kCameraCullView);
             // The composite's settings ride a buffer whose contents change per frame while the
             // table binding it stays immutable, which is how a per-pass table is meant to be used.
@@ -419,11 +399,6 @@ public:
             composite._params = glm::vec4(_indirectIntensity, static_cast<float>(_debugView), 0.0f, 0.0f);
             _compositeStagingPointers[frameIndex]->writeDirect(0, &composite, sizeof(composite));
             commandBuffer->copyBuffer(_compositeStaging[frameIndex], _compositeBuffer, 0, 0, sizeof(composite));
-            if (restirActive)
-            {
-                _restir->recordUpdateLightingConstants(commandBuffer, frameIndex, makeRestirOptions(),
-                                                       _restirDebugView, _misBlend ? 1.0f : 0.0f);
-            }
         });
 
         VkmRenderComputeSubGraph* cullSubGraph = renderGraph->beginComputeSubGraph("GiSceneCull");
@@ -460,40 +435,9 @@ public:
         // attachments over.
         recordFullscreen(renderGraph, "GiDirectLighting", _directTarget, _lightingPipeline, _tables._lighting);
 
-        // The technique boundary: exactly one producer fills _indirectTarget, and the composite
-        // neither knows nor cares which -- that is restir.md section 5's interface, and this
-        // branch is its second consumer.
-        if (restirActive)
-        {
-            recordRestir(renderGraph);
-        }
-        else
-        {
-            recordFullscreen(renderGraph, "GiProbeLighting", _indirectTarget, _probeLightingPipeline,
-                             _tables._probeLighting);
-        }
-
-        // The contact term is added on top of the probe result, in the same target: its PSO blends
-        // one-to-one and the pass loads rather than discards, so it can only ever brighten what the
-        // probes produced. Keeping it strictly additive is what stops it becoming a second GI
-        // technique with screen-space's view dependence baked in (restir.md section 5).
-        if (_ssgiEnabled && !restirActive)
-        {
-            VkmFrameBufferDescriptor ssgiFb = makeFullscreenFb(_renderExtent, _indirectTarget);
-            ssgiFb._renderPass._colorAttachments[0]._loadAction = VkmLoadAction::Load;
-            VkmRenderGraphicsSubGraph* ssgiSubGraph = renderGraph->beginGraphicsSubGraph(ssgiFb, "GiSsgi");
-            ssgiSubGraph->addReferencedResource(_indirectTarget, VkmResourceAccess::ColorAttachmentWrite);
-            std::vector<VkmResourceAccessDeclaration> ssgiBound;
-            _tables._ssgi->collectReferencedResources(&ssgiBound);
-            ssgiSubGraph->addReferencedResources(ssgiBound);
-            VkmPipelineStateBase* ssgiPipeline = _ssgiPipeline;
-            VkmResourceTableBase* ssgiTable = _tables._ssgi;
-            ssgiSubGraph->setRenderCallback([ssgiPipeline, ssgiTable](VkmCommandBufferBase* commandBuffer) {
-                commandBuffer->bindPipeline(ssgiPipeline);
-                commandBuffer->bindResourceTable(ssgiTable);
-                commandBuffer->draw(3, 1, 0, 0);
-            });
-        }
+        // The engine's GI fills its indirect target with whichever technique is selected; the
+        // composite below consumes it without knowing which (restir.md section 5).
+        _gi.record(renderGraph, frameData, frameIndex);
 
         recordFullscreen(renderGraph, "GiComposite", _compositeTarget, _compositePipeline, _tables._composite);
 
@@ -530,6 +474,13 @@ public:
             commandBuffer->draw(3, 1, 0, 0);
         });
 
+        // 6. The probe placement view, over the tone-mapped image. Not into the composite target:
+        // these are UI, and tone mapping them would darken the very irradiance they display.
+        if (_showProbes)
+        {
+            recordProbeDebug(renderGraph, backBuffer, "GiProbeDebug");
+        }
+
         // The backbuffer cannot be read back (Metal keeps framebufferOnly on the drawable), so a
         // screenshot frame tone-maps a second time into a target this sample owns. Only on that
         // one frame -- this is a debugging path, not a permanent second pass.
@@ -545,13 +496,17 @@ public:
                 commandBuffer->bindResourceTable(table);
                 commandBuffer->draw(3, 1, 0, 0);
             });
+            // The probe view has to be drawn again here, over this target: it is not tone mapped
+            // from anything, so a screenshot would otherwise never show it.
+            if (_showProbes)
+            {
+                recordProbeDebug(renderGraph, _screenshotTarget, "GiScreenshotProbeDebug");
+            }
             _screenshotPending = true;
         }
 
         _gbuffer.advanceFrame();
-        // The restir pass's tables come in pairs selected by how often the G-buffer has flipped
-        // since the pass was built; ensureTargets resets both together.
-        _restirParity ^= 1u;
+        _gi.advanceFrame();
     }
 
 private:
@@ -562,15 +517,14 @@ private:
     struct Tables
     {
         VkmResourceTableBase* _lighting = nullptr;
-        VkmResourceTableBase* _probeLighting = nullptr;
-        VkmResourceTableBase* _ssgi = nullptr;
         VkmResourceTableBase* _composite = nullptr;
         VkmResourceTableBase* _tonemap = nullptr;
+        VkmResourceTableBase* _probeDebug = nullptr;
 
         bool isComplete() const
         {
-            return _lighting != nullptr && _probeLighting != nullptr && _ssgi != nullptr &&
-                   _composite != nullptr && _tonemap != nullptr;
+            return _lighting != nullptr && _composite != nullptr && _tonemap != nullptr &&
+                   _probeDebug != nullptr;
         }
     };
 
@@ -580,13 +534,6 @@ private:
     {
         uint64_t _retiredAtFrame = 0;
         Tables _tables;
-    };
-
-    // Same rule for the restir pass, retired whole: its destroy() deletes its tables immediately.
-    struct RetiredRestir
-    {
-        uint64_t _retiredAtFrame = 0;
-        std::unique_ptr<VkmRestirPass> _pass;
     };
 
     // Same delay for a retired upscaler: its backend object is referenced by in-flight command
@@ -628,64 +575,10 @@ private:
         });
     }
 
-    VkmRestirOptions makeRestirOptions() const
-    {
-        VkmRestirOptions options{};
-        // The engine's only light is directional and the traced passes see emissive geometry and
-        // the environment only (restir.md section 12), so the environment is what lights ReSTIR's
-        // indirect term until an area-light representation exists.
-        options._environmentRadiance = glm::vec3(_environmentRadiance);
-        options._temporalResampling = true;
-        options._spatialResampling = true;
-        // Scaled with the resolution, per the option's own guidance (roughly 30 px at 1080p).
-        // Render extent: the radius is measured in G-buffer pixels, not display ones.
-        options._neighbourRadius = std::max(8.0f, static_cast<float>(_renderExtent.x) * (30.0f / 1920.0f));
-        return options;
-    }
-
-    // ReSTIR's half of the frame: resample in compute, then shade the reservoirs into the
-    // indirect target. The traced passes read the scene through sets 0/1 plus the TLAS, so the
-    // compute subgraph declares the same Draw-phase set the G-buffer draw does.
-    void recordRestir(VkmRenderGraph* renderGraph)
-    {
-        VkmRenderComputeSubGraph* resampleSubGraph = renderGraph->beginComputeSubGraph("GiRestir");
-        referenceScene(resampleSubGraph, _scene, VkmScene::ReferencePhase::Draw);
-        resampleSubGraph->addReferencedResource(_scene.getTopLevelAccelerationStructure(),
-                                                VkmResourceAccess::AccelerationStructureShaderRead);
-        for (uint32_t i = 0; i < VkmGBuffer::kTargetCount; ++i)
-        {
-            resampleSubGraph->addReferencedResource(_gbuffer.getTexture(static_cast<VkmGBuffer::Target>(i)),
-                                                    VkmResourceAccess::ShaderSampledRead);
-            resampleSubGraph->addReferencedResource(_gbuffer.getPrevTexture(static_cast<VkmGBuffer::Target>(i)),
-                                                    VkmResourceAccess::ShaderSampledRead);
-        }
-        resampleSubGraph->addReferencedResource(_restir->getReservoirBuffer(),
-                                                VkmResourceAccess::ShaderStorageReadWrite);
-        resampleSubGraph->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
-            _restir->recordResample(commandBuffer, makeRestirOptions(), _restirParity);
-        });
-
-        VkmRenderGraphicsSubGraph* lightingSubGraph =
-            renderGraph->beginGraphicsSubGraph(makeFullscreenFb(_renderExtent, _indirectTarget), "GiRestirLighting");
-        lightingSubGraph->addReferencedResource(_indirectTarget, VkmResourceAccess::ColorAttachmentWrite);
-        for (uint32_t i = 0; i < VkmGBuffer::kTargetCount; ++i)
-        {
-            lightingSubGraph->addReferencedResource(_gbuffer.getTexture(static_cast<VkmGBuffer::Target>(i)),
-                                                    VkmResourceAccess::ShaderSampledRead);
-        }
-        lightingSubGraph->addReferencedResource(_restir->getReservoirBuffer(),
-                                                VkmResourceAccess::ShaderStorageReadWrite);
-        lightingSubGraph->addReferencedResource(_restir->getLightingConstantBuffer(),
-                                                VkmResourceAccess::ConstantBufferRead);
-        lightingSubGraph->setRenderCallback([this](VkmCommandBufferBase* commandBuffer) {
-            _restir->recordLighting(commandBuffer, _restirParity);
-        });
-    }
-
     void destroyTables(Tables& tables)
     {
-        for (VkmResourceTableBase** table :
-             { &tables._lighting, &tables._probeLighting, &tables._ssgi, &tables._composite, &tables._tonemap })
+        for (VkmResourceTableBase** table : { &tables._lighting, &tables._composite, &tables._tonemap,
+                                              &tables._probeDebug })
         {
             if (*table != nullptr)
             {
@@ -704,14 +597,6 @@ private:
             {
                 destroyTables(_retiredTables[i]._tables);
                 _retiredTables.erase(_retiredTables.begin() + static_cast<ptrdiff_t>(i));
-            }
-        }
-        for (size_t i = _retiredRestir.size(); i-- > 0;)
-        {
-            if (_frameCounter >= _retiredRestir[i]._retiredAtFrame + FRAME_BUFFER_COUNT)
-            {
-                _retiredRestir[i]._pass->destroy(_engine->getDriver());
-                _retiredRestir.erase(_retiredRestir.begin() + static_cast<ptrdiff_t>(i));
             }
         }
         for (size_t i = _retiredUpscalers.size(); i-- > 0;)
@@ -746,25 +631,19 @@ private:
         VkmSceneModel model;
         std::string error;
         VkmGltfImportOptions importOptions;
-        if (!importGltfModel(path, &model, &error, importOptions) || !_scene.addModel(model, &error) ||
-            !_scene.build(driver, _engine->getPipelineStateManager(), &error))
+        if (!importGltfModel(path, &model, &error, importOptions) || !_scene.addModel(model, &error))
         {
             VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
             return;
         }
-
-        // What makes ReSTIR selectable at all: the traced passes read the scene through this.
-        // A failure downgrades to the probe technique rather than the whole sample.
-        if (_rtPipelinesLoaded)
+        // The same radiance the deferred pass's LightConstants carries (see postDriverReady):
+        // the sun in the light table is what the traced tier samples, and the two must stay in
+        // sync or ReSTIR and the deferred image disagree about how bright the sun is.
+        _scene.setDirectionalRadiance(glm::vec3(3.0f, 3.0f, 2.8f));
+        if (!_scene.build(driver, _engine->getPipelineStateManager(), &error))
         {
-            if (_scene.buildAccelerationStructures(driver, &error))
-            {
-                _restirAvailable = true;
-            }
-            else
-            {
-                VKM_DEBUG_ERROR(("ReSTIR unavailable: " + error).c_str());
-            }
+            VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
+            return;
         }
 
         // Must follow build(), which is where the material textures are created.
@@ -778,74 +657,19 @@ private:
             }
         }
 
-        // Fit the grid to what was loaded. A probe outside the geometry contributes nothing but
-        // still costs a full capture, so the grid is sized from the scene rather than guessed.
+        // The GI system fits its probe grid to these bounds; the sample only frames the camera.
         const VkmSceneAABB bounds = _scene.computeWorldBounds();
         const glm::vec3 center = bounds._valid ? bounds.getCenter() : glm::vec3(0.0f);
         const glm::vec3 extent = bounds._valid ? bounds.getExtent() : glm::vec3(8.0f);
-
-        VkmProbeVolume::Descriptor volumeDescriptor{};
-        volumeDescriptor._probeCounts = glm::max(
-            glm::uvec3(gv_gi_probes_x.get(), gv_gi_probes_y.get(), gv_gi_probes_z.get()), glm::uvec3(2u));
-        // A margin outside the bounds, so surfaces at the very edge still sit between probes
-        // rather than outside the grid, where the lookup returns black.
-        const glm::vec3 span = extent * 1.2f;
-        volumeDescriptor._spacing =
-            glm::max(span / glm::vec3(volumeDescriptor._probeCounts - glm::uvec3(1u)), glm::vec3(0.05f));
-        volumeDescriptor._origin =
-            center - glm::vec3(volumeDescriptor._probeCounts - glm::uvec3(1u)) * volumeDescriptor._spacing * 0.5f;
         _cameraController.frame(center, glm::length(extent) * 0.5f * gv_gi_camera_distance.get());
-        if (!_volume.initialize(driver, volumeDescriptor))
+        _cameraController.setOrientation(glm::radians(gv_gi_camera_yaw.get()),
+                                         glm::radians(gv_gi_camera_pitch.get()));
+
+        if (!_gi.prepareScene(&_scene, &error))
         {
-            VKM_DEBUG_ERROR("Failed to create the GI probe volume");
+            VKM_DEBUG_ERROR(("Failed to prepare the GI system's scene: " + error).c_str());
             return;
         }
-
-        // The capture pass pushes once per (probe, face, batch), so the budget has to fit inside one
-        // frame's push-constant ring region on Metal and WebGPU. The region is rewound every frame,
-        // so this is a plain per-frame capacity check.
-        const uint32_t batchCount = static_cast<uint32_t>(_scene.getDrawBatches().size());
-        const uint32_t ringBudget = kVkmPushConstantRingEntryCount / std::max(1u, 6u * batchCount + 2u);
-        const uint32_t requestedBudget = _probeBudget;
-        _probeBudget = std::clamp(std::min(_probeBudget, ringBudget), 1u, VkmProbeVolumeUpdater::kMaxBudget);
-        // Only when the ring is what took it down. Comparing against kMaxBudget instead would
-        // report every budget below the engine's ceiling as ring-limited.
-        if (_probeBudget < requestedBudget)
-        {
-            VKM_DEBUG_INFO(("Probe budget limited to " + std::to_string(_probeBudget) + " (from " +
-                            std::to_string(requestedBudget) + ") by the push-constant ring at " +
-                            std::to_string(batchCount) + " draw batches").c_str());
-        }
-
-        // _nearZ / _farZ are left at 0 so the updater derives them from the volume. Fixed
-        // world-space values are a guess about scene scale, and getting that guess wrong is
-        // invisible until you stand inside the scene: a far plane shorter than the room clips
-        // away everything the probes should have seen.
-        VkmProbeVolumeUpdater::Descriptor updaterDescriptor{};
-        updaterDescriptor._cullViewIndex = kProbeCullView;
-        updaterDescriptor._budget = _probeBudget;
-        updaterDescriptor._hysteresis = _hysteresis;
-        if (!_updater.initialize(driver, _engine->getPipelineStateManager(), &_volume, updaterDescriptor, &error))
-        {
-            VKM_DEBUG_ERROR(("Failed to create the probe updater: " + error).c_str());
-            return;
-        }
-        // The capture pass shades with the material's albedo, so it needs the same per-material
-        // tables the G-buffer does wherever the backend cannot sample bindlessly.
-        if (!_updater.buildMaterialTables(_scene, &error))
-        {
-            VKM_DEBUG_ERROR(("Failed to build the probe capture's material tables: " + error).c_str());
-            return;
-        }
-
-        const VkmProbeVolumeConstants volumeConstants = _volume.makeConstants();
-        driver->uploadToBuffer(_volumeBuffer, &volumeConstants, sizeof(volumeConstants));
-
-        // The contact term covers what falls between probes, so its reach is a fraction of the
-        // probe spacing rather than a fixed distance -- the same scale trap as the probe range.
-        VkmSsgiConstants ssgi{};
-        ssgi._params.y = glm::compMin(volumeDescriptor._spacing) * 0.35f;
-        driver->uploadToBuffer(_ssgiBuffer, &ssgi, sizeof(ssgi));
 
         _sceneReady = true;
     }
@@ -879,8 +703,9 @@ private:
         }
 
         VkmDeferredResourceReclaimer* reclaimer = driver->getDeferredReclaimer();
+        // No _indirectTarget here: the GI system owns it and sizes it from resize() below.
         for (VkmResourceHandle* target :
-             { &_directTarget, &_indirectTarget, &_compositeTarget, &_upscaledTarget, &_screenshotTarget })
+             { &_directTarget, &_compositeTarget, &_upscaledTarget, &_screenshotTarget })
         {
             if (target->isValid())
             {
@@ -889,16 +714,24 @@ private:
             }
         }
         VkmTexture* direct = createHdrTarget(driver, renderExtent, "GiDirect");
-        VkmTexture* indirect = createHdrTarget(driver, renderExtent, "GiIndirect");
         VkmTexture* composite = createHdrTarget(driver, renderExtent, "GiComposite");
-        if (direct == nullptr || indirect == nullptr || composite == nullptr)
+        if (direct == nullptr || composite == nullptr)
         {
             VKM_DEBUG_ERROR("Failed to create the GI sample's HDR targets");
             return;
         }
         _directTarget = direct->getHandle();
-        _indirectTarget = indirect->getHandle();
         _compositeTarget = composite->getHandle();
+
+        // The GI system sizes its indirect target and passes with the G-buffer, so it takes the
+        // render extent rather than the swapchain's; the composite table below binds whatever
+        // handle it now reports.
+        std::string giError;
+        if (!_gi.resize(renderExtent, _directTarget, &giError))
+        {
+            VKM_DEBUG_ERROR(("Failed to size the GI system: " + giError).c_str());
+            return;
+        }
 
         // The upscaler's extents are fixed at creation, so a resize retires it like the tables:
         // it must outlive the frames whose command buffers still reference its internal state.
@@ -978,28 +811,34 @@ private:
             _tables = Tables{};
         }
         buildTables();
+    }
 
-        // The restir pass binds the G-buffer's textures at initialize, so a resize needs a fresh
-        // pass. The old one is retired whole rather than destroyed: destroy() deletes its tables
-        // immediately, which frames still in flight may have bound.
-        if (_restirAvailable)
-        {
-            if (_restir != nullptr)
-            {
-                _retiredRestir.push_back(RetiredRestir{ _frameCounter, std::move(_restir) });
-            }
-            _restir = std::make_unique<VkmRestirPass>();
-            std::string error;
-            // Render extent, not the swapchain's: the pass binds the G-buffer's textures and
-            // resolves into _indirectTarget, both of which are sized to the render resolution.
-            if (!_restir->initialize(driver, _engine->getPipelineStateManager(), _gbuffer,
-                                     renderExtent.x, renderExtent.y, &error))
-            {
-                VKM_DEBUG_ERROR(("Failed to size the ReSTIR pass: " + error).c_str());
-                _restir.reset();
-            }
-            _restirParity = 0;
-        }
+    void recordProbeDebug(VkmRenderGraph* renderGraph, VkmResourceHandle target, const char* name)
+    {
+        // Load, not DontCare: this draws over what the tone map just wrote.
+        VkmFrameBufferDescriptor fb = makeFullscreenFb(_extent, target);
+        fb._renderPass._colorAttachments[0]._loadAction = VkmLoadAction::Load;
+        VkmRenderGraphicsSubGraph* subGraph = renderGraph->beginGraphicsSubGraph(fb, name);
+        subGraph->addReferencedResource(target, VkmResourceAccess::ColorAttachmentWrite);
+        std::vector<VkmResourceAccessDeclaration> bound;
+        _tables._probeDebug->collectReferencedResources(&bound);
+        subGraph->addReferencedResources(bound);
+
+        VkmProbeDebugPushConstants push{};
+        push._radius = glm::compMin(glm::abs(_gi.getProbeVolume().getDescriptor()._spacing)) *
+                       _probeRadiusFraction;
+        push._selectedProbe = static_cast<uint32_t>(_selectedProbe);
+
+        VkmPipelineStateBase* pipeline = _probeDebugPipeline;
+        VkmResourceTableBase* table = _tables._probeDebug;
+        const uint32_t probeCount = _gi.getProbeVolume().getProbeCount();
+        subGraph->setRenderCallback([pipeline, table, push, probeCount](VkmCommandBufferBase* commandBuffer) {
+            commandBuffer->bindPipeline(pipeline);
+            commandBuffer->bindResourceTable(table);
+            commandBuffer->setPushConstants(&push, sizeof(push));
+            // Six vertices per probe: the impostor quad the vertex shader builds from SV_VertexID.
+            commandBuffer->draw(6, probeCount, 0, 0);
+        });
     }
 
     void buildTables()
@@ -1012,24 +851,24 @@ private:
         std::string error;
         _tables._lighting = driver->newResourceTable(
             _lightingPipeline, VkmResourceSetKind::PerPass,
-            {{ 0, normal }, { 1, baseColor }, { 2, motion }, { 3, _sampler }, { 4, _lightBuffer }}, &error);
-        _tables._probeLighting = driver->newResourceTable(
-            _probeLightingPipeline, VkmResourceSetKind::PerPass,
-            {{ 0, normal }, { 1, motion }, { 2, _volume.getIrradianceTexture() },
-             { 3, _volume.getDistanceTexture() }, { 4, _sampler }, { 5, _volumeBuffer }}, &error);
-        _tables._ssgi = driver->newResourceTable(
-            _ssgiPipeline, VkmResourceSetKind::PerPass,
-            {{ 0, normal }, { 1, motion }, { 2, _directTarget }, { 3, _sampler }, { 4, _ssgiBuffer }}, &error);
+            {{ 0, normal }, { 1, baseColor }, { 2, motion }, { 3, _sampler }, { 4, _lightBuffer },
+             { 5, _gbuffer.getTexture(VkmGBuffer::Target::Emissive) }}, &error);
         _tables._composite = driver->newResourceTable(
             _compositePipeline, VkmResourceSetKind::PerPass,
-            {{ 0, _directTarget }, { 1, _indirectTarget }, { 2, baseColor }, { 3, normal },
-             { 4, motion }, { 5, _sampler }, { 6, _compositeBuffer }}, &error);
+            {{ 0, _directTarget }, { 1, _gi.getIndirectTexture() }, { 2, baseColor }, { 3, normal },
+             { 4, motion }, { 5, _sampler }, { 6, _compositeBuffer },
+             { 7, _gbuffer.getTexture(VkmGBuffer::Target::Emissive) }}, &error);
         // With an upscaler the tonemap reads the display-extent upscale; without one it samples
         // the render-extent composite directly (bilinear when the extents differ).
         const VkmResourceHandle tonemapSource =
             _upscaler != nullptr ? _upscaledTarget : _compositeTarget;
         _tables._tonemap = driver->newResourceTable(
             _tonemapPipeline, VkmResourceSetKind::PerPass, {{ 0, tonemapSource }, { 1, _sampler }, { 2, _tonemapBuffer }}, &error);
+        _tables._probeDebug = driver->newResourceTable(
+            _probeDebugPipeline, VkmResourceSetKind::PerPass,
+            {{ 0, _gi.getProbeVolume().getProbeOffsetTexture() },
+             { 1, _gi.getProbeVolume().getIrradianceTexture() },
+             { 2, _sampler }, { 3, _gi.getProbeVolumeBuffer() }}, &error);
 
         if (!_tables.isComplete())
         {
@@ -1116,26 +955,27 @@ private:
             ImGui::EndCombo();
         }
         ImGui::DragFloat("Indirect intensity", &_indirectIntensity, 0.05f, 0.0f, 8.0f);
-        ImGui::Checkbox("SSGI contact term", &_ssgiEnabled);
+        VkmGiOptions& giOptions = _gi.options();
+        ImGui::Checkbox("SSGI contact term", &giOptions._ssgi);
 
-        if (_restirAvailable)
+        if (_gi.isRestirAvailable())
         {
             ImGui::Separator();
             static const char* kTechniqueNames[] = { "Probe volume", "ReSTIR" };
-            int technique = static_cast<int>(_technique);
+            int technique = static_cast<int>(giOptions._technique);
             if (ImGui::Combo("Technique", &technique, kTechniqueNames, 2))
             {
-                _technique = static_cast<uint32_t>(technique);
+                giOptions._technique = static_cast<VkmGiTechnique>(technique);
             }
-            if (_technique == 1)
+            if (giOptions._technique == VkmGiTechnique::Restir)
             {
-                ImGui::DragFloat("Environment radiance", &_environmentRadiance, 0.05f, 0.0f, 8.0f);
-                ImGui::Checkbox("Roughness MIS blend", &_misBlend);
+                ImGui::DragFloat("Environment radiance", &giOptions._environmentRadiance, 0.05f, 0.0f, 8.0f);
+                ImGui::Checkbox("Roughness MIS blend", &giOptions._restirMisBlend);
                 static const char* kRestirViewNames[] = { "Lighting", "Confidence (M)", "Age", "Weight" };
-                int restirView = static_cast<int>(_restirDebugView);
+                int restirView = static_cast<int>(giOptions._restirDebugView);
                 if (ImGui::Combo("ReSTIR view", &restirView, kRestirViewNames, 4))
                 {
-                    _restirDebugView = static_cast<VkmRestirDebugView>(restirView);
+                    giOptions._restirDebugView = static_cast<VkmRestirDebugView>(restirView);
                 }
             }
         }
@@ -1147,18 +987,71 @@ private:
                                          : (_renderExtent == _extent ? "native" : "bilinear"));
 
         ImGui::Separator();
-        ImGui::Text("Probes: %u, budget %u/frame", _volume.getProbeCount(), _updater.getDescriptor()._budget);
-        const uint32_t roundLength = _updater.getRoundLengthInFrames();
-        ImGui::Text("Round: %u frames", roundLength);
+        const VkmProbeVolume& volume = _gi.getProbeVolume();
+        const VkmProbeVolumeUpdater& updater = _gi.getProbeUpdater();
+        ImGui::Text("Probes: %u, budget %u/frame", volume.getProbeCount(), updater.getDescriptor()._budget);
+        ImGui::Text("Round: %u frames", updater.getRoundLengthInFrames());
         // The number Phase 4 exists to surface: this tier trades rays for amortized rasterization,
         // and convergence time is the bill.
         ImGui::Text("90%% convergence: %u frames",
-                    VkmProbeVolumeUpdater::framesToConverge(_volume.getProbeCount(),
-                                                            _updater.getDescriptor()._budget,
-                                                            _updater.getDescriptor()._hysteresis, 0.1f));
+                    VkmProbeVolumeUpdater::framesToConverge(volume.getProbeCount(),
+                                                            updater.getDescriptor()._budget,
+                                                            updater.getDescriptor()._hysteresis, 0.1f));
+
+        drawProbePlacementUi(volume);
         ImGui::End();
 #endif
     }
+
+#if defined(VKM_ENABLE_IMGUI)
+    /*
+    * @brief The probe placement tool: show the grid, pick a probe, drag it with a gizmo.
+    *
+    * A probe that lands inside a wall captures that wall's interior and hands it to every surface
+    * around it. Finding one means seeing where the probes actually are, which is what the debug
+    * view is for; fixing it means moving that probe into open space, which is what the gizmo does.
+    */
+    void drawProbePlacementUi(const VkmProbeVolume& volume)
+    {
+        ImGui::Separator();
+        ImGui::Checkbox("Show probes", &_showProbes);
+        if (!_showProbes)
+        {
+            return;
+        }
+        ImGui::DragFloat("Probe size", &_probeRadiusFraction, 0.01f, 0.02f, 0.5f);
+
+        const int probeCount = static_cast<int>(volume.getProbeCount());
+        _selectedProbe = glm::clamp(_selectedProbe, 0, glm::max(0, probeCount - 1));
+        ImGui::SliderInt("Selected probe", &_selectedProbe, 0, glm::max(0, probeCount - 1));
+
+        const uint32_t probeIndex = static_cast<uint32_t>(_selectedProbe);
+        const glm::uvec3 coord = volume.getProbeCoord(probeIndex);
+        const glm::vec3 offset = volume.getProbeOffset(probeIndex);
+        ImGui::Text("Grid (%u, %u, %u), offset (%.2f, %.2f, %.2f)", coord.x, coord.y, coord.z,
+                    offset.x, offset.y, offset.z);
+        if (ImGui::Button("Reset all offsets"))
+        {
+            _gi.clearProbeOffsets();
+        }
+
+        // ImGuizmo draws into the current ImGui frame and reads the mouse from it, so it belongs
+        // here rather than in render(). It manipulates a full transform; only the translation
+        // column is read back, the volume storing a displacement rather than a matrix.
+        ImGuizmo::BeginFrame();
+        ImGuizmo::SetOrthographic(false);
+        ImGuizmo::SetRect(0.0f, 0.0f, static_cast<float>(_extent.x), static_cast<float>(_extent.y));
+
+        const glm::mat4 view = _camera.getView();
+        const glm::mat4 projection = _camera.getProjection();
+        glm::mat4 transform = glm::translate(glm::mat4(1.0f), volume.getProbePosition(probeIndex));
+        if (ImGuizmo::Manipulate(&view[0][0], &projection[0][0], ImGuizmo::TRANSLATE, ImGuizmo::WORLD,
+                                 &transform[0][0]))
+        {
+            _gi.setProbeOffset(probeIndex, glm::vec3(transform[3]) - volume.getProbeGridPosition(probeIndex));
+        }
+    }
+#endif
 
     VkmEngine* _engine = nullptr;
     VkmCamera _camera;
@@ -1166,27 +1059,22 @@ private:
 
     VkmScene _scene;
     VkmGBuffer _gbuffer;
-    VkmProbeVolume _volume;
-    VkmProbeVolumeUpdater _updater;
+    VkmGiSystem _gi;
 
     std::array<VkmPipelineStateBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _gbufferPipelines{};
     // One set-3 table per material, per G-buffer permutation. Empty on a backend whose shader
     // samples materials through the bindless array; see VkmSceneMaterialTables.
     std::array<VkmSceneMaterialTables, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _gbufferMaterialTables{};
     VkmPipelineStateBase* _lightingPipeline = nullptr;
-    VkmPipelineStateBase* _probeLightingPipeline = nullptr;
-    VkmPipelineStateBase* _ssgiPipeline = nullptr;
     VkmPipelineStateBase* _compositePipeline = nullptr;
     VkmPipelineStateBase* _tonemapPipeline = nullptr;
+    VkmPipelineStateBase* _probeDebugPipeline = nullptr;
 
     VkmResourceHandle _sampler{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _lightBuffer{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _tonemapBuffer{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _compositeBuffer{ VKM_INVALID_RESOURCE_HANDLE };
-    VkmResourceHandle _volumeBuffer{ VKM_INVALID_RESOURCE_HANDLE };
-    VkmResourceHandle _ssgiBuffer{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _directTarget{ VKM_INVALID_RESOURCE_HANDLE };
-    VkmResourceHandle _indirectTarget{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _compositeTarget{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _upscaledTarget{ VKM_INVALID_RESOURCE_HANDLE };
     VkmResourceHandle _screenshotTarget{ VKM_INVALID_RESOURCE_HANDLE };
@@ -1210,19 +1098,14 @@ private:
 
     VkmGiDebugView _debugView = VkmGiDebugView::Composite;
     float _indirectIntensity = 1.0f;
-    bool _ssgiEnabled = true;
-    uint32_t _probeBudget = 32u;
-    float _hysteresis = 0.9f;
 
-    std::unique_ptr<VkmRestirPass> _restir;
-    std::vector<RetiredRestir> _retiredRestir;
-    bool _rtPipelinesLoaded = false;
-    bool _restirAvailable = false;
-    uint32_t _technique = 0; // 0 = probe volume, 1 = ReSTIR
-    uint32_t _restirParity = 0;
-    float _environmentRadiance = 1.0f;
-    bool _misBlend = true;
-    VkmRestirDebugView _restirDebugView = VkmRestirDebugView::Lighting;
+    // Probe placement UI state. The radius is a fraction of the probe spacing so it stays sensible
+    // across scenes of wildly different scale.
+    // Seeded from gv_gi_show_probes in postDriverReady, not here: the delegate is constructed
+    // before the command line is parsed, so a member initializer would always read the default.
+    bool _showProbes = false;
+    float _probeRadiusFraction = 0.12f;
+    int _selectedProbe = 0;
 };
 
 int main(int argc, char* argv[])

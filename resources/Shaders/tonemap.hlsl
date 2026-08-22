@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Maps an HDR scene colour to a displayable range and encodes it for the swapchain.
 //

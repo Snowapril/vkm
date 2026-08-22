@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Cross-backend acceleration structure coverage: one bottom-level structure over a triangle, one
 // top-level structure that instances it, and the dynamic-object path -- move the instance and

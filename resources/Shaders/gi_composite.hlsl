@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The shared composite: direct lighting plus whatever the active GI technique produced, and the
 // engine's debug views over both.
@@ -32,6 +32,7 @@ struct GiCompositeConstants
 [[vk::binding(4, 2)]] Texture2D    g_Motion   : register(t4, space2);
 [[vk::binding(5, 2)]] SamplerState g_Sampler  : register(s0, space2);
 [[vk::binding(6, 2)]] ConstantBuffer<GiCompositeConstants> g_Composite : register(b0, space2);
+[[vk::binding(7, 2)]] Texture2D    g_Emissive : register(t5, space2);
 
 // Must match vkm::VkmGiDebugView.
 #define VKM_GI_DEBUG_COMPOSITE 0
@@ -44,6 +45,7 @@ struct GiCompositeConstants
 #define VKM_GI_DEBUG_METALLIC  7
 #define VKM_GI_DEBUG_MOTION    8
 #define VKM_GI_DEBUG_DISTANCE  9
+#define VKM_GI_DEBUG_EMISSIVE  10
 
 typedef VkmFullscreenVSOutput VSOutput;
 
@@ -85,6 +87,8 @@ float4 PSMain(VSOutput input) : SV_TARGET0
             // Reciprocal so near geometry is bright: the far plane would otherwise dominate.
             case VKM_GI_DEBUG_DISTANCE:
                 return float4((1.0 / max(motionMetallic.w, 1e-3)).xxx, 1.0);
+            case VKM_GI_DEBUG_EMISSIVE:
+                return float4(g_Emissive.SampleLevel(g_Sampler, input.uv, 0).rgb, 1.0);
             default: break;
         }
     }

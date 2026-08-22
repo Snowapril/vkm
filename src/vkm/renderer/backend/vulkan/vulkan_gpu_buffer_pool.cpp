@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/backend/vulkan/vulkan_gpu_buffer_pool.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>

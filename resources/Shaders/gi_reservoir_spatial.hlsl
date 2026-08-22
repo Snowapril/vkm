@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Phase 8.4: spatial resampling. Each pixel merges k neighbours' reservoirs into its own.
 //
@@ -55,7 +55,8 @@ struct FrameData
     float4 lightDirection;
     uint   materialPoolSlot;
     uint   debugMode;
-    uint2  _pad0;
+    uint   lightPoolSlot;
+    uint   lightCount;
 };
 
 // Mirrors vkm::VkmRestirConstants.
@@ -87,6 +88,7 @@ VKM_BINDLESS_OBJECT_DATA(ObjectData, g_ObjectData);
 VKM_BINDLESS_FRAME_DATA(FrameData, g_FrameData);
 VKM_BINDLESS_ACCELERATION_STRUCTURE(g_Scene);
 VKM_MATERIAL_LOADER()
+VKM_LIGHT_LOADER()
 VKM_PATH_TRACING_DECLARE()
 
 [[vk::binding(0, 2)]] Texture2D g_Normal   : register(t0, space2);

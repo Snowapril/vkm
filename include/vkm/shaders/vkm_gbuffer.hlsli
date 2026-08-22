@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Shader-side mirror of the G-buffer's channel layout (see renderer/gbuffer.h, the single source
 // of truth for formats and target order).

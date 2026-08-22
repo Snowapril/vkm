@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/imgui/metal_imgui_renderer.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>

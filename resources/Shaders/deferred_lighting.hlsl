@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Fullscreen deferred lighting: samples the G-buffer and shades it with one directional light.
 //
@@ -34,6 +34,9 @@ struct LightConstants
 [[vk::binding(2, 2)]] Texture2D            g_MotionMetallic     : register(t2, space2);
 [[vk::binding(3, 2)]] SamplerState         g_Sampler            : register(s0, space2);
 [[vk::binding(4, 2)]] ConstantBuffer<LightConstants> g_Light    : register(b0, space2);
+// Appended past the constants rather than beside the other G-buffer channels, so existing
+// binding tables only grow by one entry instead of renumbering.
+[[vk::binding(5, 2)]] Texture2D            g_Emissive           : register(t3, space2);
 
 typedef VkmFullscreenVSOutput VSOutput;
 
@@ -112,5 +115,8 @@ float4 PSMain(VSOutput input) : SV_TARGET0
     const float3 diffuse = (1.0 - fresnel) * diffuseColor / 3.14159265;
 
     const float3 radiance = g_Light.radiance.rgb * nDotL;
-    return float4((diffuse + specular) * radiance, 1.0);
+    // Emission is what the surface adds on its own, on top of what the light reflects off it --
+    // the term that makes a camera-visible emitter glow instead of rendering black.
+    const float3 emissive = g_Emissive.SampleLevel(g_Sampler, input.uv, 0).rgb;
+    return float4((diffuse + specular) * radiance + emissive, 1.0);
 }

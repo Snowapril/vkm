@@ -88,7 +88,9 @@ TEST_CASE("importGltfModel - imports meshes, materials and the node hierarchy of
     CHECK(material._baseColorFactor.b == doctest::Approx(0.75f));
     CHECK(material._metallicFactor == doctest::Approx(0.25f));
     CHECK(material._roughnessFactor == doctest::Approx(0.75f));
-    CHECK(material._emissiveFactor.g == doctest::Approx(0.2f));
+    // 0.2 * KHR_materials_emissive_strength (5.0): the extension is the only way an asset
+    // expresses a brighter-than-1 emitter, since the core factor clamps to [0,1].
+    CHECK(material._emissiveFactor.g == doctest::Approx(1.0f));
 
     REQUIRE(model._nodes.size() == 2);
     REQUIRE(model._rootNodeIndices.size() == 1);

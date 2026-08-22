@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/backend/common/buffer.h>
 #include <vkm/renderer/backend/common/buffer_view.h>

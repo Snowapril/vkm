@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/backend/webgpu/webgpu_sampler.h>
 #include <vkm/renderer/backend/webgpu/webgpu_driver.h>

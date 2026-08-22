@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Shared declarations for the engine's scene compute passes. The records here mirror their C++
 // counterparts in include/vkm/renderer/scene/scene.h byte for byte; TestObjectDataLayout asserts

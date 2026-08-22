@@ -136,15 +136,16 @@
 - The reference path tracer evaluates materials factor-only: `VKM_MATERIAL_DECLARE()`'s samplers call `Sample()`, which needs screen-space derivatives a compute shader does not have, so a base-colour or metallic-roughness texture is ignored there while the rasterized G-buffer honours it. A `SampleLevel` variant of that macro is the fix.
 - The path tracer drops a path that has not escaped after `_maxBounces` and loses its energy: there is no Russian roulette, so the bounce count is a bias knob rather than only a cost one, and an enclosed room needs a high one to converge.
 - The path tracer treats every material as Lambertian: `metallic` and `roughness` are loaded and ignored, so it is not yet ground truth for anything specular.
-- `VkmFrameData::_lightDirection` is invisible to the path tracer, which is lit only by emissive geometry and the uniform environment -- so the reference and the raster tiers do not see the same lights until the scene grows an area-light representation for that directional light.
 - The path tracer's accumulation buffer is a storage buffer rather than a storage texture (`VkmTableResourceType` has no storage-texture kind), so displaying it needs a pass that reads it as a buffer.
 - Phase 6's split-screen accumulation mode (ground truth beside the live pipeline) is not built; the reference is reachable only from a test, not from the gi sample.
 - `VkmPipelineStateManager::loadPipelineState` silently *replaces* an already-registered pipeline object rather than skipping it, so loading the same directory twice destroys pipelines that callers still hold raw pointers to; `vkmLoadRayTracingPipelineStates` exists to keep the ray-tracing directory to one load, but nothing enforces it.
-- The 1-spp indirect pass computes radiance leaving the G-buffer surface *excluding* that surface's own emission, because the G-buffer carries no emissive channel, so it cannot reproduce a scene whose camera-visible surfaces emit.
 - `VkmSurfaceHit::uv` is reserved and always zero: filling it needs a vertex-layout id in `VkmObjectData` (uv0 sits at a different offset and format per `VkmVertexLayoutPreset`, and PositionOnly has none), which is the second of that record's two padding words.
-- Nothing casts a shadow or reconnection ray yet, so the `t_max = (1 - eps) * distance` shortening Phase 8 needs is documented in `vkm_path_tracing.hlsli` but unimplemented and untested.
-- `resources/tests/gltf_cornell.gltf` is open-topped and lit by the environment rather than by an emissive ceiling, so it exercises colour bleeding but not an area light; a true emissive-light Cornell box needs next-event estimation to converge and an emissive G-buffer channel to compare against.
 - An acceleration structure is made resident by `VkmAccelerationStructureMetal::initialize` itself rather than by `onResourceInitialized`, because the driver calls that only after `initialize()` returns while the synchronous build needs it resident before then; nothing enforces that ordering for a future backend or resource type that builds inside its own initialize.
+- The light table bakes world-space triangles at scene build, so a moved or spawned emitter needs the table rebuilt; nothing rebuilds it yet.
+- NEE draws one light sample per vertex with no BSDF-sampling MIS, so large emitters converge slowly; small ones are the designed case.
+- The probe tier's capture pass shades no emission, so probes stay blind to emitters and only the traced tier sees them.
+- The deferred pass's directional light casts no shadow ray while the reference's sun NEE does, so their images differ in sun shadows until a shadowing technique exists.
+- The 1-spp indirect pass still excludes the G-buffer surface's own emission by design: the deferred composite adds it, and adding it again in the estimator would double it.
 - The reservoir's reserved eighth word is written as zero and never read; 8.4 chose to recompute the target pdf per neighbour rather than cache it there, so it is 4 bytes per reservoir of nothing.
 - Object motion vectors are still camera-only (`VkmObjectData` carries no previous transform), so temporal reuse reprojects a moving object as if it were static.
 - The temporal pass has no automated moving-camera gate; reprojection under motion is verified only by eye in the gi sample.
@@ -159,3 +160,7 @@
 - MetalFX/FSR frame generation (interpolator sibling to VkmUpscalerBase, present pacing, UI composited after interpolation).
 - Linux FSR build (ffx-api is MSVC-only as shipped; Windows uses AMD's prebuilt DLL).
 - MetalFX temporal upscaling is withheld under MTL_DEBUG_LAYER (MTL4FX cannot encode under the debug layer).
+- Thin double-sided geometry (Sponza's curtains) reads near-zero from the probe volume: the Chebyshev test self-shadows a surface against its own probe-captured depth, and with the unshadowed sun lighting only one side, the other renders pure black in the probe tier -- the ReSTIR tier lights it correctly.
+- Probe placement is manual and per-probe: no automatic relocation, no way to save or load an authored offset set.
+- The probe debug view has no depth test and no picking; selection is by linear index.
+- Probe offsets upload through a device drain, not through the frame's transfer subgraph.

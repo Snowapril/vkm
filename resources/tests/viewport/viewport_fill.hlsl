@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Test fixture: a fullscreen triangle that writes one constant colour, so what a viewport does is
 // visible purely as which texels changed.

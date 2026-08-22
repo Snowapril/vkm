@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Phase 6's reference path tracer: brute-force, accumulating, no resampling and no denoiser. It
 // exists to be *right*, not fast -- every later phase is measured against what this converges to,
@@ -56,7 +56,8 @@ struct FrameData
     float4 lightDirection;
     uint   materialPoolSlot;
     uint   debugMode;
-    uint2  _pad0;
+    uint   lightPoolSlot;
+    uint   lightCount;
 };
 
 // Mirrors vkm::VkmPathTraceConstants (include/vkm/renderer/path_tracer.h). Scalars only, so the
@@ -85,6 +86,7 @@ VKM_BINDLESS_ACCELERATION_STRUCTURE(g_Scene);
 // screen-space derivatives a compute shader does not have, and it would declare a texture array
 // this pass never indexes. Materials are therefore factor-only here; see TODO.md.
 VKM_MATERIAL_LOADER()
+VKM_LIGHT_LOADER()
 // The path loop, the hit encoding and the vertex mapping are shared with gi_indirect.hlsl -- two
 // estimators of the same integral must not each have their own copy of what they have in common.
 VKM_PATH_TRACING_DECLARE()

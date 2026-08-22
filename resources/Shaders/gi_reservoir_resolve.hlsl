@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Phase 8.6 (the part 8.3 needs to be observable): shade a pixel from its reservoir.
 //

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The reservoir's packing is an ABI in the strongest sense this engine has: a screen's worth is
 // millions of records, every ReSTIR pass reads and writes them, and the shader side mirrors these

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/backend/metal/metal_gpu_heap_allocator.h>
 #include <vkm/renderer/backend/metal/metal_gpu_heap_pool.h>

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #pragma once
 
@@ -28,7 +28,8 @@ namespace vkm
         Metallic = 7,
         Motion = 8,         // screen-space motion, scaled to be visible
         CameraDistance = 9, // reciprocal, so near geometry is bright
-        Count = 10,
+        Emissive = 10,      // the surface's own emitted radiance
+        Count = 11,
     };
 
     // Display names in VkmGiDebugView order, for a UI that offers the views.

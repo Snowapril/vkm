@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Phase 7's gate: the 1-spp indirect pass converges to the Phase 6 reference when accumulated.
 //
@@ -209,6 +209,9 @@ namespace vkmtest
         REQUIRE(scene.addModel(model, &error));
         REQUIRE_MESSAGE(scene.build(driver, &manager, &error), error);
         REQUIRE(scene.getObjects().size() == 4); // floor, back, and the two coloured side walls
+        // No emissive material anywhere, so the light table must be header-only -- which is what
+        // keeps NEE a strict no-op on this fixture and every measured number below unmoved.
+        CHECK(scene.getLightTriangleCount() == 0);
         REQUIRE_MESSAGE(scene.buildAccelerationStructures(driver, &error), error);
 
         // Inside the box near its open front, looking at the back wall. The ceiling is missing, so

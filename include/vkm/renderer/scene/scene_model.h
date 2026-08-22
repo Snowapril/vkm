@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #pragma once
 
@@ -64,6 +64,15 @@ namespace vkm
         std::string _name;
         glm::vec4 _baseColorFactor{ 1.0f, 1.0f, 1.0f, 1.0f };
         glm::vec3 _emissiveFactor{ 0.0f, 0.0f, 0.0f };
+        /*
+        * @brief glTF alphaMode MASK's cutoff, or 0 for OPAQUE and BLEND.
+        * @details A masked material's base-colour alpha is a stencil, not an opacity: a leaf card
+        * is a rectangle whose texture is transparent everywhere the leaf is not. Rendering one
+        * without the test draws the whole rectangle, and since a masked texture's hidden texels
+        * are near-black, the result is a hard-edged dark card. 0 means "no test", which is what
+        * OPAQUE wants and the honest approximation for BLEND until real blending exists.
+        */
+        float _alphaCutoff = 0.0f;
         float _metallicFactor = 1.0f;
         float _roughnessFactor = 1.0f;
 
