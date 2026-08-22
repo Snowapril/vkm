@@ -155,15 +155,30 @@ namespace vkm
     void vkmExtractFrustumPlanes(const glm::mat4& viewProjection, glm::vec4* outPlanes);
 
     /*
+    * @brief The six axis-aligned planes of `boxMin`..`boxMax`, in the same inward-facing form
+    * vkmExtractFrustumPlanes produces.
+    * @details For a view no single frustum describes. A probe capture sees in every direction and
+    * all six of its faces share one cull result; a shadow atlas pass fills several lights' tiles
+    * from one cull. In both cases a box around what the pass will draw from is the tightest
+    * correct test available.
+    * @param boxMin Minimum corner.
+    * @param boxMax Maximum corner.
+    * @param outPlanes Receives six planes, matching VkmFrameData::_frustumPlanes.
+    */
+    void vkmBuildBoxPlanes(const glm::vec3& boxMin, const glm::vec3& boxMax, glm::vec4* outPlanes);
+
+    /*
     * @brief How many independently culled views one frame may record.
     *
-    * @details Two, because a frame that refreshes GI probes needs a cull the probes can use
-    * alongside the camera's: a probe looks in every direction, so culling its capture against the
-    * camera frustum would drop exactly the geometry behind the camera that indirect light comes
-    * from. Each view gets its own frame data, its own counts and its own payload regions, so the
-    * two culls never write the same words and need no barrier between them.
+    * @details Three: the camera's, a GI probe refresh's, and a shadow atlas pass's. A probe looks
+    * in every direction, so culling its capture against the camera frustum would drop exactly the
+    * geometry behind the camera that indirect light comes from; a shadow pass draws from each
+    * light rather than from the eye, so it needs its own cull for the same reason. Each view gets
+    * its own frame data, its own counts and its own payload regions, so the culls never write the
+    * same words and need no barrier between them -- which is also what makes raising this a
+    * matter of buffer size alone.
     */
-    constexpr uint32_t kVkmSceneMaxCullViews = 2;
+    constexpr uint32_t kVkmSceneMaxCullViews = 3;
 
     class VkmScene
     {

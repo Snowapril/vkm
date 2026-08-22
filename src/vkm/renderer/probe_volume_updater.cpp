@@ -36,23 +36,6 @@ namespace vkm
             return false;
         }
 
-        /*
-        * @brief The six axis-aligned planes of `min`..`max`, in the engine's inward-facing form.
-        *
-        * A probe sees in every direction and all six of its faces share one cull result, so the
-        * capture cannot be culled by any single frustum -- a box around the probes being refreshed
-        * is the tightest correct test available.
-        */
-        void buildBoxPlanes(const glm::vec3& boxMin, const glm::vec3& boxMax, glm::vec4* outPlanes)
-        {
-            // Same sign convention scene_cull.hlsl tests with: dot(n, c) + w < -radius rejects.
-            outPlanes[0] = glm::vec4(1.0f, 0.0f, 0.0f, -boxMin.x);
-            outPlanes[1] = glm::vec4(-1.0f, 0.0f, 0.0f, boxMax.x);
-            outPlanes[2] = glm::vec4(0.0f, 1.0f, 0.0f, -boxMin.y);
-            outPlanes[3] = glm::vec4(0.0f, -1.0f, 0.0f, boxMax.y);
-            outPlanes[4] = glm::vec4(0.0f, 0.0f, 1.0f, -boxMin.z);
-            outPlanes[5] = glm::vec4(0.0f, 0.0f, -1.0f, boxMax.z);
-        }
     } // namespace
 
     VkmProbeVolumeUpdater::~VkmProbeVolumeUpdater()
@@ -441,7 +424,7 @@ namespace vkm
         boxMax += glm::vec3(_descriptor._farZ);
 
         VkmFrameData probeFrameData = frameData;
-        buildBoxPlanes(boxMin, boxMax, probeFrameData._frustumPlanes);
+        vkmBuildBoxPlanes(boxMin, boxMax, probeFrameData._frustumPlanes);
 
         const uint32_t frameIndex = renderGraph->frameIndex();
         const auto referenceScene = [&sceneResources, scene](VkmRenderSubGraph* subGraph,
