@@ -19,6 +19,7 @@
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/staging_buffer.h>
 #include <vkm/renderer/deferred_lighting.h>
+#include <vkm/renderer/shadow_atlas.h>
 #include <vkm/renderer/gbuffer.h>
 #include <vkm/renderer/scene/gltf_importer.h>
 #include <vkm/renderer/scene/scene.h>
@@ -380,6 +381,36 @@ namespace vkmtest
         // Renders the lighting pass with `intensity` and returns the readback. A table is
         // immutable, so a different light means a different table -- which is exactly the usage
         // the immutability was designed around.
+        // The deferred pass binds a shadow atlas whether or not anything casts one. A 1x1 texel
+        // holding the far sentinel plus every light's _shadowTile at -1 is the "no shadows"
+        // configuration, and it must be bound rather than omitted: an unbound table entry is a
+        // validation error, not a silently-black sample.
+        vkm::VkmTextureInfo shadowInfo{};
+        shadowInfo._flags = vkm::VkmResourceCreateInfo::AllowShaderRead | vkm::VkmResourceCreateInfo::AllowTransferDst;
+        shadowInfo._extent = glm::uvec3(1, 1, 1);
+        shadowInfo._numMipLevels = 1;
+        shadowInfo._numArrayLayers = 1;
+        shadowInfo._format = vkm::VkmFormat::R16G16B16A16_SFLOAT;
+        shadowInfo._debugName = "DeferredShadowAtlasStub";
+        vkm::VkmTexture* shadowStub = driver->newTexture(shadowInfo);
+        REQUIRE(shadowStub != nullptr);
+        {
+            const uint16_t sentinel[4] = { encodeHalf(vkm::kVkmShadowFarSentinel), 0, 0, encodeHalf(1.0f) };
+            REQUIRE(driver->uploadToTexture(shadowStub->getHandle(), sentinel, sizeof(sentinel)));
+        }
+
+        vkm::VkmBufferInfo shadowConstantsInfo{};
+        shadowConstantsInfo._flags =
+            vkm::VkmResourceCreateInfo::AllowShaderRead | vkm::VkmResourceCreateInfo::AllowTransferDst;
+        shadowConstantsInfo._size = sizeof(vkm::VkmShadowAtlasConstants);
+        shadowConstantsInfo._debugName = "DeferredShadowAtlasConstants";
+        vkm::VkmBuffer* shadowConstants = driver->newBuffer(shadowConstantsInfo);
+        REQUIRE(shadowConstants != nullptr);
+        {
+            const vkm::VkmShadowAtlasConstants zeroed{};
+            REQUIRE(driver->uploadToBuffer(shadowConstants->getHandle(), &zeroed, sizeof(zeroed)));
+        }
+
         const auto shadeWithBuffer = [&](vkm::VkmBuffer* lightBuffer) {
             const std::vector<vkm::VkmTableResourceEntry> entries{
                 { 0, gbuffer.getTexture(vkm::VkmGBuffer::Target::Normal) },
@@ -388,6 +419,8 @@ namespace vkmtest
                 { 3, sampler->getHandle() },
                 { 4, lightBuffer->getHandle() },
                 { 5, gbuffer.getTexture(vkm::VkmGBuffer::Target::Emissive) },
+                { 6, shadowStub->getHandle() },
+                { 7, shadowConstants->getHandle() },
             };
             std::string tableError;
             vkm::VkmResourceTableBase* table =
@@ -495,6 +528,8 @@ namespace vkmtest
             }
         }
 
+        driver->getRenderResourcePool()->releaseResource(shadowConstants->getHandle());
+        driver->getRenderResourcePool()->releaseResource(shadowStub->getHandle());
         driver->getRenderResourcePool()->releaseResource(lightingTarget->getHandle());
         driver->getRenderResourcePool()->releaseResource(sampler->getHandle());
         // The scene's buffers outlive this body otherwise, and VMA reports them as unfreed when

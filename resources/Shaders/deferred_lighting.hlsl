@@ -19,6 +19,7 @@
 #include "vkm_fullscreen.hlsli"
 #include "vkm_gbuffer.hlsli"
 #include "vkm_punctual_lights.hlsli"
+#include "vkm_shadow.hlsli"
 
 VKM_FRAME_CONSTANTS(g_VkmFrame);
 
@@ -30,8 +31,18 @@ VKM_FRAME_CONSTANTS(g_VkmFrame);
 // vkm::VkmDeferredLightConstants (renderer/deferred_lighting.h).
 struct LightConstants
 {
-    uint4 lightCount; // x = valid entries in `lights`
+    // x = valid entries in `lights`, y = shadow tiles per atlas row, z = tile size in texels
+    uint4 lightCount;
     VkmPunctualLight lights[VKM_MAX_PUNCTUAL_LIGHTS];
+};
+
+// Mirrors vkm::VkmShadowAtlasConstants (renderer/shadow_atlas.h). Shared with the pass that
+// filled the atlas, so the matrices a lookup projects by are provably the ones it was drawn with.
+struct ShadowAtlasConstants
+{
+    float4x4 tileViewProjection[VKM_MAX_SHADOW_TILES];
+    float4 tileLightPosition[VKM_MAX_SHADOW_TILES];
+    float4 tileLightDirection[VKM_MAX_SHADOW_TILES];
 };
 
 [[vk::binding(0, 2)]] Texture2D            g_Normal             : register(t0, space2);
@@ -42,6 +53,12 @@ struct LightConstants
 // Appended past the constants rather than beside the other G-buffer channels, so existing
 // binding tables only grow by one entry instead of renumbering.
 [[vk::binding(5, 2)]] Texture2D            g_Emissive           : register(t3, space2);
+// Appended past the existing bindings for the same reason binding 5 was: an existing table only
+// grows an entry instead of renumbering every one it already had.
+[[vk::binding(6, 2)]] Texture2D            g_ShadowAtlas        : register(t4, space2);
+[[vk::binding(7, 2)]] ConstantBuffer<ShadowAtlasConstants> g_ShadowAtlasConstants : register(b1, space2);
+
+VKM_SHADOW_LOADER(g_ShadowAtlas, g_Sampler, g_ShadowAtlasConstants);
 
 typedef VkmFullscreenVSOutput VSOutput;
 
@@ -88,6 +105,9 @@ float4 PSMain(VSOutput input) : SV_TARGET0
 
     const float4 packedNormals = g_Normal.SampleLevel(g_Sampler, input.uv, 0);
     const float3 shadingNormal = vkmUnpackShadingNormal(packedNormals);
+    // The shadow query is offset along the GEOMETRIC normal, not the shading one: a normal map
+    // must not move where the surface actually is, or a bumpy wall self-shadows in its dents.
+    const float3 geometricNormal = vkmUnpackGeometricNormal(packedNormals);
 
     const float4 baseColorRoughness = g_BaseColorRoughness.SampleLevel(g_Sampler, input.uv, 0);
     const float3 baseColor = baseColorRoughness.rgb;
@@ -121,6 +141,14 @@ float4 PSMain(VSOutput input) : SV_TARGET0
             continue;
         }
 
+        const float shadow = vkmShadowFactor(g_Light.lights[lightIndex], worldPosition,
+                                             geometricNormal, nDotL,
+                                             g_Light.lightCount.y, g_Light.lightCount.z);
+        if (shadow <= 0.0)
+        {
+            continue;
+        }
+
         const float3 halfVector = normalize(viewDirection + lightSample.direction);
         const float nDotH = saturate(dot(shadingNormal, halfVector));
         const float vDotH = saturate(dot(viewDirection, halfVector));
@@ -131,7 +159,7 @@ float4 PSMain(VSOutput input) : SV_TARGET0
         // Energy that was not reflected specularly is what remains for the diffuse lobe.
         const float3 diffuse = (1.0 - fresnel) * diffuseColor / 3.14159265;
 
-        shaded += (diffuse + specular) * lightSample.radiance * nDotL;
+        shaded += (diffuse + specular) * lightSample.radiance * nDotL * shadow;
     }
 
     // Emission is what the surface adds on its own, on top of what the lights reflect off it --
