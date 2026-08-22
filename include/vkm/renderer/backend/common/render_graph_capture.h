@@ -47,9 +47,9 @@ namespace vkm
         VkmCapturedResourceInfo info;
         VkmLoadAction loadAction = VkmLoadAction::DontCare;
         VkmStoreAction storeAction = VkmStoreAction::DontCare;
-        // True when the attachment is a swapchain back buffer (AllowPresent). Those cannot be
-        // copy sources (CAMetalLayer.framebufferOnly stays YES), so info.snapshotTexture
-        // stays invalid for them.
+        // True when the attachment is a swapchain back buffer (AllowPresent). The capture path
+        // deliberately skips present targets and snapshots owned targets instead, so
+        // info.snapshotTexture stays invalid for them.
         bool isPresentTarget = false;
     };
 
