@@ -18,6 +18,7 @@
 #include <vkm/renderer/backend/common/render_graph.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/staging_buffer.h>
+#include <vkm/renderer/deferred_lighting.h>
 #include <vkm/renderer/gbuffer.h>
 #include <vkm/renderer/scene/gltf_importer.h>
 #include <vkm/renderer/scene/scene.h>
@@ -286,23 +287,70 @@ namespace vkmtest
         vkm::VkmSampler* sampler = driver->newSampler(samplerInfo);
         REQUIRE(sampler != nullptr);
 
-        struct LightConstants
-        {
-            float directionToLight[4];
-            float radiance[4];
-        };
-
-        // Head-on with the fixture's +Z normals, so nDotL saturates and the material's colour
-        // reaches the output as strongly as it can.
+        // Head-on with the fixture's normals, so nDotL saturates and the material's colour
+        // reaches the output as strongly as it can. One directional entry: the pass shades a
+        // list now, and a directional light is an ordinary member of it.
+        //
+        // The plane's shading normal faces -Z here, not +Z: the G-buffer aligns it into the
+        // geometric normal's hemisphere, and the geometric normal comes from the derivatives of
+        // this fixture's world position under the affine view-projection above. Lighting from
+        // +Z, as this test did before the light list existed, put every covered pixel at
+        // nDotL <= 0 -- so its lit term was zero and the linearity assertion below compared 0
+        // against 0. The REQUIRE guarding that assertion is what stops it going quiet again.
         const auto makeLightBuffer = [&](float intensity) {
             vkm::VkmBufferInfo info{};
             info._flags = vkm::VkmResourceCreateInfo::AllowShaderRead | vkm::VkmResourceCreateInfo::AllowTransferDst;
-            info._size = sizeof(LightConstants);
+            info._size = sizeof(vkm::VkmDeferredLightConstants);
             info._debugName = "DeferredLightConstants";
             vkm::VkmBuffer* buffer = driver->newBuffer(info);
             REQUIRE(buffer != nullptr);
-            const LightConstants constants{{0.0f, 0.0f, 1.0f, 0.0f},
-                                           {intensity, intensity, intensity, 0.0f}};
+
+            vkm::VkmDeferredLightConstants constants{};
+            constants._lightCount = glm::uvec4(1u, 0u, 0u, 0u);
+            vkm::VkmPunctualLight& light = constants._lights[0];
+            light._type = static_cast<uint32_t>(vkm::VkmLightType::Directional);
+            // The record stores the direction the light POINTS, so lighting a +Z-facing surface
+            // head-on means aiming down -Z.
+            light._directionWorld[0] = 0.0f;
+            light._directionWorld[1] = 0.0f;
+            light._directionWorld[2] = 1.0f;
+            light._radiance[0] = intensity;
+            light._radiance[1] = intensity;
+            light._radiance[2] = intensity;
+            REQUIRE(driver->uploadToBuffer(buffer->getHandle(), &constants, sizeof(constants)));
+            return buffer;
+        };
+
+        // A point light on the plane's lit side. setObjectTransform above overrides the glTF's
+        // root translation with identity, so the triangle is its local self: x,y in [0,1] at
+        // z = 0, with the shading normal facing -Z (see the directional entry's note). A light
+        // far along -Z from its centre is therefore nearly on every covered pixel's normal,
+        // which is what makes the inverse-square ratio below exact well within tolerance
+        // despite the pixel's own position being unknown here.
+        const auto makePointLightBuffer = [&](float distance) {
+            vkm::VkmBufferInfo info{};
+            info._flags = vkm::VkmResourceCreateInfo::AllowShaderRead | vkm::VkmResourceCreateInfo::AllowTransferDst;
+            info._size = sizeof(vkm::VkmDeferredLightConstants);
+            info._debugName = "DeferredPointLightConstants";
+            vkm::VkmBuffer* buffer = driver->newBuffer(info);
+            REQUIRE(buffer != nullptr);
+
+            vkm::VkmDeferredLightConstants constants{};
+            constants._lightCount = glm::uvec4(1u, 0u, 0u, 0u);
+            vkm::VkmPunctualLight& light = constants._lights[0];
+            light._type = static_cast<uint32_t>(vkm::VkmLightType::Point);
+            light._positionWorld[0] = 0.5f;
+            light._positionWorld[1] = 0.5f;
+            light._positionWorld[2] = -distance;
+            // Unranged, so the window never engages and the falloff is pure inverse square.
+            light._range = 0.0f;
+            // Scaled by d^2 so the two renders land in the same half-float range; the ratio the
+            // gate asserts is unaffected, but comparing 1e-4 against 2.5e-5 would not survive
+            // RGBA16F's mantissa.
+            const float intensity = distance * distance;
+            light._radiance[0] = intensity;
+            light._radiance[1] = intensity;
+            light._radiance[2] = intensity;
             REQUIRE(driver->uploadToBuffer(buffer->getHandle(), &constants, sizeof(constants)));
             return buffer;
         };
@@ -332,8 +380,7 @@ namespace vkmtest
         // Renders the lighting pass with `intensity` and returns the readback. A table is
         // immutable, so a different light means a different table -- which is exactly the usage
         // the immutability was designed around.
-        const auto shadeWith = [&](float intensity) {
-            vkm::VkmBuffer* lightBuffer = makeLightBuffer(intensity);
+        const auto shadeWithBuffer = [&](vkm::VkmBuffer* lightBuffer) {
             const std::vector<vkm::VkmTableResourceEntry> entries{
                 { 0, gbuffer.getTexture(vkm::VkmGBuffer::Target::Normal) },
                 { 1, gbuffer.getTexture(vkm::VkmGBuffer::Target::BaseColorRoughness) },
@@ -372,6 +419,10 @@ namespace vkmtest
             delete table;
             driver->getRenderResourcePool()->releaseResource(lightBuffer->getHandle());
             return readback;
+        };
+
+        const auto shadeWith = [&](float intensity) {
+            return shadeWithBuffer(makeLightBuffer(intensity));
         };
 
         const uint32_t litX = kGBufferRenderSize / 4;
@@ -416,8 +467,32 @@ namespace vkmtest
         const float lit[3] = { litR, litG, litB };
         for (uint32_t channel = 0; channel < 3; ++channel)
         {
+            // Without this the assertion below is satisfied by 0 == 0, which is exactly what it
+            // was doing while the light shone on the surface's unlit side.
+            REQUIRE(lit[channel] - kEmissive[channel] > 0.0f);
             CHECK(readHalfComponent(texelAt(doubled, litX, litY), channel) - kEmissive[channel] ==
                   doctest::Approx((lit[channel] - kEmissive[channel]) * 2.0f).epsilon(0.02));
+        }
+
+        // A point light's inverse-square falloff, measured rather than eyeballed. The radiance
+        // is pre-scaled by d^2, so if the shader's falloff really is 1/d^2 the two renders land
+        // on the SAME value -- and any other exponent shows up as a ratio away from 1. That is
+        // the assertion no convergence or image test can make: a linear falloff, a missing
+        // square, or a swapped position/direction all still produce a plausible image.
+        {
+            const float kNear = 50.0f;
+            const vkm::VkmTextureReadbackResult nearShade = shadeWithBuffer(makePointLightBuffer(kNear));
+            const vkm::VkmTextureReadbackResult farShade = shadeWithBuffer(makePointLightBuffer(kNear * 2.0f));
+
+            for (uint32_t channel = 0; channel < 3; ++channel)
+            {
+                const float nearLit = readHalfComponent(texelAt(nearShade, litX, litY), channel) - kEmissive[channel];
+                const float farLit = readHalfComponent(texelAt(farShade, litX, litY), channel) - kEmissive[channel];
+                REQUIRE(nearLit > 0.0f);
+                // 3% covers the lateral offset between the pixel and the light's axis (the
+                // triangle spans ~1 unit against a 50-unit distance) plus RGBA16F's mantissa.
+                CHECK(farLit == doctest::Approx(nearLit).epsilon(0.03));
+            }
         }
 
         driver->getRenderResourcePool()->releaseResource(lightingTarget->getHandle());

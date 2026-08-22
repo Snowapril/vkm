@@ -38,6 +38,7 @@ set(SRCS
     ${SRC_DIR}/TestSceneGeometryPool.cpp
     ${SRC_DIR}/TestSceneBatching.cpp
     ${SRC_DIR}/TestGltfImporter.cpp
+    ${SRC_DIR}/TestPunctualLights.cpp
     ${SRC_DIR}/TestCpuProfiler.cpp
     ${SRC_DIR}/TestGpuProfiler.cpp
     ${SRC_DIR}/TestImageLoader.cpp
