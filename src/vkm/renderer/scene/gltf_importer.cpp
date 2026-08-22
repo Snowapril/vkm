@@ -376,6 +376,30 @@ namespace vkm
             }
         }
 
+        // KHR_lights_punctual. cgltf parses the extension unconditionally, so an absent
+        // extension simply leaves lights_count at zero.
+        model._lights.reserve(data->lights_count);
+        for (cgltf_size i = 0; i < data->lights_count; ++i)
+        {
+            const cgltf_light& source = data->lights[i];
+            VkmScenePunctualLight light;
+            light._name = source.name != nullptr ? source.name : "";
+            light._color = glm::vec3(source.color[0], source.color[1], source.color[2]);
+            light._intensity = source.intensity;
+            light._range = source.range;
+            light._innerConeAngle = source.spot_inner_cone_angle;
+            light._outerConeAngle = source.spot_outer_cone_angle;
+            switch (source.type)
+            {
+                case cgltf_light_type_directional: light._type = VkmLightType::Directional; break;
+                case cgltf_light_type_spot:        light._type = VkmLightType::Spot; break;
+                // A light whose type the file did not name is a point light rather than a
+                // dropped one: dropping it would shift every later index a node refers to.
+                default:                           light._type = VkmLightType::Point; break;
+            }
+            model._lights.push_back(std::move(light));
+        }
+
         model._nodes.resize(data->nodes_count);
         for (cgltf_size i = 0; i < data->nodes_count; ++i)
         {
@@ -394,6 +418,11 @@ namespace vkm
             if (sourceNode.mesh != nullptr)
             {
                 node._meshIndices = primitiveIndicesPerMesh[cgltf_mesh_index(data, sourceNode.mesh)];
+            }
+
+            if (sourceNode.light != nullptr)
+            {
+                node._lightIndex = static_cast<uint32_t>(cgltf_light_index(data, sourceNode.light));
             }
         }
 
