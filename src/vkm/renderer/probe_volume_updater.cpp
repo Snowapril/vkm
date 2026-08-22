@@ -2,6 +2,8 @@
 
 #include <vkm/renderer/probe_volume_updater.h>
 
+#include <vkm/renderer/shadow_atlas.h>
+
 #include <vkm/base/common.h>
 #include <vkm/renderer/backend/common/buffer.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
@@ -49,6 +51,21 @@ namespace vkm
         {
             _everRefreshed[probeIndex] = false;
         }
+    }
+
+    void VkmProbeVolumeUpdater::setShadowSun(const VkmPunctualLight& sun, uint32_t tilesPerRow,
+                                             uint32_t tileSize)
+    {
+        VKM_ASSERT(isValid(), "VkmProbeVolumeUpdater::setShadowSun requires an initialized updater");
+
+        _captureConstantValues._sun = sun;
+        // Zero either dimension and the shader skips the lookup, which is what an updater with no
+        // atlas leaves in place.
+        const bool usable = _descriptor._shadowAtlasTexture.isValid() && tilesPerRow > 0u && tileSize > 0u;
+        _captureConstantValues._shadowParams =
+            usable ? glm::uvec4(tilesPerRow, tileSize, 0u, 0u) : glm::uvec4(0u);
+        _driver->uploadToBuffer(_captureConstants, &_captureConstantValues,
+                                sizeof(_captureConstantValues));
     }
 
     uint32_t VkmProbeVolumeUpdater::getRoundLengthInFrames() const
@@ -217,13 +234,43 @@ namespace vkm
             return true;
         };
 
-        VkmProbeCaptureConstants captureConstants{};
+        _captureConstantValues = VkmProbeCaptureConstants{};
         vkmBuildProbeFaceViewProjections(glm::vec3(0.0f), _descriptor._nearZ, _descriptor._farZ,
-                                         captureConstants._faceViewProjection);
-        if (!createAndUpload(&captureConstants, sizeof(captureConstants), "VkmProbeCaptureConstants",
-                             _captureConstants))
+                                         _captureConstantValues._faceViewProjection);
+        if (!createAndUpload(&_captureConstantValues, sizeof(_captureConstantValues),
+                             "VkmProbeCaptureConstants", _captureConstants))
         {
             return fail(outError, "Failed to create the probe capture constant buffer");
+        }
+
+        // No atlas from the caller: bind a sentinel of our own rather than leaving a table entry
+        // unbound, which is a validation error on every backend. One texel reading the far
+        // sentinel means "nothing occludes", and _shadowParams stays zero so the lookup is
+        // skipped outright.
+        if (!_descriptor._shadowAtlasTexture.isValid() || !_descriptor._shadowAtlasConstants.isValid())
+        {
+            VkmTextureInfo stubInfo{};
+            stubInfo._flags = static_cast<VkmResourceCreateInfo>(
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst));
+            stubInfo._extent = glm::uvec3(1, 1, 1);
+            stubInfo._numMipLevels = 1;
+            stubInfo._numArrayLayers = 1;
+            stubInfo._format = VkmFormat::R16G16B16A16_SFLOAT;
+            stubInfo._debugName = "VkmProbeShadowStub";
+            VkmTexture* stub = _driver->newTexture(stubInfo);
+            if (stub == nullptr)
+            {
+                return fail(outError, "Failed to create the probe capture's shadow stub texture");
+            }
+            _shadowStubTexture = stub->getHandle();
+
+            const VkmShadowAtlasConstants zeroed{};
+            if (!createAndUpload(&zeroed, sizeof(zeroed), "VkmProbeShadowStubConstants",
+                                 _shadowStubConstants))
+            {
+                return fail(outError, "Failed to create the probe capture's shadow stub constants");
+            }
         }
 
         const glm::uvec2 captureExtent = getCaptureAtlasExtent();
@@ -277,7 +324,18 @@ namespace vkm
                 return fail(outError, "A probe_capture_pso vertex-layout permutation is missing");
             }
             _capturePipelines[preset] = pipeline;
-            if (!buildTable(pipeline, {{ 0, _captureConstants }}, _captureTables[preset]))
+            const VkmResourceHandle shadowTexture = _descriptor._shadowAtlasTexture.isValid()
+                                                       ? _descriptor._shadowAtlasTexture
+                                                       : _shadowStubTexture;
+            const VkmResourceHandle shadowConstants = _descriptor._shadowAtlasConstants.isValid()
+                                                          ? _descriptor._shadowAtlasConstants
+                                                          : _shadowStubConstants;
+            if (!buildTable(pipeline,
+                            {{ 0, _captureConstants },
+                             { 1, shadowTexture },
+                             { 2, _sampler },
+                             { 3, shadowConstants }},
+                            _captureTables[preset]))
             {
                 return false;
             }
@@ -343,6 +401,8 @@ namespace vkm
         release(_captureDepth);
         release(_sampler);
         release(_captureConstants);
+        release(_shadowStubTexture);
+        release(_shadowStubConstants);
         release(_irradianceBlendConstants);
         release(_distanceBlendConstants);
 

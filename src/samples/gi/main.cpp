@@ -286,6 +286,10 @@ public:
         giDescriptor._probeHysteresis = 0.9f;
         giDescriptor._probeNormalBiasFraction = gv_gi_probe_normal_bias.get();
         giDescriptor._probeCullView = kProbeCullView;
+        // The sample owns the atlas; the GI system only forwards it to the probe capture, which
+        // is the pass that needs it. The atlas is initialized above so its handles are valid.
+        giDescriptor._shadowAtlasTexture = _shadowAtlas.getAtlasTexture();
+        giDescriptor._shadowAtlasConstants = _shadowAtlas.getConstantBuffer();
         VkmShadowAtlas::Descriptor shadowDescriptor;
         shadowDescriptor._cullViewIndex = kShadowCullView;
         std::string shadowError;
@@ -664,6 +668,14 @@ private:
             _shadowLights.push_back(light);
         }
         _shadowAtlas.allocate(_scene, &_shadowLights);
+
+        // Now that a tile is assigned, the probe capture can shade shadowed too -- which is what
+        // stops probes reporting a wall as sunlit when the sun cannot reach it.
+        if (!_shadowLights.empty())
+        {
+            _gi.setShadowSun(_shadowLights[0], _shadowAtlas.getTilesPerRow(),
+                             _shadowAtlas.getDescriptor()._tileSize);
+        }
 
         VkmDeferredLightConstants lightConstants{};
         vkmBuildDeferredLightConstants(_shadowLights, _shadowAtlas.getTilesPerRow(),

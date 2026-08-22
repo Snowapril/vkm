@@ -55,18 +55,6 @@ struct FrameData
     uint2  _pad0;
 };
 
-// Mirrors vkm::VkmShadowAtlasConstants (renderer/shadow_atlas.h).
-struct ShadowAtlasConstants
-{
-    float4x4 tileViewProjection[VKM_MAX_SHADOW_TILES];
-    // xyz = the light's world position for this tile (a directional light's is a point on its
-    // ortho box's near plane), w = 1 for a positional light and 0 for a directional one, which
-    // is what selects between a radial distance and a distance along the light's axis.
-    float4 tileLightPosition[VKM_MAX_SHADOW_TILES];
-    // xyz = the direction the light points, used only when w above is 0.
-    float4 tileLightDirection[VKM_MAX_SHADOW_TILES];
-};
-
 // Mirrors vkm::VkmShadowTilePushConstants.
 struct TilePushConstants
 {
@@ -86,7 +74,7 @@ VKM_BINDLESS_OBJECT_DATA(ObjectData, g_ObjectData);
 VKM_BINDLESS_FRAME_DATA(FrameData, g_FrameData);
 VKM_MATERIAL_DECLARE();
 
-[[vk::binding(0, 2)]] ConstantBuffer<ShadowAtlasConstants> g_Atlas : register(b0, space2);
+[[vk::binding(0, 2)]] ConstantBuffer<VkmShadowAtlasConstants> g_Atlas : register(b0, space2);
 
 // Words per vertex, per layout preset: 64 B, 32 B and 16 B (see VkmVertexLayoutPreset). These
 // must match probe_capture.hlsl and gbuffer.hlsl exactly -- a wrong stride reads a vertex from

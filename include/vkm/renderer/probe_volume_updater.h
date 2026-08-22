@@ -74,6 +74,16 @@ namespace vkm
             // view must give them different indices: a probe looks in every direction, so the two
             // cannot share a cull result.
             uint32_t _cullViewIndex = 0u;
+            /*
+            * @brief The shadow atlas the capture consults, if the caller has one.
+            * @details Handles rather than a VkmShadowAtlas reference, and optional: per-pass
+            * tables are immutable, so what the capture binds has to be known at initialize(),
+            * and an updater used without shadows must still bind something. Leave these invalid
+            * and the updater creates a 1x1 sentinel of its own, which reads as "nothing
+            * occludes" -- so no caller is forced to own an atlas to refresh probes.
+            */
+            VkmResourceHandle _shadowAtlasTexture{ VKM_INVALID_RESOURCE_HANDLE };
+            VkmResourceHandle _shadowAtlasConstants{ VKM_INVALID_RESOURCE_HANDLE };
         };
 
         // Face tiles per capture-atlas row. Six faces land as a 3x2 block per probe, which keeps the
@@ -141,6 +151,18 @@ namespace vkm
         */
         void invalidateProbe(uint32_t probeIndex);
 
+        /*
+        * @brief Tells the capture which light to shade with and where its shadow tile is.
+        * @details Separate from initialize() because a shadow tile is assigned by
+        * VkmShadowAtlas::allocate, which cannot run until the scene is built -- long after the
+        * capture's immutable table was created. Only the constant buffer's contents change here,
+        * never its binding.
+        * @param sun The directional light, with its _shadowTile filled in.
+        * @param tilesPerRow Shadow atlas tiles per row; 0 disables the lookup.
+        * @param tileSize Shadow atlas tile size in texels.
+        */
+        void setShadowSun(const VkmPunctualLight& sun, uint32_t tilesPerRow, uint32_t tileSize);
+
         // Frames a full sweep of the grid takes at the current budget.
         uint32_t getRoundLengthInFrames() const;
 
@@ -204,6 +226,12 @@ namespace vkm
         // A probe's first refresh blends against a cleared cell, so it takes the capture whole
         // instead of 3% of it. Without this every probe would spend a full convergence just
         // climbing out of black.
+        // Bound when the caller supplied no atlas: one texel holding the far sentinel, so the
+        // lookup reads "nothing occludes" rather than the table having an unbound entry.
+        VkmResourceHandle _shadowStubTexture{ VKM_INVALID_RESOURCE_HANDLE };
+        VkmResourceHandle _shadowStubConstants{ VKM_INVALID_RESOURCE_HANDLE };
+        VkmProbeCaptureConstants _captureConstantValues{};
+
         std::vector<bool> _everRefreshed;
         uint32_t _cursor = 0;
         // The atlases are cleared by the first blend pass's load action rather than by a pass of

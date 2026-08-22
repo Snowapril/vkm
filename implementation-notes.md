@@ -5221,7 +5221,11 @@ them:
   `vkmReconstructWorldPosition` walks `cameraDistance` along a ray from `cameraPositionWorld`,
   which is a pinhole construction, so under an orthographic projection the reconstruction is
   correct only at the image centre and drifts outward, reading exactly like a broken lookup.
-- **`probe_capture` is NOT wired to the atlas** (`TODO.md`). It is the step that would close the
-  over-bright-interior loop, and it needs a decision on who owns the shadow atlas: shadows are
-  not GI, but `VkmGiSystem` owns the probe updater. Landing it in a hurry would have put a
-  shadow atlas inside the GI system for no better reason than proximity.
+- **`probe_capture` consults the atlas, and the ownership question resolved without a new owner.**
+  The atlas stays with the caller; `VkmProbeVolumeUpdater::Descriptor` takes *handles*, not a
+  `VkmShadowAtlas&`, because a per-pass table is immutable and must name what it binds at
+  `initialize()`. Leave them invalid and the updater builds a 1x1 far-sentinel of its own, so no
+  caller is forced to own an atlas to refresh probes. `VkmGiSystem` forwards the handles without
+  owning anything. The sun's tile is only known after `VkmShadowAtlas::allocate`, long after the
+  table was built, so `setShadowSun` rewrites the constant buffer's contents rather than its
+  binding.
