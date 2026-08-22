@@ -170,3 +170,10 @@
 - VkmUpscalerMetal never queries MTLFXTemporalScalerDescriptor's supportedInputContentMin/MaxScale (1.0-3.0 on M3 Pro), so an out-of-range ratio fails as a nil scaler rather than a clear rejection.
 - model_viewer sizes its depth texture from the swapchain extent, so it cannot consume the engine's upscale mode until that follows getRenderExtent().
 - Stale .gcda files left by a recompiled coverage build crash UnitTests inside __llvm_gcov_writeout at exit, which run_tests.py reports as FAIL even though doctest printed SUCCESS; deleting build/<backend>/**/*.gcda clears it.
+- Texture streaming holds no CPU pixels between rebuilds, so streaming *down* re-decodes the file and rebuilds the whole chain to keep only its tail.
+- Texture streaming runs one rebuild at a time and uploads `_maxLevelUploadsPerTick` levels per frame, so a large camera move converges over many frames.
+- Texture streaming is off without `VkmDriverCapabilityFlags::BindlessTextures` (WebGPU): a per-draw set-3 material table has no slot to re-point and is immutable once built.
+- The streaming mip debug view rides the G-buffer's base colour, so while it is selected the indirect estimator and the temporal history consume the heat colour, and switching away leaves it ghosting for a few frames.
+- `VkmMaterialData` carries the streamed level of the base-colour texture only; a material's four textures stream independently and the record has one pair of words.
+- `VkmScene::destroy()` releases material textures that were never declared as referenced resources, so the reclaimer has no recorded usage to wait on and relies on the caller having drained the queue.
+- Texture streaming selects from a bounding sphere rather than the real UV parameterisation, so `_mipBias` absorbs the per-scene difference.

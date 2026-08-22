@@ -67,18 +67,20 @@ namespace
         MaterialIndex = 2,
         Normal = 3,
         TangentNormal = 4,
-        Count = 5,
+        StreamingMip = 5,
+        Count = 6,
     };
 
     constexpr size_t kDebugModeCount = static_cast<size_t>(DebugMode::Count);
 
     // Both indexed by DebugMode, so the sized declarations fail to compile if one drifts.
     constexpr const char* kDebugModeNames[kDebugModeCount] = {
-        "Lit", "Base color", "Material index", "World normal", "TBN normal",
+        "Lit", "Base color", "Material index", "World normal", "TBN normal", "Streaming mip",
     };
     // Digits, so nothing collides with the fly camera's WASD/QE/Shift set.
     constexpr VkmKeyCode kDebugModeKeys[kDebugModeCount] = {
         VkmKeyCode::Num0, VkmKeyCode::Num1, VkmKeyCode::Num2, VkmKeyCode::Num3, VkmKeyCode::Num4,
+        VkmKeyCode::Num5,
     };
 
     // One loadable file found under resources/Scenes/.
@@ -200,6 +202,7 @@ public:
         }
         pollDebugModeKeys();
         updateDepthTexture();
+        updateTextureStreaming();
 
 #if defined(VKM_ENABLE_IMGUI)
         drawSceneBrowser();
@@ -438,10 +441,17 @@ private:
         {
             ImGui::TextDisabled("Magenta = no tangent (the asset ships none, or the layout has no room)");
         }
+        else if (_debugMode == DebugMode::StreamingMip)
+        {
+            ImGui::TextDisabled("Green = the whole chain is resident, red = only the coarsest level");
+        }
         else
         {
             ImGui::TextDisabled("Or press 0-%zu over the render window", kDebugModeCount - 1);
         }
+
+        ImGui::Separator();
+        drawTextureStreamingUi();
 
         ImGui::Separator();
         bool flyMode = _flyMode;
@@ -525,7 +535,56 @@ private:
         }
     }
 
+#if defined(VKM_ENABLE_IMGUI)
+    void drawTextureStreamingUi()
+    {
+        if (!_scene.isTextureStreamingAvailable())
+        {
+            ImGui::TextDisabled("Texture streaming: unavailable (no bindless texture array)");
+            return;
+        }
+
+        VkmTextureStreamingSettings settings = _scene.getTextureStreamingSettings();
+        bool changed = ImGui::Checkbox("Texture streaming", &settings._enabled);
+
+        int mipBias = static_cast<int>(settings._mipBias);
+        if (ImGui::SliderInt("Mip bias", &mipBias, -4, 4))
+        {
+            settings._mipBias = static_cast<int32_t>(mipBias);
+            changed = true;
+        }
+        ImGui::TextDisabled("Negative keeps more detail than the screen needs, positive trades it for memory");
+
+        if (changed)
+        {
+            _scene.setTextureStreamingSettings(settings);
+        }
+    }
+#else
+    void drawTextureStreamingUi() {}
+#endif
+
+    /*
+    * Runs before the frame records anything, which is what the streamer's texture creation and
+    * blocking uploads need -- and the camera is already current, the engine having drained input
+    * before calling update().
+    */
+    void updateTextureStreaming()
+    {
+        if (!_sceneReady)
+        {
+            return;
+        }
+
+        VkmTextureStreamingView view;
+        view._cameraPosition = _camera.getPosition();
+        view._viewportHeight = _camera.getViewportHeight();
+        view._fovYRadians = _camera.getFovYRadians();
+        _scene.updateTextureStreaming(_engine->getDriver(), view);
+    }
+
     // The depth buffer must always match the swapchain, which the window can resize under us.
+
     void updateDepthTexture()
     {
         VkmSwapChainBase* swapChain = _engine->getMainSwapChain();

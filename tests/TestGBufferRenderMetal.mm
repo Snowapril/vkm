@@ -62,6 +62,12 @@ TEST_CASE("Metal material textures - the base-colour texture reaches the G-buffe
     vkmtest::runMaterialTextureTest(fixture.driver.get());
 }
 
+TEST_CASE("Metal texture streaming - a streamed-out material texture is a new resource that still samples") {
+    MetalGBufferRenderFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runTextureStreamingSwapTest(fixture.driver.get());
+}
+
 TEST_CASE("Metal deferred lighting - the G-buffer is sampled through set 2 and shaded") {
     MetalGBufferRenderFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);

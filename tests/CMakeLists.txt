@@ -42,6 +42,7 @@ set(SRCS
     ${SRC_DIR}/TestGpuProfiler.cpp
     ${SRC_DIR}/TestImageLoader.cpp
     ${SRC_DIR}/TestMipChain.cpp
+    ${SRC_DIR}/TestTextureStreaming.cpp
     ${SRC_DIR}/TestCubemapTexture.cpp
     ${SRC_DIR}/TestBufferHostWrite.cpp
     ${SRC_DIR}/TestTransientTexture.cpp

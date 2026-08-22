@@ -46,6 +46,7 @@ struct GiCompositeConstants
 #define VKM_GI_DEBUG_MOTION    8
 #define VKM_GI_DEBUG_DISTANCE  9
 #define VKM_GI_DEBUG_EMISSIVE  10
+#define VKM_GI_DEBUG_STREAMING_MIP 11
 
 typedef VkmFullscreenVSOutput VSOutput;
 
@@ -89,6 +90,11 @@ float4 PSMain(VSOutput input) : SV_TARGET0
                 return float4((1.0 / max(motionMetallic.w, 1e-3)).xxx, 1.0);
             case VKM_GI_DEBUG_EMISSIVE:
                 return float4(g_Emissive.SampleLevel(g_Sampler, input.uv, 0).rgb, 1.0);
+            // The G-buffer pass wrote the heat colour into base colour for this view (it has no
+            // channel of its own), so showing it is showing albedo -- unlit, the colour being a
+            // level index rather than a reflectance.
+            case VKM_GI_DEBUG_STREAMING_MIP:
+                return float4(baseColorRoughness.rgb, 1.0);
             default: break;
         }
     }

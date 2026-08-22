@@ -352,6 +352,15 @@ public:
         {
             _camera.setJitterPixels(glm::vec2(0.0f));
         }
+        // Before the frame records anything: the streamer creates textures and uploads through the
+        // driver directly, which a recording command buffer cannot be open across. The render
+        // extent, not the display one, is what the G-buffer is rasterized at.
+        VkmTextureStreamingView streamingView;
+        streamingView._cameraPosition = _camera.getPosition();
+        streamingView._viewportHeight = _renderExtent.y;
+        streamingView._fovYRadians = _camera.getFovYRadians();
+        _scene.updateTextureStreaming(_engine->getDriver(), streamingView);
+
         takePendingScreenshot();
         drawUi();
     }
@@ -381,6 +390,12 @@ public:
         const uint32_t frameIndex = renderGraph->frameIndex();
         VkmFrameData cameraFrameData = frameData;
         vkmExtractFrustumPlanes(_camera.getViewProjection(), cameraFrameData._frustumPlanes);
+        // The streaming view is the one debug view the composite cannot read out of the G-buffer,
+        // so the G-buffer pass has to be told to write it. Only the camera's frame data carries
+        // it: the probe refresh shades with `frameData` and stays unaffected.
+        cameraFrameData._debugMode = (_debugView == VkmGiDebugView::StreamingMip)
+                                         ? kGBufferDebugStreamingMip
+                                         : 0u;
 
         VkmRenderTransferSubGraph* updateSubGraph = renderGraph->beginTransferSubGraph("GiSceneUpdate");
         referenceScene(updateSubGraph, _scene, VkmScene::ReferencePhase::Update);
@@ -508,6 +523,8 @@ public:
 private:
     // The probe refresh takes the other one; see the file header.
     static constexpr uint32_t kCameraCullView = 0;
+    // Mirrors VKM_GBUFFER_DEBUG_STREAMING_MIP in resources/Shaders/gbuffer.hlsl.
+    static constexpr uint32_t kGBufferDebugStreamingMip = 1;
     static constexpr uint32_t kProbeCullView = 1;
 
     struct Tables
@@ -932,6 +949,29 @@ private:
                 }
             }
             ImGui::EndCombo();
+        }
+        if (_debugView == VkmGiDebugView::StreamingMip)
+        {
+            ImGui::TextDisabled("Green = the whole chain is resident, red = only the coarsest level");
+            if (_scene.isTextureStreamingAvailable())
+            {
+                VkmTextureStreamingSettings streaming = _scene.getTextureStreamingSettings();
+                bool changed = ImGui::Checkbox("Texture streaming", &streaming._enabled);
+                int mipBias = static_cast<int>(streaming._mipBias);
+                if (ImGui::SliderInt("Mip bias", &mipBias, -4, 4))
+                {
+                    streaming._mipBias = static_cast<int32_t>(mipBias);
+                    changed = true;
+                }
+                if (changed)
+                {
+                    _scene.setTextureStreamingSettings(streaming);
+                }
+            }
+            else
+            {
+                ImGui::TextDisabled("Streaming unavailable: no bindless texture array");
+            }
         }
         ImGui::DragFloat("Indirect intensity", &_indirectIntensity, 0.05f, 0.0f, 8.0f);
         VkmGiOptions& giOptions = _gi.options();

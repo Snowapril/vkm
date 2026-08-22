@@ -54,6 +54,35 @@ struct VkmMaterial
     uint   emissiveSlot;
 };
 
+/*
+* The base-colour texture's streamed mip range: words 10 and 11, which vkmLoadMaterial does not
+* read. x is the level the resident texture starts at, y how many levels its full chain has.
+*
+* Separate from VkmMaterial, and loaded by its own function, because only the streaming debug view
+* wants it: folding two more word loads into vkmLoadMaterial would charge every shader that
+* evaluates a material -- including the ray-tracing kernels, which do it per hit -- for a
+* visualisation none of them draws.
+*/
+#define VKM_MATERIAL_STREAMING_LOADER()                                                             \
+    float2 vkmLoadMaterialStreamingMip(uint materialPoolSlot, uint materialIndex)                   \
+    {                                                                                               \
+        const uint base = materialIndex * VKM_MATERIAL_WORD_STRIDE;                                 \
+        return float2(asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 10)),                        \
+                      asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 11)));                       \
+    }
+
+/*
+* Green where the whole chain is resident through cool blue to red at the coarsest level, so a
+* surface that has streamed out reads as hot. A material with no streamed texture reports a chain
+* of one level and comes back green, which is what "nothing to stream" should look like.
+*/
+float3 vkmStreamingMipHeatColor(float2 streamingMip)
+{
+    const float lastLevel = max(streamingMip.y - 1.0, 1.0);
+    const float t = saturate(streamingMip.x / lastLevel);
+    return float3(t, 1.0 - t, 0.5 * saturate(1.0 - abs(t * 2.0 - 1.0)));
+}
+
 // Reads one material record out of the pool, which is an untyped u32 word array (it shares the
 // bindless Buffer array with the geometry pools) -- so this is a word unpack, the same shape
 // VKM_LOAD_VERTEX has. Identical on every backend.
@@ -121,6 +150,7 @@ struct VkmMaterial
     [[vk::binding(2, 3)]] SamplerState g_VkmMaterialSampler           : register(s0, space3);       \
     [[vk::binding(3, 3)]] Texture2D    g_VkmMaterialEmissive          : register(t2, space3);       \
     VKM_MATERIAL_LOADER()                                                                           \
+    VKM_MATERIAL_STREAMING_LOADER()                                                                 \
     float4 vkmSampleBaseColor(VkmMaterial material, float2 uv)                                      \
     {                                                                                               \
         return material.baseColorFactor *                                                           \
@@ -156,6 +186,7 @@ struct VkmMaterial
         return g_VkmMaterialTextures[NonUniformResourceIndex(slot)].Sample(g_VkmMaterialSampler, uv); \
     }                                                                                               \
     VKM_MATERIAL_LOADER()                                                                           \
+    VKM_MATERIAL_STREAMING_LOADER()                                                                 \
     VKM_MATERIAL_SAMPLERS()
 
 #endif

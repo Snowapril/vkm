@@ -64,6 +64,13 @@ TEST_CASE("Vulkan material textures - the base-colour texture reaches the G-buff
     vkmtest::runMaterialTextureTest(fixture.driver.get());
 }
 
+TEST_CASE("Vulkan texture streaming - a streamed-out material texture is a new resource that still samples")
+{
+    VulkanGBufferRenderFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runTextureStreamingSwapTest(fixture.driver.get());
+}
+
 TEST_CASE("Vulkan deferred lighting - the G-buffer is sampled through set 2 and shaded")
 {
     VulkanGBufferRenderFixture fixture;
