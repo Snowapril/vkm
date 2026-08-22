@@ -69,4 +69,10 @@ TEST_CASE("Metal shadowed probe capture - a probe under an occluder records shad
     vkmtest::runShadowedProbeCaptureTest(fixture.driver.get());
 }
 
+TEST_CASE("Metal shadow atlas - the directional fit follows the camera and snaps to texels") {
+    MetalShadowAtlasFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runShadowFocusTest(fixture.driver.get());
+}
+
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE

@@ -22,8 +22,10 @@
 #include <glm/geometric.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace vkmtest
@@ -214,6 +216,94 @@ namespace vkmtest
 
         atlas.destroy();
     }
+    /*
+    * @brief The directional fit follows the camera, and snaps to whole shadow texels.
+    *
+    * Two properties, and the second is the one that is easy to get wrong. Fitting the tile to a
+    * focus region instead of the whole scene is what buys the resolution -- on Sponza it is the
+    * difference between 7.3 world units per texel and a fraction of one. But refitting every
+    * frame slides the texel grid under a static world, and every shadow edge then crawls: a
+    * moving staircase instead of a stationary one, which is worse. Snapping the fit to texel
+    * increments is what makes a sub-texel camera movement change nothing at all.
+    */
+    inline void runShadowFocusTest(vkm::VkmDriverBase* driver)
+    {
+        vkm::VkmPipelineStateManager manager(driver);
+        std::string psoError;
+        REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(TEST_ENGINE_PIPELINE_DIR,
+                                                                TEST_ENGINE_SHADER_CACHE_DIR,
+                                                                vkm::VkmPipelineStateOrigin::Engine, &psoError),
+                        psoError);
+
+        vkm::VkmScene scene;
+        vkm::VkmShadowAtlas atlas;
+        vkm::VkmShadowAtlas::Descriptor descriptor;
+        descriptor._tileSize = 512u;
+        std::string atlasError;
+        REQUIRE_MESSAGE(atlas.initialize(driver, &manager, descriptor, &atlasError), atlasError);
+
+        std::vector<vkm::VkmPunctualLight> lights(1);
+        vkm::VkmPunctualLight& sun = lights[0];
+        sun._type = static_cast<uint32_t>(vkm::VkmLightType::Directional);
+        sun._directionWorld[0] = 0.0f;
+        sun._directionWorld[1] = -1.0f;
+        sun._directionWorld[2] = 0.0f;
+        sun._radiance[0] = 1.0f;
+        atlas.allocate(scene, &lights);
+        REQUIRE(atlas.getTileCount() == 1);
+
+        constexpr float kRadius = 50.0f;
+        const float texelWorld = 2.0f * kRadius / static_cast<float>(descriptor._tileSize);
+
+        atlas.setDirectionalFocus(glm::vec3(0.0f, 0.0f, 0.0f), kRadius);
+        // The stored footprint is what the shader biases by, so it has to follow the fit.
+        CHECK(atlas.getConstants()._tileLightDirection[0].w == doctest::Approx(texelWorld));
+
+        // A focus radius covering a region instead of a whole scene is the resolution win: a
+        // 3721-unit scene at this tile size would spend 7.3 units per texel.
+        CHECK(texelWorld < 0.25f);
+
+        // Snapping means the fit is a STEP function of the focus: constant across a texel, and
+        // changing only at texel boundaries. Sweeping sub-texel offsets across most of one texel
+        // therefore yields at most two distinct fits (the sweep can straddle one boundary),
+        // whereas an unsnapped fit yields a distinct one for every sample -- which is precisely
+        // the per-frame crawl this exists to prevent.
+        const auto fitKey = [&]() {
+            const glm::mat4& m = atlas.getConstants()._tileViewProjection[0];
+            return std::make_pair(m[3][0], m[3][1]); // the translation the snap moves
+        };
+
+        std::vector<std::pair<float, float>> subTexelFits;
+        for (int step = 0; step < 8; ++step)
+        {
+            const float offset = texelWorld * (static_cast<float>(step) / 8.0f);
+            atlas.setDirectionalFocus(glm::vec3(offset, 0.0f, 0.0f), kRadius);
+            const std::pair<float, float> key = fitKey();
+            if (std::find(subTexelFits.begin(), subTexelFits.end(), key) == subTexelFits.end())
+            {
+                subTexelFits.push_back(key);
+            }
+        }
+        CHECK(subTexelFits.size() <= 2);
+
+        // And a sweep of whole-texel steps must actually move, or the shadow stops following the
+        // camera at all -- the opposite failure, and just as invisible in a still frame.
+        std::vector<std::pair<float, float>> texelFits;
+        for (int step = 0; step < 8; ++step)
+        {
+            atlas.setDirectionalFocus(glm::vec3(texelWorld * static_cast<float>(step * 4), 0.0f, 0.0f),
+                                      kRadius);
+            const std::pair<float, float> key = fitKey();
+            if (std::find(texelFits.begin(), texelFits.end(), key) == texelFits.end())
+            {
+                texelFits.push_back(key);
+            }
+        }
+        CHECK(texelFits.size() == 8);
+
+        atlas.destroy();
+    }
+
     /*
     * @brief The probe capture consults the shadow atlas, so a probe under an occluder records the
     * floor as shadowed rather than sunlit.

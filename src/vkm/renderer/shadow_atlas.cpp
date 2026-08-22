@@ -10,6 +10,7 @@
 #include <vkm/renderer/backend/common/render_graph.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/resource_table.h>
+#include <vkm/renderer/backend/common/staging_buffer.h>
 #include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/probe_volume.h>
 #include <vkm/renderer/scene/scene.h>
@@ -152,6 +153,25 @@ namespace vkm
             return fail(outError, "Failed to create the shadow atlas constant buffer");
         }
         _constantBuffer = buffer->getHandle();
+
+        // One staging region per frame slot: the directional tile is refitted every frame now,
+        // so the constants change while the tables naming them stay immutable. Copying inside
+        // the frame's own transfer subgraph is what keeps that safe -- an uploadToBuffer here
+        // would submit and wait while earlier frames are still sampling the buffer.
+        for (uint32_t slot = 0; slot < FRAME_BUFFER_COUNT; ++slot)
+        {
+            VkmStagingBufferInfo stagingInfo{};
+            stagingInfo._size = sizeof(VkmShadowAtlasConstants);
+            stagingInfo._debugName = "VkmShadowAtlasConstantStaging";
+            VkmStagingBuffer* staging = _driver->newStagingBuffer(stagingInfo);
+            if (staging == nullptr)
+            {
+                return fail(outError, "Failed to create the shadow atlas constant staging buffer");
+            }
+            _constantStaging[slot] = staging->getHandle();
+            _constantStagingPointers[slot] = staging;
+        }
+
         // Uploaded once here so the buffer is never read uninitialized; allocate() rewrites it.
         return _driver->uploadToBuffer(_constantBuffer, &_constants, sizeof(_constants));
     }
@@ -231,6 +251,9 @@ namespace vkm
         const glm::vec3 sceneMax = bounds._valid ? bounds._max : glm::vec3(1.0f);
         const glm::vec3 sceneCenter = 0.5f * (sceneMin + sceneMax);
         const float sceneRadius = std::max(0.5f * glm::length(sceneMax - sceneMin), 1e-3f);
+        _sceneCenter = sceneCenter;
+        _sceneRadius = sceneRadius;
+        _directionalTile = -1;
 
         _casterBoxMin = glm::vec3(std::numeric_limits<float>::max());
         _casterBoxMax = glm::vec3(std::numeric_limits<float>::lowest());
@@ -257,25 +280,18 @@ namespace vkm
 
             if (type == static_cast<uint32_t>(VkmLightType::Directional))
             {
-                // One ortho box over the whole scene. Coarse on a large scene -- cascades are the
-                // answer and are deliberately not in this pass -- but correct.
-                const glm::vec3 eye = sceneCenter - direction * (sceneRadius * 2.0f);
-                // Any up vector not parallel to the aim; the aim is normalized, so comparing a
-                // component against 1 is a safe test for "pointing along Y".
-                const glm::vec3 up = std::abs(direction.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f)
-                                                                   : glm::vec3(0.0f, 1.0f, 0.0f);
-                const glm::mat4 view = glm::lookAtRH(eye, sceneCenter, up);
-                const glm::mat4 projection = glm::orthoRH_ZO(-sceneRadius, sceneRadius, -sceneRadius,
-                                                             sceneRadius, 0.0f, sceneRadius * 4.0f);
+                // Only one directional tile is tracked for refitting; a second directional light
+                // keeps whatever fit allocate() gave it.
+                if (_directionalTile < 0)
+                {
+                    _directionalTile = static_cast<int32_t>(_tiles.size());
+                    _directionalDirection = direction;
+                }
                 Tile tile;
-                tile._lightPosition = eye;
                 tile._lightDirection = direction;
                 tile._positional = false;
-                tile._farZ = sceneRadius * 4.0f;
-                // Orthographic: the footprint does not depend on distance, so it is the whole
-                // constant. The shader multiplies by 1 for a directional tile.
-                tile._texelWorldPerDistance = (2.0f * sceneRadius) / static_cast<float>(_descriptor._tileSize);
-                appendTile(projection * view, tile);
+                appendTile(glm::mat4(1.0f), tile);
+                rebuildDirectionalTile();
 
                 _casterBoxMin = glm::min(_casterBoxMin, sceneMin);
                 _casterBoxMax = glm::max(_casterBoxMax, sceneMax);
@@ -334,6 +350,69 @@ namespace vkm
         }
 
         _driver->uploadToBuffer(_constantBuffer, &_constants, sizeof(_constants));
+        _constantsDirty = false;
+    }
+
+    void VkmShadowAtlas::rebuildDirectionalTile()
+    {
+        if (_directionalTile < 0 || static_cast<size_t>(_directionalTile) >= _tiles.size())
+        {
+            return;
+        }
+
+        // Focus if a camera gave us one, otherwise the whole scene.
+        const bool focused = _focusRadius > 0.0f;
+        const glm::vec3 center = focused ? _focusCenter : _sceneCenter;
+        const float radius = focused ? _focusRadius : _sceneRadius;
+        const glm::vec3 direction = _directionalDirection;
+
+        // Any up vector not parallel to the aim; the aim is normalized, so comparing a component
+        // against 1 is a safe test for "pointing along Y".
+        const glm::vec3 up =
+            std::abs(direction.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+
+        // Snap the centre to whole shadow texels, in light space. Without this the texel grid
+        // slides under a static world every time the camera moves and every shadow edge crawls --
+        // the fit has to change in texel-sized steps or not at all.
+        const float texelWorld = (2.0f * radius) / static_cast<float>(_descriptor._tileSize);
+        const glm::mat4 snapView = glm::lookAtRH(glm::vec3(0.0f), direction, up);
+        glm::vec3 lightSpaceCenter = glm::vec3(snapView * glm::vec4(center, 1.0f));
+        lightSpaceCenter.x = std::floor(lightSpaceCenter.x / texelWorld) * texelWorld;
+        lightSpaceCenter.y = std::floor(lightSpaceCenter.y / texelWorld) * texelWorld;
+        const glm::vec3 snappedCenter =
+            glm::vec3(glm::inverse(snapView) * glm::vec4(lightSpaceCenter, 1.0f));
+
+        // Pulled back far enough that casters between the light and the focus are still inside
+        // the frustum -- an object outside it casts nothing, which reads as a missing shadow.
+        const float pullBack = _sceneRadius * 2.0f + radius;
+        const glm::vec3 eye = snappedCenter - direction * pullBack;
+        const float farZ = pullBack + radius + _sceneRadius * 2.0f;
+
+        const glm::mat4 view = glm::lookAtRH(eye, snappedCenter, up);
+        const glm::mat4 projection = glm::orthoRH_ZO(-radius, radius, -radius, radius, 0.0f, farZ);
+
+        Tile& tile = _tiles[static_cast<size_t>(_directionalTile)];
+        tile._lightPosition = eye;
+        tile._lightDirection = direction;
+        tile._positional = false;
+        tile._farZ = farZ;
+        // Orthographic: the footprint does not depend on distance, so it is the whole constant.
+        tile._texelWorldPerDistance = texelWorld;
+
+        const uint32_t index = static_cast<uint32_t>(_directionalTile);
+        _constants._tileViewProjection[index] = projection * view;
+        _constants._tileLightPosition[index] = glm::vec4(tile._lightPosition, 0.0f);
+        _constants._tileLightDirection[index] = glm::vec4(tile._lightDirection, tile._texelWorldPerDistance);
+        _constantsDirty = true;
+    }
+
+    void VkmShadowAtlas::setDirectionalFocus(const glm::vec3& center, float radius)
+    {
+        VKM_ASSERT(isValid(), "VkmShadowAtlas::setDirectionalFocus requires an initialized atlas");
+
+        _focusCenter = center;
+        _focusRadius = std::max(radius, 0.0f);
+        rebuildDirectionalTile();
     }
 
     void VkmShadowAtlas::record(VkmRenderGraph* renderGraph, VkmScene* scene,
@@ -364,10 +443,23 @@ namespace vkm
 
         VkmRenderTransferSubGraph* updateSubGraph = renderGraph->beginTransferSubGraph("ShadowSceneUpdate");
         referenceScene(updateSubGraph, VkmScene::ReferencePhase::Update);
+        const bool uploadConstants = _constantsDirty;
+        if (uploadConstants)
+        {
+            updateSubGraph->addReferencedResource(_constantBuffer, VkmResourceAccess::TransferWrite);
+            updateSubGraph->addReferencedResource(_constantStaging[frameIndex], VkmResourceAccess::TransferRead);
+        }
         updateSubGraph->setTransferCallback(
-            [scene, frameIndex, shadowFrameData, cullView](VkmCommandBufferBase* commandBuffer) {
+            [this, scene, frameIndex, shadowFrameData, cullView, uploadConstants](VkmCommandBufferBase* commandBuffer) {
                 scene->recordUpdate(commandBuffer, frameIndex, shadowFrameData, cullView);
+                if (uploadConstants)
+                {
+                    _constantStagingPointers[frameIndex]->writeDirect(0, &_constants, sizeof(_constants));
+                    commandBuffer->copyBuffer(_constantStaging[frameIndex], _constantBuffer, 0, 0,
+                                              sizeof(_constants));
+                }
             });
+        _constantsDirty = false;
 
         VkmRenderComputeSubGraph* cullSubGraph = renderGraph->beginComputeSubGraph("ShadowSceneCull");
         referenceScene(cullSubGraph, VkmScene::ReferencePhase::Cull);
@@ -465,6 +557,15 @@ namespace vkm
         // Released straight to the pool rather than through the deferred reclaimer, matching
         // VkmProbeVolume::releaseSet: the reclaimer frees on a GPU timeline that will not advance
         // again once teardown has started. Draining before destroy() is the caller's job.
+        for (VkmResourceHandle& staging : _constantStaging)
+        {
+            if (staging.isValid())
+            {
+                _driver->getRenderResourcePool()->releaseResource(staging);
+                staging = VKM_INVALID_RESOURCE_HANDLE;
+            }
+        }
+        _constantStagingPointers.fill(nullptr);
         for (VkmResourceHandle* handle : { &_atlasColor, &_atlasDepth, &_constantBuffer })
         {
             if (handle->isValid())
