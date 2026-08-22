@@ -289,6 +289,19 @@ namespace vkm
         }
     }
 
+    void vkmBuildBoxPlanes(const glm::vec3& boxMin, const glm::vec3& boxMax, glm::vec4* outPlanes)
+    {
+        VKM_ASSERT(outPlanes != nullptr, "vkmBuildBoxPlanes requires an output array of 6 planes");
+
+        // Same sign convention scene_cull.hlsl tests with: dot(n, c) + w < -radius rejects.
+        outPlanes[0] = glm::vec4(1.0f, 0.0f, 0.0f, -boxMin.x);
+        outPlanes[1] = glm::vec4(-1.0f, 0.0f, 0.0f, boxMax.x);
+        outPlanes[2] = glm::vec4(0.0f, 1.0f, 0.0f, -boxMin.y);
+        outPlanes[3] = glm::vec4(0.0f, -1.0f, 0.0f, boxMax.y);
+        outPlanes[4] = glm::vec4(0.0f, 0.0f, 1.0f, -boxMin.z);
+        outPlanes[5] = glm::vec4(0.0f, 0.0f, -1.0f, boxMax.z);
+    }
+
     void VkmScene::setDirectionalLight(const glm::vec3& directionToLight, const glm::vec3& radiance)
     {
         VKM_ASSERT(_lightBuffer == VKM_INVALID_RESOURCE_HANDLE,
