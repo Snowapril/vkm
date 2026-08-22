@@ -75,6 +75,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestGBufferMetal.mm
         ${SRC_DIR}/TestGBufferRenderMetal.mm
         ${SRC_DIR}/TestProbeVolumeMetal.mm
+        ${SRC_DIR}/TestShadowAtlasMetal.mm
         ${SRC_DIR}/TestViewportMetal.mm
         ${SRC_DIR}/TestAccelerationStructureMetal.mm
         ${SRC_DIR}/TestUpscalerMetal.mm
@@ -102,6 +103,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestGBufferMetal.mm
         ${SRC_DIR}/TestGBufferRenderMetal.mm
         ${SRC_DIR}/TestProbeVolumeMetal.mm
+        ${SRC_DIR}/TestShadowAtlasMetal.mm
         ${SRC_DIR}/TestViewportMetal.mm
         ${SRC_DIR}/TestAccelerationStructureMetal.mm
         ${SRC_DIR}/TestUpscalerMetal.mm
