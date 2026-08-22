@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Phase 8.4: spatial resampling. Each pixel merges k neighbours' reservoirs into its own.
 //

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Turns scene_cull.hlsl's compacted visible-object list into native indirect draw arguments.
 //

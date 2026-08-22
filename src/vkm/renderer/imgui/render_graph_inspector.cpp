@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/imgui/render_graph_inspector.h>
 #include <vkm/renderer/imgui/imgui_renderer.h>

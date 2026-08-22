@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The fullscreen pass building block: a vertex shader that needs no vertex buffer, no index
 // buffer and no input layout, so a PSO using it declares none.

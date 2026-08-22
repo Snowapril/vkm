@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The shared composite: direct lighting plus whatever the active GI technique produced, and the
 // engine's debug views over both.

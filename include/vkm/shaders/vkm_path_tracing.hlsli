@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The path-tracing seam shared by the reference tracer (path_trace.hlsl) and the 1-spp indirect
 // pass (gi_indirect.hlsl). Two estimators of the same integral have to agree, so the parts they

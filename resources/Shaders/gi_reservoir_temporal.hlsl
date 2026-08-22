@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Phase 8.5: temporal resampling. Each pixel merges last frame's reservoir into this frame's
 // fresh one, which is where ReSTIR's large quality win comes from: confidence grows every frame,

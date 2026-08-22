@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The low-spec GI tier's output pass: reads the G-buffer, samples the probe volume, and writes the
 // indirect diffuse radiance the composite consumes.

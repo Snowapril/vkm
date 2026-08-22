@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Phase 6's reference path tracer: brute-force, accumulating, no resampling and no denoiser. It
 // exists to be *right*, not fast -- every later phase is measured against what this converges to,

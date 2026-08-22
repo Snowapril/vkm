@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Phase 8.6: shade the screen from the resampled reservoirs into the indirect-radiance texture.
 //

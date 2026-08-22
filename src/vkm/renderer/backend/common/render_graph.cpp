@@ -1,5 +1,5 @@
 
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/backend/common/render_graph.h>
 #include <vkm/renderer/backend/common/aliased_memory_heap.h>

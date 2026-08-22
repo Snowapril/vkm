@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The one place that knows how a material's textures reach a shader, so no drawing shader has to.
 // Same role vkm_bindless.hlsli plays for the resource arrays: a shader writes VKM_MATERIAL_DECLARE()

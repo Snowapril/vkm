@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The low-spec tier's contact term: short-range indirect light, ray-marched in screen space and
 // added on top of the probe volume's result.

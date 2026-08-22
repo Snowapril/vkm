@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Fills the G-buffer both GI tiers read (see renderer/gbuffer.h for the channel layout, and
 // vkm_gbuffer.hlsli for the packing this shader and its readers share).

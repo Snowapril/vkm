@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The scene's light table, as next-event estimation reads it: a fixed header (the directional
 // light's radiance) followed by emissive-triangle records carrying world-space corners, radiance,

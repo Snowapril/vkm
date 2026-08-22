@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // VkmScene builds its acceleration structures out of the geometry pool it already owns, so a
 // traced scene duplicates no vertex data. Written against VkmDriverBase so Metal and Vulkan run

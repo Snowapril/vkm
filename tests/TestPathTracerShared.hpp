@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Phase 6's gate: the white furnace test, and energy conservation on a small diffuse scene.
 //

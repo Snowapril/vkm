@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Shader-side mirror of the probe volume's atlas layout and its lookup (see renderer/probe_volume.h
 // for the storage, which is the single source of truth for formats, resolutions and the border).

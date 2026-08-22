@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Phase 5's gate: a compute shader casts rays at the scene's top-level acceleration structure,
 // reached through the bindless set rather than any per-pass binding, and writes hit/miss plus the

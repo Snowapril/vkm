@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The GI sample: the first application to drive the deferred chain end to end, and the first place
 // the low-spec GI tier appears on screen.

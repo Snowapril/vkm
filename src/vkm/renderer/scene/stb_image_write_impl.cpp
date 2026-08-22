@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 // Single translation unit holding stb_image_write's implementation, for the same reason
 // stb_image_impl.cpp exists: the third-party code compiles with the project's

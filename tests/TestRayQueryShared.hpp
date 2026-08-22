@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Phase 5's gate: a compute shader ray-casts a loaded glTF scene and writes hit/miss plus `t`
 // matching a CPU reference for known rays, on Vulkan and Metal.

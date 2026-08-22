@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Phase 7's gate: the 1-spp indirect pass converges to the Phase 6 reference when accumulated.
 //

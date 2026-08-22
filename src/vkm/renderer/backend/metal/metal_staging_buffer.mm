@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/backend/metal/metal_staging_buffer.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>

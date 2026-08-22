@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Renders the scene from one probe, into the six cube faces of a single capture target.
 //

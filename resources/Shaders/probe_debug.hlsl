@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Draws the probe volume as shaded spheres, one per probe, so a probe's position and what it
 // stores are both visible while it is being placed by hand.

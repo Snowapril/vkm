@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Cubemap skybox drawn as a single oversized clip-space triangle. Like triangle.hlsl and
 // model_viewer.hlsl the pipeline declares no vertex input attributes -- but unlike them

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Phase 7: one indirect ray per pixel, no reservoirs. Deliberately noisy -- this is the baseline
 // ReSTIR has to beat, and the thing that proves the sampling and the BRDF are right *before*

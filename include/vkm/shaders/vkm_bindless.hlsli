@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Shader-side mirror of the engine-global bindless set 0 (see
 // renderer/backend/common/bindless_resource_manager.h, the single source of truth for the

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // Fullscreen deferred lighting: samples the G-buffer and shades it with one directional light.
 //

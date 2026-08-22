@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 
 #include <vkm/platform/windows/application.h>
 #include <vkm/platform/common/glfw_input.h>

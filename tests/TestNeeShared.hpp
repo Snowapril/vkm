@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Snowapril
+// Copyright (c) 2026 Snowapril
 //
 // The next-event-estimation gates. Three claims, each pinned where it is cheapest to catch:
 //
