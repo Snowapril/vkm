@@ -674,9 +674,11 @@ Vulkan builds that include the FidelityFX SDK; WebGPU has none).
   returns null by default; only a backend that sets `VkmDriverCapabilityFlags::TemporalUpscaling`
   in `initializeInner()` overrides it. `newUpscaler()` checks the flag and logs, so callers check
   the flag where absence is expected (the `newAccelerationStructure` shape).
-- **Caller-owned lifetime.** Same contract as `newResourceTable`: `destroy()` then `delete`, only
-  once no in-flight frame can still reference it. Extents are fixed at creation — a resize **or a
-  mode change** retires the old upscaler (FRAME_COUNT-frame delay) and creates a new one.
+- **Caller-owned lifetime.** `destroy()` then `delete`, from anywhere outside a render-graph
+  callback: unlike `newResourceTable`, `destroy()` drains every queue itself before releasing the
+  vendor context and its history textures, which never go through the deferred reclaimer. Extents
+  are fixed at creation — a resize **or a mode change** destroys the old upscaler in place and
+  creates a new one, so a switch costs one GPU drain rather than a retire delay.
 - **The engine owns the preset, not the app.** `VkmUpscaleMode` (Off, Native, Quality, Balanced,
   Performance) lives beside the jitter helpers in `upscaler.h`, and `VkmEngine` holds the live
   value: `getUpscaleMode()`, `setUpscaleMode()`, and `getRenderExtent()`, which is the single

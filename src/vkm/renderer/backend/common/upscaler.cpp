@@ -3,6 +3,7 @@
 #include <vkm/renderer/backend/common/upscaler.h>
 
 #include <vkm/base/common.h>
+#include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/render_graph.h>
 
 #include <glm/common.hpp>
@@ -104,6 +105,10 @@ namespace vkm
         {
             return;
         }
+        // destroyInner() releases the vendor context and its history textures synchronously, and
+        // neither can go through the deferred reclaimer, so every submission that could still
+        // reference them has to have completed first.
+        _driver->waitIdle();
         destroyInner();
         _driver = nullptr;
     }
