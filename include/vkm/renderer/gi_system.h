@@ -47,6 +47,15 @@ namespace vkm
         float _probeNormalBiasFraction = 0.25f;
         // The scene cull view the probe refresh owns; the camera keeps view 0.
         uint32_t _probeCullView = 1;
+        /*
+        * @brief The shadow atlas the probe capture consults, if the caller has one.
+        * @details Forwarded to VkmProbeVolumeUpdater, not owned: shadows are not GI, and the
+        * atlas serves the caller's deferred pass too. Handles rather than a reference because
+        * the capture's per-pass table is immutable and must name them at initialize(). Leave
+        * them invalid and probes capture unshadowed, as they did before shadows existed.
+        */
+        VkmResourceHandle _shadowAtlasTexture{ VKM_INVALID_RESOURCE_HANDLE };
+        VkmResourceHandle _shadowAtlasConstants{ VKM_INVALID_RESOURCE_HANDLE };
     };
 
     // Per-frame-mutable settings, read at record() time. UI-safe to poke between frames.
@@ -146,6 +155,13 @@ namespace vkm
         * @param offset World-space displacement from the probe's grid position.
         * @return Whether the offset was applied and uploaded.
         */
+        /*
+        * @brief Tells the probe capture which light to shade with and where its shadow tile is.
+        * @details Must follow VkmShadowAtlas::allocate, which is what assigns the tile. Without
+        * it the capture shades unshadowed, which is what it did before shadows existed.
+        */
+        void setShadowSun(const VkmPunctualLight& sun, uint32_t tilesPerRow, uint32_t tileSize);
+
         bool setProbeOffset(uint32_t probeIndex, const glm::vec3& offset);
         // Returns every probe to its grid position, invalidating all of them.
         bool clearProbeOffsets();

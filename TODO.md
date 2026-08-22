@@ -170,7 +170,6 @@
 - VkmUpscalerMetal never queries MTLFXTemporalScalerDescriptor's supportedInputContentMin/MaxScale (1.0-3.0 on M3 Pro), so an out-of-range ratio fails as a nil scaler rather than a clear rejection.
 - model_viewer sizes its depth texture from the swapchain extent, so it cannot consume the engine's upscale mode until that follows getRenderExtent().
 - Stale .gcda files left by a recompiled coverage build crash UnitTests inside __llvm_gcov_writeout at exit, which run_tests.py reports as FAIL even though doctest printed SUCCESS; deleting build/<backend>/**/*.gcda clears it.
-- probe_capture applies unshadowed Lambert, so probes still over-report interior brightness; wiring it to the shadow atlas needs a decision on who owns the atlas, since shadows are not GI and VkmGiSystem owns the probe updater.
 - The traced tier's NEE does not see punctual lights, so ReSTIR and the reference path tracer light a point-lit scene differently from the deferred image.
 - Area lights are shadowed only in the traced tier; the raster tier neither shades nor shadows emissive triangles.
 - The directional shadow map is a single ortho tile fitted to the whole scene, with no cascades, so it is coarse on a scene the size of Sponza.

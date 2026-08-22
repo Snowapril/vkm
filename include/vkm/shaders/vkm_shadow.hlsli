@@ -18,6 +18,18 @@
 // finite in a half-float, whose largest value is 65504.
 #define VKM_SHADOW_FAR_SENTINEL 60000.0
 
+// Mirrors vkm::VkmShadowAtlasConstants (renderer/shadow_atlas.h), byte for byte. Declared here
+// rather than in each consuming shader so the pass that fills the atlas and every pass that reads
+// it provably project by the same matrices -- there is one declaration and one buffer.
+struct VkmShadowAtlasConstants
+{
+    float4x4 tileViewProjection[VKM_MAX_SHADOW_TILES];
+    // xyz = the position this tile measures distance from, w = 1 positional / 0 directional.
+    float4 tileLightPosition[VKM_MAX_SHADOW_TILES];
+    // xyz = the direction the light points, w = the world size of one texel at unit distance.
+    float4 tileLightDirection[VKM_MAX_SHADOW_TILES];
+};
+
 /*
 * @brief Which cube face a direction from a point light falls in.
 * @details Face order matches vkmBuildProbeFaceViewProjections (renderer/probe_volume.cpp):

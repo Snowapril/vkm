@@ -63,4 +63,10 @@ TEST_CASE("Metal shadowed deferred lighting - an occluder darkens only what it c
     vkmtest::runShadowedLightingTest(fixture.driver.get());
 }
 
+TEST_CASE("Metal shadowed probe capture - a probe under an occluder records shadowed floor") {
+    MetalShadowAtlasFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runShadowedProbeCaptureTest(fixture.driver.get());
+}
+
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE

@@ -191,6 +191,8 @@ namespace vkm
 
         VkmProbeVolumeUpdater::Descriptor updaterDescriptor{};
         updaterDescriptor._cullViewIndex = _descriptor._probeCullView;
+        updaterDescriptor._shadowAtlasTexture = _descriptor._shadowAtlasTexture;
+        updaterDescriptor._shadowAtlasConstants = _descriptor._shadowAtlasConstants;
         updaterDescriptor._budget = budget;
         updaterDescriptor._hysteresis = _descriptor._probeHysteresis;
         std::string error;
@@ -440,6 +442,14 @@ namespace vkm
         else
         {
             recordProbeTier(renderGraph, frameData);
+        }
+    }
+
+    void VkmGiSystem::setShadowSun(const VkmPunctualLight& sun, uint32_t tilesPerRow, uint32_t tileSize)
+    {
+        if (_updater.isValid())
+        {
+            _updater.setShadowSun(sun, tilesPerRow, tileSize);
         }
     }
 

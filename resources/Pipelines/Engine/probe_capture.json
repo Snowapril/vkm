@@ -22,6 +22,18 @@
         {
             "binding": 0,
             "type": "uniform_buffer"
+        },
+        {
+            "binding": 1,
+            "type": "sampled_texture"
+        },
+        {
+            "binding": 2,
+            "type": "sampler"
+        },
+        {
+            "binding": 3,
+            "type": "uniform_buffer"
         }
     ],
     "per_draw_resources": {

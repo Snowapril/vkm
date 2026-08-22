@@ -12,6 +12,11 @@
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/scene/gltf_importer.h>
 #include <vkm/renderer/scene/scene.h>
+#include <vkm/renderer/backend/common/buffer.h>
+#include <vkm/renderer/backend/common/command_buffer.h>
+#include <vkm/renderer/backend/common/texture.h>
+#include <vkm/renderer/backend/common/sampler.h>
+#include <vkm/renderer/probe_volume.h>
 #include <vkm/renderer/shadow_atlas.h>
 
 #include <glm/geometric.hpp>
@@ -208,6 +213,238 @@ namespace vkmtest
         CHECK(many.back()._shadowTile == -1);
 
         atlas.destroy();
+    }
+    /*
+    * @brief The probe capture consults the shadow atlas, so a probe under an occluder records the
+    * floor as shadowed rather than sunlit.
+    *
+    * This is the term that decides whether the probe tier over-reports indoors: a probe that
+    * captures a wall as sunlit hands that brightness to every surface around it, whether or not
+    * the sun can actually reach the wall.
+    *
+    * Same design as the deferred gate -- the capture runs twice with everything identical except
+    * the sun's `_shadowTile`, so albedo, nDotL and the sun's radiance cannot explain a difference.
+    * The fixture's floor is at y = 0 and its occluder spans +-1 at y = 2 under a sun straight
+    * overhead, so the floor directly below the occluder is fully shadowed and the floor beyond
+    * +-1 is fully lit.
+    */
+    inline void runShadowedProbeCaptureTest(vkm::VkmDriverBase* driver)
+    {
+        constexpr uint32_t kFaceSize = 32;
+        constexpr uint32_t kFacesX = 3;
+        constexpr uint32_t kFacesY = 2;
+
+        vkm::VkmGltfImportOptions importOptions;
+        importOptions._optimizeMeshes = false;
+        vkm::VkmSceneModel model;
+        std::string error;
+        REQUIRE_MESSAGE(vkm::importGltfModel(std::string(RESOURCES_DIR) + "tests/gltf_shadow_occluder.gltf",
+                                             &model, &error, importOptions),
+                        error);
+
+        vkm::VkmPipelineStateManager manager(driver);
+        std::string psoError;
+        REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(TEST_ENGINE_PIPELINE_DIR,
+                                                                TEST_ENGINE_SHADER_CACHE_DIR,
+                                                                vkm::VkmPipelineStateOrigin::Engine, &psoError),
+                        psoError);
+
+        vkm::VkmScene scene;
+        REQUIRE(scene.addModel(model, &error));
+        REQUIRE_MESSAGE(scene.build(driver, &manager, &error), error);
+
+        const std::string psoName =
+            std::string("probe_capture_pso[") +
+            vkm::vkmVertexLayoutPresetName(vkm::VkmVertexLayoutPreset::StandardPBR) + "]";
+        vkm::VkmPipelineStateBase* pso = manager.getPipelineState(psoName, vkm::VkmPipelineStateOrigin::Engine);
+        REQUIRE(pso != nullptr);
+
+        // Sun straight down, so the occluder's shadow lands directly beneath it.
+        vkm::VkmFrameData frameData;
+        frameData._lightDirection = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
+
+        std::vector<vkm::VkmPunctualLight> lights(1);
+        vkm::VkmPunctualLight& sun = lights[0];
+        sun._type = static_cast<uint32_t>(vkm::VkmLightType::Directional);
+        sun._directionWorld[0] = 0.0f;
+        sun._directionWorld[1] = -1.0f;
+        sun._directionWorld[2] = 0.0f;
+        sun._radiance[0] = 1.0f;
+        sun._radiance[1] = 1.0f;
+        sun._radiance[2] = 1.0f;
+
+        vkm::VkmShadowAtlas atlas;
+        vkm::VkmShadowAtlas::Descriptor atlasDescriptor;
+        atlasDescriptor._tileSize = 512u;
+        atlasDescriptor._cullViewIndex = 2u;
+        std::string atlasError;
+        REQUIRE_MESSAGE(atlas.initialize(driver, &manager, atlasDescriptor, &atlasError), atlasError);
+        REQUIRE_MESSAGE(atlas.prepareScene(scene, &atlasError), atlasError);
+        atlas.allocate(scene, &lights);
+        REQUIRE(lights[0]._shadowTile == 0);
+
+        vkm::VkmSamplerInfo samplerInfo{};
+        samplerInfo._debugName = "ProbeShadowSampler";
+        vkm::VkmSampler* sampler = driver->newSampler(samplerInfo);
+        REQUIRE(sampler != nullptr);
+
+        const glm::uvec2 captureExtent(kFaceSize * kFacesX, kFaceSize * kFacesY);
+        const auto makeTarget = [&](vkm::VkmFormat format, vkm::VkmResourceCreateInfo flags, const char* name) {
+            vkm::VkmTextureInfo info{};
+            info._flags = flags;
+            info._extent = glm::uvec3(captureExtent, 1);
+            info._numMipLevels = 1;
+            info._numArrayLayers = 1;
+            info._format = format;
+            info._debugName = name;
+            vkm::VkmTexture* texture = driver->newTexture(info);
+            REQUIRE(texture != nullptr);
+            return texture;
+        };
+        vkm::VkmTexture* captureTarget = makeTarget(
+            vkm::VkmFormat::R16G16B16A16_SFLOAT,
+            static_cast<vkm::VkmResourceCreateInfo>(
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowColorAttachment) |
+                static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowTransferSrc)),
+            "ProbeShadowCapture");
+        vkm::VkmTexture* captureDepth =
+            makeTarget(vkm::VkmFormat::D32_SFLOAT, vkm::VkmResourceCreateInfo::AllowDepthStencilAttachment,
+                       "ProbeShadowCaptureDepth");
+
+        vkm::VkmFrameBufferDescriptor fbDesc{};
+        fbDesc._width = captureExtent.x;
+        fbDesc._height = captureExtent.y;
+        fbDesc._renderPass._colorAttachmentCount = 1;
+        fbDesc._renderPass._colorAttachments[0]._attachmentId = 0;
+        fbDesc._renderPass._colorAttachments[0]._loadAction = vkm::VkmLoadAction::Clear;
+        fbDesc._renderPass._colorAttachments[0]._storeAction = vkm::VkmStoreAction::Store;
+        fbDesc._colorAttachments[0] = captureTarget->getHandle();
+        vkm::VkmDepthStencilAttachmentDescriptor depthDesc{};
+        depthDesc._attachmentId = 1;
+        depthDesc._loadAction = vkm::VkmLoadAction::Clear;
+        depthDesc._storeAction = vkm::VkmStoreAction::Store;
+        depthDesc._clearDepth = 1.0f;
+        fbDesc._renderPass._depthStencilAttachment = depthDesc;
+        fbDesc._depthStencilAttachment = captureDepth->getHandle();
+
+        vkm::VkmBufferInfo captureBufferInfo{};
+        captureBufferInfo._flags =
+            vkm::VkmResourceCreateInfo::AllowShaderRead | vkm::VkmResourceCreateInfo::AllowTransferDst;
+        captureBufferInfo._size = sizeof(vkm::VkmProbeCaptureConstants);
+        captureBufferInfo._debugName = "ProbeShadowCaptureConstants";
+        vkm::VkmBuffer* captureBuffer = driver->newBuffer(captureBufferInfo);
+        REQUIRE(captureBuffer != nullptr);
+
+        std::string tableError;
+        vkm::VkmResourceTableBase* table = driver->newResourceTable(
+            pso, vkm::VkmResourceSetKind::PerPass,
+            {{ 0, captureBuffer->getHandle() },
+             { 1, atlas.getAtlasTexture() },
+             { 2, sampler->getHandle() },
+             { 3, atlas.getConstantBuffer() }},
+            &tableError);
+        REQUIRE_MESSAGE(table != nullptr, tableError);
+
+        // Between the floor and the occluder, so face 3 (-Y) looks straight down at floor the
+        // occluder is shading.
+        const glm::vec3 probePosition(0.0f, 1.0f, 0.0f);
+
+        const auto capture = [&](bool shadowed) {
+            vkm::VkmProbeCaptureConstants constants{};
+            vkm::vkmBuildProbeFaceViewProjections(glm::vec3(0.0f), 0.05f, 100.0f,
+                                                  constants._faceViewProjection);
+            constants._sun = lights[0];
+            if (!shadowed)
+            {
+                constants._sun._shadowTile = -1;
+            }
+            constants._shadowParams =
+                glm::uvec4(atlas.getTilesPerRow(), atlas.getDescriptor()._tileSize, 0u, 0u);
+            REQUIRE(driver->uploadToBuffer(captureBuffer->getHandle(), &constants, sizeof(constants)));
+
+            vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+            atlas.record(&renderGraph, &scene, frameData, /*frameIndex=*/0);
+
+            std::vector<vkm::VkmResourceAccessDeclaration> referenced;
+            auto* updateSubGraph = renderGraph.beginTransferSubGraph("ProbeShadowSceneUpdate");
+            scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Update, &referenced);
+            updateSubGraph->addReferencedResources(referenced);
+            updateSubGraph->setTransferCallback([&scene, &frameData](vkm::VkmCommandBufferBase* commandBuffer) {
+                scene.recordUpdate(commandBuffer, /*frameIndex=*/0, frameData, /*viewIndex=*/0);
+            });
+
+            auto* cullSubGraph = renderGraph.beginComputeSubGraph("ProbeShadowSceneCull");
+            referenced.clear();
+            scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Cull, &referenced);
+            cullSubGraph->addReferencedResources(referenced);
+            cullSubGraph->setComputeCallback([&scene](vkm::VkmCommandBufferBase* commandBuffer) {
+                scene.recordCull(commandBuffer, /*viewIndex=*/0);
+            });
+
+            auto* captureSubGraph = renderGraph.beginGraphicsSubGraph(fbDesc);
+            referenced.clear();
+            scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Draw, &referenced);
+            captureSubGraph->addReferencedResources(referenced);
+            std::vector<vkm::VkmResourceAccessDeclaration> bound;
+            table->collectReferencedResources(&bound);
+            captureSubGraph->addReferencedResources(bound);
+            captureSubGraph->setRenderCallback([&scene, pso, table, probePosition](vkm::VkmCommandBufferBase* commandBuffer) {
+                for (uint32_t face = 0; face < 6; ++face)
+                {
+                    commandBuffer->setViewportAndScissor(
+                        static_cast<int32_t>((face % kFacesX) * kFaceSize),
+                        static_cast<int32_t>((face / kFacesX) * kFaceSize), kFaceSize, kFaceSize);
+
+                    vkm::VkmProbeCapturePushConstants push{};
+                    push._probePositionWorld = probePosition;
+                    push._faceIndex = face;
+
+                    scene.recordDrawBatches(
+                        commandBuffer, [pso](const vkm::VkmScene::DrawBatch&) { return pso; },
+                        [table, &push](vkm::VkmCommandBufferBase* cb, const vkm::VkmScene::DrawBatch&) {
+                            cb->bindResourceTable(table);
+                            cb->setPushConstants(&push, sizeof(push));
+                        },
+                        /*viewIndex=*/0);
+                }
+            });
+
+            renderGraph.compile();
+            renderGraph.execute();
+            renderGraph.ensureCompleted();
+            return driver->readbackTexture(captureTarget->getHandle());
+        };
+
+        const vkm::VkmTextureReadbackResult shadowed = capture(true);
+        const vkm::VkmTextureReadbackResult unshadowed = capture(false);
+        REQUIRE(shadowed.channels == 8);
+
+        // Face 3 is -Y, straight down at the shadowed floor.
+        const uint32_t faceX = (3u % kFacesX) * kFaceSize + kFaceSize / 2;
+        const uint32_t faceY = (3u / kFacesX) * kFaceSize + kFaceSize / 2;
+        const auto radianceAt = [&](const vkm::VkmTextureReadbackResult& readback) {
+            const uint8_t* p =
+                &readback.pixels[(static_cast<size_t>(faceY) * readback.width + faceX) * readback.channels];
+            return readHalfComponent(p, 0) + readHalfComponent(p, 1) + readHalfComponent(p, 2);
+        };
+
+        const float litRadiance = radianceAt(unshadowed);
+        const float shadowedRadiance = radianceAt(shadowed);
+
+        // Without this the ratio below is vacuous: the probe must actually see lit floor first.
+        REQUIRE(litRadiance > 0.0f);
+        // And with the occluder's tile assigned, the floor it captures goes dark. Only the
+        // visibility term differs between the two captures.
+        CHECK(shadowedRadiance < litRadiance * 0.05f);
+
+        table->destroy();
+        delete table;
+        atlas.destroy();
+        driver->getRenderResourcePool()->releaseResource(captureBuffer->getHandle());
+        driver->getRenderResourcePool()->releaseResource(captureDepth->getHandle());
+        driver->getRenderResourcePool()->releaseResource(captureTarget->getHandle());
+        driver->getRenderResourcePool()->releaseResource(sampler->getHandle());
+        scene.destroy(driver);
     }
 } // namespace vkmtest
 
