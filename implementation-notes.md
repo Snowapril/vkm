@@ -5186,3 +5186,42 @@ driver, which is why the collectors take a summary list rather than a pool.
 ### Deviations
 
 (none)
+## 2026-08-22 — Punctual lights and shadow maps
+
+Point and spot lights did not exist in the engine at all; the raster tier cast no shadow of any
+kind. Five commits on `shadow-maps`. Deviations from the plan, and the constraints that forced
+them:
+
+- **The atlas is RGBA16F holding linear world distance, not a depth texture and not a
+  single-channel float.** The plan's first instinct — add `VkmFormat::R32_SFLOAT` — was wrong
+  twice: no single-channel format exists in the engine at all, and `r32float`/`rgba32float` are
+  non-filterable in core WebGPU while the per-pass bind-group layout hardcodes a filterable float
+  sample type. RGBA16F distance is what `probe_capture` already renders on all three backends.
+- **An atlas, not a texture array or cube map, is the only expressible shape.** No attachment
+  descriptor carries a slice or face index, Vulkan pins `layerCount` to 1, Metal never sets
+  `renderTargetArrayLength`, and there is no `SV_RenderTargetArrayIndex` or geometry stage.
+- **Bias is in-shader.** `VkmRasterizationStateDescriptor` has no depth bias, slope factor or
+  depth clamp, and the compared value is a colour attachment's contents rather than the
+  rasterizer's depth, so a hardware bias would not touch it.
+- **The shadow pass indexes FrameData by its own cull view.** Every other scene shader reads
+  `g_FrameData[0]`, which is safe only because the camera publishes view 0 first. That holds in a
+  full frame and fails anywhere else — here `materialPoolSlot` read garbage and the alpha test
+  discarded every fragment.
+- **Distance is computed per fragment, not interpolated.** Distance is not linear across a
+  triangle. The gate's fixture has three equidistant vertices, so the interpolated value was
+  constant at 4.06 while the true distance dips to 4.00 under the light.
+- **Two pre-existing defects surfaced.** The deferred lighting test's linearity assertion was
+  vacuous — the fixture's shading normal faces -Z while the light shone from +Z, so the lit term
+  was zero and "doubling the light doubles the result" compared 0 against 0. And
+  `buildBoxPlanes`' sign convention was asserted nowhere despite `scene_cull.hlsl` depending on
+  it.
+- **Two things about testing this, both non-obvious.** A light directly above an occluder cannot
+  be gated from a top-down camera: the camera sees the occluder's lit top face where the umbra is
+  and never the floor beneath. And the camera must be perspective —
+  `vkmReconstructWorldPosition` walks `cameraDistance` along a ray from `cameraPositionWorld`,
+  which is a pinhole construction, so under an orthographic projection the reconstruction is
+  correct only at the image centre and drifts outward, reading exactly like a broken lookup.
+- **`probe_capture` is NOT wired to the atlas** (`TODO.md`). It is the step that would close the
+  over-bright-interior loop, and it needs a decision on who owns the shadow atlas: shadows are
+  not GI, but `VkmGiSystem` owns the probe updater. Landing it in a hurry would have put a
+  shadow atlas inside the GI system for no better reason than proximity.
