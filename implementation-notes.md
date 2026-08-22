@@ -5186,3 +5186,26 @@ driver, which is why the collectors take a summary list rather than a pool.
 ### Deviations
 
 (none)
+
+## 2026-08-22 — ImGui font scale slider with local persistence
+
+- New `imgui_settings.{h,cpp}` (two free functions, no state -- the value lives in
+  `ImGuiStyle::FontScaleMain`): `vkmLoadImGuiSettings()` seeds the atlas and applies the cached
+  scale, `vkmDrawImGuiFontScaleSlider()` submits the slider and writes on drag end.
+- Cached as JSON at `$HOME/.vkm/ui_settings.json` (`%APPDATA%/vkm/` on Windows); no cache under
+  Emscripten, whose MEMFS is recreated every run.
+- `VkmEngine::addSwapChain` calls the loader right after the ImGui renderer initializes (context
+  alive, no frame opened yet); `renderDebugOverlay` hosts the slider, so every sample gets it.
+- Font only (`FontScaleMain`), not `ImGuiStyle::ScaleAllSizes`: widget padding stays at 1x.
+  ImGui 1.92's dynamic font system re-rasterizes on change and all three backends already set
+  `ImGuiBackendFlags_RendererHasTextures`, so no atlas plumbing was needed.
+- `AddFontDefaultVector()` is called explicitly. `AddFontDefault()` picks the bitmap ProggyClean
+  below an effective 15px and the vector ProggyForever above it, deciding once from whatever
+  scale is in effect when the font is added -- but the scale is the user's to move at any time.
+
+### Deviations
+
+- **Planned:** write `style.FontScaleMain` to the cache file as-is.
+  **Done instead:** rounded to two decimals before serializing.
+  **Why:** a float widened to double serializes as `1.2400000095367432`. Two decimals is exactly
+  what the slider displays, and keeps a file a user may hand-edit readable.
