@@ -114,6 +114,8 @@
 - Metal's MTL4ArgumentTable caps buffer binds at 31 and sampler binds at 16, which is what bounds sets 2 and 3 to 13 buffers / 8 samplers / 16 textures each.
 - A CI job whose Vulkan driver is missing still reports success: `VKM_REQUIRE_DEVICE` skips every device test and doctest counts the run as passing, so only the ICD-lookup guard in `ubuntu.yml` distinguishes real coverage from none.
 - Acceleration structures have no WebGPU path: `newAccelerationStructureInner` is an error stub there(no such API).
+- The F4 inspector's 3D wireframe overlay draws at most `kVkmAsDebugMaxBoxes` (256) instances, its box array being a uniform buffer sized to the 16 KiB `maxUniformBufferRange` every Vulkan device guarantees; a larger scene is clamped with a one-shot warning, and no driver limits query exists to size it to the real device.
+- The 3D wireframe overlay is recorded for window 0 only, since set 1 carries the primary window's camera; a second scene-rendering window shows no boxes.
 - The Vulkan unit-test run reports SKIP rather than PASS on any device without ray tracing, because the shared acceleration structure test prints a `Skipping: ` line that `run_tests.py` treats as a suite-wide skip; a second, unrelated skip is therefore invisible there.
 - A rebuilt top-level structure cannot grow: `updateInstances` refuses a list longer than the one it was created with, because the structure was sized against that count, so a scene that spawns objects has to recreate its structure.
 - Deforming geometry has no path: `recordBuild` always does a full BUILD, never an UPDATE refit, so a skinned or morphed mesh would rebuild its bottom-level structure from scratch every frame.
