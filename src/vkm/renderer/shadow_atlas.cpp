@@ -200,7 +200,7 @@ namespace vkm
         _constants._tileViewProjection[index] = viewProjection;
         _constants._tileLightPosition[index] =
             glm::vec4(tile._lightPosition, tile._positional ? 1.0f : 0.0f);
-        _constants._tileLightDirection[index] = glm::vec4(tile._lightDirection, 0.0f);
+        _constants._tileLightDirection[index] = glm::vec4(tile._lightDirection, tile._texelWorldPerDistance);
         _tiles.push_back(tile);
     }
 
@@ -258,6 +258,9 @@ namespace vkm
                 tile._lightDirection = direction;
                 tile._positional = false;
                 tile._farZ = sceneRadius * 4.0f;
+                // Orthographic: the footprint does not depend on distance, so it is the whole
+                // constant. The shader multiplies by 1 for a directional tile.
+                tile._texelWorldPerDistance = (2.0f * sceneRadius) / static_cast<float>(_descriptor._tileSize);
                 appendTile(projection * view, tile);
 
                 _casterBoxMin = glm::min(_casterBoxMin, sceneMin);
@@ -285,6 +288,10 @@ namespace vkm
                 tile._lightDirection = direction;
                 tile._positional = true;
                 tile._farZ = farZ;
+                // Perspective: a texel's footprint grows with distance, and this is its width
+                // per unit of it -- the frustum's full angular width over the tile resolution.
+                tile._texelWorldPerDistance =
+                    2.0f * std::tan(0.5f * fov) / static_cast<float>(_descriptor._tileSize);
                 appendTile(projection * view, tile);
                 continue;
             }
@@ -300,6 +307,8 @@ namespace vkm
                 tile._lightDirection = direction;
                 tile._positional = true;
                 tile._farZ = farZ;
+                // A cube face is a 90-degree frustum, so tan(45 deg) = 1.
+                tile._texelWorldPerDistance = 2.0f / static_cast<float>(_descriptor._tileSize);
                 appendTile(faces[face], tile);
             }
         }

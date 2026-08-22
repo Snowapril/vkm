@@ -47,7 +47,11 @@ namespace vkm
         // xyz = the light position this tile measures distance from, w = 1 positional / 0
         // directional.
         glm::vec4 _tileLightPosition[kVkmMaxShadowTiles]{};
-        // xyz = the direction the light points; read only for a directional tile.
+        // xyz = the direction the light points (read only for a directional tile), w = the world
+        // size of one of this tile's texels AT UNIT DISTANCE from the light. A perspective tile
+        // scales that by the receiver's distance; an orthographic one does not, which is why the
+        // number is stored per tile rather than derived in the shader from a formula that only
+        // holds for one of the two.
         glm::vec4 _tileLightDirection[kVkmMaxShadowTiles]{};
     };
 
@@ -150,6 +154,7 @@ namespace vkm
             glm::vec3 _lightDirection{ 0.0f, 0.0f, -1.0f };
             bool _positional = true;
             float _farZ = 1.0f;
+            float _texelWorldPerDistance = 0.0f;
         };
 
         bool createTargets(std::string* outError);
