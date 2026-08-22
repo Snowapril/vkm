@@ -214,11 +214,18 @@ namespace vkm
 
         const uint32_t minImageCountClamped = std::clamp(preferredImageCount, minImageCount, maxImageCount);
 
-        // A back buffer that is also a transfer source is what lets the engine read the presented
-        // image back; surfaces that do not support it simply stay unreadable.
-        VkImageUsageFlags imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        const bool backBufferReadable =
+        // A transfer-source back buffer is what lets the engine read the presented image back, and
+        // it costs the driver's framebuffer-only fast paths, so it is opt-in rather than free.
+        const bool readbackRequested = _driver->getLaunchOptions().enableBackBufferReadback;
+        const bool surfaceAllowsTransferSrc =
             (capabilities2.surfaceCapabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+        if (readbackRequested && !surfaceAllowsTransferSrc)
+        {
+            VKM_DEBUG_ERROR("Back buffer readback was requested, but this surface does not support TRANSFER_SRC");
+        }
+
+        VkImageUsageFlags imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        const bool backBufferReadable = readbackRequested && surfaceAllowsTransferSrc;
         if (backBufferReadable)
         {
             imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;

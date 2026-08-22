@@ -584,6 +584,13 @@ namespace vkm
     void VkmEngine::captureBackBufferToClipboard(VkmResourceHandle backBuffer, VkmFormat format)
     {
 #if (defined(VKM_PLATFORM_APPLE) && defined(VKM_USE_METAL_API)) || (defined(VKM_PLATFORM_WINDOWS) && defined(VKM_USE_VULKAN_API))
+        // The back buffer is only created as a copy source when it was asked for at launch, since
+        // making it one costs the driver's framebuffer-only fast paths every frame.
+        if (!_engineOptions.enableBackBufferReadback)
+        {
+            VKM_DEBUG_WARN("Clipboard capture needs a readable back buffer; relaunch with --enable-backbuffer-readback");
+            return;
+        }
 #if defined(VKM_USE_VULKAN_API)
         // Surfaces that cannot supply a transfer-source back buffer leave the flag unset; copying
         // from one anyway would be invalid.
@@ -851,7 +858,9 @@ namespace vkm
             ("gpu-capture-frame-count", "Number of consecutive frames to record into the .gputrace",
                 cxxopts::value<uint32_t>()->default_value(std::to_string(DEFAULT_ENGINE_LAUNCH_OPTIONS.gpuCaptureFrameCount)))
             ("enable-hdr", "Request an HDR swapchain (used only if the display supports it)",
-                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableHdr ? "true" : "false"));
+                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableHdr ? "true" : "false"))
+            ("enable-backbuffer-readback", "Make the back buffer readable so F2 can copy the frame to the clipboard (gives up the driver's framebuffer-only fast paths)",
+                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableBackBufferReadback ? "true" : "false"));
 
         VkmEngineLaunchOptions launchOptions = DEFAULT_ENGINE_LAUNCH_OPTIONS;
         try
@@ -865,6 +874,7 @@ namespace vkm
             launchOptions.gpuCaptureStartFrame = result["gpu-capture-start-frame"].as<uint32_t>();
             launchOptions.gpuCaptureFrameCount = result["gpu-capture-frame-count"].as<uint32_t>();
             launchOptions.enableHdr = result["enable-hdr"].as<bool>();
+            launchOptions.enableBackBufferReadback = result["enable-backbuffer-readback"].as<bool>();
             // The GPU frame capture scope only exists when enableGpuCapture is set --
             // a startup capture request implies it.
             launchOptions.enableGpuCapture |= launchOptions.captureGpuFrameOnStartup;
