@@ -29,7 +29,15 @@ namespace vkm
         Motion = 8,         // screen-space motion, scaled to be visible
         CameraDistance = 9, // reciprocal, so near geometry is bright
         Emissive = 10,      // the surface's own emitted radiance
-        Count = 11,
+        /*
+        * The mip level texture streaming currently keeps resident for each surface's base-colour
+        * texture: green where the whole chain is, red at the coarsest level. Unlike every other
+        * view here it is not a G-buffer channel -- there is no spare one -- so selecting it also
+        * puts the G-buffer pass into VKM_GBUFFER_DEBUG_STREAMING_MIP, which writes the colour into
+        * base colour for this pass to show unlit.
+        */
+        StreamingMip = 11,
+        Count = 12,
     };
 
     // Display names in VkmGiDebugView order, for a UI that offers the views.

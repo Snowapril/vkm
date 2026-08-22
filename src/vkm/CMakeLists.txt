@@ -69,6 +69,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_geometry_pool.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_material_tables.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/scene/texture_streamer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/engine.h
 )
 
@@ -136,6 +137,7 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/scene/scene_geometry_pool.cpp
     ${SRC_DIR}/vkm/renderer/scene/scene.cpp
     ${SRC_DIR}/vkm/renderer/scene/scene_material_tables.cpp
+    ${SRC_DIR}/vkm/renderer/scene/texture_streamer.cpp
     ${SRC_DIR}/vkm/renderer/engine.cpp
 )
 

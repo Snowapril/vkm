@@ -5113,3 +5113,78 @@ cannot encode under it.
 ### Deviations
 
 (none)
+
+## 2026-08-22 — Camera-distance texture mip streaming
+
+Material textures no longer hold their whole mip chain for the life of a scene. A new
+`VkmTextureStreamer` (`renderer/scene/texture_streamer.{h,cpp}`), owned by `VkmScene`, keeps each
+one at the level the camera actually needs and **rebuilds the texture** to get there — a smaller
+allocation holding levels `[base, last]`, not a view narrowed over a full-size one, which would
+still pay for level 0.
+
+**Selection** is screen-space texel density, not raw distance: `vkmSelectStreamingBaseMip()` projects
+an object's bounding sphere (`2*r*viewportHeight / (2*d*tan(fovY/2))`) and takes
+`round(log2(texWidth / projectedPixels)) + bias`. That makes a 4K texture on a small distant object
+drop further than a 256px one, which a distance-only rule cannot express. The closest object naming
+a texture wins, since a texture is one resource however many objects share it. Free-standing so
+`TestTextureStreaming.cpp` can pin it without a driver, a scene or a camera.
+
+**The swap takes a new bindless slot rather than rewriting the old one.** The set is
+`UPDATE_AFTER_BIND | PARTIALLY_BOUND` but not `UPDATE_UNUSED_WHILE_PENDING`, and a submitted frame is
+still sampling the old index — so an in-place descriptor write would need a `waitIdle()` per swap.
+A fresh slot needs none. The displaced texture and slot then retire on a tick counter before
+release: material textures are declared nowhere in `collectReferencedResources`, so they carry no
+recorded GPU usage for `VkmDeferredResourceReclaimer` to wait on, and `VkmBindlessSlotAllocator` is
+LIFO — a released slot is the *first* one handed back out. The delay is load-bearing on both counts.
+
+`VkmScene` gained a material dirty range beside the object one, a third staging region
+(`[ObjectData][FrameData x views][MaterialData]`), and `_materialBuffer` declared `TransferWrite` in
+the Update phase. The streamer owns the textures and slots on a bindless backend, so
+`_materialTextureSlots` is gone and `_materialTextures` now holds only the no-bindless path's.
+
+**Debug view.** `VkmMaterialData::_metallicRoughness.z/.w` were unread padding (`vkmLoadMaterial`
+reads words 0-9 and 12-15), so the base-colour texture's level and chain length ride there with no
+layout change. They load through their own `vkmLoadMaterialStreamingMip()` rather than through
+`VKM_MATERIAL_LOADER()`: eight shaders expand that macro, including ray-tracing kernels that
+evaluate a material per hit, and none of them draws the visualisation. `model_viewer` gets
+`DebugMode::StreamingMip` (Num5); gi gets `VkmGiDebugView::StreamingMip`, which also puts the
+G-buffer pass into `VKM_GBUFFER_DEBUG_STREAMING_MIP` — there is no spare G-buffer channel, so the
+heat colour rides base colour and the composite shows it unlit.
+
+Two pre-existing bugs surfaced because streaming hammers the paths they sit on, and both are fixed
+here: `VkmDriverBase::uploadToTexture` never released its command buffer (`readbackTexture` does),
+which was bounded at scene load and unbounded once a rebuild calls it per frame; and
+`VkmScene::destroy()` never cleared `_materialImages`/`_materialTextureHandles`, so a `model_viewer`
+scene swap left `build()`'s `resize()` keeping the *previous* scene's texture paths.
+
+### Deviations
+
+- **Planned:** create each texture at its distance-appropriate level during `uploadMaterialTextures`.
+  **Did instead:** upload the full chain there and let the first ticks stream down. `build()` takes
+  only a driver and a PSO manager — it has no camera to size anything against, and inventing one
+  would have been worse than costing one frame of streaming.
+- **Planned:** apply whole rebuilds, bounded per tick by texture count.
+  **Did instead:** bounded by *mip level* (`_maxLevelUploadsPerTick`), with the new texture published
+  only once every level is in place. `uploadToTexture` submits and blocks once per level wherever
+  the destination is not host-writable — which is every discrete-GPU Vulkan device — so a 4K
+  texture streaming to level 0 would otherwise have been 13 full GPU stalls inside one `update()`.
+  Conservative: the old texture keeps serving until the new one is complete.
+- **Planned:** one shared `vkmLoadMaterial()` carrying the streaming words.
+  **Did instead:** a separate loader, for the per-hit cost reason above.
+- **Planned:** stop the decode worker the way `VkmDeferredResourceReclaimer` does.
+  **Did instead:** clear `_running` *under* `_mutex` before notifying. The reclaimer flips it
+  unlocked and gets away with it because its worker uses a 4 ms `wait_for`, so a lost wakeup costs
+  one poll interval. This worker waits on an untimed predicate, where the same race is permanent:
+  clearing the flag between the predicate's evaluation and the sleep it precedes loses the notify
+  and `join()` never returns. It hung `TestAccelerationStructureMetal.mm`'s ray-query case on every
+  run — a scene with no textures at all still spawns the worker — and was found by that test, not
+  by review.
+
+Coverage: `TestTextureStreaming.cpp` pins the selection arithmetic (one level per doubling of
+distance, one per doubling of texture width, the bias, and every degenerate camera), and
+`runTextureStreamingSwapTest` in `TestGBufferRenderShared.hpp` drives a real rebuild on Vulkan and
+Metal — it asserts the resident level actually moved *and* that the material still samples green
+afterwards. Neither implies the other: a solid-colour chain renders identically at every level, so
+pixels alone cannot prove a rebuild happened, and a rebuild that left the record naming the released
+slot would still move the level. `recordGBufferFrame` was split out of `fillGBuffer` so that test
+can render the same scene twice.

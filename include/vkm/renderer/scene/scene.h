@@ -6,6 +6,7 @@
 #include <vkm/renderer/scene/light_table.h>
 #include <vkm/renderer/scene/scene_geometry_pool.h>
 #include <vkm/renderer/scene/scene_model.h>
+#include <vkm/renderer/scene/texture_streamer.h>
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec4.hpp>
@@ -126,7 +127,14 @@ namespace vkm
     {
         glm::vec4 _baseColorFactor{ 1.0f, 1.0f, 1.0f, 1.0f };
         glm::vec4 _emissive{ 0.0f, 0.0f, 0.0f, 0.0f };            // xyz = emissive factor
-        glm::vec4 _metallicRoughness{ 1.0f, 1.0f, 0.0f, 0.0f };   // x = metallic, y = roughness
+        /*
+        * x = metallic, y = roughness.
+        * z = the base-colour texture's currently streamed base mip level, w = how many levels its
+        * full chain has. Both are the base-colour channel's alone: a material's four textures
+        * stream independently, and one pair of words cannot describe all of them. They exist for
+        * the streaming debug view, and stay 0 wherever nothing is streamed.
+        */
+        glm::vec4 _metallicRoughness{ 1.0f, 1.0f, 0.0f, 0.0f };
         // Bindless texture-array slots: x = base colour, y = metallic-roughness, z = normal,
         // w = emissive. INVALID_VALUE32 where the material has no texture for that channel, which
         // is also what every slot holds on a backend without VkmDriverCapabilityFlags::TextureUpload.
@@ -349,6 +357,44 @@ namespace vkm
         */
         MaterialTextures getMaterialTextures(uint32_t materialIndex) const;
 
+        /*
+        * @brief Moves each material texture towards the mip range this camera needs.
+        *
+        * @details Call once per frame, before the frame records anything: the streamer creates and
+        * uploads textures through the driver directly, which a recording command buffer cannot be
+        * open across, and its retire delay is counted in calls to this.
+        * A rebuilt texture lands on a new bindless slot, so this also rewrites the affected
+        * material records and widens the material dirty range recordUpdate() uploads.
+        * A no-op without VkmDriverCapabilityFlags::BindlessTextures -- there is no slot to
+        * re-point, and the per-draw tables that stand in for one are immutable once built.
+        *
+        * @param driver Driver the scene was built against.
+        * @param view Where the camera is and how wide its projection is this frame.
+        */
+        void updateTextureStreaming(VkmDriverBase* driver, const VkmTextureStreamingView& view);
+
+        inline const VkmTextureStreamingSettings& getTextureStreamingSettings() const
+        {
+            return _textureStreamer.getSettings();
+        }
+        inline void setTextureStreamingSettings(const VkmTextureStreamingSettings& settings)
+        {
+            _textureStreamer.setSettings(settings);
+        }
+        // False where the backend has no bindless texture array, which is where streaming cannot run.
+        inline bool isTextureStreamingAvailable() const { return _textureStreamingAvailable; }
+
+        /*
+        * @brief The mip level a material channel's texture currently starts at.
+        * @details The only externally observable proof that a rebuild actually happened -- the slot
+        * and the texture handle are both internal, and the rendered pixels of a mip chain do not
+        * have to change when the level does.
+        * @param materialIndex Material to query.
+        * @param channel 0 base colour, 1 metallic-roughness, 2 normal, 3 emissive.
+        * @return The resident base level, or INVALID_VALUE32 where that channel streams no texture.
+        */
+        uint32_t getStreamedBaseMip(uint32_t materialIndex, uint32_t channel) const;
+
     private:
         /*
         * @brief One material's texture references, as resolved file paths plus the colour space
@@ -371,6 +417,13 @@ namespace vkm
         // Skipped entirely without VkmDriverCapabilityFlags::TextureUpload, which leaves every slot
         // invalid and every material factor-only -- what WebGPU gets until set 3 carries them.
         bool uploadMaterialTextures(VkmDriverBase* driver, std::string* outError);
+
+        // Widens the half-open material dirty range recordUpdate() uploads, the way
+        // setObjectTransform() widens the object one.
+        void markMaterialDirty(uint32_t materialIndex);
+        // Writes one material channel's streamed level into the record, for the debug view.
+        void publishStreamingMip(uint32_t materialIndex, uint32_t channel, uint32_t baseMip,
+                                 uint32_t totalMipCount);
 
         // One mesh appended into a pool, plus the object-space data every instance of it shares.
         struct MeshEntry
@@ -405,9 +458,12 @@ namespace vkm
         std::vector<VkmSceneObject> _objects;
         std::vector<VkmMaterialData> _materials;
         std::vector<MaterialImageRefs> _materialImages; // 1:1 with _materials
-        // Textures this scene owns, one per (path, colour space) actually uploaded.
+        /*
+        * Textures this scene owns directly, one per (path, colour space) actually uploaded.
+        * Only the no-bindless path fills it: elsewhere VkmTextureStreamer owns them, a rebuild
+        * replacing both the texture and its slot.
+        */
         std::vector<VkmResourceHandle> _materialTextures;
-        std::vector<uint32_t> _materialTextureSlots; // 1:1 with _materialTextures
         std::vector<MaterialTextures> _materialTextureHandles; // 1:1 with _materials
         std::vector<VkmObjectData> _objectData;
         std::vector<DrawBatch> _drawBatches;
@@ -479,5 +535,17 @@ namespace vkm
         // Half-open dirty range of _objectData, in object indices. Empty when _dirtyFirst == _dirtyEnd.
         uint32_t _dirtyFirst = 0;
         uint32_t _dirtyEnd = 0;
+
+        // The same, for _materials: a streamed texture lands on a new bindless slot, so its
+        // records have to reach the GPU again.
+        uint32_t _materialDirtyFirst = 0;
+        uint32_t _materialDirtyEnd = 0;
+        uint64_t _materialStagingOffset = 0;
+
+        VkmTextureStreamer _textureStreamer;
+        bool _textureStreamingAvailable = false;
+        // Scratch for updateTextureStreaming, kept so a per-frame pass allocates nothing.
+        std::vector<VkmTextureStreamingObject> _streamingObjects;
+        std::vector<VkmTextureStreamingUpdate> _streamingUpdates;
     };
 } // namespace vkm

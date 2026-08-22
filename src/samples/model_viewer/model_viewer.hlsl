@@ -67,6 +67,7 @@ struct FrameData
 #define VKM_DEBUG_MODE_MATERIAL_INDEX 2
 #define VKM_DEBUG_MODE_NORMAL         3
 #define VKM_DEBUG_MODE_TANGENT_NORMAL 4
+#define VKM_DEBUG_MODE_STREAMING_MIP  5
 
 // The pools are untyped word arrays, so the "vertex type" is a single u32.
 VKM_BINDLESS_VERTEX_PULLING(uint);
@@ -207,6 +208,13 @@ float4 PSMain(VSOutput input) : SV_TARGET
     if (debugMode == VKM_DEBUG_MODE_MATERIAL_INDEX)
     {
         return float4(debugIndexColor(input.materialIndex), 1.0);
+    }
+    if (debugMode == VKM_DEBUG_MODE_STREAMING_MIP)
+    {
+        // The base-colour texture's resident level, which is the one the record carries.
+        const float2 streamingMip =
+            vkmLoadMaterialStreamingMip(g_VkmSceneFrame[0].materialPoolSlot, input.materialIndex);
+        return float4(vkmStreamingMipHeatColor(streamingMip), 1.0);
     }
     if (debugMode == VKM_DEBUG_MODE_NORMAL)
     {

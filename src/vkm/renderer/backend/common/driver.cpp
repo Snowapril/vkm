@@ -532,6 +532,7 @@ namespace vkm
         {
             submitResult._gpuEventTimeline->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
         }
+        commandQueue->getCommandBufferPool()->release(commandBuffer);
 
         _renderResourcePool->releaseResource(stagingBuffer->getHandle());
         return true;
