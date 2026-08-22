@@ -98,12 +98,49 @@ namespace vkm
         std::string _uri; // resolved against the glTF's own directory
     };
 
+    /*
+    * @brief Which of glTF's three punctual light types a VkmScenePunctualLight is.
+    * @details Values match the order the GPU record's `_type` word uses; do not renumber without
+    * changing shaders/vkm_punctual_lights.hlsli with it.
+    */
+    enum class VkmLightType : uint32_t
+    {
+        Point = 0,
+        Spot = 1,
+        Directional = 2,
+    };
+
+    /*
+    * @brief One KHR_lights_punctual light, in the units glTF states them in.
+    * @details Position and direction are NOT here: a glTF light is positioned by the node that
+    * references it, so a placed light is this record plus that node's world transform (see
+    * VkmSceneModel::buildLightList). Units are glTF's own -- candela for point and spot, lux for
+    * directional -- and the engine applies them unscaled, so a scene's absolute brightness is the
+    * author's business rather than the importer's.
+    */
+    struct VkmScenePunctualLight
+    {
+        std::string _name;
+        VkmLightType _type = VkmLightType::Point;
+        glm::vec3 _color{ 1.0f, 1.0f, 1.0f };
+        float _intensity = 1.0f;
+        // Distance past which the light contributes nothing. 0 means unlimited, which is what
+        // glTF says an absent `range` means.
+        float _range = 0.0f;
+        // Spot only, radians from the cone axis. Full intensity inside the inner angle, zero
+        // outside the outer one.
+        float _innerConeAngle = 0.0f;
+        float _outerConeAngle = 0.7853982f; // glTF's default, pi/4
+    };
+
     struct VkmSceneNode
     {
         std::string _name;
         glm::mat4 _localTransform{ 1.0f };
         std::vector<uint32_t> _meshIndices;  // indices into VkmSceneModel::_meshes
         std::vector<uint32_t> _childIndices; // indices into VkmSceneModel::_nodes
+        // Index into VkmSceneModel::_lights, or INVALID_VALUE32 when this node carries no light.
+        uint32_t _lightIndex = INVALID_VALUE32;
     };
 
     /*
@@ -121,14 +158,32 @@ namespace vkm
             glm::mat4 _worldTransform{ 1.0f };
         };
 
+        /*
+        * @brief One placed light: the light's parameters plus where the hierarchy put it.
+        * @details glTF orients a light down its node's local -Z, so `_directionWorld` is the
+        * normalized negated third column of `_worldTransform`. Meaningless for a point light and
+        * left normalized anyway rather than zeroed, so a consumer never divides by it.
+        */
+        struct LightItem
+        {
+            uint32_t _lightIndex = INVALID_VALUE32;
+            uint32_t _nodeIndex = INVALID_VALUE32;
+            glm::vec3 _positionWorld{ 0.0f, 0.0f, 0.0f };
+            glm::vec3 _directionWorld{ 0.0f, 0.0f, -1.0f };
+        };
+
         std::vector<VkmSceneMesh> _meshes;
         std::vector<VkmSceneMaterial> _materials;
         std::vector<VkmSceneImage> _images;
         std::vector<VkmSceneNode> _nodes;
+        std::vector<VkmScenePunctualLight> _lights;
         std::vector<uint32_t> _rootNodeIndices;
 
         // Flattens the hierarchy into one entry per (node, mesh) pair, in depth-first order.
         std::vector<DrawItem> buildDrawList() const;
+
+        // The same walk for lights: one entry per node carrying one, in depth-first order.
+        std::vector<LightItem> buildLightList() const;
 
         // World-space bounds of every mesh reachable from the root nodes; invalid when the
         // model has no drawable mesh.
