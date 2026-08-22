@@ -8,6 +8,7 @@
 #include <vkm/renderer/backend/metal/metal_driver.h>
 
 #include "TestShadowAtlasShared.hpp"
+#include "TestShadowedLightingShared.hpp"
 
 #import <Metal/MTLDevice.h>
 
@@ -54,6 +55,12 @@ TEST_CASE("Metal shadow atlas - tile accounting per light type") {
     MetalShadowAtlasFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
     vkmtest::runShadowAtlasAllocationTest(fixture.driver.get());
+}
+
+TEST_CASE("Metal shadowed deferred lighting - an occluder darkens only what it covers") {
+    MetalShadowAtlasFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runShadowedLightingTest(fixture.driver.get());
 }
 
 #endif // VKM_USE_METAL_API && VKM_PLATFORM_APPLE

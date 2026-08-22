@@ -18,4 +18,136 @@
 // finite in a half-float, whose largest value is 65504.
 #define VKM_SHADOW_FAR_SENTINEL 60000.0
 
+/*
+* @brief Which cube face a direction from a point light falls in.
+* @details Face order matches vkmBuildProbeFaceViewProjections (renderer/probe_volume.cpp):
+* +X, -X, +Y, -Y, +Z, -Z. Selected by the major axis, which is what makes it agree with the six
+* 90-degree frusta that filled those tiles.
+*/
+uint vkmShadowCubeFace(float3 direction)
+{
+    const float3 magnitude = abs(direction);
+    if (magnitude.x >= magnitude.y && magnitude.x >= magnitude.z)
+    {
+        return direction.x >= 0.0 ? 0u : 1u;
+    }
+    if (magnitude.y >= magnitude.z)
+    {
+        return direction.y >= 0.0 ? 2u : 3u;
+    }
+    return direction.z >= 0.0 ? 4u : 5u;
+}
+
+/*
+* @brief The atlas UV rectangle of one tile.
+* @details Tiles run left to right, top to bottom, in the same order the fill pass sets its
+* viewports -- so this and VkmShadowAtlas::record cannot disagree about where a tile is.
+* @param tileIndex Linear tile index.
+* @param tilesPerRow Tiles across the atlas.
+* @return xy = the tile's origin in UV, zw = its size in UV.
+*/
+float4 vkmShadowTileRect(uint tileIndex, uint tilesPerRow)
+{
+    const float inverse = 1.0 / float(tilesPerRow);
+    const float2 origin = float2(float(tileIndex % tilesPerRow), float(tileIndex / tilesPerRow)) * inverse;
+    return float4(origin, inverse, inverse);
+}
+
+/*
+* @brief Declares the shadow lookup against a named atlas texture and sampler.
+* @details A macro rather than functions taking resource parameters, matching VKM_LIGHT_LOADER:
+* passing a Texture2D through a function signature is a path SPIRV-Cross to MSL and WGSL is not
+* exercised on anywhere else in this engine, and there is no reason to be the first.
+*/
+#define VKM_SHADOW_LOADER(AtlasTexture, AtlasSampler, AtlasConstants)                              \
+    /* Distance a fragment is from the light that owns `tile`, in the same measure the atlas   */  \
+    /* stores: radial for a positional light, along the axis for a directional one.            */  \
+    float vkmShadowReceiverDistance(uint tile, float3 worldPosition)                               \
+    {                                                                                              \
+        const float4 lightPosition = AtlasConstants.tileLightPosition[tile];                       \
+        const float3 relative = worldPosition - lightPosition.xyz;                                 \
+        return lightPosition.w > 0.5                                                               \
+                   ? length(relative)                                                              \
+                   : dot(relative, normalize(AtlasConstants.tileLightDirection[tile].xyz));         \
+    }                                                                                              \
+                                                                                                   \
+    /* One tap: 1 when the atlas says nothing nearer to the light covers this point.           */  \
+    float vkmShadowTap(uint tile, uint tilesPerRow, uint tileSize, float2 tileUv,                  \
+                       float receiverDistance, float bias)                                         \
+    {                                                                                              \
+        /* Clamped inside the tile, and this is not optional: a tap that walks off the edge     */  \
+        /* reads the NEIGHBOURING light's tile, which is the atlas's one real hazard.           */  \
+        const float halfTexel = 0.5 / float(tileSize);                                             \
+        const float2 clamped = clamp(tileUv, halfTexel, 1.0 - halfTexel);                          \
+        const float4 rect = vkmShadowTileRect(tile, tilesPerRow);                                  \
+        const float2 atlasUv = rect.xy + clamped * rect.zw;                                        \
+        const float stored = AtlasTexture.SampleLevel(AtlasSampler, atlasUv, 0).r;                 \
+        return (receiverDistance - bias) <= stored ? 1.0 : 0.0;                                    \
+    }                                                                                              \
+                                                                                                   \
+    /*                                                                                          */ \
+    /* How much of `light` reaches `worldPosition`: 1 lit, 0 fully shadowed.                    */ \
+    /*                                                                                          */ \
+    /* The bias is in WORLD UNITS, expressed as a multiple of the shadow texel's world-space    */ \
+    /* footprint at the receiver. That is what lets one constant work on a Cornell box and on   */ \
+    /* a 3721-unit Sponza -- the same discipline the probe volume's normal bias landed under.   */ \
+    /* It has to be in-shader: the RHI has no depth-bias state at all, and the value being      */ \
+    /* compared is a colour attachment's contents rather than the rasterizer's depth.           */ \
+    float vkmShadowFactor(VkmPunctualLight light, float3 worldPosition, float3 geometricNormal,    \
+                          float nDotL, uint tilesPerRow, uint tileSize)                            \
+    {                                                                                              \
+        if (light.shadowTile < 0)                                                                  \
+        {                                                                                          \
+            return 1.0;                                                                            \
+        }                                                                                          \
+                                                                                                   \
+        uint tile = uint(light.shadowTile);                                                        \
+        if (light.type == VKM_LIGHT_TYPE_POINT)                                                    \
+        {                                                                                          \
+            tile += vkmShadowCubeFace(worldPosition - light.positionWorld);                        \
+        }                                                                                          \
+                                                                                                   \
+        const float receiverDistance = vkmShadowReceiverDistance(tile, worldPosition);             \
+        /* A texel's world footprint. For a perspective tile it grows with distance; the        */  \
+        /* factor of 2 is the tile's full angular width over its resolution.                    */  \
+        const float texelWorld = max(2.0 * receiverDistance / float(tileSize), 1e-6);              \
+        /* Slope-scaled: a surface seen edge-on by the light spans many texels of depth in one  */  \
+        /* texel of area, and needs proportionally more room.                                   */  \
+        const float slope = sqrt(saturate(1.0 - nDotL * nDotL)) / max(nDotL, 1e-3);                \
+        const float bias = texelWorld * (1.0 + 2.0 * clamp(slope, 0.0, 8.0));                      \
+                                                                                                   \
+        /* Normal offset on top of the depth bias: it moves the QUERY off the surface rather    */  \
+        /* than loosening the comparison, so it fixes acne on curved geometry the depth bias    */  \
+        /* alone would either miss or peter-pan.                                                */  \
+        const float3 queryPosition = worldPosition + geometricNormal * texelWorld;                 \
+                                                                                                   \
+        const float4 clip = mul(AtlasConstants.tileViewProjection[tile], float4(queryPosition, 1.0)); \
+        if (clip.w <= 0.0)                                                                         \
+        {                                                                                          \
+            return 1.0; /* behind the light: nothing it can occlude */                             \
+        }                                                                                          \
+        const float3 ndc = clip.xyz / clip.w;                                                      \
+        if (any(abs(ndc.xy) > 1.0) || ndc.z < 0.0 || ndc.z > 1.0)                                  \
+        {                                                                                          \
+            return 1.0; /* outside this tile's frustum: unshadowed rather than wrongly dark */     \
+        }                                                                                          \
+        /* Clip space is +Y up and the atlas was rendered top-left origin, so V flips here.     */  \
+        float2 tileUv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);                              \
+                                                                                                   \
+        /* 3x3 PCF. Enough to soften the staircase a tile's resolution puts on a shadow edge    */  \
+        /* without pretending to be a soft shadow, which needs a light with area.               */  \
+        const float texel = 1.0 / float(tileSize);                                                 \
+        float sum = 0.0;                                                                           \
+        for (int y = -1; y <= 1; ++y)                                                              \
+        {                                                                                          \
+            for (int x = -1; x <= 1; ++x)                                                          \
+            {                                                                                      \
+                sum += vkmShadowTap(tile, tilesPerRow, tileSize,                                   \
+                                    tileUv + float2(float(x), float(y)) * texel,                   \
+                                    receiverDistance, bias);                                       \
+            }                                                                                      \
+        }                                                                                          \
+        return sum * (1.0 / 9.0);                                                                  \
+    }
+
 #endif // VKM_SHADOW_HLSLI

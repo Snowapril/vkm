@@ -7,6 +7,7 @@
 #include <glm/vec4.hpp>
 
 #include <cstdint>
+#include <vector>
 
 namespace vkm
 {
@@ -29,7 +30,9 @@ namespace vkm
     */
     struct VkmDeferredLightConstants
     {
-        // x = number of valid entries in _lights; yzw reserved.
+        // x = valid entries in _lights, y = shadow tiles per atlas row, z = shadow tile size in
+        // texels. The atlas geometry rides here rather than in its own buffer because the lookup
+        // needs both together and a second uniform binding would buy nothing.
         glm::uvec4 _lightCount{ 0u, 0u, 0u, 0u };
         VkmPunctualLight _lights[kVkmMaxPunctualLights]{};
     };
@@ -45,4 +48,18 @@ namespace vkm
     * @param outConstants Receives the constants; fully overwritten.
     */
     void vkmBuildDeferredLightConstants(const VkmScene& scene, VkmDeferredLightConstants* outConstants);
+
+    /*
+    * @brief The same, for a scene whose lights a shadow atlas has already assigned tiles to.
+    * @details Takes the light list `VkmShadowAtlas::allocate` filled in rather than the scene's
+    * own, so the `_shadowTile` indices survive into the pass. Call order is therefore: scene
+    * lights -> atlas allocate -> this.
+    * @param lights The atlas's output list.
+    * @param tilesPerRow Atlas tiles per row.
+    * @param tileSize Atlas tile size in texels.
+    * @param outConstants Receives the constants; fully overwritten.
+    */
+    void vkmBuildDeferredLightConstants(const std::vector<VkmPunctualLight>& lights,
+                                        uint32_t tilesPerRow, uint32_t tileSize,
+                                        VkmDeferredLightConstants* outConstants);
 } // namespace vkm

@@ -50,4 +50,19 @@ namespace vkm
 
         outConstants->_lightCount = glm::uvec4(count, 0u, 0u, 0u);
     }
+
+    void vkmBuildDeferredLightConstants(const std::vector<VkmPunctualLight>& lights,
+                                        uint32_t tilesPerRow, uint32_t tileSize,
+                                        VkmDeferredLightConstants* outConstants)
+    {
+        VKM_ASSERT(outConstants != nullptr, "vkmBuildDeferredLightConstants needs an output");
+
+        *outConstants = VkmDeferredLightConstants{};
+        const uint32_t count = std::min(static_cast<uint32_t>(lights.size()), kVkmMaxPunctualLights);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            outConstants->_lights[i] = lights[i];
+        }
+        outConstants->_lightCount = glm::uvec4(count, tilesPerRow, tileSize, 0u);
+    }
 } // namespace vkm
