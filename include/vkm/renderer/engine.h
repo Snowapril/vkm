@@ -85,8 +85,13 @@ namespace vkm
         // actually supports it (see VkmDriverBase::selectSwapChainColorFormat); otherwise it
         // falls back to the non-HDR format. Off by default -- HDR is opt-in.
         bool enableHdr = false;
+        // Create the back buffer so it can be read back, which is what the F3 clipboard capture
+        // needs. Off by default: a readable back buffer gives up the driver's framebuffer-only
+        // fast paths (lossless compression, direct-to-display), and a run that never captures
+        // should not pay for them.
+        bool enableBackBufferReadback = false;
     };
-    constexpr const VkmEngineLaunchOptions DEFAULT_ENGINE_LAUNCH_OPTIONS = { true, false, false, false, false, 0, 1, false };
+    constexpr const VkmEngineLaunchOptions DEFAULT_ENGINE_LAUNCH_OPTIONS = { true, false, false, false, false, 0, 1, false, false };
 
     /*
     * @brief Engine base class
