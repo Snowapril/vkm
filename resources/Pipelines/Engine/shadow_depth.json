@@ -1,5 +1,5 @@
 {
-    "name": "probe_capture_pso",
+    "name": "shadow_depth_pso",
     "primitive_topology": "triangle_list",
     "rasterization_state": {
         "fill_mode": "solid",
@@ -21,18 +21,6 @@
     "per_pass_resources": [
         {
             "binding": 0,
-            "type": "uniform_buffer"
-        },
-        {
-            "binding": 1,
-            "type": "sampled_texture"
-        },
-        {
-            "binding": 2,
-            "type": "sampler"
-        },
-        {
-            "binding": 3,
             "type": "uniform_buffer"
         }
     ],
@@ -61,11 +49,11 @@
     },
     "shaders": {
         "vertex": {
-            "filepath": "probe_capture.hlsl",
+            "filepath": "shadow_depth.hlsl",
             "entry_point": "VSMain"
         },
         "fragment": {
-            "filepath": "probe_capture.hlsl",
+            "filepath": "shadow_depth.hlsl",
             "entry_point": "PSMain"
         }
     },

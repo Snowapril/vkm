@@ -38,6 +38,7 @@ set(SRCS
     ${SRC_DIR}/TestSceneGeometryPool.cpp
     ${SRC_DIR}/TestSceneBatching.cpp
     ${SRC_DIR}/TestGltfImporter.cpp
+    ${SRC_DIR}/TestPunctualLights.cpp
     ${SRC_DIR}/TestCpuProfiler.cpp
     ${SRC_DIR}/TestGpuProfiler.cpp
     ${SRC_DIR}/TestImageLoader.cpp
@@ -74,6 +75,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestGBufferMetal.mm
         ${SRC_DIR}/TestGBufferRenderMetal.mm
         ${SRC_DIR}/TestProbeVolumeMetal.mm
+        ${SRC_DIR}/TestShadowAtlasMetal.mm
         ${SRC_DIR}/TestViewportMetal.mm
         ${SRC_DIR}/TestAccelerationStructureMetal.mm
         ${SRC_DIR}/TestUpscalerMetal.mm
@@ -101,6 +103,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestGBufferMetal.mm
         ${SRC_DIR}/TestGBufferRenderMetal.mm
         ${SRC_DIR}/TestProbeVolumeMetal.mm
+        ${SRC_DIR}/TestShadowAtlasMetal.mm
         ${SRC_DIR}/TestViewportMetal.mm
         ${SRC_DIR}/TestAccelerationStructureMetal.mm
         ${SRC_DIR}/TestUpscalerMetal.mm

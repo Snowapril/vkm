@@ -102,6 +102,66 @@ namespace vkm
         return drawList;
     }
 
+    std::vector<VkmSceneModel::LightItem> VkmSceneModel::buildLightList() const
+    {
+        struct StackEntry
+        {
+            uint32_t _nodeIndex;
+            glm::mat4 _parentTransform;
+        };
+
+        std::vector<LightItem> lightList;
+        // Same guard buildDrawList carries, and for the same reason: nothing in glTF enforces
+        // that the nodes form a forest.
+        std::vector<uint8_t> visited(_nodes.size(), 0);
+
+        std::vector<StackEntry> stack;
+        stack.reserve(_nodes.size());
+        for (auto it = _rootNodeIndices.rbegin(); it != _rootNodeIndices.rend(); ++it)
+        {
+            stack.push_back(StackEntry{ *it, glm::mat4(1.0f) });
+        }
+
+        while (!stack.empty())
+        {
+            const StackEntry entry = stack.back();
+            stack.pop_back();
+
+            if (entry._nodeIndex >= _nodes.size() || visited[entry._nodeIndex] != 0)
+            {
+                continue;
+            }
+            visited[entry._nodeIndex] = 1;
+
+            const VkmSceneNode& node = _nodes[entry._nodeIndex];
+            const glm::mat4 worldTransform = entry._parentTransform * node._localTransform;
+
+            if (node._lightIndex < _lights.size())
+            {
+                LightItem item;
+                item._lightIndex = node._lightIndex;
+                item._nodeIndex = entry._nodeIndex;
+                item._positionWorld = glm::vec3(worldTransform[3]);
+                // glTF aims a light down its node's local -Z. Taking the column rather than
+                // inverse-transposing is correct for the direction of an axis (a normal would
+                // need the inverse transpose; a transformed axis does not), and it survives the
+                // non-uniform scale a node is allowed to carry once normalized.
+                const glm::vec3 axis = -glm::vec3(worldTransform[2]);
+                const float axisLength = glm::length(axis);
+                item._directionWorld =
+                    axisLength > 0.0f ? axis / axisLength : glm::vec3(0.0f, 0.0f, -1.0f);
+                lightList.push_back(item);
+            }
+
+            for (auto it = node._childIndices.rbegin(); it != node._childIndices.rend(); ++it)
+            {
+                stack.push_back(StackEntry{ *it, worldTransform });
+            }
+        }
+
+        return lightList;
+    }
+
     VkmSceneAABB VkmSceneModel::computeWorldBounds() const
     {
         VkmSceneAABB bounds;

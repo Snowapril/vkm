@@ -49,8 +49,10 @@
 #include <vkm/renderer/camera.h>
 #include <vkm/renderer/engine.h>
 #include <vkm/renderer/gbuffer.h>
+#include <vkm/renderer/deferred_lighting.h>
 #include <vkm/renderer/gi_composite.h>
 #include <vkm/renderer/gi_system.h>
+#include <vkm/renderer/shadow_atlas.h>
 #include <vkm/renderer/screenshot.h>
 
 #include <cstdio>
@@ -138,13 +140,7 @@ namespace
 {
     constexpr VkmFormat kHdrFormat = VkmFormat::R16G16B16A16_SFLOAT;
     constexpr glm::vec3 kLightDirection{ 0.4f, 0.8f, 0.45f }; // towards the light
-
-    // Mirrors LightConstants in deferred_lighting.hlsl.
-    struct LightConstants
-    {
-        glm::vec4 _directionToLight{ 0.0f, 1.0f, 0.0f, 0.0f };
-        glm::vec4 _radiance{ 1.0f, 1.0f, 1.0f, 0.0f };
-    };
+    constexpr glm::vec3 kLightRadiance{ 3.0f, 3.0f, 2.8f };
 
     // Mirrors TonemapConstants in tonemap.hlsl.
     struct TonemapConstants
@@ -244,7 +240,7 @@ public:
         VkmSampler* sampler = driver->newSampler(samplerInfo);
         _sampler = sampler != nullptr ? sampler->getHandle() : VKM_INVALID_RESOURCE_HANDLE;
 
-        VkmBuffer* lightBuffer = createUniformBuffer(driver, sizeof(LightConstants), "GiLightConstants");
+        VkmBuffer* lightBuffer = createUniformBuffer(driver, sizeof(VkmDeferredLightConstants), "GiLightConstants");
         VkmBuffer* tonemapBuffer = createUniformBuffer(driver, sizeof(TonemapConstants), "GiTonemapConstants");
         VkmBuffer* compositeBuffer = createUniformBuffer(driver, sizeof(VkmGiCompositeConstants), "GiCompositeConstants");
         if (lightBuffer == nullptr || tonemapBuffer == nullptr || compositeBuffer == nullptr)
@@ -272,8 +268,6 @@ public:
             _compositeStagingPointers[frame] = staging;
         }
 
-        const LightConstants light{ glm::vec4(glm::normalize(kLightDirection), 0.0f), glm::vec4(3.0f, 3.0f, 2.8f, 0.0f) };
-        driver->uploadToBuffer(_lightBuffer, &light, sizeof(light));
         const TonemapConstants tonemap{};
         driver->uploadToBuffer(_tonemapBuffer, &tonemap, sizeof(tonemap));
         // Uploaded once the scene's scale is known; see loadScene.
@@ -292,6 +286,19 @@ public:
         giDescriptor._probeHysteresis = 0.9f;
         giDescriptor._probeNormalBiasFraction = gv_gi_probe_normal_bias.get();
         giDescriptor._probeCullView = kProbeCullView;
+        // The sample owns the atlas; the GI system only forwards it to the probe capture, which
+        // is the pass that needs it. The atlas is initialized above so its handles are valid.
+        giDescriptor._shadowAtlasTexture = _shadowAtlas.getAtlasTexture();
+        giDescriptor._shadowAtlasConstants = _shadowAtlas.getConstantBuffer();
+        VkmShadowAtlas::Descriptor shadowDescriptor;
+        shadowDescriptor._cullViewIndex = kShadowCullView;
+        std::string shadowError;
+        if (!_shadowAtlas.initialize(driver, manager, shadowDescriptor, &shadowError))
+        {
+            VKM_DEBUG_ERROR(("Failed to initialize the shadow atlas: " + shadowError).c_str());
+            return;
+        }
+
         std::string giError;
         if (!_gi.initialize(driver, manager, &_gbuffer, giDescriptor, &giError))
         {
@@ -321,6 +328,7 @@ public:
         _retiredTables.clear();
         destroyUpscaler(_upscaler);
         _upscaler = nullptr;
+        _shadowAtlas.destroy();
         _gi.destroy();
         _gbuffer.destroy();
         for (VkmSceneMaterialTables& tables : _gbufferMaterialTables)
@@ -338,6 +346,16 @@ public:
         }
         // The technique's own capability gate lives in VkmGiSystem now, clamped at record().
         _lastDeltaTime = static_cast<float>(deltaTime);
+
+        // Split the directional shadow into cascades across the camera's view. One tile cannot
+        // serve a whole view -- fitted tightly it runs out before the far geometry, fitted loosely
+        // it spends every texel on distance nothing needs. The atlas snaps each cascade to its own
+        // texel grid, so refitting every frame does not make the shadows crawl.
+        _shadowAtlas.setDirectionalView(_camera.getPosition(),
+                                        glm::normalize(_camera.getTarget() - _camera.getPosition()),
+                                        _camera.getFovYRadians(),
+                                        static_cast<float>(_extent.x) / static_cast<float>(glm::max(_extent.y, 1u)),
+                                        _shadowDistance);
         retireTables();
         ensureTargets();
         // Runs after ensureTargets so the phase count follows a resize immediately. The camera
@@ -374,13 +392,16 @@ public:
         }
 
         VkmFrameData frameData;
-        frameData._lightDirection = glm::vec4(glm::normalize(kLightDirection), 0.0f);
+        frameData._lightDirection = glm::vec4(_scene.getDirectionalDirection(), 0.0f);
 
         // 1. The camera's own update and cull, in view 0. (The GI system records its own
         // subgraphs — including the probe refresh's second cull view — from record() below.)
         const uint32_t frameIndex = renderGraph->frameIndex();
         VkmFrameData cameraFrameData = frameData;
         vkmExtractFrustumPlanes(_camera.getViewProjection(), cameraFrameData._frustumPlanes);
+
+        // Before everything else: the deferred pass below reads what this writes.
+        _shadowAtlas.record(renderGraph, &_scene, frameData, frameIndex);
 
         VkmRenderTransferSubGraph* updateSubGraph = renderGraph->beginTransferSubGraph("GiSceneUpdate");
         referenceScene(updateSubGraph, _scene, VkmScene::ReferencePhase::Update);
@@ -509,6 +530,8 @@ private:
     // The probe refresh takes the other one; see the file header.
     static constexpr uint32_t kCameraCullView = 0;
     static constexpr uint32_t kProbeCullView = 1;
+    // The shadow atlas draws from each light rather than from the eye, so it needs its own.
+    static constexpr uint32_t kShadowCullView = 2;
 
     struct Tables
     {
@@ -616,15 +639,64 @@ private:
             VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
             return;
         }
-        // The same radiance the deferred pass's LightConstants carries (see postDriverReady):
-        // the sun in the light table is what the traced tier samples, and the two must stay in
-        // sync or ReSTIR and the deferred image disagree about how bright the sun is.
-        _scene.setDirectionalRadiance(glm::vec3(3.0f, 3.0f, 2.8f));
+        // Stated once. The traced tier reads it from the light table's header and the deferred
+        // pass from the constants derived below, so the two cannot disagree about the sun.
+        _scene.setDirectionalLight(kLightDirection, kLightRadiance);
         if (!_scene.build(driver, _engine->getPipelineStateManager(), &error))
         {
             VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
             return;
         }
+
+        std::string shadowSceneError;
+        if (!_shadowAtlas.prepareScene(_scene, &shadowSceneError))
+        {
+            VKM_DEBUG_ERROR(("Failed to prepare the shadow atlas: " + shadowSceneError).c_str());
+            return;
+        }
+
+        // Tile assignment first, then the constants: allocate() writes each light's _shadowTile
+        // and the deferred pass reads it, so building the constants from the scene instead of
+        // from this list would silently drop every assignment.
+        _shadowLights.clear();
+        const glm::vec3& sunRadiance = _scene.getDirectionalRadiance();
+        if (sunRadiance.x > 0.0f || sunRadiance.y > 0.0f || sunRadiance.z > 0.0f)
+        {
+            VkmPunctualLight sun;
+            sun._type = static_cast<uint32_t>(VkmLightType::Directional);
+            const glm::vec3 aim = -_scene.getDirectionalDirection();
+            sun._directionWorld[0] = aim.x;
+            sun._directionWorld[1] = aim.y;
+            sun._directionWorld[2] = aim.z;
+            sun._radiance[0] = sunRadiance.x;
+            sun._radiance[1] = sunRadiance.y;
+            sun._radiance[2] = sunRadiance.z;
+            _shadowLights.push_back(sun);
+        }
+        for (const VkmPunctualLight& light : _scene.getPunctualLights())
+        {
+            _shadowLights.push_back(light);
+        }
+        _shadowAtlas.allocate(_scene, &_shadowLights);
+        // A fraction of the scene, so the cascades cover a useful depth range on any scale of
+        // model. Sponza lands at roughly 370 units of shadow distance, which the three cascades
+        // split so the nearest spends its texels on what is closest to the eye.
+        const VkmSceneAABB shadowBounds = _scene.computeWorldBounds();
+        _shadowDistance =
+            shadowBounds._valid ? glm::max(glm::length(shadowBounds.getExtent()) * 0.1f, 1.0f) : 32.0f;
+
+        // Now that a tile is assigned, the probe capture can shade shadowed too -- which is what
+        // stops probes reporting a wall as sunlit when the sun cannot reach it.
+        if (!_shadowLights.empty())
+        {
+            _gi.setShadowSun(_shadowLights[0], _shadowAtlas.getTilesPerRow(),
+                             _shadowAtlas.getDescriptor()._tileSize);
+        }
+
+        VkmDeferredLightConstants lightConstants{};
+        vkmBuildDeferredLightConstants(_shadowLights, _shadowAtlas.getTilesPerRow(),
+                                       _shadowAtlas.getDescriptor()._tileSize, &lightConstants);
+        driver->uploadToBuffer(_lightBuffer, &lightConstants, sizeof(lightConstants));
 
         // Must follow build(), which is where the material textures are created.
         for (uint32_t i = 0; i < static_cast<uint32_t>(VkmVertexLayoutPreset::Count); ++i)
@@ -831,7 +903,8 @@ private:
         _tables._lighting = driver->newResourceTable(
             _lightingPipeline, VkmResourceSetKind::PerPass,
             {{ 0, normal }, { 1, baseColor }, { 2, motion }, { 3, _sampler }, { 4, _lightBuffer },
-             { 5, _gbuffer.getTexture(VkmGBuffer::Target::Emissive) }}, &error);
+             { 5, _gbuffer.getTexture(VkmGBuffer::Target::Emissive) },
+             { 6, _shadowAtlas.getAtlasTexture() }, { 7, _shadowAtlas.getConstantBuffer() }}, &error);
         _tables._composite = driver->newResourceTable(
             _compositePipeline, VkmResourceSetKind::PerPass,
             {{ 0, _directTarget }, { 1, _gi.getIndirectTexture() }, { 2, baseColor }, { 3, normal },
@@ -1041,6 +1114,7 @@ private:
     VkmScene _scene;
     VkmGBuffer _gbuffer;
     VkmGiSystem _gi;
+    VkmShadowAtlas _shadowAtlas;
 
     std::array<VkmPipelineStateBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _gbufferPipelines{};
     // One set-3 table per material, per G-buffer permutation. Empty on a backend whose shader
@@ -1078,6 +1152,13 @@ private:
     VkmUpscaleMode _upscaleMode{ VkmUpscaleMode::Off };
     uint64_t _frameCounter = 0;
     bool _sceneReady = false;
+
+    // The atlas's tile assignments, kept because the deferred constants are derived from them.
+    std::vector<VkmPunctualLight> _shadowLights;
+    // How far from the eye the directional shadow reaches, in world units. Derived from the
+    // scene at load rather than fixed: a constant here would be a guess about scene scale.
+    // Past it nothing casts, which reads as flat lighting rather than a black band.
+    float _shadowDistance = 1.0f;
 
     VkmGiDebugView _debugView = VkmGiDebugView::Composite;
     float _indirectIntensity = 1.0f;

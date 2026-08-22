@@ -155,15 +155,30 @@ namespace vkm
     void vkmExtractFrustumPlanes(const glm::mat4& viewProjection, glm::vec4* outPlanes);
 
     /*
+    * @brief The six axis-aligned planes of `boxMin`..`boxMax`, in the same inward-facing form
+    * vkmExtractFrustumPlanes produces.
+    * @details For a view no single frustum describes. A probe capture sees in every direction and
+    * all six of its faces share one cull result; a shadow atlas pass fills several lights' tiles
+    * from one cull. In both cases a box around what the pass will draw from is the tightest
+    * correct test available.
+    * @param boxMin Minimum corner.
+    * @param boxMax Maximum corner.
+    * @param outPlanes Receives six planes, matching VkmFrameData::_frustumPlanes.
+    */
+    void vkmBuildBoxPlanes(const glm::vec3& boxMin, const glm::vec3& boxMax, glm::vec4* outPlanes);
+
+    /*
     * @brief How many independently culled views one frame may record.
     *
-    * @details Two, because a frame that refreshes GI probes needs a cull the probes can use
-    * alongside the camera's: a probe looks in every direction, so culling its capture against the
-    * camera frustum would drop exactly the geometry behind the camera that indirect light comes
-    * from. Each view gets its own frame data, its own counts and its own payload regions, so the
-    * two culls never write the same words and need no barrier between them.
+    * @details Three: the camera's, a GI probe refresh's, and a shadow atlas pass's. A probe looks
+    * in every direction, so culling its capture against the camera frustum would drop exactly the
+    * geometry behind the camera that indirect light comes from; a shadow pass draws from each
+    * light rather than from the eye, so it needs its own cull for the same reason. Each view gets
+    * its own frame data, its own counts and its own payload regions, so the culls never write the
+    * same words and need no barrier between them -- which is also what makes raising this a
+    * matter of buffer size alone.
     */
-    constexpr uint32_t kVkmSceneMaxCullViews = 2;
+    constexpr uint32_t kVkmSceneMaxCullViews = 3;
 
     class VkmScene
     {
@@ -327,16 +342,31 @@ namespace vkm
         inline uint32_t getMaterialCount() const { return static_cast<uint32_t>(_materials.size()); }
 
         /*
-        * @brief Sets the directional light's radiance, carried in the light table's header so the
-        * traced passes can sample it.
-        * @details Must precede build() -- the table uploads once. The per-frame direction stays in
-        * VkmFrameData::_lightDirection; radiance is the static half of the pair.
+        * @brief Sets the scene's directional light: the single place its direction and radiance
+        * are stated.
+        * @details Must precede build() -- the light table uploads once. Both halves live here so
+        * they cannot disagree: the radiance reaches the traced tier through the light table's
+        * header and the raster tier through vkmBuildDeferredLightConstants, and the direction
+        * reaches every per-frame consumer through getDirectionalDirection().
+        * @param directionToLight World-space direction TOWARDS the light; normalized here.
+        * @param radiance Colour times intensity.
         */
-        void setDirectionalRadiance(const glm::vec3& radiance);
+        void setDirectionalLight(const glm::vec3& directionToLight, const glm::vec3& radiance);
+
+        inline const glm::vec3& getDirectionalDirection() const { return _directionalDirection; }
+        inline const glm::vec3& getDirectionalRadiance() const { return _directionalRadiance; }
 
         // Emissive triangles the built light table holds, past its header. CPU-known after
         // build(), so tests can assert the gather without a GPU readback.
         inline uint32_t getLightTriangleCount() const { return _lightTriangleCount; }
+
+        /*
+        * @brief Every punctual light the scene's models placed, in world space.
+        * @details Filled by addModel from each model's node hierarchy, so it is valid before
+        * build(). The scene's own directional light is NOT in here -- it is not a model's light;
+        * vkmBuildDeferredLightConstants appends it.
+        */
+        inline const std::vector<VkmPunctualLight>& getPunctualLights() const { return _punctualLights; }
 
         /*
         * @brief The textures a material samples, for building a per-draw (set 3) table.
@@ -419,6 +449,8 @@ namespace vkm
         uint32_t _lightPoolSlot = INVALID_VALUE32;
         uint32_t _lightTriangleCount = 0;
         glm::vec3 _directionalRadiance{ 0.0f };
+        glm::vec3 _directionalDirection{ 0.0f, 1.0f, 0.0f };
+        std::vector<VkmPunctualLight> _punctualLights;
 
         VkmResourceHandle _objectDataBuffer{ VKM_INVALID_RESOURCE_HANDLE };
         VkmResourceHandle _frameDataBuffer{ VKM_INVALID_RESOURCE_HANDLE };
