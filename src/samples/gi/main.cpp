@@ -52,6 +52,7 @@
 #include <vkm/renderer/deferred_lighting.h>
 #include <vkm/renderer/gi_composite.h>
 #include <vkm/renderer/gi_system.h>
+#include <vkm/renderer/shadow_atlas.h>
 #include <vkm/renderer/screenshot.h>
 
 #include <cstdio>
@@ -285,6 +286,15 @@ public:
         giDescriptor._probeHysteresis = 0.9f;
         giDescriptor._probeNormalBiasFraction = gv_gi_probe_normal_bias.get();
         giDescriptor._probeCullView = kProbeCullView;
+        VkmShadowAtlas::Descriptor shadowDescriptor;
+        shadowDescriptor._cullViewIndex = kShadowCullView;
+        std::string shadowError;
+        if (!_shadowAtlas.initialize(driver, manager, shadowDescriptor, &shadowError))
+        {
+            VKM_DEBUG_ERROR(("Failed to initialize the shadow atlas: " + shadowError).c_str());
+            return;
+        }
+
         std::string giError;
         if (!_gi.initialize(driver, manager, &_gbuffer, giDescriptor, &giError))
         {
@@ -314,6 +324,7 @@ public:
         _retiredTables.clear();
         destroyUpscaler(_upscaler);
         _upscaler = nullptr;
+        _shadowAtlas.destroy();
         _gi.destroy();
         _gbuffer.destroy();
         for (VkmSceneMaterialTables& tables : _gbufferMaterialTables)
@@ -374,6 +385,9 @@ public:
         const uint32_t frameIndex = renderGraph->frameIndex();
         VkmFrameData cameraFrameData = frameData;
         vkmExtractFrustumPlanes(_camera.getViewProjection(), cameraFrameData._frustumPlanes);
+
+        // Before everything else: the deferred pass below reads what this writes.
+        _shadowAtlas.record(renderGraph, &_scene, frameData, frameIndex);
 
         VkmRenderTransferSubGraph* updateSubGraph = renderGraph->beginTransferSubGraph("GiSceneUpdate");
         referenceScene(updateSubGraph, _scene, VkmScene::ReferencePhase::Update);
@@ -502,6 +516,8 @@ private:
     // The probe refresh takes the other one; see the file header.
     static constexpr uint32_t kCameraCullView = 0;
     static constexpr uint32_t kProbeCullView = 1;
+    // The shadow atlas draws from each light rather than from the eye, so it needs its own.
+    static constexpr uint32_t kShadowCullView = 2;
 
     struct Tables
     {
@@ -618,10 +634,40 @@ private:
             return;
         }
 
-        // Derived from the scene rather than typed here, so the deferred pass and the traced
-        // tier's light table cannot disagree about the sun. Uploaded once: the lights are static.
+        std::string shadowSceneError;
+        if (!_shadowAtlas.prepareScene(_scene, &shadowSceneError))
+        {
+            VKM_DEBUG_ERROR(("Failed to prepare the shadow atlas: " + shadowSceneError).c_str());
+            return;
+        }
+
+        // Tile assignment first, then the constants: allocate() writes each light's _shadowTile
+        // and the deferred pass reads it, so building the constants from the scene instead of
+        // from this list would silently drop every assignment.
+        _shadowLights.clear();
+        const glm::vec3& sunRadiance = _scene.getDirectionalRadiance();
+        if (sunRadiance.x > 0.0f || sunRadiance.y > 0.0f || sunRadiance.z > 0.0f)
+        {
+            VkmPunctualLight sun;
+            sun._type = static_cast<uint32_t>(VkmLightType::Directional);
+            const glm::vec3 aim = -_scene.getDirectionalDirection();
+            sun._directionWorld[0] = aim.x;
+            sun._directionWorld[1] = aim.y;
+            sun._directionWorld[2] = aim.z;
+            sun._radiance[0] = sunRadiance.x;
+            sun._radiance[1] = sunRadiance.y;
+            sun._radiance[2] = sunRadiance.z;
+            _shadowLights.push_back(sun);
+        }
+        for (const VkmPunctualLight& light : _scene.getPunctualLights())
+        {
+            _shadowLights.push_back(light);
+        }
+        _shadowAtlas.allocate(_scene, &_shadowLights);
+
         VkmDeferredLightConstants lightConstants{};
-        vkmBuildDeferredLightConstants(_scene, &lightConstants);
+        vkmBuildDeferredLightConstants(_shadowLights, _shadowAtlas.getTilesPerRow(),
+                                       _shadowAtlas.getDescriptor()._tileSize, &lightConstants);
         driver->uploadToBuffer(_lightBuffer, &lightConstants, sizeof(lightConstants));
 
         // Must follow build(), which is where the material textures are created.
@@ -829,7 +875,8 @@ private:
         _tables._lighting = driver->newResourceTable(
             _lightingPipeline, VkmResourceSetKind::PerPass,
             {{ 0, normal }, { 1, baseColor }, { 2, motion }, { 3, _sampler }, { 4, _lightBuffer },
-             { 5, _gbuffer.getTexture(VkmGBuffer::Target::Emissive) }}, &error);
+             { 5, _gbuffer.getTexture(VkmGBuffer::Target::Emissive) },
+             { 6, _shadowAtlas.getAtlasTexture() }, { 7, _shadowAtlas.getConstantBuffer() }}, &error);
         _tables._composite = driver->newResourceTable(
             _compositePipeline, VkmResourceSetKind::PerPass,
             {{ 0, _directTarget }, { 1, _gi.getIndirectTexture() }, { 2, baseColor }, { 3, normal },
@@ -1039,6 +1086,7 @@ private:
     VkmScene _scene;
     VkmGBuffer _gbuffer;
     VkmGiSystem _gi;
+    VkmShadowAtlas _shadowAtlas;
 
     std::array<VkmPipelineStateBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _gbufferPipelines{};
     // One set-3 table per material, per G-buffer permutation. Empty on a backend whose shader
@@ -1076,6 +1124,9 @@ private:
     VkmUpscaleMode _upscaleMode{ VkmUpscaleMode::Off };
     uint64_t _frameCounter = 0;
     bool _sceneReady = false;
+
+    // The atlas's tile assignments, kept because the deferred constants are derived from them.
+    std::vector<VkmPunctualLight> _shadowLights;
 
     VkmGiDebugView _debugView = VkmGiDebugView::Composite;
     float _indirectIntensity = 1.0f;
