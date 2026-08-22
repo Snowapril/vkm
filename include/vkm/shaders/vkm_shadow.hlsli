@@ -19,13 +19,14 @@
 * buys.
 * @details Both are measured rather than derived. The kernel radius is geometry: a 3x3 kernel
 * reaches 1.5 texels from its centre once the half-texel of the centre tap is counted. The depth
-* scale is the one free constant, and it was raised to 4 against Sponza's roof, whose corrugated
-* tiles put a full ridge inside a single shadow texel at any resolution the atlas can afford --
-* the in-texel depth range is then the ridge height, not a fraction of a texel, and no smaller
-* bias removes the acne. Raising it further starts to detach contact shadows.
+* scale is the one free constant, measured against Sponza's roof, whose corrugated tiles put a
+* full ridge inside a single shadow texel at any resolution the atlas can afford -- the in-texel
+* depth range is then the ridge height, not a fraction of a texel, so a bias derived from the
+* texel's own size underestimates it. Swept on that roof: 4 acnes heavily, 6 leaves thin
+* outlines, 8 is the first clean value. Raising it further starts to detach contact shadows.
 */
 #define VKM_SHADOW_KERNEL_RADIUS 1.5
-#define VKM_SHADOW_DEPTH_BIAS_SCALE 4.0
+#define VKM_SHADOW_DEPTH_BIAS_SCALE 8.0
 
 // What an untouched atlas texel holds. Far enough that every real query reads as unoccluded, and
 // finite in a half-float, whose largest value is 65504.
