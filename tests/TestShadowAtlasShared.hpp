@@ -179,6 +179,7 @@ namespace vkmtest
         vkm::VkmShadowAtlas atlas;
         vkm::VkmShadowAtlas::Descriptor descriptor;
         descriptor._tileSize = 32u;
+        descriptor._cascadeCount = 3u;
         std::string atlasError;
         REQUIRE_MESSAGE(atlas.initialize(driver, &manager, descriptor, &atlasError), atlasError);
 
@@ -199,10 +200,17 @@ namespace vkmtest
         };
         atlas.allocate(scene, &lights);
 
-        CHECK(lights[0]._shadowTile == 0); // directional: one tile
-        CHECK(lights[1]._shadowTile == 1); // point: six, starting here
-        CHECK(lights[2]._shadowTile == 7); // spot: the one after them
-        CHECK(atlas.getTileCount() == 8);
+        CHECK(lights[0]._shadowTile == 0); // directional: one tile per cascade
+        CHECK(lights[0]._shadowTileCount == 3u);
+        CHECK(lights[1]._shadowTile == 3); // point: six faces, starting after the cascades
+        CHECK(lights[1]._shadowTileCount == 6u);
+        CHECK(lights[2]._shadowTile == 9); // spot: the one after them
+        CHECK(lights[2]._shadowTileCount == 1u);
+        CHECK(atlas.getTileCount() == 10);
+        // The count is what the lookup walks; a light whose tiles it under-counts silently reads
+        // a neighbouring light's.
+        CHECK(lights[0]._shadowTileCount + lights[1]._shadowTileCount + lights[2]._shadowTileCount ==
+              atlas.getTileCount());
 
         // Past the budget a light keeps shading and simply casts no shadow -- a dropped light
         // would be a hole in the image, an unshadowed one only a missing shadow.
@@ -239,6 +247,8 @@ namespace vkmtest
         vkm::VkmShadowAtlas atlas;
         vkm::VkmShadowAtlas::Descriptor descriptor;
         descriptor._tileSize = 512u;
+        // One cascade, so this isolates the snapping from the split.
+        descriptor._cascadeCount = 1u;
         std::string atlasError;
         REQUIRE_MESSAGE(atlas.initialize(driver, &manager, descriptor, &atlasError), atlasError);
 
@@ -300,6 +310,68 @@ namespace vkmtest
             }
         }
         CHECK(texelFits.size() == 8);
+
+        atlas.destroy();
+    }
+
+    /*
+    * @brief Cascades split the view, and the near one resolves far better than any single fit.
+    *
+    * The point of cascading is not that there are more tiles -- it is that the near slice, where
+    * a shadow texel is worth the most, stops paying for the far slice's coverage. So the
+    * assertions are about the texel sizes the split produces, not about tile bookkeeping.
+    */
+    inline void runShadowCascadeTest(vkm::VkmDriverBase* driver)
+    {
+        vkm::VkmPipelineStateManager manager(driver);
+        std::string psoError;
+        REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(TEST_ENGINE_PIPELINE_DIR,
+                                                                TEST_ENGINE_SHADER_CACHE_DIR,
+                                                                vkm::VkmPipelineStateOrigin::Engine, &psoError),
+                        psoError);
+
+        vkm::VkmScene scene;
+        vkm::VkmShadowAtlas atlas;
+        vkm::VkmShadowAtlas::Descriptor descriptor;
+        descriptor._tileSize = 1024u;
+        descriptor._cascadeCount = 3u;
+        std::string atlasError;
+        REQUIRE_MESSAGE(atlas.initialize(driver, &manager, descriptor, &atlasError), atlasError);
+
+        std::vector<vkm::VkmPunctualLight> lights(1);
+        vkm::VkmPunctualLight& sun = lights[0];
+        sun._type = static_cast<uint32_t>(vkm::VkmLightType::Directional);
+        sun._directionWorld[0] = 0.0f;
+        sun._directionWorld[1] = -1.0f;
+        sun._directionWorld[2] = 0.0f;
+        sun._radiance[0] = 1.0f;
+        atlas.allocate(scene, &lights);
+        REQUIRE(atlas.getTileCount() == 3);
+        REQUIRE(lights[0]._shadowTileCount == 3u);
+
+        // A view down -Z from the origin, covering 400 units -- roughly Sponza's scale.
+        constexpr float kShadowDistance = 400.0f;
+        atlas.setDirectionalView(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f),
+                                 glm::radians(60.0f), 16.0f / 9.0f, kShadowDistance);
+
+        // Each tile's stored texel footprint is what the shader biases and resolves by.
+        const float near = atlas.getConstants()._tileLightDirection[0].w;
+        const float mid = atlas.getConstants()._tileLightDirection[1].w;
+        const float far = atlas.getConstants()._tileLightDirection[2].w;
+
+        // Strictly increasing: that IS the split working. Equal footprints would mean every
+        // cascade covers the same region and the extra tiles bought nothing.
+        CHECK(near < mid);
+        CHECK(mid < far);
+
+        // And the near cascade beats what one tile fitted to the whole distance could do. That
+        // single fit is the previous behaviour, so this is the improvement stated as a number.
+        const float singleFit = 2.0f * kShadowDistance / static_cast<float>(descriptor._tileSize);
+        CHECK(near < singleFit * 0.25f);
+
+        // The far cascade still has to reach the shadow distance, or geometry past it silently
+        // stops casting well before the caller asked it to.
+        CHECK(far * static_cast<float>(descriptor._tileSize) * 0.5f >= kShadowDistance * 0.5f);
 
         atlas.destroy();
     }
