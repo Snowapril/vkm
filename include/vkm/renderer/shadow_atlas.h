@@ -12,6 +12,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -19,6 +20,7 @@
 namespace vkm
 {
     class VkmDriverBase;
+    class VkmStagingBuffer;
     class VkmPipelineStateBase;
     class VkmPipelineStateManager;
     class VkmRenderGraph;
@@ -140,6 +142,24 @@ namespace vkm
         void allocate(const VkmScene& scene, std::vector<VkmPunctualLight>* outLights);
 
         /*
+        * @brief Refits the directional tile around what the camera can actually see.
+        * @details A directional light has no position, so its tile has to be fitted to *some*
+        * region, and fitting it to the whole scene is what makes the shadow useless on a large
+        * one: Sponza is 3721 units across, so a 512-texel tile spends 7.3 world units per texel
+        * and every silhouette lands on a staircase several units wide. Fitting to a sphere the
+        * camera is looking at spends the same texels on the region being looked at instead.
+        *
+        * The fit is SNAPPED to whole shadow texels. Without that, refitting each frame slides the
+        * texel grid under a static world and every shadow edge crawls -- trading a stationary
+        * staircase for a moving one, which is worse.
+        *
+        * Optional: leave it uncalled and the tile keeps its scene-wide fit.
+        * @param center World-space centre of the region to cover.
+        * @param radius Its radius, in world units.
+        */
+        void setDirectionalFocus(const glm::vec3& center, float radius);
+
+        /*
         * @brief Records the atlas fill: scene update, cull, then one graphics pass over all tiles.
         * @details Must precede any pass that reads the atlas. `frameData` is the caller's, copied
         * and re-culled against a box covering every shadow caster.
@@ -168,6 +188,7 @@ namespace vkm
             float _texelWorldPerDistance = 0.0f;
         };
 
+        void rebuildDirectionalTile();
         bool createTargets(std::string* outError);
         bool createConstantBuffer(std::string* outError);
         bool createTable(VkmPipelineStateManager* pipelineStateManager, std::string* outError);
@@ -187,6 +208,21 @@ namespace vkm
 
         std::vector<Tile> _tiles;
         VkmShadowAtlasConstants _constants{};
+        // Which tile the directional light owns, so a refit rewrites only that one.
+        int32_t _directionalTile = -1;
+        glm::vec3 _directionalDirection{ 0.0f, -1.0f, 0.0f };
+        glm::vec3 _focusCenter{ 0.0f };
+        // 0 means "no focus set": fit to the scene, as before any camera told us otherwise.
+        float _focusRadius = 0.0f;
+        // The scene fit, kept so a refit can fall back to it and so the caster box stays valid.
+        glm::vec3 _sceneCenter{ 0.0f };
+        float _sceneRadius = 1.0f;
+        bool _constantsDirty = false;
+
+        // Per frame slot, because the constants now change per frame while the tables naming them
+        // stay immutable -- the same shape the gi sample's composite constants use.
+        std::array<VkmResourceHandle, FRAME_BUFFER_COUNT> _constantStaging{};
+        std::array<VkmStagingBuffer*, FRAME_BUFFER_COUNT> _constantStagingPointers{};
         // The union of every shadow caster's influence, which the cull view is tested against.
         glm::vec3 _casterBoxMin{ 0.0f };
         glm::vec3 _casterBoxMax{ 0.0f };
