@@ -22,6 +22,7 @@
 #include <glm/geometric.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <map>
 
@@ -184,6 +185,35 @@ namespace vkm
             _meshEntries.push_back(entry);
         }
 
+        // Placed lights, resolved against the hierarchy the same way the draw items are. Unlike
+        // the emissive triangles above these need no CPU vertex data, so they are gathered
+        // straight into world space and are valid before build().
+        for (const VkmSceneModel::LightItem& item : model.buildLightList())
+        {
+            const VkmScenePunctualLight& source = model._lights[item._lightIndex];
+
+            VkmPunctualLight light;
+            light._positionWorld[0] = item._positionWorld.x;
+            light._positionWorld[1] = item._positionWorld.y;
+            light._positionWorld[2] = item._positionWorld.z;
+            light._directionWorld[0] = item._directionWorld.x;
+            light._directionWorld[1] = item._directionWorld.y;
+            light._directionWorld[2] = item._directionWorld.z;
+            light._range = source._range;
+            // glTF splits colour from intensity; every shader wants the product, so the split
+            // ends here.
+            light._radiance[0] = source._color.x * source._intensity;
+            light._radiance[1] = source._color.y * source._intensity;
+            light._radiance[2] = source._color.z * source._intensity;
+            light._type = static_cast<uint32_t>(source._type);
+            if (source._type == VkmLightType::Spot)
+            {
+                light._cosInner = std::cos(source._innerConeAngle);
+                light._cosOuter = std::cos(source._outerConeAngle);
+            }
+            _punctualLights.push_back(light);
+        }
+
         for (const VkmSceneModel::DrawItem& item : model.buildDrawList())
         {
             if (item._meshIndex >= meshEntryIndices.size())
@@ -259,10 +289,14 @@ namespace vkm
         }
     }
 
-    void VkmScene::setDirectionalRadiance(const glm::vec3& radiance)
+    void VkmScene::setDirectionalLight(const glm::vec3& directionToLight, const glm::vec3& radiance)
     {
         VKM_ASSERT(_lightBuffer == VKM_INVALID_RESOURCE_HANDLE,
-                   "setDirectionalRadiance must precede build(): the light table uploads once");
+                   "setDirectionalLight must precede build(): the light table uploads once");
+        const float length = glm::length(directionToLight);
+        // A zero direction is a caller error, not a light pointing nowhere: keep the default
+        // rather than propagating a NaN into every shader that normalizes it.
+        _directionalDirection = length > 0.0f ? directionToLight / length : _directionalDirection;
         _directionalRadiance = radiance;
     }
 
@@ -967,6 +1001,7 @@ namespace vkm
         _materialPoolSlot = INVALID_VALUE32;
         _lightPoolSlot = INVALID_VALUE32;
         _lightTriangleCount = 0;
+        _punctualLights.clear();
         _cullPipeline = nullptr;
         _emitPipeline = nullptr;
 

@@ -49,6 +49,7 @@
 #include <vkm/renderer/camera.h>
 #include <vkm/renderer/engine.h>
 #include <vkm/renderer/gbuffer.h>
+#include <vkm/renderer/deferred_lighting.h>
 #include <vkm/renderer/gi_composite.h>
 #include <vkm/renderer/gi_system.h>
 #include <vkm/renderer/screenshot.h>
@@ -138,13 +139,7 @@ namespace
 {
     constexpr VkmFormat kHdrFormat = VkmFormat::R16G16B16A16_SFLOAT;
     constexpr glm::vec3 kLightDirection{ 0.4f, 0.8f, 0.45f }; // towards the light
-
-    // Mirrors LightConstants in deferred_lighting.hlsl.
-    struct LightConstants
-    {
-        glm::vec4 _directionToLight{ 0.0f, 1.0f, 0.0f, 0.0f };
-        glm::vec4 _radiance{ 1.0f, 1.0f, 1.0f, 0.0f };
-    };
+    constexpr glm::vec3 kLightRadiance{ 3.0f, 3.0f, 2.8f };
 
     // Mirrors TonemapConstants in tonemap.hlsl.
     struct TonemapConstants
@@ -244,7 +239,7 @@ public:
         VkmSampler* sampler = driver->newSampler(samplerInfo);
         _sampler = sampler != nullptr ? sampler->getHandle() : VKM_INVALID_RESOURCE_HANDLE;
 
-        VkmBuffer* lightBuffer = createUniformBuffer(driver, sizeof(LightConstants), "GiLightConstants");
+        VkmBuffer* lightBuffer = createUniformBuffer(driver, sizeof(VkmDeferredLightConstants), "GiLightConstants");
         VkmBuffer* tonemapBuffer = createUniformBuffer(driver, sizeof(TonemapConstants), "GiTonemapConstants");
         VkmBuffer* compositeBuffer = createUniformBuffer(driver, sizeof(VkmGiCompositeConstants), "GiCompositeConstants");
         if (lightBuffer == nullptr || tonemapBuffer == nullptr || compositeBuffer == nullptr)
@@ -272,8 +267,6 @@ public:
             _compositeStagingPointers[frame] = staging;
         }
 
-        const LightConstants light{ glm::vec4(glm::normalize(kLightDirection), 0.0f), glm::vec4(3.0f, 3.0f, 2.8f, 0.0f) };
-        driver->uploadToBuffer(_lightBuffer, &light, sizeof(light));
         const TonemapConstants tonemap{};
         driver->uploadToBuffer(_tonemapBuffer, &tonemap, sizeof(tonemap));
         // Uploaded once the scene's scale is known; see loadScene.
@@ -374,7 +367,7 @@ public:
         }
 
         VkmFrameData frameData;
-        frameData._lightDirection = glm::vec4(glm::normalize(kLightDirection), 0.0f);
+        frameData._lightDirection = glm::vec4(_scene.getDirectionalDirection(), 0.0f);
 
         // 1. The camera's own update and cull, in view 0. (The GI system records its own
         // subgraphs — including the probe refresh's second cull view — from record() below.)
@@ -616,15 +609,20 @@ private:
             VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
             return;
         }
-        // The same radiance the deferred pass's LightConstants carries (see postDriverReady):
-        // the sun in the light table is what the traced tier samples, and the two must stay in
-        // sync or ReSTIR and the deferred image disagree about how bright the sun is.
-        _scene.setDirectionalRadiance(glm::vec3(3.0f, 3.0f, 2.8f));
+        // Stated once. The traced tier reads it from the light table's header and the deferred
+        // pass from the constants derived below, so the two cannot disagree about the sun.
+        _scene.setDirectionalLight(kLightDirection, kLightRadiance);
         if (!_scene.build(driver, _engine->getPipelineStateManager(), &error))
         {
             VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
             return;
         }
+
+        // Derived from the scene rather than typed here, so the deferred pass and the traced
+        // tier's light table cannot disagree about the sun. Uploaded once: the lights are static.
+        VkmDeferredLightConstants lightConstants{};
+        vkmBuildDeferredLightConstants(_scene, &lightConstants);
+        driver->uploadToBuffer(_lightBuffer, &lightConstants, sizeof(lightConstants));
 
         // Must follow build(), which is where the material textures are created.
         for (uint32_t i = 0; i < static_cast<uint32_t>(VkmVertexLayoutPreset::Count); ++i)

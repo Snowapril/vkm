@@ -185,7 +185,7 @@ namespace vkmtest
 
         vkm::VkmScene scene;
         REQUIRE(scene.addModel(model, &error));
-        scene.setDirectionalRadiance(sunRadiance);
+        scene.setDirectionalLight(sunDirection, sunRadiance);
         REQUIRE_MESSAGE(scene.build(driver, &manager, &error), error);
         // Two emitters, two triangles each; a wrong gather count here fails before any GPU work.
         CHECK(scene.getLightTriangleCount() == 4);

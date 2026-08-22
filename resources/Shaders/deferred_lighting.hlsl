@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Snowapril
 //
-// Fullscreen deferred lighting: samples the G-buffer and shades it with one directional light.
+// Fullscreen deferred lighting: samples the G-buffer and shades it with every punctual light.
 //
 // This is the first pass in the engine that reads the G-buffer, and it is deliberately built the
 // way the GI passes will be:
@@ -18,15 +18,20 @@
 #include "vkm_frame_constants.hlsli"
 #include "vkm_fullscreen.hlsli"
 #include "vkm_gbuffer.hlsli"
+#include "vkm_punctual_lights.hlsli"
 
 VKM_FRAME_CONSTANTS(g_VkmFrame);
 
 // Per-pass lighting parameters. Carried in set 2 rather than read from the scene's FrameData
-// singleton so this pass needs no scene at all.
+// singleton so this pass needs no scene at all -- which is also why the light list is a
+// fixed-size array: WGSL has no runtime-sized arrays.
+//
+// The directional light is an ordinary entry of type Directional, not a special case. Mirrors
+// vkm::VkmDeferredLightConstants (renderer/deferred_lighting.h).
 struct LightConstants
 {
-    float4 directionToLight; // xyz = normalized direction TOWARDS the light, w unused
-    float4 radiance;         // rgb = light colour * intensity, w unused
+    uint4 lightCount; // x = valid entries in `lights`
+    VkmPunctualLight lights[VKM_MAX_PUNCTUAL_LIGHTS];
 };
 
 [[vk::binding(0, 2)]] Texture2D            g_Normal             : register(t0, space2);
@@ -95,28 +100,42 @@ float4 PSMain(VSOutput input) : SV_TARGET0
         input.uv, cameraDistance, g_VkmFrame.inverseViewProjection, g_VkmFrame.cameraPositionWorld.xyz);
 
     const float3 viewDirection = normalize(g_VkmFrame.cameraPositionWorld.xyz - worldPosition);
-    const float3 lightDirection = normalize(g_Light.directionToLight.xyz);
-    const float3 halfVector = normalize(viewDirection + lightDirection);
-
-    const float nDotL = saturate(dot(shadingNormal, lightDirection));
     const float nDotV = abs(dot(shadingNormal, viewDirection)) + 1e-5;
-    const float nDotH = saturate(dot(shadingNormal, halfVector));
-    const float vDotH = saturate(dot(viewDirection, halfVector));
 
     // Metals have no diffuse response and tint their specular with the base colour; dielectrics
     // reflect an achromatic ~4% at normal incidence.
     const float3 diffuseColor = baseColor * (1.0 - metallic);
     const float3 f0 = lerp(float3(0.04, 0.04, 0.04), baseColor, metallic);
 
-    const float3 fresnel = fresnelSchlick(vDotH, f0);
-    const float3 specular = distributionGGX(nDotH, roughness) *
-                            visibilitySmithGGX(nDotV, nDotL, roughness) * fresnel;
-    // Energy that was not reflected specularly is what remains for the diffuse lobe.
-    const float3 diffuse = (1.0 - fresnel) * diffuseColor / 3.14159265;
+    float3 shaded = float3(0.0, 0.0, 0.0);
+    for (uint lightIndex = 0; lightIndex < g_Light.lightCount.x; ++lightIndex)
+    {
+        const VkmLightSample lightSample =
+            vkmSamplePunctualLight(g_Light.lights[lightIndex], worldPosition);
 
-    const float3 radiance = g_Light.radiance.rgb * nDotL;
-    // Emission is what the surface adds on its own, on top of what the light reflects off it --
+        const float nDotL = saturate(dot(shadingNormal, lightSample.direction));
+        // Both cheap rejections in one test: a surface facing away, and a light whose distance
+        // or cone attenuation already took it to zero.
+        if (nDotL <= 0.0 || all(lightSample.radiance <= 0.0))
+        {
+            continue;
+        }
+
+        const float3 halfVector = normalize(viewDirection + lightSample.direction);
+        const float nDotH = saturate(dot(shadingNormal, halfVector));
+        const float vDotH = saturate(dot(viewDirection, halfVector));
+
+        const float3 fresnel = fresnelSchlick(vDotH, f0);
+        const float3 specular = distributionGGX(nDotH, roughness) *
+                                visibilitySmithGGX(nDotV, nDotL, roughness) * fresnel;
+        // Energy that was not reflected specularly is what remains for the diffuse lobe.
+        const float3 diffuse = (1.0 - fresnel) * diffuseColor / 3.14159265;
+
+        shaded += (diffuse + specular) * lightSample.radiance * nDotL;
+    }
+
+    // Emission is what the surface adds on its own, on top of what the lights reflect off it --
     // the term that makes a camera-visible emitter glow instead of rendering black.
     const float3 emissive = g_Emissive.SampleLevel(g_Sampler, input.uv, 0).rgb;
-    return float4((diffuse + specular) * radiance + emissive, 1.0);
+    return float4(shaded + emissive, 1.0);
 }
