@@ -321,11 +321,6 @@ public:
         _retiredTables.clear();
         destroyUpscaler(_upscaler);
         _upscaler = nullptr;
-        for (RetiredUpscaler& retired : _retiredUpscalers)
-        {
-            destroyUpscaler(retired._upscaler);
-        }
-        _retiredUpscalers.clear();
         _gi.destroy();
         _gbuffer.destroy();
         for (VkmSceneMaterialTables& tables : _gbufferMaterialTables)
@@ -537,14 +532,6 @@ private:
         Tables _tables;
     };
 
-    // Same delay for a retired upscaler: its backend object is referenced by in-flight command
-    // buffers exactly like a table's descriptors.
-    struct RetiredUpscaler
-    {
-        uint64_t _retiredAtFrame = 0;
-        VkmUpscalerBase* _upscaler = nullptr;
-    };
-
     static void referenceScene(VkmRenderSubGraph* subGraph, const VkmScene& scene,
                                VkmScene::ReferencePhase phase)
     {
@@ -598,14 +585,6 @@ private:
             {
                 destroyTables(_retiredTables[i]._tables);
                 _retiredTables.erase(_retiredTables.begin() + static_cast<ptrdiff_t>(i));
-            }
-        }
-        for (size_t i = _retiredUpscalers.size(); i-- > 0;)
-        {
-            if (_frameCounter >= _retiredUpscalers[i]._retiredAtFrame + FRAME_BUFFER_COUNT)
-            {
-                destroyUpscaler(_retiredUpscalers[i]._upscaler);
-                _retiredUpscalers.erase(_retiredUpscalers.begin() + static_cast<ptrdiff_t>(i));
             }
         }
     }
@@ -734,14 +713,11 @@ private:
             return;
         }
 
-        // The upscaler's extents are fixed at creation, so a resize or a mode change retires it
-        // like the tables: it must outlive the frames whose command buffers still reference its
-        // internal state.
-        if (_upscaler != nullptr)
-        {
-            _retiredUpscalers.push_back(RetiredUpscaler{ _frameCounter, _upscaler });
-            _upscaler = nullptr;
-        }
+        // The upscaler's extents are fixed at creation, so a resize or a mode change destroys it
+        // and builds a new one. destroy() drains the device, which is what makes releasing the
+        // backend's internal state safe here rather than frames later.
+        destroyUpscaler(_upscaler);
+        _upscaler = nullptr;
         // The engine already pinned the mode to Off where the driver has no upscaler, so the
         // capability is not re-tested here.
         if (upscaleMode != VkmUpscaleMode::Off)
@@ -1086,7 +1062,6 @@ private:
     bool _screenshotPending = false;
 
     VkmUpscalerBase* _upscaler = nullptr;
-    std::vector<RetiredUpscaler> _retiredUpscalers;
     bool _upscalerResetPending = false;
     float _lastDeltaTime = 0.0f;
 

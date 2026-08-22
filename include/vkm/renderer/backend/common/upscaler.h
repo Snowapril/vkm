@@ -86,10 +86,9 @@ namespace vkm
 
     /*
     * @brief Immutable description of a temporal upscaler, fixed at creation.
-    * @details Extents are fixed for the upscaler's lifetime: a resize destroys and recreates it
-    * (retired only once no in-flight frame still references it, like a resource table). Formats
-    * name the textures later passed through VkmUpscalerDispatchDesc; the motion texture may carry
-    * unrelated data outside .xy, which is all the upscaler reads.
+    * @details Extents are fixed for the upscaler's lifetime: a resize or a mode change destroys
+    * and recreates it. Formats name the textures later passed through VkmUpscalerDispatchDesc; the
+    * motion texture may carry unrelated data outside .xy, which is all the upscaler reads.
     */
     struct VkmUpscalerDescriptor
     {
@@ -131,9 +130,9 @@ namespace vkm
     * @brief Backend-agnostic temporal upscaler: render-extent inputs in, display-extent image out.
     * @details Created through VkmDriverBase::newUpscaler, which returns null on a backend whose
     * capability flags lack VkmDriverCapabilityFlags::TemporalUpscaling. The caller owns the
-    * result: destroy() then delete, once no in-flight frame can still be using it (the same
-    * lifetime contract as VkmResourceTableBase). The upscaler keeps internal history between
-    * dispatches; pass _reset when that history no longer matches the scene.
+    * result: destroy() then delete, at any point outside a render-graph callback -- destroy()
+    * drains the device itself, so no caller-side deferral is needed. The upscaler keeps internal
+    * history between dispatches; pass _reset when that history no longer matches the scene.
     */
     class VkmUpscalerBase
     {
@@ -149,6 +148,12 @@ namespace vkm
         */
         bool initialize(VkmDriverBase* driver, const VkmUpscalerDescriptor& descriptor);
 
+        /*
+        * @brief Waits for every queue to go idle, then releases the backend upscaler.
+        * @details The backend object and its history textures are freed synchronously rather than
+        * through the deferred reclaimer, so the drain is what makes the release safe. Blocking:
+        * never call it from inside a render-graph callback. A second call is a no-op.
+        */
         void destroy();
 
         /*
