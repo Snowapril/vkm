@@ -28,6 +28,16 @@
 #define VKM_SHADOW_KERNEL_RADIUS 1.5
 #define VKM_SHADOW_DEPTH_BIAS_SCALE 8.0
 
+/*
+* @brief How wide the cross-fade into the next cascade is, as a fraction of a cascade's half-
+* extent.
+* @details Measured from the rim inwards, so 0.12 fades over the outer 12% of the tile. Wide
+* enough that the band spans several pixels at the angles a cascade border is usually seen at,
+* narrow enough that the coarser cascade is not mixed into the middle of the finer one, where
+* the finer one's answer is the better of the two.
+*/
+#define VKM_SHADOW_CASCADE_BLEND 0.12
+
 // What an untouched atlas texel holds. Far enough that every real query reads as unoccluded, and
 // finite in a half-float, whose largest value is 65504.
 #define VKM_SHADOW_FAR_SENTINEL 60000.0
@@ -86,148 +96,208 @@ float4 vkmShadowTileRect(uint tileIndex, uint tilesPerRow)
 * exercised on anywhere else in this engine, and there is no reason to be the first.
 */
 #define VKM_SHADOW_LOADER(AtlasTexture, AtlasSampler, AtlasConstants)                              \
-    /* Distance a fragment is from the light that owns `tile`, in the same measure the atlas   */  \
-    /* stores: radial for a positional light, along the axis for a directional one.            */  \
-    float vkmShadowReceiverDistance(uint tile, float3 worldPosition)                               \
-    {                                                                                              \
-        const float4 lightPosition = AtlasConstants.tileLightPosition[tile];                       \
-        const float3 relative = worldPosition - lightPosition.xyz;                                 \
-        return lightPosition.w > 0.5                                                               \
-                   ? length(relative)                                                              \
-                   : dot(relative, normalize(AtlasConstants.tileLightDirection[tile].xyz));         \
-    }                                                                                              \
-                                                                                                   \
-    /* One tap: 1 when the atlas says nothing nearer to the light covers this point.           */  \
-    float vkmShadowTap(uint tile, uint tilesPerRow, uint tileSize, float2 tileUv,                  \
-                       float receiverDistance, float bias)                                         \
-    {                                                                                              \
-        /* Clamped inside the tile, and this is not optional: a tap that walks off the edge     */  \
-        /* reads the NEIGHBOURING light's tile, which is the atlas's one real hazard.           */  \
-        const float halfTexel = 0.5 / float(tileSize);                                             \
-        const float2 clamped = clamp(tileUv, halfTexel, 1.0 - halfTexel);                          \
-        const float4 rect = vkmShadowTileRect(tile, tilesPerRow);                                  \
-        const float2 atlasUv = rect.xy + clamped * rect.zw;                                        \
-        const float stored = AtlasTexture.SampleLevel(AtlasSampler, atlasUv, 0).r;                 \
-        return (receiverDistance - bias) <= stored ? 1.0 : 0.0;                                    \
-    }                                                                                              \
-                                                                                                   \
+    /* Distance a fragment is from the light that owns `tile`, in the same measure the atlas   */ \
+    /* stores: radial for a positional light, along the axis for a directional one.            */ \
+    float vkmShadowReceiverDistance(uint tile, float3 worldPosition)                              \
+    {                                                                                             \
+        const float4 lightPosition = AtlasConstants.tileLightPosition[tile];                      \
+        const float3 relative = worldPosition - lightPosition.xyz;                                \
+        return lightPosition.w > 0.5                                                              \
+                   ? length(relative)                                                             \
+                   : dot(relative, normalize(AtlasConstants.tileLightDirection[tile].xyz));       \
+    }                                                                                             \
+                                                                                                  \
+    /* One tap: 1 when the atlas says nothing nearer to the light covers this point.           */ \
+    float vkmShadowTap(uint tile, uint tilesPerRow, uint tileSize, float2 tileUv,                 \
+                       float receiverDistance, float bias)                                        \
+    {                                                                                             \
+        /* Clamped inside the tile, and this is not optional: a tap that walks off the edge     */ \
+        /* reads the NEIGHBOURING light's tile, which is the atlas's one real hazard.           */ \
+        const float halfTexel = 0.5 / float(tileSize);                                            \
+        const float2 clamped = clamp(tileUv, halfTexel, 1.0 - halfTexel);                         \
+        const float4 rect = vkmShadowTileRect(tile, tilesPerRow);                                 \
+        const float2 atlasUv = rect.xy + clamped * rect.zw;                                       \
+        const float stored = AtlasTexture.SampleLevel(AtlasSampler, atlasUv, 0).r;                \
+        return (receiverDistance - bias) <= stored ? 1.0 : 0.0;                                   \
+    }                                                                                             \
+                                                                                                  \
     /*                                                                                          */ \
-    /* How much of `light` reaches `worldPosition`: 1 lit, 0 fully shadowed.                    */ \
+    /* One tile's answer: 1 lit, 0 fully shadowed, over a 3x3 PCF kernel.                       */ \
     /*                                                                                          */ \
     /* The bias is in WORLD UNITS, expressed as a multiple of the shadow texel's world-space    */ \
     /* footprint at the receiver. That is what lets one constant work on a Cornell box and on   */ \
     /* a 3721-unit Sponza -- the same discipline the probe volume's normal bias landed under.   */ \
     /* It has to be in-shader: the RHI has no depth-bias state at all, and the value being      */ \
     /* compared is a colour attachment's contents rather than the rasterizer's depth.           */ \
-    float vkmShadowFactor(VkmPunctualLight light, float3 worldPosition, float3 geometricNormal,    \
-                          float nDotL, uint tilesPerRow, uint tileSize)                            \
-    {                                                                                              \
-        if (light.shadowTile < 0)                                                                  \
-        {                                                                                          \
-            return 1.0;                                                                            \
-        }                                                                                          \
-                                                                                                   \
-        uint tile = uint(light.shadowTile);                                                        \
-        const uint tileCount = max(light.shadowTileCount, 1u);                                     \
-        float2 tileUv = float2(0.0, 0.0);                                                          \
-                                                                                                   \
-        /* tan of the angle between the surface and the light. Both the depth bias and the      */  \
-        /* normal offset scale with it, because both are correcting the same thing: across one  */  \
-        /* shadow texel a surface's true depth changes by texelWorld * slope, and at grazing    */  \
-        /* incidence that dwarfs the texel itself.                                              */  \
+    /*                                                                                          */ \
+    float vkmShadowVisibility(uint tile, uint tilesPerRow, uint tileSize, float2 tileUv,          \
+                              float3 worldPosition, float slopeScale)                             \
+    {                                                                                             \
+        const float receiverDistance = vkmShadowReceiverDistance(tile, worldPosition);            \
+        /* A texel's world footprint, from the value the atlas stored for THIS tile: a          */ \
+        /* perspective tile's grows with the receiver's distance, an orthographic one's does    */ \
+        /* not. Deriving it here from a single formula would be right for one and wrong for     */ \
+        /* the other, and the directional case is the one where it is wrong by the scene's      */ \
+        /* whole size.                                                                          */ \
+        const float4 lightPosition = AtlasConstants.tileLightPosition[tile];                      \
+        const float perDistance = AtlasConstants.tileLightDirection[tile].w;                      \
+        const float texelWorld =                                                                  \
+            max(lightPosition.w > 0.5 ? perDistance * receiverDistance : perDistance, 1e-6);      \
+        const float bias = texelWorld * slopeScale * VKM_SHADOW_DEPTH_BIAS_SCALE;                 \
+                                                                                                  \
+        /* 3x3 PCF. Enough to soften the staircase a tile's resolution puts on a shadow edge    */ \
+        /* without pretending to be a soft shadow, which needs a light with area.               */ \
+        const float texel = 1.0 / float(tileSize);                                                \
+        float sum = 0.0;                                                                          \
+        for (int y = -1; y <= 1; ++y)                                                             \
+        {                                                                                         \
+            for (int x = -1; x <= 1; ++x)                                                         \
+            {                                                                                     \
+                sum += vkmShadowTap(tile, tilesPerRow, tileSize,                                  \
+                                    tileUv + float2(float(x), float(y)) * texel,                  \
+                                    receiverDistance, bias);                                      \
+            }                                                                                     \
+        }                                                                                         \
+        return sum * (1.0 / 9.0);                                                                 \
+    }                                                                                             \
+                                                                                                  \
+    /*                                                                                          */ \
+    /* Projects a point into one orthographic cascade tile.                                     */ \
+    /*                                                                                          */ \
+    /* `edge` is how close the point sits to the tile's border, 0 at the centre and 1 at the    */ \
+    /* rim, and it is what the blend between neighbouring cascades is driven by.                */ \
+    /*                                                                                          */ \
+    bool vkmShadowCascadeUv(uint tile, float3 worldPosition, float3 geometricNormal,              \
+                            float slopeScale, out float2 tileUv, out float edge)                  \
+    {                                                                                             \
+        tileUv = float2(0.0, 0.0);                                                                \
+        edge = 1.0;                                                                               \
+        const float texelGuess = AtlasConstants.tileLightDirection[tile].w;                       \
+        const float3 query = worldPosition + geometricNormal * texelGuess * slopeScale;           \
+        const float4 clip = mul(AtlasConstants.tileViewProjection[tile], float4(query, 1.0));     \
+        if (clip.w <= 0.0)                                                                        \
+        {                                                                                         \
+            return false;                                                                         \
+        }                                                                                         \
+        const float3 ndc = clip.xyz / clip.w;                                                     \
+        if (any(abs(ndc.xy) > 1.0) || ndc.z < 0.0 || ndc.z > 1.0)                                 \
+        {                                                                                         \
+            return false;                                                                         \
+        }                                                                                         \
+        tileUv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);                                    \
+        edge = max(abs(ndc.x), abs(ndc.y));                                                       \
+        return true;                                                                              \
+    }                                                                                             \
+                                                                                                  \
+    /* How much of `light` reaches `worldPosition`: 1 lit, 0 fully shadowed.                    */ \
+    float vkmShadowFactor(VkmPunctualLight light, float3 worldPosition, float3 geometricNormal,   \
+                          float nDotL, uint tilesPerRow, uint tileSize)                           \
+    {                                                                                             \
+        if (light.shadowTile < 0)                                                                 \
+        {                                                                                         \
+            return 1.0;                                                                           \
+        }                                                                                         \
+                                                                                                  \
+        uint tile = uint(light.shadowTile);                                                       \
+        const uint tileCount = max(light.shadowTileCount, 1u);                                    \
+        float2 tileUv = float2(0.0, 0.0);                                                         \
+                                                                                                  \
+        /* tan of the angle between the surface and the light. Both the depth bias and the      */ \
+        /* normal offset scale with it, because both are correcting the same thing: across one  */ \
+        /* shadow texel a surface's true depth changes by texelWorld * slope, and at grazing    */ \
+        /* incidence that dwarfs the texel itself.                                              */ \
         const float slope = clamp(sqrt(saturate(1.0 - nDotL * nDotL)) / max(nDotL, 1e-3), 0.0, 24.0); \
-        /* The 3x3 kernel reaches a texel and a half from the centre, and a tap out there lands */  \
-        /* on a surface point whose depth differs by that much again -- so the correction has   */  \
-        /* to cover the kernel, not just the centre texel.                                      */  \
-        const float slopeScale = VKM_SHADOW_KERNEL_RADIUS * (1.0 + slope);                         \
-                                                                                                   \
-        if (light.type == VKM_LIGHT_TYPE_POINT)                                                    \
-        {                                                                                          \
-            /* A cube face is chosen, not searched: the six 90-degree frusta tile every        */  \
-            /* direction exactly, so the major axis names the one face that can contain it.    */  \
-            tile += vkmShadowCubeFace(worldPosition - light.positionWorld);                        \
-            const float texelGuess = AtlasConstants.tileLightDirection[tile].w *                   \
-                                     length(worldPosition - light.positionWorld);                  \
-            const float3 faceQuery = worldPosition + geometricNormal * texelGuess * slopeScale;    \
-            const float4 faceClip =                                                                \
-                mul(AtlasConstants.tileViewProjection[tile], float4(faceQuery, 1.0));               \
-            if (faceClip.w <= 0.0)                                                                 \
-            {                                                                                      \
-                return 1.0;                                                                        \
-            }                                                                                      \
-            const float3 faceNdc = faceClip.xyz / faceClip.w;                                      \
-            if (any(abs(faceNdc.xy) > 1.0) || faceNdc.z < 0.0 || faceNdc.z > 1.0)                  \
-            {                                                                                      \
-                return 1.0;                                                                        \
-            }                                                                                      \
-            tileUv = float2(faceNdc.x * 0.5 + 0.5, 0.5 - faceNdc.y * 0.5);                         \
-        }                                                                                          \
-        else                                                                                       \
-        {                                                                                          \
-            /*                                                                                  */ \
-            /* Cascades, searched near to far. A directional light owns one tile per cascade,   */ \
-            /* each fitted to a slice of the view, and the first one that CONTAINS the point is */ \
-            /* the tightest that covers it. Selecting by containment rather than by distance    */ \
-            /* from the camera is what lets this same lookup serve the probe capture, which has */ \
-            /* no camera to measure against. A spot light has one tile and takes the same path. */ \
-            /*                                                                                  */ \
-            bool found = false;                                                                    \
-            for (uint cascade = 0; cascade < tileCount; ++cascade)                                 \
-            {                                                                                      \
-                const uint candidate = uint(light.shadowTile) + cascade;                           \
-                const float texelGuess = AtlasConstants.tileLightDirection[candidate].w;           \
-                const float3 query = worldPosition + geometricNormal * texelGuess * slopeScale;    \
-                const float4 clip =                                                                \
-                    mul(AtlasConstants.tileViewProjection[candidate], float4(query, 1.0));          \
-                if (clip.w <= 0.0)                                                                 \
-                {                                                                                  \
-                    continue;                                                                      \
-                }                                                                                  \
-                const float3 ndc = clip.xyz / clip.w;                                              \
-                if (any(abs(ndc.xy) > 1.0) || ndc.z < 0.0 || ndc.z > 1.0)                          \
-                {                                                                                  \
-                    continue;                                                                      \
-                }                                                                                  \
-                tile = candidate;                                                                  \
-                tileUv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);                             \
-                found = true;                                                                      \
-                break;                                                                             \
-            }                                                                                      \
-            /* Past the last cascade: unshadowed rather than wrongly dark. This is the edge a   */ \
-            /* shadow distance buys -- beyond it nothing casts, which reads as flat lighting    */ \
-            /* rather than as a black band.                                                     */ \
-            if (!found)                                                                            \
-            {                                                                                      \
-                return 1.0;                                                                        \
-            }                                                                                      \
-        }                                                                                          \
-                                                                                                   \
-        const float receiverDistance = vkmShadowReceiverDistance(tile, worldPosition);             \
-        /* A texel's world footprint, from the value the atlas stored for THIS tile: a          */  \
-        /* perspective tile's grows with the receiver's distance, an orthographic one's does    */  \
-        /* not. Deriving it here from a single formula would be right for one and wrong for     */  \
-        /* the other, and the directional case is the one where it is wrong by the scene's      */  \
-        /* whole size.                                                                          */  \
-        const float4 lightPosition = AtlasConstants.tileLightPosition[tile];                       \
-        const float perDistance = AtlasConstants.tileLightDirection[tile].w;                       \
-        const float texelWorld =                                                                   \
-            max(lightPosition.w > 0.5 ? perDistance * receiverDistance : perDistance, 1e-6);       \
-        const float bias = texelWorld * slopeScale * VKM_SHADOW_DEPTH_BIAS_SCALE;                  \
-                                                                                                   \
-        /* 3x3 PCF. Enough to soften the staircase a tile's resolution puts on a shadow edge    */  \
-        /* without pretending to be a soft shadow, which needs a light with area.               */  \
-        const float texel = 1.0 / float(tileSize);                                                 \
-        float sum = 0.0;                                                                           \
-        for (int y = -1; y <= 1; ++y)                                                              \
-        {                                                                                          \
-            for (int x = -1; x <= 1; ++x)                                                          \
-            {                                                                                      \
-                sum += vkmShadowTap(tile, tilesPerRow, tileSize,                                   \
-                                    tileUv + float2(float(x), float(y)) * texel,                   \
-                                    receiverDistance, bias);                                       \
-            }                                                                                      \
-        }                                                                                          \
-        return sum * (1.0 / 9.0);                                                                  \
+        /* The 3x3 kernel reaches a texel and a half from the centre, and a tap out there lands */ \
+        /* on a surface point whose depth differs by that much again -- so the correction has   */ \
+        /* to cover the kernel, not just the centre texel.                                      */ \
+        const float slopeScale = VKM_SHADOW_KERNEL_RADIUS * (1.0 + slope);                        \
+                                                                                                  \
+        if (light.type == VKM_LIGHT_TYPE_POINT)                                                   \
+        {                                                                                         \
+            /* A cube face is chosen, not searched: the six 90-degree frusta tile every        */ \
+            /* direction exactly, so the major axis names the one face that can contain it.    */ \
+            tile += vkmShadowCubeFace(worldPosition - light.positionWorld);                       \
+            const float texelGuess = AtlasConstants.tileLightDirection[tile].w *                  \
+                                     length(worldPosition - light.positionWorld);                 \
+            const float3 faceQuery = worldPosition + geometricNormal * texelGuess * slopeScale;   \
+            const float4 faceClip =                                                               \
+                mul(AtlasConstants.tileViewProjection[tile], float4(faceQuery, 1.0));             \
+            if (faceClip.w <= 0.0)                                                                \
+            {                                                                                     \
+                return 1.0;                                                                       \
+            }                                                                                     \
+            const float3 faceNdc = faceClip.xyz / faceClip.w;                                     \
+            if (any(abs(faceNdc.xy) > 1.0) || faceNdc.z < 0.0 || faceNdc.z > 1.0)                 \
+            {                                                                                     \
+                return 1.0;                                                                       \
+            }                                                                                     \
+            tileUv = float2(faceNdc.x * 0.5 + 0.5, 0.5 - faceNdc.y * 0.5);                        \
+            /* Six faces of one cube meet at hard seams rather than nesting, so there is no     */ \
+            /* neighbour to blend with the way cascades have one.                               */ \
+            return vkmShadowVisibility(tile, tilesPerRow, tileSize, tileUv, worldPosition, slopeScale); \
+        }                                                                                         \
+                                                                                                  \
+        /*                                                                                      */ \
+        /* Cascades, searched near to far. A directional light owns one tile per cascade, each  */ \
+        /* fitted to a slice of the view, and the first one that CONTAINS the point is the      */ \
+        /* tightest that covers it. Selecting by containment rather than by distance from the   */ \
+        /* camera is what lets this same lookup serve the probe capture, which has no camera to */ \
+        /* measure against. A spot light has one tile and takes the same path.                  */ \
+        /*                                                                                      */ \
+        bool found = false;                                                                       \
+        uint chosen = 0;                                                                          \
+        float edge = 1.0;                                                                         \
+        for (uint cascade = 0; cascade < tileCount; ++cascade)                                    \
+        {                                                                                         \
+            const uint candidate = uint(light.shadowTile) + cascade;                              \
+            if (vkmShadowCascadeUv(candidate, worldPosition, geometricNormal, slopeScale, tileUv, edge)) \
+            {                                                                                     \
+                tile = candidate;                                                                 \
+                chosen = cascade;                                                                 \
+                found = true;                                                                     \
+                break;                                                                            \
+            }                                                                                     \
+        }                                                                                         \
+        /* Past the last cascade: unshadowed rather than wrongly dark. This is the edge a       */ \
+        /* shadow distance buys -- beyond it nothing casts, which reads as flat lighting rather */ \
+        /* than as a black band.                                                                */ \
+        if (!found)                                                                               \
+        {                                                                                         \
+            return 1.0;                                                                           \
+        }                                                                                         \
+                                                                                                  \
+        const float visibility =                                                                  \
+            vkmShadowVisibility(tile, tilesPerRow, tileSize, tileUv, worldPosition, slopeScale);  \
+                                                                                                  \
+        /*                                                                                      */ \
+        /* Cross-fade into the next cascade over a band at this one's rim.                      */ \
+        /*                                                                                      */ \
+        /* Neighbouring cascades do not agree: each is a different fit at a different texel      */ \
+        /* size, so the same receiver can read lit in one and shadowed in the other. Selecting   */ \
+        /* one outright makes that disagreement a hard edge along the cascade's border -- a      */ \
+        /* straight line across a flat floor, which no occluder in the scene accounts for.       */ \
+        /* Blending does not remove the disagreement, it spreads it over the band so the         */ \
+        /* transition reads as a gradient rather than as a seam.                                 */ \
+        /*                                                                                      */ \
+        if (chosen + 1u < tileCount)                                                              \
+        {                                                                                         \
+            const float blendStart = 1.0 - VKM_SHADOW_CASCADE_BLEND;                              \
+            if (edge > blendStart)                                                                \
+            {                                                                                     \
+                float2 nextUv = float2(0.0, 0.0);                                                 \
+                float nextEdge = 1.0;                                                             \
+                const uint nextTile = uint(light.shadowTile) + chosen + 1u;                       \
+                if (vkmShadowCascadeUv(nextTile, worldPosition, geometricNormal, slopeScale,      \
+                                       nextUv, nextEdge))                                         \
+                {                                                                                 \
+                    const float nextVisibility = vkmShadowVisibility(nextTile, tilesPerRow, tileSize, \
+                                                                     nextUv, worldPosition, slopeScale); \
+                    const float t = saturate((edge - blendStart) / VKM_SHADOW_CASCADE_BLEND);     \
+                    return lerp(visibility, nextVisibility, t);                                   \
+                }                                                                                 \
+            }                                                                                     \
+        }                                                                                         \
+        return visibility;                                                                        \
     }
 
 #endif // VKM_SHADOW_HLSLI

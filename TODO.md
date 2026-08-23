@@ -182,3 +182,4 @@
 - The shadow acne gates use flat receivers, so neither reproduces acne from geometry finer than a shadow texel, which is the case Sponza's roof showed.
 - Vulkan teardown destroys buffers, descriptor sets, samplers and pipelines still in use by RenderGraph.Frame1, raising five validation errors per UnitTests run.
 - Shadow bias is one global constant, so a scene whose geometry is finer than a shadow texel forces it up for every other surface too.
+- Cascade boundary blending has no test gate; it is verified only by a pixel-difference measurement on the gi sample.
