@@ -201,20 +201,17 @@ namespace vkmtest
         atlas.allocate(scene, &lights);
 
         CHECK(lights[0]._shadowTile == 0); // directional: one tile per cascade
-        CHECK(lights[0]._shadowTileCount == 3u);
-        // The directional light also owns a fourth tile, fitted to the scene for the probe
-        // capture, which is why the point light starts at 4 rather than at 3.
+        // Three camera-fitted cascades plus the scene-fitted one, which is the last of them.
+        CHECK(lights[0]._shadowTileCount == 4u);
         CHECK(atlas.getDirectionalSceneTile() == 3);
         CHECK(lights[1]._shadowTile == 4); // point: six faces, starting after the cascades
         CHECK(lights[1]._shadowTileCount == 6u);
         CHECK(lights[2]._shadowTile == 10); // spot: the one after them
         CHECK(lights[2]._shadowTileCount == 1u);
         CHECK(atlas.getTileCount() == 11);
-        // The count is what the lookup walks, and it must stop before the scene tile: a light
-        // whose tiles it over-counts reads a fit meant for something else, one whose tiles it
-        // under-counts silently reads a neighbouring light's.
-        CHECK(lights[0]._shadowTileCount + lights[1]._shadowTileCount + lights[2]._shadowTileCount +
-                  1u ==
+        // The count is what the lookup walks; a light whose tiles it under-counts silently reads
+        // a neighbouring light's.
+        CHECK(lights[0]._shadowTileCount + lights[1]._shadowTileCount + lights[2]._shadowTileCount ==
               atlas.getTileCount());
 
         // Past the budget a light keeps shading and simply casts no shadow -- a dropped light
@@ -352,7 +349,7 @@ namespace vkmtest
         sun._radiance[0] = 1.0f;
         atlas.allocate(scene, &lights);
         REQUIRE(atlas.getTileCount() == 4); // three cascades, plus the scene-fitted tile
-        REQUIRE(lights[0]._shadowTileCount == 3u);
+        REQUIRE(lights[0]._shadowTileCount == 4u); // three cascades plus the scene fit
 
         // A view down -Z from the origin, covering 400 units -- roughly Sponza's scale.
         constexpr float kShadowDistance = 400.0f;

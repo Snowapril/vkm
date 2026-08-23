@@ -223,9 +223,13 @@ namespace vkm
         * so its irradiance would depend on where the camera stood when it was refreshed, and
         * moving the camera would make the cached lighting pulse. This tile is fitted to the whole
         * scene and never moves, so a cache can consult the same shadows from anywhere. It is one
-        * tile for the entire scene, so it is coarse -- which suits a low-frequency consumer and
-        * would not suit the camera's own pass. Not part of the light's cascade range: the
-        * deferred lookup walks _shadowTileCount tiles from _shadowTile and must not reach this.
+        * tile for the entire scene, so it is coarse -- which suits a low-frequency consumer.
+        *
+        * It is also the light's last cascade, and the camera's own pass reaches it the same way it
+        * reaches any other: by containment, near to far. That makes it the answer for a receiver
+        * past every camera-fitted cascade, which would otherwise read unshadowed -- a lit region
+        * bounded by the outermost cascade's box, which on a large wall reads as a hard-edged
+        * rectangle of shadow with nothing casting it.
         */
         inline int32_t getDirectionalSceneTile() const { return _directionalSceneTile; }
 

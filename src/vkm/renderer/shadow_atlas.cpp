@@ -285,10 +285,7 @@ namespace vkm
             }
 
             light._shadowTile = static_cast<int32_t>(_tiles.size());
-            // The scene tile is allocated with the cascades but is not one of them, so the
-            // lookup's walk stops before it.
-            light._shadowTileCount =
-                (type == static_cast<uint32_t>(VkmLightType::Directional)) ? cascades : needed;
+            light._shadowTileCount = needed;
 
             if (type == static_cast<uint32_t>(VkmLightType::Directional))
             {
