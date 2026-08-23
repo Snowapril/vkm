@@ -1298,9 +1298,19 @@ namespace vkm
         */
         if (_feedbackBuffer != VKM_INVALID_RESOURCE_HANDLE)
         {
+            /*
+            * Advanced first, so recordUpdate later this frame writes the very slot read here.
+            * That is what makes the latency a whole ring: slot F holds what frame F - ring wrote,
+            * and reading it before this frame's copy overwrites it is free. Splitting the counter
+            * across the read and the write instead would leave one frame of latency and hand back
+            * a slot whose copy may still be executing.
+            */
+            ++_feedbackFrameCounter;
             const uint32_t ringSlot = static_cast<uint32_t>(_feedbackFrameCounter % kFeedbackRingSize);
             VkmStagingBuffer* staging = _feedbackStagingPointers[ringSlot];
-            if (staging != nullptr && _feedbackFrameCounter >= kFeedbackRingSize)
+            // Strictly greater: at exactly kFeedbackRingSize this slot has never been written, and
+            // a staging buffer's contents before its first copy are whatever the allocator left.
+            if (staging != nullptr && _feedbackFrameCounter > kFeedbackRingSize)
             {
                 staging->invalidate(0, _feedbackScratch.size() * sizeof(uint32_t));
                 if (const void* mapped = staging->map())
@@ -1311,7 +1321,6 @@ namespace vkm
                                                    static_cast<uint32_t>(_feedbackScratch.size()));
                 }
             }
-            ++_feedbackFrameCounter;
         }
 
         // The streamer measures world-space spheres, so the object-space bounds every record

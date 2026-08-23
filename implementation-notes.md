@@ -5304,3 +5304,35 @@ that descriptor's stageFlags excluded the stage reading it.
 
 Measured on Sponza at the same viewpoint: texture-category bytes 389.1 -> 349.2 MiB, in the predicted
 direction. Metal, `MTL_DEBUG_LAYER=1`: 307/307 cases, no validation errors.
+
+### 2026-08-23 — Tier 1 follow-up: Vulkan verification and a readback-ring off-by-one
+
+Building the Vulkan backend for the first time this cycle turned up one real bug and one honest gap.
+
+**The readback ring read and wrote different frame numbers.** `updateTextureStreaming` read slot
+`counter % ring` and then incremented, while `recordUpdate` — which runs later in the same frame —
+wrote slot `(counter + 1) % ring`. The read therefore returned what the *previous* frame wrote rather
+than what a frame a whole ring back wrote, which is one frame of latency where four were intended,
+against a copy that may still have been executing. The counter now advances once at the top of
+`updateTextureStreaming`, so both sides name the same slot and the latency is the ring again. The
+guard also moved from `>=` to `>`: at exactly the ring size that slot has never been written, and a
+staging buffer before its first copy holds whatever the allocator left. Found by reasoning about the
+ordering while writing the GPU test, not by the test failing.
+
+**MoltenVK reports no `RayTracing`.** Every ray-query, path-tracer and ReSTIR case skips on macOS
+Vulkan, so the acceleration-structure binding move — the trap that broke every ray query on Metal —
+is still unverified on Vulkan, as is the `gi_restir_lighting` stage-flags fix it was supposed to
+repair. Both need a discrete-GPU run. Recorded in TODO.md rather than left as an assumption.
+
+Vulkan validation output is the four "destroyed while still in use" VUIDs TODO.md already records
+against `main` (`vkDestroyBuffer-buffer-00922`, `vkFreeDescriptorSets-pDescriptorSets-00309`,
+`vkDestroySampler-sampler-01082`, `vkDestroyPipeline-pipeline-00765`) and no new class. The feedback
+path's own buffers go through the same teardown lambda as the existing ones, so they inherit that
+pre-existing bug rather than introducing a different one.
+
+`runTextureFeedbackTest` covers what no pure-logic test can reach: the LOD query surviving the shader
+toolchain, the atomic landing in the right bindless slot, the singleton being bound where the shader
+declared it, the ring's index arithmetic, and the relative-to-absolute decode. It asserts the loop
+delivers and then settles rather than walking a texture down a level per frame. It deliberately does
+not assert a numerically exact level — that needs a known UV parameterisation, and the Sponza A/B
+covers it instead.

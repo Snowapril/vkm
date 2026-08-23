@@ -372,6 +372,89 @@ namespace vkmtest
     }
 
     /*
+    * @brief The GPU feedback loop, end to end: the shader writes, the ring carries it back, the
+    * streamer acts on it.
+    *
+    * @details Everything between the pixel shader and `selectTargets` is machinery no pure-logic
+    * test can reach -- the LOD query surviving the shader toolchain, the atomic landing in the right
+    * bindless slot, the singleton being bound where the shader declared it, the readback ring's
+    * index arithmetic, and the relative-to-absolute decode. A silent failure anywhere in that chain
+    * looks exactly like "streaming is a bit conservative", which is why it needs asserting rather
+    * than eyeballing.
+    *
+    * What it does not check is whether the reported level is *numerically* right for a given
+    * geometry -- that needs a known UV parameterisation and is left to the Sponza A/B.
+    */
+    inline void runTextureFeedbackTest(vkm::VkmDriverBase* driver)
+    {
+        vkm::VkmPipelineStateManager manager(driver);
+        vkm::VkmScene scene;
+        vkm::VkmGBuffer gbuffer;
+        fillGBuffer(driver, manager, scene, gbuffer, "tests/gltf_textured.gltf");
+
+        if (!scene.isTextureStreamingAvailable())
+        {
+            MESSAGE("Skipping: this backend has no bindless texture array, so nothing streams.");
+            gbuffer.destroy();
+            scene.destroy(driver);
+            return;
+        }
+
+        // Nothing should have voted before a frame has been drawn.
+        REQUIRE(scene.getTextureStreamingStats()._feedbackCount == 0);
+
+        const std::string psoName =
+            std::string("gbuffer_pso[") +
+            vkm::vkmVertexLayoutPresetName(vkm::VkmVertexLayoutPreset::StandardPBR) + "]";
+        vkm::VkmPipelineStateBase* pso = manager.getPipelineState(psoName, vkm::VkmPipelineStateOrigin::Engine);
+        REQUIRE(pso != nullptr);
+
+        vkm::VkmFrameData frameData;
+        const glm::mat4 viewProjection = glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, -1.0f, 0.5f)) *
+                                         glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 2.0f, 1.0f));
+        vkm::vkmExtractFrustumPlanes(viewProjection, frameData._frustumPlanes);
+        frameData._lightDirection = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
+
+        // A camera close enough that the estimate alone would keep everything at level 0, so a
+        // target that ends up anywhere else came from the GPU rather than from the sphere.
+        vkm::VkmTextureStreamingView view;
+        view._viewportHeight = kGBufferRenderSize;
+        view._fovYRadians = 0.8726646f;
+        view._cameraPosition = glm::vec3(0.0f, 0.0f, 1.0f);
+
+        /*
+        * The reading is a whole ring behind by design, so a handful of frames have to go by before
+        * any of it comes back. Bounded rather than open-ended: a loop that never delivers must fail
+        * here rather than spin.
+        */
+        uint32_t feedbackCount = 0;
+        for (uint32_t frame = 0; frame < 32 && feedbackCount == 0; ++frame)
+        {
+            scene.updateTextureStreaming(driver, view);
+            recordGBufferFrame(driver, scene, gbuffer, pso, frameData);
+            feedbackCount = scene.getTextureStreamingStats()._feedbackCount;
+        }
+
+        // The fixture's material samples one texture, so exactly one slot can have voted.
+        CHECK(feedbackCount > 0);
+
+        // And the loop must settle rather than walk the texture down a level per frame: once the
+        // texture holds what the shader asked for, the reading names that same level again.
+        for (uint32_t frame = 0; frame < 8; ++frame)
+        {
+            scene.updateTextureStreaming(driver, view);
+            recordGBufferFrame(driver, scene, gbuffer, pso, frameData);
+        }
+        const uint32_t settled = scene.getStreamedBaseMip(/*materialIndex=*/0, /*channel=*/0);
+        CHECK(settled != vkm::INVALID_VALUE32);
+        // A quad this close needs its finest levels; a runaway decode would have evicted them.
+        CHECK(settled <= 1);
+
+        gbuffer.destroy();
+        scene.destroy(driver);
+    }
+
+    /*
     * @brief Fills the G-buffer, hands it to the fullscreen lighting pass through descriptor set 2,
     * and checks the shaded result.
     *

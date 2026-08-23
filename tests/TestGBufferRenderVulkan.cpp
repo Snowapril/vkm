@@ -71,6 +71,13 @@ TEST_CASE("Vulkan texture streaming - a streamed-out material texture is a new r
     vkmtest::runTextureStreamingSwapTest(fixture.driver.get());
 }
 
+TEST_CASE("Vulkan texture feedback - the shader reports the level it wanted and the streamer acts on it")
+{
+    VulkanGBufferRenderFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runTextureFeedbackTest(fixture.driver.get());
+}
+
 TEST_CASE("Vulkan deferred lighting - the G-buffer is sampled through set 2 and shaded")
 {
     VulkanGBufferRenderFixture fixture;

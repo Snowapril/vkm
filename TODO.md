@@ -188,3 +188,5 @@
 - Texture feedback is written only by the G-buffer pass, so a texture visible solely through a probe capture, the path tracer or model_viewer keeps the CPU bounding-sphere estimate.
 - One pixel in 16 votes for texture feedback, so a surface thinner than 4 pixels in either axis may never vote and falls back to the estimate.
 - Texture feedback rides a set-0 singleton the WebGPU graphics bind group deliberately omits, so that backend is tier 0 permanently; WGSL has no LOD-query builtin either.
+- MoltenVK reports no `RayTracing`, so on macOS Vulkan every ray-query, path-tracer and ReSTIR test skips: the acceleration-structure binding move and the `gi_restir_lighting` fragment-stage storage-buffer fix are verified on Metal only and need a discrete-GPU Vulkan run.
+- `TestAliasedTexture`'s "disjoint lifetimes share bytes" case segfaulted once in four full Vulkan runs and reproduced neither alone nor on repeat; the aliasing path is untouched by the streaming work.
