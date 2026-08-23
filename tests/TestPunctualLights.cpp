@@ -12,6 +12,7 @@
 #include <vkm/renderer/deferred_lighting.h>
 #include <vkm/renderer/scene/light_table.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace
