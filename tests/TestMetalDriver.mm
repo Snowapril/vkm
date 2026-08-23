@@ -68,6 +68,18 @@ TEST_CASE("VkmDriverMetal - initialization succeeds") {
         if (rayTracing) { MESSAGE("RayTracing capability on this device: yes"); }
         else            { MESSAGE("RayTracing capability on this device: no"); }
         CHECK((!rayTracing || deviceAddress));
+
+        /*
+        * Texture streaming's high tier changes which mip levels are backed rather than rebuilding
+        * the texture, so it is meaningless without a bindless array to leave the slot pointing at.
+        * An implication again, not a value: placement sparse is a hardware tier, and the probe that
+        * decides it can legitimately come back None on older Apple silicon.
+        */
+        const bool sparse = (flags & static_cast<uint32_t>(vkm::VkmDriverCapabilityFlags::SparseResidency)) != 0u;
+        const bool bindless = (flags & static_cast<uint32_t>(vkm::VkmDriverCapabilityFlags::BindlessTextures)) != 0u;
+        if (sparse) { MESSAGE("SparseResidency capability on this device: yes"); }
+        else        { MESSAGE("SparseResidency capability on this device: no"); }
+        CHECK((!sparse || bindless));
     }
 }
 

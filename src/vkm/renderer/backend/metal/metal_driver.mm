@@ -39,6 +39,24 @@
 
 namespace vkm
 {
+    namespace
+    {
+        /*
+        * Page size every placement-sparse texture and its tile heap are created with. Lives here
+        * rather than in the header because metal_driver.h forward-declares its Metal types instead
+        * of importing Metal, and this is an NS_ENUM that cannot be forward-declared.
+        *
+        * The smallest Metal offers, chosen for the mip tail rather than for the tile. A texture's
+        * tail -- every level too small to fill one tile -- is indivisible and permanently resident,
+        * so the page size sets the floor on what streaming can ever give back. Measured on an
+        * M3 Pro against a 2048x2048 RGBA8 chain: 16 KiB pages put the tail at level 6 and 16 KiB,
+        * 64 KiB pages at level 5 and 64 KiB, 256 KiB at level 4 and 256 KiB. The smallest page
+        * therefore streams two more levels and leaves a sixteenth of the residue.
+        * A texture and the heap it is placed in must agree on this, so there is one value.
+        */
+        constexpr MTLSparsePageSize kSparsePageSize = MTLSparsePageSize16;
+    } // namespace
+
     VkmDriverMetal::VkmDriverMetal(id<MTLDevice> mtlDevice)
         : VkmDriverBase(), _mtlDevice(mtlDevice)
     {
@@ -98,6 +116,35 @@ namespace vkm
         {
             _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::RayTracing;
         }
+        /*
+        * Placement sparse: a hardware tier, not an API version. Queried through a throwaway
+        * descriptor because sparseTextureTier is a property of a texture's configuration rather
+        * than of the device -- the same reason the tile size query takes a texture type and format.
+        * Tier 1 is enough for per-mip residency: partial backing plus defined reads of unbacked
+        * texels. Tier 2 adds per-tile access counters, which this does not use.
+        */
+        {
+            MTLTextureDescriptor* probe = [[MTLTextureDescriptor alloc] init];
+            probe.textureType = MTLTextureType2D;
+            probe.pixelFormat = MTLPixelFormatRGBA8Unorm;
+            probe.width = 256;
+            probe.height = 256;
+            probe.mipmapLevelCount = 9;
+            probe.usage = MTLTextureUsageShaderRead;
+            probe.storageMode = MTLStorageModePrivate;
+            probe.placementSparsePageSize = kSparsePageSize;
+
+            id<MTLTexture> probeTexture = [_mtlDevice newTextureWithDescriptor:probe];
+            const MTLTextureSparseTier tier =
+                (probeTexture != nil) ? [probeTexture sparseTextureTier] : MTLTextureSparseTierNone;
+            if (tier != MTLTextureSparseTierNone)
+            {
+                _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::SparseResidency;
+            }
+            [probeTexture release];
+            [probe release];
+        }
+
         // Metal-4 MetalFX support is its own device question, separate from classic MetalFX.
         // Withheld while the Metal debug layer is active: MTL4FXTemporalScaler's encode aborts
         // the process under the debug layer's wrapper objects, so the capability stays clear

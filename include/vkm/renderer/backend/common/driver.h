@@ -89,6 +89,16 @@ namespace vkm
         * clear on WebGPU, which has no upscaler library at all.
         */
         TemporalUpscaling       = 0x00000100,
+        /*
+        * Backend can change which mip levels of a texture are actually backed by memory, without
+        * recreating the texture. Texture streaming's high tier: the image view covers the whole
+        * chain for the texture's life, so a level arriving or leaving costs a mapping update
+        * rather than a new resource, a new bindless slot and a rewrite of every material naming it.
+        * Asked of the device rather than assumed from the API version -- placement sparse is a
+        * hardware tier on Metal and a feature bit on Vulkan, and both can be absent on a device
+        * whose API level otherwise has it.
+        */
+        SparseResidency         = 0x00000200,
     };
 
     inline VkmDriverCapabilityFlags operator|(VkmDriverCapabilityFlags lhs, VkmDriverCapabilityFlags rhs)

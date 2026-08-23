@@ -165,3 +165,31 @@ sub-rect upload does not exist. Full virtual texturing would have needed it.
 - **2026-08-23** — Tier 1: GPU feedback. Toolchain spiked first and passed, so no fallback was needed.
   Fixed `toVkShaderStageFlags` making set-2 storage buffers fragment-visible, which was also a latent
   bug for `gi_restir_lighting` on Vulkan. Moved the acceleration-structure binding to 9.
+
+## 8. Tier 2 measurements — what this hardware actually offers
+
+Probed directly on an **Apple M3 Pro**, against a 2048x2048 RGBA8 12-level chain:
+
+| Page size | Tier | Tile | First mip in tail | Tail bytes |
+|---|---|---|---|---|
+| 16 KiB | 2 | 64x64 | 6 | 16 KiB |
+| 64 KiB | 2 | 128x128 | 5 | 64 KiB |
+| 256 KiB | 2 | 256x256 | 4 | 256 KiB |
+
+A placement heap declaring `maxCompatiblePlacementSparsePageSize = 64KB` creates without complaint.
+
+Three things follow:
+
+- **Tier 2 is available**, which is more than per-mip residency needs. Tier 1 already gives partial
+  backing and defined reads of unbacked texels; Tier 2 adds per-tile access counters, i.e. Metal's
+  own texture feedback. That is a possible future replacement for the shader-side feedback of
+  tier 1, not something this design requires.
+- **16 KiB pages are the right choice**, and the reason is the tail rather than the tile. Every level
+  too small to fill one tile lives in an indivisible, permanently resident mip tail, so the page size
+  sets the floor on what streaming can ever give back. 16 KiB pages stream two more levels than
+  256 KiB ones and leave a sixteenth of the residue.
+- **Per-mip residency stays worthwhile.** With 16 KiB pages a 2048-wide chain streams levels 0-5
+  independently, and level 0 alone is three quarters of the chain's bytes. The 16 KiB tail is noise.
+
+`VkmDriverCapabilityFlags::SparseResidency` now reports this: yes on the M3 Pro, no under MoltenVK
+(which has neither the feature bits nor ray tracing).
