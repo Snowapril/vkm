@@ -202,14 +202,19 @@ namespace vkmtest
 
         CHECK(lights[0]._shadowTile == 0); // directional: one tile per cascade
         CHECK(lights[0]._shadowTileCount == 3u);
-        CHECK(lights[1]._shadowTile == 3); // point: six faces, starting after the cascades
+        // The directional light also owns a fourth tile, fitted to the scene for the probe
+        // capture, which is why the point light starts at 4 rather than at 3.
+        CHECK(atlas.getDirectionalSceneTile() == 3);
+        CHECK(lights[1]._shadowTile == 4); // point: six faces, starting after the cascades
         CHECK(lights[1]._shadowTileCount == 6u);
-        CHECK(lights[2]._shadowTile == 9); // spot: the one after them
+        CHECK(lights[2]._shadowTile == 10); // spot: the one after them
         CHECK(lights[2]._shadowTileCount == 1u);
-        CHECK(atlas.getTileCount() == 10);
-        // The count is what the lookup walks; a light whose tiles it under-counts silently reads
-        // a neighbouring light's.
-        CHECK(lights[0]._shadowTileCount + lights[1]._shadowTileCount + lights[2]._shadowTileCount ==
+        CHECK(atlas.getTileCount() == 11);
+        // The count is what the lookup walks, and it must stop before the scene tile: a light
+        // whose tiles it over-counts reads a fit meant for something else, one whose tiles it
+        // under-counts silently reads a neighbouring light's.
+        CHECK(lights[0]._shadowTileCount + lights[1]._shadowTileCount + lights[2]._shadowTileCount +
+                  1u ==
               atlas.getTileCount());
 
         // Past the budget a light keeps shading and simply casts no shadow -- a dropped light
@@ -260,7 +265,7 @@ namespace vkmtest
         sun._directionWorld[2] = 0.0f;
         sun._radiance[0] = 1.0f;
         atlas.allocate(scene, &lights);
-        REQUIRE(atlas.getTileCount() == 1);
+        REQUIRE(atlas.getTileCount() == 2); // one cascade, plus the scene-fitted tile
 
         constexpr float kRadius = 50.0f;
         const float texelWorld = 2.0f * kRadius / static_cast<float>(descriptor._tileSize);
@@ -346,7 +351,7 @@ namespace vkmtest
         sun._directionWorld[2] = 0.0f;
         sun._radiance[0] = 1.0f;
         atlas.allocate(scene, &lights);
-        REQUIRE(atlas.getTileCount() == 3);
+        REQUIRE(atlas.getTileCount() == 4); // three cascades, plus the scene-fitted tile
         REQUIRE(lights[0]._shadowTileCount == 3u);
 
         // A view down -Z from the origin, covering 400 units -- roughly Sponza's scale.
@@ -372,6 +377,29 @@ namespace vkmtest
         // The far cascade still has to reach the shadow distance, or geometry past it silently
         // stops casting well before the caller asked it to.
         CHECK(far * static_cast<float>(descriptor._tileSize) * 0.5f >= kShadowDistance * 0.5f);
+
+        // The scene tile belongs to the probe capture, and a world-space irradiance cache cannot
+        // have its shadows move when the camera does: a probe refreshed from one camera position
+        // and read from another would disagree with itself, which the eye sees as the lighting
+        // pulsing while the camera moves. Moving the camera must refit the cascades and leave
+        // this tile exactly where it was.
+        {
+            const int32_t sceneTile = atlas.getDirectionalSceneTile();
+            REQUIRE(sceneTile >= 0);
+            REQUIRE(static_cast<uint32_t>(sceneTile) < atlas.getTileCount());
+            const glm::mat4 cascadeBefore = atlas.getConstants()._tileViewProjection[0];
+            const glm::mat4 sceneBefore =
+                atlas.getConstants()._tileViewProjection[static_cast<size_t>(sceneTile)];
+
+            atlas.setDirectionalView(glm::vec3(137.0f, 41.0f, -88.0f), glm::vec3(0.0f, 0.0f, -1.0f),
+                                     glm::radians(60.0f), 16.0f / 9.0f, kShadowDistance);
+
+            // The cascade followed -- without this the check below would pass on an atlas that
+            // simply stopped refitting anything.
+            CHECK(atlas.getConstants()._tileViewProjection[0] != cascadeBefore);
+            CHECK(atlas.getConstants()._tileViewProjection[static_cast<size_t>(sceneTile)] ==
+                  sceneBefore);
+        }
 
         atlas.destroy();
     }

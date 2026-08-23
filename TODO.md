@@ -183,5 +183,5 @@
 - Vulkan teardown destroys buffers, descriptor sets, samplers and pipelines still in use by RenderGraph.Frame1, raising five validation errors per UnitTests run.
 - Shadow bias is one global constant, so a scene whose geometry is finer than a shadow texel forces it up for every other surface too.
 - Cascade boundary blending has no test gate; it is verified only by a pixel-difference measurement on the gi sample.
-- Probe capture reads the camera-focused shadow atlas, so a probe outside every cascade captures unshadowed and its irradiance changes with where the camera was when it was refreshed.
 - The probe budget and the shadow tile count are each sized against a hand-picked share of the push-constant ring, so a scene with more draw batches than Sponza silently clamps them again.
+- The probe capture's scene-fitted shadow tile is one tile for the whole scene, so its shadows are far coarser than the cascades the camera pass reads.

@@ -254,6 +254,7 @@ namespace vkm
         _sceneCenter = sceneCenter;
         _sceneRadius = sceneRadius;
         _directionalTile = -1;
+        _directionalSceneTile = -1;
 
         _casterBoxMin = glm::vec3(std::numeric_limits<float>::max());
         _casterBoxMax = glm::vec3(std::numeric_limits<float>::lowest());
@@ -270,9 +271,11 @@ namespace vkm
             const uint32_t type = light._type;
             const uint32_t cascades =
                 std::clamp(_descriptor._cascadeCount, 1u, kVkmMaxShadowCascades);
+            // A directional light takes one tile per cascade plus the scene-fitted tile a
+            // lighting cache reads; see getDirectionalSceneTile().
             const uint32_t needed = (type == static_cast<uint32_t>(VkmLightType::Point)) ? 6u
                                     : (type == static_cast<uint32_t>(VkmLightType::Directional))
-                                        ? cascades
+                                        ? cascades + 1u
                                         : 1u;
             if (_tiles.size() + needed > tileBudget)
             {
@@ -282,7 +285,10 @@ namespace vkm
             }
 
             light._shadowTile = static_cast<int32_t>(_tiles.size());
-            light._shadowTileCount = needed;
+            // The scene tile is allocated with the cascades but is not one of them, so the
+            // lookup's walk stops before it.
+            light._shadowTileCount =
+                (type == static_cast<uint32_t>(VkmLightType::Directional)) ? cascades : needed;
 
             if (type == static_cast<uint32_t>(VkmLightType::Directional))
             {
@@ -293,8 +299,9 @@ namespace vkm
                     _directionalTile = static_cast<int32_t>(_tiles.size());
                     _directionalCascades = cascades;
                     _directionalDirection = direction;
+                    _directionalSceneTile = static_cast<int32_t>(_tiles.size() + cascades);
                 }
-                for (uint32_t cascade = 0; cascade < cascades; ++cascade)
+                for (uint32_t cascade = 0; cascade < cascades + 1u; ++cascade)
                 {
                     Tile tile;
                     tile._lightDirection = direction;
@@ -426,6 +433,13 @@ namespace vkm
             const glm::vec3 center = _hasFocus ? _cascadeCenters[cascade] : _sceneCenter;
             const float radius = _hasFocus ? _cascadeRadii[cascade] : _sceneRadius;
             fitDirectionalCascade(tileIndex, center, std::max(radius, 1e-3f));
+        }
+        // Always the scene, never the camera. This is the whole point of the tile: a cache that
+        // consults it gets the same answer wherever the camera happens to be.
+        if (_directionalSceneTile >= 0 && static_cast<size_t>(_directionalSceneTile) < _tiles.size())
+        {
+            fitDirectionalCascade(static_cast<uint32_t>(_directionalSceneTile), _sceneCenter,
+                                  std::max(_sceneRadius, 1e-3f));
         }
         _constantsDirty = true;
     }

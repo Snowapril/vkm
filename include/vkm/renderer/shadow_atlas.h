@@ -216,6 +216,19 @@ namespace vkm
         // Texel extent of the whole atlas.
         glm::uvec2 getAtlasExtent() const;
         // Tiles per row in that extent; the lookup needs it to turn a tile index into a rect.
+        /*
+        * @brief The directional light's scene-fitted tile, or -1 when it has none.
+        * @details The cascades follow the camera, which is right for what the camera can see and
+        * wrong for anything that caches lighting: a probe outside every cascade reads unshadowed,
+        * so its irradiance would depend on where the camera stood when it was refreshed, and
+        * moving the camera would make the cached lighting pulse. This tile is fitted to the whole
+        * scene and never moves, so a cache can consult the same shadows from anywhere. It is one
+        * tile for the entire scene, so it is coarse -- which suits a low-frequency consumer and
+        * would not suit the camera's own pass. Not part of the light's cascade range: the
+        * deferred lookup walks _shadowTileCount tiles from _shadowTile and must not reach this.
+        */
+        inline int32_t getDirectionalSceneTile() const { return _directionalSceneTile; }
+
         uint32_t getTilesPerRow() const;
         // The constants the lookup binds, valid after allocate().
         inline const VkmShadowAtlasConstants& getConstants() const { return _constants; }
@@ -257,6 +270,7 @@ namespace vkm
         // rewrites exactly those.
         int32_t _directionalTile = -1;
         uint32_t _directionalCascades = 0u;
+        int32_t _directionalSceneTile = -1;
         glm::vec3 _directionalDirection{ 0.0f, -1.0f, 0.0f };
         // The spheres each cascade is fitted to. Empty until a camera says otherwise, in which
         // case every cascade falls back to the scene fit.

@@ -1034,7 +1034,18 @@ private:
         // a full round after it is gone.
         if (hasSun)
         {
-            _gi.setShadowSun(_shadowLights[0], _shadowAtlas.getTilesPerRow(),
+            // The scene-fitted tile, not the cascades. A probe is a world-space cache, and the
+            // cascades follow the camera, so reading those would make a probe's irradiance depend
+            // on where the camera stood when it was last refreshed -- which the eye sees as the
+            // lighting pulsing while the camera moves.
+            VkmPunctualLight probeSun = _shadowLights[0];
+            const int32_t sceneTile = _shadowAtlas.getDirectionalSceneTile();
+            if (sceneTile >= 0)
+            {
+                probeSun._shadowTile = sceneTile;
+                probeSun._shadowTileCount = 1u;
+            }
+            _gi.setShadowSun(probeSun, _shadowAtlas.getTilesPerRow(),
                              _shadowAtlas.getDescriptor()._tileSize);
         }
         else
