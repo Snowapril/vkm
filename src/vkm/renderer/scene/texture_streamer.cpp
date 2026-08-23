@@ -489,7 +489,7 @@ namespace vkm
             entry->_sparse = (texture != nullptr) && texture->isSparse();
             entry->_sparseResolved = true;
         }
-        return entry->_sparse;
+        return entry->_sparse && _settings._useSparseResidency;
     }
 
     void VkmTextureStreamer::publishEntry(const Entry& entry,
@@ -503,6 +503,9 @@ namespace vkm
             update._bindlessSlot = entry._bindlessSlot;
             update._baseMip = entry._residentBaseMip;
             update._totalMipCount = entry._totalMipCount;
+            // Not gated on the setting: what the shader must clamp to is a fact about the texture
+            // in front of it, and a texture whose levels are unbound stays unbound if the setting
+            // flips before its next rebuild lands.
             update._minLod = entry._sparse ? entry._residentBaseMip : 0u;
             outUpdates->push_back(update);
         }
@@ -714,6 +717,9 @@ namespace vkm
         entry._texture = _build._texture;
         entry._bindlessSlot = newSlot;
         entry._residentBaseMip = _build._baseMip;
+        // A different texture, so whether it is sparse has to be asked again rather than inherited.
+        entry._sparse = false;
+        entry._sparseResolved = false;
         ++_rebuildsApplied;
 
         publishEntry(entry, outUpdates);

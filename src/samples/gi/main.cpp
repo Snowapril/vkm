@@ -130,6 +130,10 @@ VKM_GLOBAL_VARIABLE(float, gv_gi_camera_pitch, 17.2f); // the controller's 0.3 r
 // 0 on a device without ray tracing -- the selection is a runtime capability question, not a
 // build-time one (restir.md section 5).
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_technique, 0u);
+// Whether a texture the driver granted sparse residency streams by binding and unbinding its own
+// levels instead of being rebuilt into a second texture. Off forces every texture down the rebuild
+// path, which is what makes the two comparable on one machine.
+VKM_GLOBAL_VARIABLE(bool, gv_gi_sparse_streaming, true);
 // 8.7's final-shading MIS blend: smooth surfaces lean on the pixel's own fresh sample instead of
 // the resampled one, whose cached radiance is the documented ReSTIR GI bias on low roughness.
 // Settable here so a screenshot run can A/B it.
@@ -367,6 +371,10 @@ public:
         _gi.options()._restirMisBlend = gv_gi_restir_mis.get();
 
         loadScene(gv_gi_model_path.get());
+
+        VkmTextureStreamingSettings streaming = _scene.getTextureStreamingSettings();
+        streaming._useSparseResidency = gv_gi_sparse_streaming.get();
+        _scene.setTextureStreamingSettings(streaming);
     }
 
     virtual void preShutdown() override final
@@ -953,6 +961,15 @@ private:
         // --screenshot fires before the device has finished initializing and captures a blank page.
         dumpScreenshotAsBase64(gv_gi_screenshot.get());
 #endif
+        // What streaming settled at, alongside the screenshot: a headless run is the only place
+        // these get read, and the panel that shows them needs a window.
+        const VkmTextureStreamingStats stats = _scene.getTextureStreamingStats();
+        VKM_DEBUG_INFO(("[streaming] resident " + std::to_string(stats._residentBytes / (1024 * 1024)) +
+                        " MiB of " + std::to_string(stats._fullChainBytes / (1024 * 1024)) +
+                        " MiB full, textures=" + std::to_string(stats._textureCount) +
+                        " changes=" + std::to_string(stats._rebuildsApplied) +
+                        " inflight=" + std::to_string(stats._rebuildInFlight) +
+                        " retiring=" + std::to_string(stats._pendingRetireCount)).c_str());
         // A screenshot run exists to produce the file, so it stops once it has one.
         _engine->getInputHandler().requestExit();
     }
@@ -1086,6 +1103,10 @@ private:
         {
             VkmTextureStreamingSettings streaming = _scene.getTextureStreamingSettings();
             bool changed = ImGui::Checkbox("Texture streaming", &streaming._enabled);
+            // The two residency paths, on one machine: unbinding a texture's own levels against
+            // rebuilding it into a second one. Only meaningful where the driver granted sparse
+            // residency; where it did not, every texture already rebuilds whatever this says.
+            changed |= ImGui::Checkbox("Sparse residency", &streaming._useSparseResidency);
             int mipBias = static_cast<int>(streaming._mipBias);
             if (ImGui::SliderInt("Mip bias", &mipBias, -4, 4))
             {

@@ -150,6 +150,14 @@ namespace vkm
         return TileRun{};
     }
 
+    /*
+    * Tiles go back to the free list, never back to the device. Releasing an emptied block was tried
+    * and reverted: updateTextureMappings unmaps on the queue, so a heap freed the moment its last
+    * run is released can be pulled out from under an unmap still in flight, and the texture then
+    * samples freed memory. It buys nothing to weigh that against -- a placement heap reserves
+    * address space rather than committed pages, so on Sponza the device total moved 0.01 GiB
+    * between a heap that grew to six blocks and one that did not.
+    */
     void VkmSparseTileHeapMetal::release(const TileRun& run)
     {
         if (!run.isValid() || run._blockIndex >= _blocks.size())

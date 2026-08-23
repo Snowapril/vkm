@@ -147,6 +147,16 @@ namespace vkm
         * the new texture is published only once every one of its levels is in place.
         */
         uint32_t _maxLevelUploadsPerTick = 2;
+        /*
+        * Whether a texture the driver granted sparse residency changes level by binding and
+        * unbinding its own levels rather than being rebuilt into a second texture. Off falls every
+        * texture back to rebuilding, which is the only path on a device without sparse residency
+        * and stays reachable on one with it -- a path only ever taken where the hardware happens
+        * to lack a feature is a path that rots.
+        * Read live: turning it off mid-run rebuilds each texture the next time its level moves,
+        * and turning it back on returns it to unbinding once it is sparse again.
+        */
+        bool _useSparseResidency = true;
     };
 
     /*

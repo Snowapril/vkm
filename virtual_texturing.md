@@ -307,3 +307,49 @@ recover it. Tier 2 keeps the full extent whatever is backed, so the shader can a
   `CalculateLevelOfDetail` is wrong. Pre-existing, orthogonal to streaming, and not yet chased.
 - **Vulkan sparse cannot be exercised here at all**: MoltenVK reports `sparseResidencyImage2D =
   false`. The Vulkan `vkQueueBindSparse` path needs a discrete-GPU device to be written against.
+
+## 12. Sponza A/B, both tiers on one machine
+
+`--gv_gi_sparse_streaming` forces every texture down the rebuild path on a machine where sparse
+residency is granted, which is what makes the two comparable. It is read live, so the checkbox in
+the sample's streaming panel switches paths mid-run.
+
+Sponza, camera distance 2.5, 900 frames, feedback on, M3 Pro:
+
+| | Tier 0 — rebuild | Tier 2 — residency |
+|---|---|---|
+| Streamer resident / full | **123 MiB of 362 MiB** | **123 MiB of 362 MiB** |
+| Level changes applied | 46 | 46 |
+| `_rebuildInFlight` | 0 | 0 |
+| `_pendingRetireCount` | 0 | 0 |
+| Texture category | 377.2 MiB | 371.2 MiB |
+| Device total | 2.21 GiB | 2.22 GiB |
+
+**The two tiers make exactly the same decision.** Same resident figure, same number of changes —
+selection is shared and only the mechanism differs, which is the result that says the seam is in the
+right place.
+
+**Memory is parity, and that is the honest headline.** Tier 2 was never going to beat tier 0 on
+steady-state bytes: a rebuilt texture is genuinely only as large as what it holds, so tier 0 already
+frees the memory. What tier 2 changes is the cost of *getting there* — no decode, no re-upload of
+levels already held, no second texture live at once, no bindless slot churn, no retire delay — and
+the feedback ratchet in section 11, which is a correctness difference rather than a memory one.
+
+`_rebuildInFlight` and `_pendingRetireCount` reading 0 on tier 0 too is convergence, not absence of
+rebuilds: by frame 900 the last one has long landed. The tier-2 run reaches that state in a handful
+of frames instead.
+
+### Freeing emptied tile-heap blocks: tried, reverted
+
+The tile heap is a high-water mark — tiles return to the free list, never to the device — so
+releasing a block once nothing is left in it looks obviously right. It is not:
+
+- **It corrupts sampling.** `updateTextureMappings` unmaps on the queue. A heap released the moment
+  its last run is freed can be pulled out from under an unmap still in flight, and the texture then
+  samples freed memory. The G-buffer test caught this immediately.
+- **It buys nothing to weigh against that.** A placement heap reserves address space, not committed
+  pages. On Sponza the device total moved 0.01 GiB between a heap that grew to six 64 MiB blocks and
+  one that did not — the unmapped tiles were never costing anything to begin with.
+
+Doing it safely needs the heap to outlive in-flight mappings, which means routing it through
+`VkmDeferredResourceReclaimer`. Not worth it for a saving the device does not report.
