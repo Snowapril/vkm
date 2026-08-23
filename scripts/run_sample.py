@@ -226,7 +226,7 @@ def cmake_build_target(build_dir: Path, target: str, jobs: int, env=None) -> boo
 
 def run_native_sample(backend: str, sample: str, build_type: str,
                        build_dir: Path, jobs: int, system: str,
-                       mtl_debug_layer: bool = True) -> int:
+                       engine_args: list, mtl_debug_layer: bool = True) -> int:
     backend_build_dir = build_dir / backend
 
     if not cmake_configure_for_sample(backend_build_dir, build_type,
@@ -263,8 +263,8 @@ def run_native_sample(backend: str, sample: str, build_type: str,
             # layer off is the only way to see them.
             print("[WARN] Metal validation layer disabled; temporal upscaling is reachable.")
 
-    print(f"[INFO] Launching {binary} ...")
-    return run_cmd([str(binary)], env=env).returncode
+    print(f"[INFO] Launching {binary} {' '.join(engine_args)}".rstrip() + " ...")
+    return run_cmd([str(binary)] + engine_args, env=env).returncode
 
 
 def build_host_vkm_compiler(jobs: int, system: str):
@@ -401,6 +401,11 @@ def main() -> None:
              "upscaling: MTL4FX cannot encode under the debug layer, so the driver withholds "
              "the capability there and every upscale mode falls back to Off.",
     )
+    parser.add_argument(
+        "engine_args", nargs="*", metavar="-- ENGINE_ARG...",
+        help="Arguments after -- are handed to the sample itself rather than parsed here, "
+             "e.g. -- --enable-hdr --gv_cpu_profile=1",
+    )
     args = parser.parse_args()
 
     validate_sample(args.sample)
@@ -410,10 +415,16 @@ def main() -> None:
 
     system = platform.system()
     if args.backend == "webgpu":
+        # The wasm build runs in a browser, so there is no argv to forward to. Say so instead
+        # of dropping the arguments silently.
+        if args.engine_args:
+            print("[ERROR] Engine arguments cannot be forwarded to the webgpu backend; "
+                  "it runs in a browser.")
+            sys.exit(1)
         sys.exit(run_webgpu_sample(args.sample, args.build_type, args.jobs, system))
     else:
         sys.exit(run_native_sample(args.backend, args.sample, args.build_type,
-                                    Path(args.build_dir), args.jobs, system,
+                                    Path(args.build_dir), args.jobs, system, args.engine_args,
                                     not args.no_mtl_debug_layer))
 
 

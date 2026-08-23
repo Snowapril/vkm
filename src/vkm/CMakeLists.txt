@@ -13,6 +13,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/platform/common/input_handler.h
     ${PUBLIC_HDR_DIR}/vkm/platform/common/glfw_input.h
     ${PUBLIC_HDR_DIR}/vkm/platform/common/process_stats.h
+    ${PUBLIC_HDR_DIR}/vkm/platform/common/clipboard.h
     ${PUBLIC_HDR_DIR}/vkm/base/platform.h
     ${PUBLIC_HDR_DIR}/vkm/base/common.h
     ${PUBLIC_HDR_DIR}/vkm/base/logger.h
@@ -174,6 +175,7 @@ if (VKM_PLATFORM_WINDOWS)
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/windows/application.cpp
         ${SRC_DIR}/vkm/platform/windows/process_stats.cpp
+        ${SRC_DIR}/vkm/platform/windows/clipboard.cpp
     )
 endif()
 
@@ -194,6 +196,7 @@ if (VKM_PLATFORM_APPLE)
     list(APPEND SRCS
         ${SRC_DIR}/vkm/platform/apple/application.mm
         ${SRC_DIR}/vkm/platform/apple/process_stats.cpp
+        ${SRC_DIR}/vkm/platform/apple/clipboard.mm
     )
 endif()
 

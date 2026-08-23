@@ -85,8 +85,13 @@ namespace vkm
         // actually supports it (see VkmDriverBase::selectSwapChainColorFormat); otherwise it
         // falls back to the non-HDR format. Off by default -- HDR is opt-in.
         bool enableHdr = false;
+        // Create the back buffer so it can be read back, which is what the F3 clipboard capture
+        // needs. Off by default: a readable back buffer gives up the driver's framebuffer-only
+        // fast paths (lossless compression, direct-to-display), and a run that never captures
+        // should not pay for them.
+        bool enableBackBufferReadback = false;
     };
-    constexpr const VkmEngineLaunchOptions DEFAULT_ENGINE_LAUNCH_OPTIONS = { true, false, false, false, false, 0, 1, false };
+    constexpr const VkmEngineLaunchOptions DEFAULT_ENGINE_LAUNCH_OPTIONS = { true, false, false, false, false, 0, 1, false, false };
 
     /*
     * @brief Engine base class
@@ -150,6 +155,17 @@ namespace vkm
         * deferred reclaimer, so the drain here is what makes that safe.
         */
         void recreateSwapChain(VkmWindowContext& windowContext, uint64_t packedExtent);
+
+        /*
+        * @brief Reads the given back buffer back and puts the image into the OS clipboard.
+        * @details Blocks: readbackTexture submits and waits. Call it between a render graph's
+        * execute() and the swapchain present, where the back buffer holds the finished frame and
+        * has not been presented yet. Supported on macOS (Metal) and Windows (Vulkan); on any
+        * other platform or backend it only logs.
+        * @param backBuffer Back buffer acquired for the current frame.
+        * @param format Format of that back buffer.
+        */
+        void captureBackBufferToClipboard(VkmResourceHandle backBuffer, VkmFormat format);
 
 #if defined(VKM_ENABLE_IMGUI)
         /*
@@ -368,6 +384,9 @@ namespace vkm
         bool _hasPrevViewProjection {false};
 
         std::unique_ptr<VkmRenderGraphCapture> _renderGraphCapture;
+
+        // Set by the F3 hotkey, consumed by render() on the next primary-window frame.
+        bool _clipboardCaptureArmed {false};
 
 #if defined(VKM_ENABLE_IMGUI)
         double _fpsSmoothed {0.0}; // exponential moving average, used by renderDebugOverlay()
