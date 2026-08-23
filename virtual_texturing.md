@@ -300,13 +300,13 @@ texture out on the reading and never bring it back on the reading alone; only th
 recover it. Tier 2 keeps the full extent whatever is backed, so the shader can always ask for level
 0 again.
 
-### Two open items this surfaced
+### One open item this surfaced
 
-- **The backends disagree on the reported level.** The same 64x64 fixture on the same GPU reads 2
-  through SPIRV-Cross's MSL and 0 through MoltenVK's SPIR-V. One of the two translations of
-  `CalculateLevelOfDetail` is wrong. Pre-existing, orthogonal to streaming, and not yet chased.
-- **Vulkan sparse cannot be exercised here at all**: MoltenVK reports `sparseResidencyImage2D =
-  false`. The Vulkan `vkQueueBindSparse` path needs a discrete-GPU device to be written against.
+**Vulkan sparse cannot be exercised here at all**: MoltenVK reports `sparseResidencyImage2D = false`.
+The Vulkan `vkQueueBindSparse` path needs a discrete-GPU device to be written against.
+
+(An earlier revision of this section claimed the two backends disagreed on the reported level, 2
+through MSL against 0 through SPIR-V. That was wrong, and section 13 records why.)
 
 ## 12. Sponza A/B, both tiers on one machine
 
@@ -353,3 +353,30 @@ releasing a block once nothing is left in it looks obviously right. It is not:
 
 Doing it safely needs the heap to outlive in-flight mappings, which means routing it through
 `VkmDeferredResourceReclaimer`. Not worth it for a saving the device does not report.
+
+
+## 13. The backends do not disagree, and the test said they did
+
+Section 11 reported that the same 64x64 fixture on the same GPU read level 2 through SPIRV-Cross's
+MSL and level 0 through MoltenVK's SPIR-V, and called one of the two translations wrong. That was a
+bug in the test, not in either toolchain.
+
+Dumping the feedback buffer on the Vulkan run settles it: slot 0 reads **2**, and 4095 of 4096 slots
+read `UNUSED`, so the per-frame clear works and the one slot anything sampled reported the same level
+Metal did. Both backends now settle this fixture at base mip 2.
+
+**What actually went wrong** was the convergence loop written to replace the original fixed frame
+count. It ran until the level had not changed for eight consecutive frames — and "has not changed"
+and "has not started" are indistinguishable from outside. On tier 2 the level moves in the first
+tick, so eight stable frames really did mean settled. On tier 0 the streamer first waits out its own
+`_stableTickCount` damping, then the readback ring latency, then queues a decode on the worker, then
+uploads a bounded number of levels per tick — none of which has happened eight frames in. The loop
+exited immediately and reported the level the texture was created at.
+
+The fix is a fixed warm-up before the level is read at all, then the stability check. Not a
+convergence detector: there is no signal from outside that separates "converged" from "not yet
+started", so the test has to give the slow path room rather than try to detect it.
+
+The general shape is worth keeping in mind — it is the second time in this work that a test's timing
+assumption, not its assertion, encoded which tier it was written against. The first was
+`CHECK(settled <= 1)` passing on a value still in transit.

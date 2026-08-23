@@ -5354,10 +5354,9 @@ comment always claimed.
 
 Two things the rewrite surfaced and did not fix:
 
-- **The two backends disagree on the reported level for the same fixture on the same GPU** — 2
-  through SPIRV-Cross's MSL, 0 through MoltenVK's SPIR-V. Both are `CalculateLevelOfDetail` on a
-  64x64 texture, so one of the two translations is wrong. Pre-existing and orthogonal to streaming;
-  the test reports the level rather than pinning it.
+- ~~**The two backends disagree on the reported level**~~ — **retracted, see below.** They do not:
+  both report 2. The Vulkan reading of 0 was the replacement test exiting before the level had begun
+  to move.
 - **Feedback on a rebuilt texture is a ratchet.** A texture reduced to base B cannot report a level
   finer than B — its level 0 *is* B — so tier 0 and tier 1 can walk a texture out but never bring it
   back on the reading alone. Tier 2 does not have this problem, because the texture keeps its full
@@ -5373,3 +5372,21 @@ Two things the rewrite surfaced and did not fix:
 assertion is only true where residency changed by unbinding. Asserting it in a test that runs on
 both tiers would have meant asserting a tier-2 property against tier 0. The stat going permanently
 quiet on Sponza is where that claim belongs.
+
+
+### Retraction: the cross-backend LOD "discrepancy" was the test, not the toolchain
+
+**Claimed:** SPIRV-Cross's MSL and MoltenVK's SPIR-V translate `CalculateLevelOfDetail` differently,
+reading 2 and 0 for the same fixture on the same GPU.
+
+**Actually:** both read 2. Dumping the raw feedback buffer on the Vulkan run showed slot 0 = 2 with
+4095 of 4096 slots `UNUSED`, so the clear works and the reading matches Metal's exactly.
+
+**Why the wrong conclusion:** the converge-then-assert loop introduced in the previous entry ran
+until the level had not changed for eight frames, and "has not changed" is indistinguishable from
+"has not started". Tier 2 moves the level in the first tick, so on Metal eight stable frames meant
+settled. Tier 0 waits out the streamer's damping, then the ring latency, then a worker decode, then
+bounded uploads — so on Vulkan the loop exited before anything happened and reported the level the
+texture was created at. Replaced with a fixed warm-up followed by the stability check: nothing
+observable from outside separates "converged" from "not yet started", so the test has to give the
+slow path room rather than try to detect it.
