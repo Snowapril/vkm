@@ -41,6 +41,7 @@
 #include <vkm/renderer/imgui/cpu_profiler_inspector.h>
 #include <vkm/renderer/imgui/gpu_profiler_inspector.h>
 #include <vkm/renderer/imgui/acceleration_structure_inspector.h>
+#include <vkm/renderer/acceleration_structure_debug_renderer.h>
 #include <imgui.h>
 #endif
 
@@ -166,6 +167,27 @@ namespace vkm
             VKM_DEBUG_ERROR(fmt::format("Failed to load engine pipeline states: {}", psoError).c_str());
             return VkmInitResult{VkmInitResultCode::Failed, psoError};
         }
+
+#if defined(VKM_ENABLE_IMGUI)
+        // Here rather than beside the inspector in initialize(): the pipeline it resolves only
+        // exists once the directory above has loaded. Skipped where no acceleration structure can
+        // exist, so a device without ray tracing allocates nothing for an always-empty view. A
+        // failure leaves the pointer null and is logged -- a debug overlay must not stop startup.
+        if ((_driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::RayTracing) != 0)
+        {
+            auto debugRenderer = std::make_unique<VkmAccelerationStructureDebugRenderer>();
+            std::string debugRendererError;
+            if (debugRenderer->initialize(_driver, _pipelineStateManager.get(), &debugRendererError))
+            {
+                _asDebugRenderer = std::move(debugRenderer);
+            }
+            else
+            {
+                VKM_DEBUG_ERROR(fmt::format("Failed to initialize the acceleration structure debug "
+                                            "renderer: {}", debugRendererError).c_str());
+            }
+        }
+#endif
 
 #if defined(VKM_GPU_CAPTURE)
         // Must run after driver init -- the Metal capture scope is created there, and
@@ -413,6 +435,11 @@ namespace vkm
         {
             _renderGraphInspector->releaseResources(_driver);
         }
+        if (_asDebugRenderer)
+        {
+            _asDebugRenderer->releaseResources();
+            _asDebugRenderer.reset();
+        }
 #endif
 #if defined(VKM_ENABLE_IMGUI)
         if (_imGuiRenderer)
@@ -547,6 +574,14 @@ namespace vkm
                 _cpuProfilerInspector->draw();
                 _gpuProfilerInspector->draw(_driver->getGpuProfiler());
                 _accelerationStructureInspector->draw(_driver);
+            }
+
+            // Outside the draw above, so the overlay follows the toggle even while the window is
+            // closed -- draw() early-returns on !_visible without touching either value.
+            if (_asDebugRenderer)
+            {
+                _asDebugRenderer->setEnabled(_accelerationStructureInspector->isSceneOverlayEnabled());
+                _asDebugRenderer->setSelected(_accelerationStructureInspector->getSelected());
             }
 
             // Collection follows the window: closing it (with F7 or the title bar's close
@@ -762,6 +797,16 @@ namespace vkm
             }
 
 #if defined(VKM_ENABLE_IMGUI)
+            // Between the app's passes and the ImGui overlay: over the scene, under the UI.
+            // Window 0 only, because set 1 carries the primary window's camera and these boxes
+            // are in that camera's world. The swapchain extent, not the render extent: this draws
+            // into the back buffer, which an upscaler has already resolved to display size.
+            if (windowIndex == 0 && appRendersHere && _asDebugRenderer)
+            {
+                VKM_PROFILE_SCOPE("AsDebugRenderer::record");
+                _asDebugRenderer->record(renderGraph, currentBackBuffer, windowExtent, _currentFrameIndex);
+            }
+
             if (windowContext._isImGuiWindow && _imGuiRenderer)
             {
                 // If the app already recorded into this back buffer (single-window mode), load it;

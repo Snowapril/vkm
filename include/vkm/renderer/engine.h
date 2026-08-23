@@ -30,6 +30,7 @@ namespace vkm
     class VkmCpuProfilerInspector;
     class VkmGpuProfilerInspector;
     class VkmAccelerationStructureInspector;
+    class VkmAccelerationStructureDebugRenderer;
 #endif
     struct VkmInitResult;
 
@@ -375,6 +376,9 @@ namespace vkm
         std::unique_ptr<VkmCpuProfilerInspector> _cpuProfilerInspector;
         std::unique_ptr<VkmGpuProfilerInspector> _gpuProfilerInspector;
         std::unique_ptr<VkmAccelerationStructureInspector> _accelerationStructureInspector;
+        // The inspector's 3D view. Null on a backend without ray tracing, where no structure
+        // can exist for it to outline.
+        std::unique_ptr<VkmAccelerationStructureDebugRenderer> _asDebugRenderer;
         // Previous frame's profiler window visibility, so update() can start/stop capture on
         // the edge instead of overriding the inspector's own Start/Stop button every frame.
         bool _cpuProfilerWasVisible {false};
