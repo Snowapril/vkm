@@ -254,3 +254,56 @@ visible, and it is what the test asserts against.
   complete, tested with and without. The header still asks for one, so this is a "not observed"
   rather than a "not required" — but it was not the cause of the hang above, which is worth recording
   because it was the obvious suspect.
+
+## 11. Tier 2 wired into the streamer
+
+`VkmTextureStreamer` now has two ways to change a level, chosen per entry from whether the driver
+granted that texture sparse residency:
+
+| | Tier 0 / 1 — rebuild | Tier 2 — residency |
+|---|---|---|
+| Coarser (evict) | decode, upload, new texture, new slot, retire | **unbind the levels; one tick, no decode, no upload** |
+| Finer (fill) | decode, upload whole chain, new texture, new slot, retire | decode, bind and upload **only the new levels**, into the texture it already has |
+| Bindless slot | new one each time | never changes |
+| Retire delay | `FRAME_BUFFER_COUNT + 1` ticks | none — nothing is displaced |
+
+Evicting is the asymmetric win: the pixels are being thrown away, so there is nothing to read and
+nothing to copy, and every entry that wants a coarser level gets it the frame the camera pulls back.
+
+### The min-LOD clamp, which tier 2 cannot work without
+
+A rebuilt texture is physically only as large as what it holds, so its level 0 is always backed. A
+sparse texture keeps its full extent while the front of its chain has had the memory taken away —
+and an unbacked level does not read as "unavailable", it reads as **blank**. The first run of the
+tier-2 path turned the fixture black for exactly this reason.
+
+So each material channel carries the finest level its texture actually has memory for, and the
+sample is clamped to it: HLSL `Sample(s, uv, offset, clamp)` → SPIR-V `MinLod` → MSL
+`min_lod_clamp`. Verified through the whole toolchain before writing the rest, as with
+`CalculateLevelOfDetail`: DXC emits `OpCapability MinLod` at `ps_6_0`, SPIRV-Cross emits
+`min_lod_clamp` at MSL 2.2+ (vkm sets 3.0), and this device reports `shaderResourceMinLod = true`.
+
+The clamp is **zero on tier 0** and must be: there, the texture's level 0 already *is* chain level
+`baseMip`, so clamping to `baseMip` again would skip those levels twice. Same reasoning applies to
+the feedback decode, which adds the resident base only for a rebuilt texture — a sparse one's level 0
+is chain level 0, and adding anything counts it twice.
+
+This cost the material record four words (16 → 20, 64 → 80 bytes), one clamp per texture slot,
+parallel to `_textureSlots` component for component.
+
+### Feedback on a rebuilt texture is a ratchet
+
+Worth stating on its own, because it is the sharpest argument for tier 2 that has nothing to do with
+memory. A texture reduced to base B **cannot report a level finer than B** — its level 0 is B, and
+`CalculateLevelOfDetail` has nothing coarser-than-zero to return. So tier 0 and tier 1 can walk a
+texture out on the reading and never bring it back on the reading alone; only the CPU estimate can
+recover it. Tier 2 keeps the full extent whatever is backed, so the shader can always ask for level
+0 again.
+
+### Two open items this surfaced
+
+- **The backends disagree on the reported level.** The same 64x64 fixture on the same GPU reads 2
+  through SPIRV-Cross's MSL and 0 through MoltenVK's SPIR-V. One of the two translations of
+  `CalculateLevelOfDetail` is wrong. Pre-existing, orthogonal to streaming, and not yet chased.
+- **Vulkan sparse cannot be exercised here at all**: MoltenVK reports `sparseResidencyImage2D =
+  false`. The Vulkan `vkQueueBindSparse` path needs a discrete-GPU device to be written against.

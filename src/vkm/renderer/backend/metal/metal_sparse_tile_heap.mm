@@ -16,8 +16,8 @@ namespace vkm
         /*
         * Tiles one block holds. 4096 at the 16 KiB page size is 64 MiB, matching every other heap
         * block in the engine, and comfortably larger than the biggest run a material texture asks
-        * for: level 0 of a 2048-wide chain is 32x32 = 1024 tiles. A run may not straddle blocks, so
-        * this is also the hard ceiling on one level's size.
+        * for: level 0 of a 2048-wide chain is 32x32 = 1024 tiles. A level needing more than this
+        * gets a block sized to it instead, since a run may not straddle blocks.
         */
         constexpr uint32_t kTilesPerBlock = 4096;
     } // namespace
@@ -67,10 +67,15 @@ namespace vkm
         _allocatedTiles = 0;
     }
 
-    bool VkmSparseTileHeapMetal::addBlock()
+    bool VkmSparseTileHeapMetal::addBlock(uint32_t minimumTiles)
     {
+        // A run may not straddle two blocks, because one mapping operation names one heap. So the
+        // block, not the level, is what gives: a level 0 larger than the usual block gets a block
+        // sized to it rather than being refused backing it could plainly have.
+        const uint32_t blockTiles = std::max(_tilesPerBlock, minimumTiles);
+
         MTLHeapDescriptor* descriptor = [[MTLHeapDescriptor alloc] init];
-        descriptor.size = _tileSizeBytes * _tilesPerBlock;
+        descriptor.size = _tileSizeBytes * blockTiles;
         descriptor.storageMode = MTLStorageModePrivate;
         descriptor.type = MTLHeapTypePlacement;
         // Without this the heap cannot back a texture created at that page size at all; it is the
@@ -93,8 +98,8 @@ namespace vkm
 
         auto block = std::make_unique<Block>();
         block->_heap = heap;
-        block->_tileCount = _tilesPerBlock;
-        block->_freeRuns.emplace_back(0u, _tilesPerBlock);
+        block->_tileCount = blockTiles;
+        block->_freeRuns.emplace_back(0u, blockTiles);
         _blocks.push_back(std::move(block));
         return true;
     }
@@ -105,13 +110,6 @@ namespace vkm
         {
             return TileRun{};
         }
-        if (tileCount > _tilesPerBlock)
-        {
-            // A run may not straddle two blocks, because one mapping operation names one heap.
-            VKM_DEBUG_ERROR("A sparse mip level needs more tiles than one heap block holds");
-            return TileRun{};
-        }
-
         for (uint32_t attempt = 0; attempt < 2; ++attempt)
         {
             for (size_t blockIndex = 0; blockIndex < _blocks.size(); ++blockIndex)
@@ -144,7 +142,7 @@ namespace vkm
             }
 
             // Nothing had room; one more block, then try again exactly once.
-            if (attempt == 0 && !addBlock())
+            if (attempt == 0 && !addBlock(tileCount))
             {
                 break;
             }
@@ -198,6 +196,11 @@ namespace vkm
 
     uint64_t VkmSparseTileHeapMetal::getReservedBytes() const
     {
-        return static_cast<uint64_t>(_blocks.size()) * _tilesPerBlock * _tileSizeBytes;
+        uint64_t tiles = 0;
+        for (const std::unique_ptr<Block>& block : _blocks)
+        {
+            tiles += block->_tileCount;
+        }
+        return tiles * _tileSizeBytes;
     }
 } // namespace vkm

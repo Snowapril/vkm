@@ -66,22 +66,27 @@ TEST_CASE("VkmLightTable records - match the shader-side word strides") {
 /*
 * The shaders read the material pool out of the untyped u32 Buffer array, so they index it with a
 * hardcoded stride in words -- VKM_MATERIAL_WORD_STRIDE in vkm_material.hlsli, which is the only
-* place that stride now lives. 64 bytes == 16 words, with baseColorFactor first and the texture
-* slots last.
+* place that stride now lives. 80 bytes == 20 words, with baseColorFactor first and the per-channel
+* min-LOD clamps last.
 */
-TEST_CASE("VkmMaterialData - is 16 u32 words with the base color first and the texture slots last") {
-    CHECK(sizeof(vkm::VkmMaterialData) == 64);
+TEST_CASE("VkmMaterialData - is 20 u32 words with the base color first and the min-LOD clamps last") {
+    CHECK(sizeof(vkm::VkmMaterialData) == 80);
     CHECK(sizeof(vkm::VkmMaterialData) % 4 == 0);
-    CHECK(sizeof(vkm::VkmMaterialData) / 4 == 16);
+    CHECK(sizeof(vkm::VkmMaterialData) / 4 == 20);
 
     CHECK(offsetof(vkm::VkmMaterialData, _baseColorFactor) == 0);
     CHECK(offsetof(vkm::VkmMaterialData, _emissive) == 16);
     CHECK(offsetof(vkm::VkmMaterialData, _metallicRoughness) == 32);
     CHECK(offsetof(vkm::VkmMaterialData, _textureSlots) == 48);
+    // Parallel to _textureSlots, component for component -- the clamp for a slot is at the same
+    // index as the slot, which is what lets the shader index one with the other.
+    CHECK(offsetof(vkm::VkmMaterialData, _streamingMinLod) == 64);
 
     // "No texture for this channel" must be distinguishable from slot 0, or every untextured
     // material samples whatever happens to live there.
     const vkm::VkmMaterialData defaults;
+    // Nothing is clamped until something streams, and a rebuilt texture never clamps at all.
+    CHECK(defaults._streamingMinLod == glm::uvec4(0, 0, 0, 0));
     CHECK(defaults._textureSlots.x == vkm::INVALID_VALUE32);
     CHECK(defaults._textureSlots.y == vkm::INVALID_VALUE32);
     CHECK(defaults._textureSlots.z == vkm::INVALID_VALUE32);

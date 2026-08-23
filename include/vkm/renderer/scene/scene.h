@@ -139,8 +139,16 @@ namespace vkm
         // w = emissive. INVALID_VALUE32 where the material has no texture for that channel, which
         // is also what every slot holds on a backend without VkmDriverCapabilityFlags::TextureUpload.
         glm::uvec4 _textureSlots{ INVALID_VALUE32, INVALID_VALUE32, INVALID_VALUE32, INVALID_VALUE32 };
+        /*
+        * Finest mip level each of those four textures actually has memory for, in that texture's
+        * own level numbering. Zero unless the texture is sparse: a rebuilt texture is physically
+        * only as large as what it holds, so its level 0 is always backed, while a sparse one keeps
+        * its full extent and the levels streamed off the front have had their tiles taken away.
+        * The shader passes this as the sample's min-LOD clamp, which is what keeps them unread.
+        */
+        glm::uvec4 _streamingMinLod{ 0, 0, 0, 0 };
     };
-    static_assert(sizeof(VkmMaterialData) == 64, "VkmMaterialData must match the shader-side material record");
+    static_assert(sizeof(VkmMaterialData) == 80, "VkmMaterialData must match the shader-side material record");
 
     // One placed instance of an imported mesh.
     struct VkmSceneObject

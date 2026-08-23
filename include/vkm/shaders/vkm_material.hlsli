@@ -34,7 +34,7 @@
 #include "vkm_bindless.hlsli"
 
 // Mirrors vkm::VkmMaterialData (include/vkm/renderer/scene/scene.h), 64 bytes = 16 words.
-#define VKM_MATERIAL_WORD_STRIDE 16
+#define VKM_MATERIAL_WORD_STRIDE 20
 
 // A slot of this value means the material has no texture for that channel, so its factor stands
 // alone. Mirrors INVALID_VALUE32.
@@ -68,6 +68,14 @@ struct VkmMaterial
     uint   metallicRoughnessSlot;
     uint   normalSlot;
     uint   emissiveSlot;
+    /*
+    * Finest mip level each channel's texture actually has memory for, in that texture's own level
+    * numbering, one component per slot in the same order. Zero unless the texture is sparse: a
+    * rebuilt texture is physically only as large as what it holds, so its level 0 is always
+    * backed, while a sparse one keeps its full extent and the levels streamed off the front read
+    * as blank. Passed to the sample as its min-LOD clamp, which is what keeps them unread.
+    */
+    float4 minLod;
 };
 
 /*
@@ -121,6 +129,10 @@ float3 vkmStreamingMipHeatColor(float2 streamingMip)
         material.metallicRoughnessSlot = VKM_LOAD_VERTEX(materialPoolSlot, base + 13);              \
         material.normalSlot            = VKM_LOAD_VERTEX(materialPoolSlot, base + 14);              \
         material.emissiveSlot          = VKM_LOAD_VERTEX(materialPoolSlot, base + 15);              \
+        material.minLod = float4(VKM_LOAD_VERTEX(materialPoolSlot, base + 16),                      \
+                                 VKM_LOAD_VERTEX(materialPoolSlot, base + 17),                      \
+                                 VKM_LOAD_VERTEX(materialPoolSlot, base + 18),                      \
+                                 VKM_LOAD_VERTEX(materialPoolSlot, base + 19));                     \
         return material;                                                                            \
     }
 
@@ -129,16 +141,19 @@ float3 vkmStreamingMipHeatColor(float2 streamingMip)
 #define VKM_MATERIAL_SAMPLERS()                                                                     \
     float4 vkmSampleBaseColor(VkmMaterial material, float2 uv)                                      \
     {                                                                                               \
-        return material.baseColorFactor * vkmSampleMaterialTexture(material.baseColorSlot, uv);     \
+        return material.baseColorFactor *                                                           \
+               vkmSampleMaterialTexture(material.baseColorSlot, uv, material.minLod.x);              \
     }                                                                                               \
     float2 vkmSampleMetallicRoughness(VkmMaterial material, float2 uv)                              \
     {                                                                                               \
-        const float4 s = vkmSampleMaterialTexture(material.metallicRoughnessSlot, uv);              \
+        const float4 s =                                                                            \
+            vkmSampleMaterialTexture(material.metallicRoughnessSlot, uv, material.minLod.y);        \
         return float2(material.metallic * s.b, material.roughness * s.g);                           \
     }                                                                                               \
     float3 vkmSampleEmissive(VkmMaterial material, float2 uv)                                       \
     {                                                                                               \
-        return material.emissiveFactor * vkmSampleMaterialTexture(material.emissiveSlot, uv).rgb;   \
+        return material.emissiveFactor *                                                            \
+               vkmSampleMaterialTexture(material.emissiveSlot, uv, material.minLod.w).rgb;           \
     }
 
 #if defined(VKM_BACKEND_WEBGPU)
@@ -193,13 +208,14 @@ float3 vkmStreamingMipHeatColor(float2 streamingMip)
 #define VKM_MATERIAL_DECLARE()                                                                      \
     VKM_BINDLESS_TEXTURE_2D_ARRAY(g_VkmMaterialTextures);                                           \
     VKM_BINDLESS_SAMPLER(g_VkmMaterialSampler);                                                     \
-    float4 vkmSampleMaterialTexture(uint slot, float2 uv)                                           \
+    float4 vkmSampleMaterialTexture(uint slot, float2 uv, float minLod)                             \
     {                                                                                               \
         if (slot == VKM_MATERIAL_NO_TEXTURE)                                                        \
         {                                                                                           \
             return float4(1.0, 1.0, 1.0, 1.0);                                                      \
         }                                                                                           \
-        return g_VkmMaterialTextures[NonUniformResourceIndex(slot)].Sample(g_VkmMaterialSampler, uv); \
+        return g_VkmMaterialTextures[NonUniformResourceIndex(slot)]                                 \
+            .Sample(g_VkmMaterialSampler, uv, int2(0, 0), minLod);                                  \
     }                                                                                               \
     VKM_MATERIAL_LOADER()                                                                           \
     VKM_MATERIAL_STREAMING_LOADER()                                                                 \

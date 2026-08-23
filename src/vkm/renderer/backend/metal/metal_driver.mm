@@ -390,6 +390,23 @@ namespace vkm
         return new VkmBufferViewMetal(this);
     }
 
+    void VkmDriverMetal::releaseSparseTextureMappings(VkmResourceHandle textureHandle)
+    {
+        if (_sparseTileHeap == nullptr)
+        {
+            return;
+        }
+        // Mappings are not unmapped, only their tiles reclaimed: the texture is going away, so
+        // there is nothing left to address them through.
+        const uint64_t first = static_cast<uint64_t>(textureHandle.id) << 8;
+        auto run = _sparseTileRuns.lower_bound(first);
+        while (run != _sparseTileRuns.end() && run->first < first + 256u)
+        {
+            _sparseTileHeap->release(run->second);
+            run = _sparseTileRuns.erase(run);
+        }
+    }
+
     bool VkmDriverMetal::updateSparseMipResidency(VkmResourceHandle textureHandle, uint32_t mipLevel, bool resident)
     {
         VkmTexture* texture = getRenderResourcePool()->getResource<VkmTexture>(textureHandle);
@@ -398,21 +415,29 @@ namespace vkm
             return false;
         }
 
-        /*
-        * The tail is one indivisible allocation bound for the texture's life, so there is nothing
-        * to change. Reported as success rather than failure so a caller can walk every level of a
-        * chain without knowing where the tail starts.
-        */
-        if (mipLevel >= texture->getMipTailFirstLevel())
-        {
-            return true;
-        }
-
         id<MTLTexture> mtlTexture = static_cast<VkmTextureMetal*>(texture)->getInternalHandle();
         if (mtlTexture == nullptr)
         {
             return false;
         }
+
+        const bool isTailLevel = mipLevel >= texture->getMipTailFirstLevel();
+        /*
+        * Releasing the tail is the one request that is refused by doing nothing: it is a single
+        * indivisible allocation that stays bound for the texture's life, and reporting success
+        * lets a caller walk a whole chain without first finding where the tail starts.
+        * Backing it, on the other hand, is real work exactly once -- an unmapped tail means the
+        * coarsest levels sample as blank however much is resident above them.
+        */
+        if (isTailLevel && !resident)
+        {
+            return true;
+        }
+
+        // The tail is packed: every level in it shares one allocation, addressed at its first
+        // level. Folding the request onto that level is what stops a caller that walks levels
+        // 9, 10, 11 from taking three runs for memory it already has.
+        const uint32_t mappingLevel = isTailLevel ? texture->getMipTailFirstLevel() : mipLevel;
 
         if (_sparseTileHeap == nullptr)
         {
@@ -426,7 +451,7 @@ namespace vkm
 
         // One key per (texture, level). The handle's id already distinguishes a recycled slot by
         // generation, so a stale run cannot be mistaken for a live one.
-        const uint64_t key = (static_cast<uint64_t>(textureHandle.id) << 8) | (mipLevel & 0xFFu);
+        const uint64_t key = (static_cast<uint64_t>(textureHandle.id) << 8) | (mappingLevel & 0xFFu);
         const auto existing = _sparseTileRuns.find(key);
         const bool alreadyResident = existing != _sparseTileRuns.end();
         if (resident == alreadyResident)
@@ -440,8 +465,8 @@ namespace vkm
                                                                sampleCount:1
                                                             sparsePageSize:kSparsePageSize];
         // Tiles this level needs, rounding up: a level narrower than one tile still costs one.
-        const uint32_t levelWidth = std::max(1u, info._extent.x >> mipLevel);
-        const uint32_t levelHeight = std::max(1u, info._extent.y >> mipLevel);
+        const uint32_t levelWidth = std::max(1u, info._extent.x >> mappingLevel);
+        const uint32_t levelHeight = std::max(1u, info._extent.y >> mappingLevel);
         const uint32_t tilesX =
             static_cast<uint32_t>((levelWidth + tileSize.width - 1) / tileSize.width);
         const uint32_t tilesY =
@@ -452,7 +477,7 @@ namespace vkm
 
         MTL4UpdateSparseTextureMappingOperation operation{};
         operation.textureRegion = MTLRegionMake2D(0, 0, tilesX, tilesY);
-        operation.textureLevel = mipLevel;
+        operation.textureLevel = mappingLevel;
         operation.textureSlice = 0;
 
         if (resident)

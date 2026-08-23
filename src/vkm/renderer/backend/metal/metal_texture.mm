@@ -111,6 +111,14 @@ namespace vkm
 
     VkmTextureMetal::~VkmTextureMetal()
     {
+        // Before the texture object goes, since the runs are keyed by its handle. The tile heap
+        // reclaims nothing on its own, so a scene torn down mid-session would otherwise hold every
+        // tile it ever streamed in.
+        if (isSparse())
+        {
+            static_cast<VkmDriverMetal*>(_driver)->releaseSparseTextureMappings(getHandle());
+        }
+
         _mtlTexture = nil; // ARC releases the Metal object
         // A placement heap reclaims nothing on its own, so the range has to go back by hand.
         // Ordered after the release above: the range must not be reusable while the object

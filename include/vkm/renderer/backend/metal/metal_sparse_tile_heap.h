@@ -88,7 +88,8 @@ namespace vkm
             std::vector<std::pair<uint32_t, uint32_t>> _freeRuns;
         };
 
-        bool addBlock();
+        // Adds one block, sized to hold at least `minimumTiles` in a single contiguous run.
+        bool addBlock(uint32_t minimumTiles);
 
         VkmDriverMetal* _driver = nullptr;
         std::vector<std::unique_ptr<Block>> _blocks;

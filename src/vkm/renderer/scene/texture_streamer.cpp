@@ -240,8 +240,15 @@ namespace vkm
                 continue;
             }
 
+            /*
+            * What the shader measured is relative to the texture it sampled, so the offset is the
+            * chain level that texture's level 0 is. A rebuilt texture is physically only what it
+            * holds, making that its resident base; a sparse one keeps its full extent whatever is
+            * backed, so its level 0 is chain level 0 and adding anything would count twice.
+            */
+            const uint32_t sampledBaseLevel = entry._sparse ? 0u : entry._residentBaseMip;
             entry._feedbackBaseMip =
-                vkmStreamingBaseMipFromFeedback(reported, entry._residentBaseMip, entry._totalMipCount);
+                vkmStreamingBaseMipFromFeedback(reported, sampledBaseLevel, entry._totalMipCount);
         }
     }
 
@@ -473,9 +480,80 @@ namespace vkm
 #endif
     }
 
+    bool VkmTextureStreamer::isSparseEntry(VkmDriverBase* driver, Entry* entry)
+    {
+        if (!entry->_sparseResolved)
+        {
+            const VkmTexture* texture =
+                driver->getRenderResourcePool()->getResource<VkmTexture>(entry->_texture);
+            entry->_sparse = (texture != nullptr) && texture->isSparse();
+            entry->_sparseResolved = true;
+        }
+        return entry->_sparse;
+    }
+
+    void VkmTextureStreamer::publishEntry(const Entry& entry,
+                                          std::vector<VkmTextureStreamingUpdate>* outUpdates) const
+    {
+        for (const std::pair<uint32_t, uint32_t>& reference : entry._references)
+        {
+            VkmTextureStreamingUpdate update;
+            update._materialIndex = reference.first;
+            update._channel = reference.second;
+            update._bindlessSlot = entry._bindlessSlot;
+            update._baseMip = entry._residentBaseMip;
+            update._totalMipCount = entry._totalMipCount;
+            update._minLod = entry._sparse ? entry._residentBaseMip : 0u;
+            outUpdates->push_back(update);
+        }
+    }
+
+    void VkmTextureStreamer::releaseSparseLevels(VkmDriverBase* driver,
+                                                 std::vector<VkmTextureStreamingUpdate>* outUpdates)
+    {
+        for (size_t entryIndex = 0; entryIndex < _entries.size(); ++entryIndex)
+        {
+            Entry& entry = _entries[entryIndex];
+            if (entry._streamingFailed || entry._candidateBaseMip <= entry._residentBaseMip ||
+                entry._candidateTickCount < _settings._stableTickCount)
+            {
+                continue;
+            }
+            // Never the entry being filled: its target is the one the decode was started for, and
+            // pulling levels out from under the fill would leave the two disagreeing.
+            if (_build._active && _build._entryIndex == entryIndex)
+            {
+                continue;
+            }
+            if (_jobEntryIndex == entryIndex || !isSparseEntry(driver, &entry))
+            {
+                continue;
+            }
+
+            for (uint32_t level = entry._residentBaseMip; level < entry._candidateBaseMip; ++level)
+            {
+                driver->updateSparseMipResidency(entry._texture, level, /*resident=*/false);
+            }
+            entry._residentBaseMip = entry._candidateBaseMip;
+            ++_rebuildsApplied;
+            publishEntry(entry, outUpdates);
+        }
+    }
+
     void VkmTextureStreamer::abandonBuild(VkmDriverBase* driver)
     {
-        if (_build._texture != VKM_INVALID_RESOURCE_HANDLE)
+        if (_build._sparse)
+        {
+            // The texture belongs to the entry and keeps serving at the level it already had, so
+            // only the levels this fill backed come off -- leaving them mapped would hold tiles
+            // for pixels nothing will ever sample.
+            for (uint32_t index = 0; index < _build._uploadedLevelCount; ++index)
+            {
+                driver->updateSparseMipResidency(_build._texture, _build._baseMip + index,
+                                                 /*resident=*/false);
+            }
+        }
+        else if (_build._texture != VKM_INVALID_RESOURCE_HANDLE)
         {
             // Never registered, so nothing can be sampling it and the immediate release is safe.
             driver->getRenderResourcePool()->releaseResource(_build._texture);
@@ -517,30 +595,45 @@ namespace vkm
             _build._baseMip = result._baseMip;
             _build._levels = std::move(result._levels);
             _build._uploadedLevelCount = 0;
+            _build._sparse = isSparseEntry(driver, &entry);
 
-            const glm::uvec2 extent = levelExtent(entry._baseExtent, _build._baseMip);
-            VkmTextureInfo info{};
-            info._flags = static_cast<VkmResourceCreateInfo>(
-                static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
-                static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst));
-            info._extent = glm::uvec3(extent.x, extent.y, 1);
-            info._numMipLevels = static_cast<uint32_t>(_build._levels.size());
-            info._numArrayLayers = 1;
-            info._format = entry._srgb ? VkmFormat::R8G8B8A8_SRGB : VkmFormat::R8G8B8A8_UNORM;
-            // The same name the initial upload used, so the browser shows one row per asset that
-            // survives a rebuild rather than a new anonymous one each time.
-            info._debugName = entry._debugName.c_str();
-
-            VkmTexture* texture = driver->newTexture(info);
-            if (texture == nullptr)
+            if (_build._sparse)
             {
-                VKM_DEBUG_WARN(("Streaming texture '" + entry._path +
-                                "' could not be recreated; it stays at the level it already holds").c_str());
-                entry._streamingFailed = true;
-                _build = PendingBuild{};
-                return;
+                /*
+                * Filling into the texture the entry already has. Only the levels finer than what it
+                * holds are new -- everything from _residentBaseMip down is already backed and
+                * already correct -- so the decode's coarser half is dropped rather than uploaded
+                * over itself.
+                */
+                _build._texture = entry._texture;
+                _build._levels.resize(entry._residentBaseMip - _build._baseMip);
             }
-            _build._texture = texture->getHandle();
+            else
+            {
+                const glm::uvec2 extent = levelExtent(entry._baseExtent, _build._baseMip);
+                VkmTextureInfo info{};
+                info._flags = static_cast<VkmResourceCreateInfo>(
+                    static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
+                    static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst));
+                info._extent = glm::uvec3(extent.x, extent.y, 1);
+                info._numMipLevels = static_cast<uint32_t>(_build._levels.size());
+                info._numArrayLayers = 1;
+                info._format = entry._srgb ? VkmFormat::R8G8B8A8_SRGB : VkmFormat::R8G8B8A8_UNORM;
+                // The same name the initial upload used, so the browser shows one row per asset that
+                // survives a rebuild rather than a new anonymous one each time.
+                info._debugName = entry._debugName.c_str();
+
+                VkmTexture* texture = driver->newTexture(info);
+                if (texture == nullptr)
+                {
+                    VKM_DEBUG_WARN(("Streaming texture '" + entry._path +
+                                    "' could not be recreated; it stays at the level it already holds").c_str());
+                    entry._streamingFailed = true;
+                    _build = PendingBuild{};
+                    return;
+                }
+                _build._texture = texture->getHandle();
+            }
         }
 
         // Bounded per tick: on a device whose texture memory is not host-writable each of these
@@ -551,9 +644,26 @@ namespace vkm
         for (; _build._uploadedLevelCount < limit; ++_build._uploadedLevelCount)
         {
             const VkmImageData& level = _build._levels[_build._uploadedLevelCount];
-            if (!driver->uploadToTexture(_build._texture, level._pixels.data(), level.getByteSize(),
-                                         _build._uploadedLevelCount))
+            // A rebuild's texture starts at level 0; a sparse fill writes into the middle of a full
+            // chain, and the level must be backed before anything is copied into it.
+            const uint32_t targetLevel =
+                _build._sparse ? (_build._baseMip + _build._uploadedLevelCount) : _build._uploadedLevelCount;
+            if (_build._sparse &&
+                !driver->updateSparseMipResidency(_build._texture, targetLevel, /*resident=*/true))
             {
+                VKM_DEBUG_WARN(("Streaming texture '" + _entries[_build._entryIndex]._path +
+                                "' could not be backed; it stays at the level it already holds").c_str());
+                _entries[_build._entryIndex]._streamingFailed = true;
+                abandonBuild(driver);
+                return;
+            }
+            if (!driver->uploadToTexture(_build._texture, level._pixels.data(), level.getByteSize(),
+                                         targetLevel))
+            {
+                if (_build._sparse)
+                {
+                    driver->updateSparseMipResidency(_build._texture, targetLevel, /*resident=*/false);
+                }
                 VKM_DEBUG_WARN(("Streaming texture '" + _entries[_build._entryIndex]._path +
                                 "' could not be uploaded; it stays at the level it already holds").c_str());
                 _entries[_build._entryIndex]._streamingFailed = true;
@@ -565,6 +675,19 @@ namespace vkm
         if (_build._uploadedLevelCount < levelCount)
         {
             return; // still filling; the old texture keeps serving until every level is in place
+        }
+
+        if (_build._sparse)
+        {
+            // Nothing to hand over: the texture, its view and its slot never changed, so there is
+            // no window in which a submitted frame could sample a half-built resource and nothing
+            // to retire. Only the level the material reads from moves.
+            Entry& sparseEntry = _entries[_build._entryIndex];
+            sparseEntry._residentBaseMip = _build._baseMip;
+            ++_rebuildsApplied;
+            publishEntry(sparseEntry, outUpdates);
+            _build = PendingBuild{};
+            return;
         }
 
         // Every level is in place, so the new texture can take over. A fresh slot rather than a
@@ -593,16 +716,7 @@ namespace vkm
         entry._residentBaseMip = _build._baseMip;
         ++_rebuildsApplied;
 
-        for (const std::pair<uint32_t, uint32_t>& reference : entry._references)
-        {
-            VkmTextureStreamingUpdate update;
-            update._materialIndex = reference.first;
-            update._channel = reference.second;
-            update._bindlessSlot = newSlot;
-            update._baseMip = entry._residentBaseMip;
-            update._totalMipCount = entry._totalMipCount;
-            outUpdates->push_back(update);
-        }
+        publishEntry(entry, outUpdates);
 
         _build = PendingBuild{};
     }
@@ -655,6 +769,7 @@ namespace vkm
         drainRetired(driver, /*force=*/false);
         advanceBuild(driver, outUpdates);
         selectTargets(view, objects);
+        releaseSparseLevels(driver, outUpdates);
 
         // One rebuild in flight at a time: a decode holds a whole chain in memory and an upload
         // blocks, so letting them overlap would multiply both costs.

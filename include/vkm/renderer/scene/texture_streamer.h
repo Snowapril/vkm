@@ -60,6 +60,14 @@ namespace vkm
         uint32_t _bindlessSlot = INVALID_VALUE32;
         uint32_t _baseMip = 0;
         uint32_t _totalMipCount = 1;
+        /*
+        * Finest level the texture behind this slot actually has memory for, in its own level
+        * numbering, for VkmMaterialData::_streamingMinLod. Zero where the level was reached by
+        * rebuilding into a smaller texture, since that texture's level 0 is what _baseMip names;
+        * equal to _baseMip where it was reached by unbinding levels of a sparse texture that keeps
+        * its full extent.
+        */
+        uint32_t _minLod = 0;
     };
 
     // Levels a histogram row exists for. 16 covers a 32768-texel chain; anything deeper is folded
@@ -204,7 +212,9 @@ namespace vkm
     * Free-standing for the same reason the projection maths is: this is where an off-by-one hides,
     * and it is testable without a driver.
     * @param reported What the shader wrote, clamped internally to kVkmTextureFeedbackMaxLevel.
-    * @param residentBaseMip The level the sampled texture currently starts at.
+    * @param residentBaseMip The chain level the sampled texture's own level 0 is. That is the
+    * texture's resident base where it was rebuilt to only what it holds, and 0 where it is sparse
+    * and keeps its full extent whatever is backed.
     * @param totalMipCount Levels the full chain has.
     * @return The absolute level, in [0, totalMipCount - 1].
     */
@@ -361,6 +371,14 @@ namespace vkm
             // A file that cannot be re-read will not start reading correctly on a later tick, and
             // retrying would re-pay the decode every time the camera asked again.
             bool _streamingFailed = false;
+            /*
+            * Whether this entry's texture was granted sparse residency, resolved from the texture
+            * on the first tick that looks. A sparse entry changes level by binding and unbinding
+            * mip levels of the texture it already has: no second texture, no new bindless slot, no
+            * material rewrite, no retire delay, and levels it already holds are never re-uploaded.
+            */
+            bool _sparse = false;
+            bool _sparseResolved = false;
         };
 
         struct Job
@@ -388,6 +406,12 @@ namespace vkm
             std::vector<VkmImageData> _levels;
             VkmResourceHandle _texture{ VKM_INVALID_RESOURCE_HANDLE };
             uint32_t _uploadedLevelCount = 0;
+            /*
+            * Filling levels into the entry's live texture rather than into a new one. Only the
+            * levels being newly backed are in `_levels`; everything coarser is already resident and
+            * is neither re-decoded nor re-uploaded.
+            */
+            bool _sparse = false;
         };
 
         struct Retired
@@ -403,6 +427,16 @@ namespace vkm
         // Queues at most one decode, for the entry whose target differs and has held longest.
         void queueJob();
         void advanceBuild(VkmDriverBase* driver, std::vector<VkmTextureStreamingUpdate>* outUpdates);
+        // Resolves, and caches, whether an entry's texture was granted sparse residency.
+        bool isSparseEntry(VkmDriverBase* driver, Entry* entry);
+        /*
+        * Drops levels off the front of every sparse entry that wants a coarser base. Costs no
+        * decode and no upload -- the pixels are being discarded -- so unlike a rebuild it lands the
+        * whole move in one tick, for every entry that wants it, the frame the camera pulls back.
+        */
+        void releaseSparseLevels(VkmDriverBase* driver, std::vector<VkmTextureStreamingUpdate>* outUpdates);
+        // Appends one update per material channel naming `entry`, at its current level.
+        void publishEntry(const Entry& entry, std::vector<VkmTextureStreamingUpdate>* outUpdates) const;
         void abandonBuild(VkmDriverBase* driver);
         void drainRetired(VkmDriverBase* driver, bool force);
         void workerLoop();

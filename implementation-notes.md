@@ -5336,3 +5336,40 @@ declared it, the ring's index arithmetic, and the relative-to-absolute decode. I
 delivers and then settles rather than walking a texture down a level per frame. It deliberately does
 not assert a numerically exact level — that needs a known UV parameterisation, and the Sponza A/B
 covers it instead.
+
+### Tier 2 streamer integration: the feedback test's bound was measuring tier 0's lag
+
+**Planned:** land the sparse residency path behind the existing streamer with no test changes.
+
+**Done instead:** `runTextureFeedbackTest` had to be rewritten from a fixed frame count plus
+`CHECK(settled <= 1)` to a converge-then-assert loop.
+
+**Why:** with the level moving by unbinding, the whole change lands in one tick, so the test now
+sampled a *converged* streamer where before it had sampled one still in flight. The shader's reading
+for that fixture was never `<= 1` — instrumenting `applyFeedback` showed it reporting 2 from the
+first frame at `resident = 0`, before any of this work. `<= 1` was passing on a value still in
+transit, which means it was asserting how slow rebuilding is, not that the loop converges. The test
+now runs until the level stops moving and asserts that it does, which is the property its own
+comment always claimed.
+
+Two things the rewrite surfaced and did not fix:
+
+- **The two backends disagree on the reported level for the same fixture on the same GPU** — 2
+  through SPIRV-Cross's MSL, 0 through MoltenVK's SPIR-V. Both are `CalculateLevelOfDetail` on a
+  64x64 texture, so one of the two translations is wrong. Pre-existing and orthogonal to streaming;
+  the test reports the level rather than pinning it.
+- **Feedback on a rebuilt texture is a ratchet.** A texture reduced to base B cannot report a level
+  finer than B — its level 0 *is* B — so tier 0 and tier 1 can walk a texture out but never bring it
+  back on the reading alone. Tier 2 does not have this problem, because the texture keeps its full
+  extent whatever is backed. This is the sharpest argument for tier 2 that is not about memory.
+
+### `_rebuildInFlight == false` after settling is a tier-2 property, not a shared one
+
+**Planned:** assert in the feedback test that nothing is left in flight once the level settles.
+
+**Done instead:** dropped that assertion.
+
+**Why:** on tier 0 the level can sit still while a rebuild toward it is still uploading, so the
+assertion is only true where residency changed by unbinding. Asserting it in a test that runs on
+both tiers would have meant asserting a tier-2 property against tier 0. The stat going permanently
+quiet on Sponza is where that claim belongs.

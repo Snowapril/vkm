@@ -374,6 +374,14 @@ namespace vkm
         // the shader's bindless branch is never taken.
         const bool bindlessAvailable =
             (driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::BindlessTextures) != 0u;
+        /*
+        * Where sparse residency is granted, a streamed texture changes level by binding and
+        * unbinding levels of itself rather than being rebuilt into a second texture, so it is
+        * created once at full size and never replaced. Requested rather than assumed -- the driver
+        * grants or refuses per texture, and isSparse() reports which happened.
+        */
+        const bool sparseAvailable =
+            (driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::SparseResidency) != 0u;
 
         // Streaming re-points a bindless slot at a rebuilt texture, so it is exactly the bindless
         // backends it can run on. Elsewhere a material's textures reach the shader through an
@@ -413,7 +421,8 @@ namespace vkm
             VkmTextureInfo info{};
             info._flags = static_cast<VkmResourceCreateInfo>(
                 static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
-                static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst));
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst) |
+                ((bindlessAvailable && sparseAvailable) ? static_cast<uint32_t>(VkmResourceCreateInfo::Sparse) : 0u));
             // A full mip chain. Without one, a minified material texture samples a single texel
             // per pixel and sparkles under any camera motion -- Sponza's roof tiles are the
             // obvious case. The levels are built on the CPU and uploaded like any other level,
@@ -436,6 +445,17 @@ namespace vkm
 
             VkmTexture* texture = driver->newTexture(info);
             bool uploadedAllLevels = texture != nullptr;
+            if (uploadedAllLevels && texture->isSparse())
+            {
+                // Nothing is backed at creation, and a copy into an unbacked level has nowhere to
+                // land. The upload below fills the whole chain, so the whole chain is backed first;
+                // the first streaming ticks are what take the finer levels back off.
+                for (uint32_t level = 0; uploadedAllLevels && level < info._numMipLevels; ++level)
+                {
+                    uploadedAllLevels = driver->updateSparseMipResidency(texture->getHandle(), level,
+                                                                         /*resident=*/true);
+                }
+            }
             if (uploadedAllLevels)
             {
                 uploadedAllLevels =
@@ -1354,6 +1374,9 @@ namespace vkm
             }
             _materials[update._materialIndex]._textureSlots[static_cast<int>(update._channel)] =
                 update._bindlessSlot;
+            // Component for component with the slot above: what the shader clamps that sample to.
+            _materials[update._materialIndex]._streamingMinLod[static_cast<int>(update._channel)] =
+                update._minLod;
             publishStreamingMip(update._materialIndex, update._channel, update._baseMip, update._totalMipCount);
             markMaterialDirty(update._materialIndex);
         }
