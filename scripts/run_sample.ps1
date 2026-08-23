@@ -22,16 +22,21 @@
 .PARAMETER Jobs
     Parallel build jobs. 0 = use NUMBER_OF_PROCESSORS (default: 0)
 
+.PARAMETER EngineArgs
+    Everything after -- is handed to the sample itself rather than parsed here.
+
 .EXAMPLE
     .\scripts\run_sample.ps1 -Backend vulkan -Sample triangle
     .\scripts\run_sample.ps1 -Backend webgpu -Sample triangle -BuildType Release
+    .\scripts\run_sample.ps1 -Backend vulkan -Sample triangle -- --enable-hdr
 #>
 param(
     [Parameter(Mandatory=$true)][string]$Backend,
     [Parameter(Mandatory=$true)][string]$Sample,
     [string]$BuildType = "Debug",
     [string]$BuildDir  = "",
-    [int]   $Jobs      = 0
+    [int]   $Jobs      = 0,
+    [Parameter(ValueFromRemainingArguments=$true)][string[]]$EngineArgs = @()
 )
 
 Set-StrictMode -Version Latest
@@ -67,6 +72,12 @@ if (-not (Test-Path (Join-Path $SampleDir "CMakeLists.txt"))) {
 # webgpu: delegate to run_sample.py
 # --------------------------------------------------------------------------
 if ($Backend -eq "webgpu") {
+    # The wasm build runs in a browser, so there is no argv to forward to. Say so instead of
+    # dropping the arguments silently.
+    if ($EngineArgs.Count -gt 0) {
+        Write-Error "Engine arguments cannot be forwarded to the webgpu backend; it runs in a browser."
+        exit 1
+    }
     Write-Host "[INFO] Delegating webgpu backend to scripts/run_sample.py..."
     & python "$ScriptDir\run_sample.py" --backend webgpu --sample $Sample `
         --build-type $BuildType --jobs $Jobs
@@ -119,5 +130,5 @@ if (-not (Test-Path $SampleBin)) {
 }
 
 Write-Host "[INFO] Launching $SampleBin..."
-& $SampleBin
+& $SampleBin @EngineArgs
 exit $LASTEXITCODE

@@ -73,6 +73,58 @@ namespace vkm
         }
     } // namespace
 
+    bool vkmConvertReadbackToRgba8(const VkmTextureReadbackResult& readback, VkmFormat format,
+                                   std::vector<uint8_t>& outRgba8)
+    {
+        if (readback.pixels.empty() || readback.width == 0 || readback.height == 0)
+        {
+            VKM_DEBUG_ERROR("vkmConvertReadbackToRgba8: readback produced no pixels");
+            return false;
+        }
+
+        const size_t texelCount = static_cast<size_t>(readback.width) * readback.height;
+        outRgba8.assign(texelCount * 4, 0);
+
+        switch (format)
+        {
+            case VkmFormat::R8G8B8A8_UNORM:
+            case VkmFormat::R8G8B8A8_SRGB:
+                for (size_t i = 0; i < texelCount; ++i)
+                {
+                    std::memcpy(&outRgba8[i * 4], &readback.pixels[i * readback.channels], 4);
+                }
+                break;
+            case VkmFormat::BGRA8_UNORM:
+            case VkmFormat::BGRA8_SRGB:
+                for (size_t i = 0; i < texelCount; ++i)
+                {
+                    const uint8_t* src = &readback.pixels[i * readback.channels];
+                    outRgba8[i * 4 + 0] = src[2];
+                    outRgba8[i * 4 + 1] = src[1];
+                    outRgba8[i * 4 + 2] = src[0];
+                    outRgba8[i * 4 + 3] = src[3];
+                }
+                break;
+            case VkmFormat::R16G16B16A16_SFLOAT:
+                for (size_t i = 0; i < texelCount; ++i)
+                {
+                    const uint8_t* src = &readback.pixels[i * readback.channels];
+                    for (uint32_t c = 0; c < 4; ++c)
+                    {
+                        uint16_t half = 0;
+                        std::memcpy(&half, src + c * sizeof(uint16_t), sizeof(half));
+                        outRgba8[i * 4 + c] = toUnorm8(halfToFloat(half));
+                    }
+                }
+                break;
+            default:
+                VKM_DEBUG_ERROR("vkmConvertReadbackToRgba8: unsupported texture format");
+                return false;
+        }
+
+        return true;
+    }
+
     bool vkmWriteTexturePng(VkmDriverBase* driver, VkmResourceHandle textureHandle, const std::string& path)
     {
         VKM_ASSERT(driver != nullptr, "vkmWriteTexturePng requires a driver");
@@ -86,50 +138,10 @@ namespace vkm
         const VkmFormat format = texture->getTextureInfo()._format;
 
         const VkmTextureReadbackResult readback = driver->readbackTexture(textureHandle);
-        if (readback.pixels.empty() || readback.width == 0 || readback.height == 0)
+        std::vector<uint8_t> rgba;
+        if (!vkmConvertReadbackToRgba8(readback, format, rgba))
         {
-            VKM_DEBUG_ERROR("vkmWriteTexturePng: readback produced no pixels");
             return false;
-        }
-
-        const size_t texelCount = static_cast<size_t>(readback.width) * readback.height;
-        std::vector<uint8_t> rgba(texelCount * 4, 0);
-
-        switch (format)
-        {
-            case VkmFormat::R8G8B8A8_UNORM:
-            case VkmFormat::R8G8B8A8_SRGB:
-                for (size_t i = 0; i < texelCount; ++i)
-                {
-                    std::memcpy(&rgba[i * 4], &readback.pixels[i * readback.channels], 4);
-                }
-                break;
-            case VkmFormat::BGRA8_UNORM:
-            case VkmFormat::BGRA8_SRGB:
-                for (size_t i = 0; i < texelCount; ++i)
-                {
-                    const uint8_t* src = &readback.pixels[i * readback.channels];
-                    rgba[i * 4 + 0] = src[2];
-                    rgba[i * 4 + 1] = src[1];
-                    rgba[i * 4 + 2] = src[0];
-                    rgba[i * 4 + 3] = src[3];
-                }
-                break;
-            case VkmFormat::R16G16B16A16_SFLOAT:
-                for (size_t i = 0; i < texelCount; ++i)
-                {
-                    const uint8_t* src = &readback.pixels[i * readback.channels];
-                    for (uint32_t c = 0; c < 4; ++c)
-                    {
-                        uint16_t half = 0;
-                        std::memcpy(&half, src + c * sizeof(uint16_t), sizeof(half));
-                        rgba[i * 4 + c] = toUnorm8(halfToFloat(half));
-                    }
-                }
-                break;
-            default:
-                VKM_DEBUG_ERROR("vkmWriteTexturePng: unsupported texture format");
-                return false;
         }
 
         const int stride = static_cast<int>(readback.width) * 4;

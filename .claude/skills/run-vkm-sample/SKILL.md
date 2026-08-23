@@ -57,6 +57,19 @@ dependencies, then build+run the requested sample/backend combination.
    Leave a flag off entirely when the user didn't mention it — let the
    script's own defaults apply rather than inventing a value.
 
+   Anything the *engine* takes rather than the script goes after a `--`
+   separator, which every wrapper forwards verbatim to the sample binary:
+
+   ```
+   ./scripts/run_sample.sh --backend metal --sample triangle -- --enable-hdr
+   ```
+
+   That is the only way to reach engine options such as `--enable-hdr`,
+   `--enable-backbuffer-readback`, `--capture-render-graph`, or a `--gv_*`
+   global-variable override; the wrappers reject unknown options of their own,
+   so these cannot be passed bare. The webgpu backend rejects them outright —
+   a browser-hosted build has no argv to receive them.
+
 5. **Run it in the background, not blocking in the foreground.** Both
    launch paths hang the calling process on purpose:
    - `metal`/`vulkan` launch a GUI binary directly and block until the user

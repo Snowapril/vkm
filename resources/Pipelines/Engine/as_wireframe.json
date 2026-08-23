@@ -1,0 +1,33 @@
+{
+    "name": "as_wireframe_pso",
+    "primitive_topology": "line_list",
+    "rasterization_state": {
+        "fill_mode": "solid",
+        "cull_mode": "none",
+        "front_face": "counter_clockwise"
+    },
+    "depth_stencil_state": {
+        "depth_test_enable": false,
+        "depth_write_enable": false,
+        "stencil_test_enable": false
+    },
+    "color_attachments": [
+        {
+            "format": "swapchain",
+            "blend_enable": true,
+            "src_color_blend_factor": "src_alpha",
+            "dst_color_blend_factor": "one_minus_src_alpha",
+            "src_alpha_blend_factor": "one",
+            "dst_alpha_blend_factor": "zero",
+            "color_blend_op": "add",
+            "alpha_blend_op": "add"
+        }
+    ],
+    "per_pass_resources": [
+        { "binding": 0, "type": "uniform_buffer" }
+    ],
+    "shaders": {
+        "vertex": { "filepath": "as_wireframe.hlsl", "entry_point": "VSMain" },
+        "fragment": { "filepath": "as_wireframe.hlsl", "entry_point": "PSMain" }
+    }
+}

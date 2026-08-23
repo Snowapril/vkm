@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Configure, build, and run a single vkm sample for one graphics backend.
 #
-# Usage: ./scripts/run_sample.sh --backend <metal|vulkan|webgpu> --sample <name> [options]
+# Usage: ./scripts/run_sample.sh --backend <metal|vulkan|webgpu> --sample <name> [options] [-- <engine args>]
 #   --backend <metal|vulkan|webgpu>  Backend to build and run (required)
 #   --sample <name>                  Sample name under src/samples/ (required)
 #   --build-type <Debug|Release>     cmake build type (default: Debug)
 #   --build-dir <path>               cmake binary root for native backends (default: <project_root>/build)
 #   --jobs <n>                       parallel build jobs (default: cpu count)
+#   -- <engine args>                 everything after -- is passed to the sample itself,
+#                                    e.g. -- --enable-hdr --gv_cpu_profile=1
 #
 # The webgpu backend is delegated to scripts/run_sample.py, which builds via emcmake into
 # build-wasm/ and opens the sample in your default browser.
@@ -22,6 +24,7 @@ BACKEND=""
 SAMPLE=""
 BUILD_TYPE="Debug"
 BUILD_DIR="$PROJECT_ROOT/build"
+ENGINE_ARGS=()
 
 if command -v nproc &>/dev/null; then
     JOBS=$(nproc)
@@ -41,6 +44,13 @@ while [[ $# -gt 0 ]]; do
         --build-type) BUILD_TYPE="$2"; shift 2 ;;
         --build-dir)  BUILD_DIR="$2";  shift 2 ;;
         --jobs)       JOBS="$2";       shift 2 ;;
+        --)
+            # Everything past this point belongs to the sample, not to this script, so it is
+            # collected verbatim rather than matched against the cases above.
+            shift
+            ENGINE_ARGS=("$@")
+            break
+            ;;
         -h|--help)
             sed -n '2,11p' "$0" | sed 's/^# \?//'
             exit 0
@@ -73,6 +83,12 @@ fi
 # webgpu: delegate to run_sample.py
 # --------------------------------------------------------------------------
 if [[ "$BACKEND" == "webgpu" ]]; then
+    # The wasm build runs in a browser, so there is no argv to forward to. Say so instead of
+    # dropping the arguments silently.
+    if [[ ${#ENGINE_ARGS[@]} -gt 0 ]]; then
+        echo "[ERROR] Engine arguments cannot be forwarded to the webgpu backend; it runs in a browser." >&2
+        exit 1
+    fi
     echo "[INFO] Delegating webgpu backend to scripts/run_sample.py..."
     exec python3 "$PROJECT_ROOT/scripts/run_sample.py" \
         --backend webgpu --sample "$SAMPLE" --build-type "$BUILD_TYPE" --jobs "$JOBS"
@@ -119,4 +135,9 @@ if [[ ! -x "$SAMPLE_BIN" ]]; then
 fi
 
 echo "[INFO] Launching $SAMPLE_BIN..."
+# Guarded rather than expanded unconditionally: under `set -u`, bash 3.2 -- which is what
+# /bin/bash still is on macOS -- treats "${ENGINE_ARGS[@]}" on an empty array as unbound.
+if [[ ${#ENGINE_ARGS[@]} -gt 0 ]]; then
+    exec "$SAMPLE_BIN" "${ENGINE_ARGS[@]}"
+fi
 exec "$SAMPLE_BIN"

@@ -1,17 +1,16 @@
 // Copyright (c) 2025 Snowapril
 
 #include <vkm/renderer/imgui/acceleration_structure_inspector.h>
+#include <vkm/renderer/acceleration_structure_debug.h>
 #include <vkm/renderer/backend/common/acceleration_structure.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/render_resource_pool.h>
-#include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/memory_report.h>
 #include <vkm/renderer/scene/scene_model.h>
 
 #include <imgui.h>
 
 #include <algorithm>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -30,72 +29,9 @@ namespace vkm
 
         constexpr ImU32 kSelectionColour = IM_COL32(255, 200, 90, 255);
 
-        struct StructureRow
-        {
-            VkmResourceHandle handle = VKM_INVALID_RESOURCE_HANDLE;
-            // Copied rather than pointed to: the deferred reclaimer's worker thread can release
-            // the structure mid-draw, so no resource pointer survives past the lookup. The
-            // copy's _debugName still dangles and must not be read; `name` is the durable one.
-            VkmAccelerationStructureInfo info;
-            std::string name;
-            uint64_t allocatedBytes = 0;
-        };
-
-        std::vector<StructureRow> collectRows(VkmRenderResourcePool* pool)
-        {
-            const std::vector<VkmResourceHandle> handles =
-                pool->getAllResourceHandles(VkmResourceType::AccelerationStructure);
-            std::vector<StructureRow> rows;
-            rows.reserve(handles.size());
-            for (VkmResourceHandle handle : handles)
-            {
-                const VkmAccelerationStructure* structure = pool->getResource<VkmAccelerationStructure>(handle);
-                if (structure == nullptr)
-                {
-                    continue;
-                }
-                StructureRow row;
-                row.handle = handle;
-                row.info = structure->getAccelerationStructureInfo();
-                // The durable copy of the name -- the info's _debugName is a borrowed
-                // const char* whose owner may be long gone.
-                const std::optional<VkmResourceMemoryTag> tag = pool->getResourceMemoryTag(handle);
-                if (tag.has_value() && !tag->name.empty())
-                {
-                    row.name = tag->name;
-                    row.allocatedBytes = tag->allocatedSize;
-                }
-                else
-                {
-                    row.name = "<unnamed #" + std::to_string(handle.id) + ">";
-                }
-                rows.push_back(std::move(row));
-            }
-            // Top-level structures first: they are what the tabs expand from.
-            std::stable_sort(rows.begin(), rows.end(), [](const StructureRow& a, const StructureRow& b) {
-                return a.info._type == VkmAccelerationStructureType::TopLevel &&
-                       b.info._type != VkmAccelerationStructureType::TopLevel;
-            });
-            return rows;
-        }
-
-        const StructureRow* findRow(const std::vector<StructureRow>& rows, VkmResourceHandle handle)
-        {
-            for (const StructureRow& row : rows)
-            {
-                if (row.handle == handle)
-                {
-                    return &row;
-                }
-            }
-            return nullptr;
-        }
-
-        // Both-zero bounds mean "never filled" -- see VkmAccelerationStructureInfo.
-        bool hasBounds(const VkmAccelerationStructureInfo& info)
-        {
-            return info._boundsMin != info._boundsMax;
-        }
+        // The rows, their collection and the per-instance box build are shared with the 3D
+        // overlay; see renderer/acceleration_structure_debug.h.
+        using StructureRow = VkmAccelerationStructureSummary;
 
         uint32_t triangleCount(const VkmAccelerationStructureInfo& info)
         {
@@ -145,6 +81,23 @@ namespace vkm
             return;
         }
 
+        // Above the tab bar, so the 3D view can be toggled from whichever tab is open.
+        ImGui::Checkbox("Draw in 3D scene", &_sceneOverlay);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::BeginItemTooltip())
+        {
+            ImGui::TextUnformatted("Outlines every top-level instance in the rendered scene: its\n"
+                                   "bottom-level structure's object-space bounds as an oriented\n"
+                                   "box under the instance matrix. No depth test, so a box inside\n"
+                                   "geometry still shows. The selected structure is highlighted --\n"
+                                   "picking a bottom-level one marks every instance of it. An\n"
+                                   "instance with no recorded bounds is not drawn. Stays on while\n"
+                                   "this window is closed.");
+            ImGui::EndTooltip();
+        }
+        ImGui::Separator();
+
         if (ImGui::BeginTabBar("AsInspectorTabs"))
         {
             if (ImGui::BeginTabItem("Structures"))
@@ -171,7 +124,7 @@ namespace vkm
     void VkmAccelerationStructureInspector::drawStructuresTab(VkmDriverBase* driver)
     {
         VkmRenderResourcePool* pool = driver->getRenderResourcePool();
-        const std::vector<StructureRow> rows = collectRows(pool);
+        const std::vector<StructureRow> rows = vkmCollectAccelerationStructures(pool);
         if (rows.empty())
         {
             drawEmptyHint();
@@ -229,7 +182,7 @@ namespace vkm
 
         ImGui::Separator();
 
-        const StructureRow* selected = findRow(rows, _selected);
+        const StructureRow* selected = vkmFindAccelerationStructure(rows, _selected);
         if (selected == nullptr)
         {
             ImGui::TextDisabled("Select a structure to see its instances or geometries.");
@@ -257,7 +210,7 @@ namespace vkm
                     ImGui::TableNextColumn();
                     ImGui::Text("%u", instance._instanceId);
                     ImGui::TableNextColumn();
-                    const StructureRow* blasRow = findRow(rows, instance._blas);
+                    const StructureRow* blasRow = vkmFindAccelerationStructure(rows, instance._blas);
                     ImGui::PushID(static_cast<int>(i));
                     // Jumps the shared selection, so the referenced structure is detailed instead.
                     if (ImGui::Selectable(blasRow != nullptr ? blasRow->name.c_str() : "<released>", false))
@@ -285,7 +238,7 @@ namespace vkm
         {
             ImGui::Text("%s -- %zu geometry(ies), %u triangle(s)", selected->name.c_str(),
                         info._geometries.size(), triangleCount(info));
-            if (hasBounds(info))
+            if (vkmHasAccelerationStructureBounds(info))
             {
                 const glm::vec3 extent = info._boundsMax - info._boundsMin;
                 ImGui::Text("Bounds min (%.2f, %.2f, %.2f)  max (%.2f, %.2f, %.2f)  extent (%.2f, %.2f, %.2f)",
@@ -327,7 +280,7 @@ namespace vkm
 
     void VkmAccelerationStructureInspector::drawGraphTab(VkmDriverBase* driver)
     {
-        const std::vector<StructureRow> rows = collectRows(driver->getRenderResourcePool());
+        const std::vector<StructureRow> rows = vkmCollectAccelerationStructures(driver->getRenderResourcePool());
         if (rows.empty())
         {
             drawEmptyHint();
@@ -427,7 +380,7 @@ namespace vkm
         float bottomCursor = kGraphMargin;
         for (VkmResourceHandle handle : bottomOrder)
         {
-            if (findRow(rows, handle) != nullptr)
+            if (vkmFindAccelerationStructure(rows, handle) != nullptr)
             {
                 positionOf[handle] = ImVec2(bottomColumnX, bottomCursor);
                 bottomCursor += nodeHeight + kNodeGap;
@@ -537,16 +490,20 @@ namespace vkm
 
     void VkmAccelerationStructureInspector::drawSpatialTab(VkmDriverBase* driver)
     {
-        const std::vector<StructureRow> rows = collectRows(driver->getRenderResourcePool());
+        const std::vector<StructureRow> rows = vkmCollectAccelerationStructures(driver->getRenderResourcePool());
         if (rows.empty())
         {
             drawEmptyHint();
             return;
         }
 
-        // Every instance of every top-level structure, with its bottom-level bounds carried
-        // into world space; an instance whose structure has no recorded bounds keeps only its
-        // translation and is drawn as a marker.
+        // Every instance of every top-level structure. An instance whose structure has no
+        // recorded bounds keeps only its translation and is drawn as a marker; the rest carry
+        // their bottom-level bounds into world space, re-fitted to the world axes by
+        // VkmSceneAABB::transformed (the 3D overlay draws the same instances as true oriented
+        // boxes instead).
+        const std::vector<VkmAccelerationStructureInstanceBox> instances =
+            vkmCollectInstanceBoxes(rows);
         struct InstanceBox
         {
             VkmResourceHandle tlas = VKM_INVALID_RESOURCE_HANDLE;
@@ -556,36 +513,26 @@ namespace vkm
             glm::vec3 origin{ 0.0f };
         };
         std::vector<InstanceBox> boxes;
+        boxes.reserve(instances.size());
         VkmSceneAABB unionBounds;
-        for (const StructureRow& row : rows)
+        for (const VkmAccelerationStructureInstanceBox& instance : instances)
         {
-            if (row.info._type != VkmAccelerationStructureType::TopLevel)
+            InstanceBox box;
+            box.tlas = instance.tlas;
+            box.blas = instance.blas;
+            box.instanceId = instance.instanceId;
+            box.origin = glm::vec3(instance.transform[3]);
+            if (instance.hasBounds)
             {
-                continue;
+                box.world = VkmSceneAABB{ instance.boundsMin, instance.boundsMax, true }
+                                .transformed(instance.transform);
+                unionBounds.expand(box.world);
             }
-            for (const VkmAccelerationStructureInstance& instance :
-                 row.info._instances)
+            else
             {
-                InstanceBox box;
-                box.tlas = row.handle;
-                box.blas = instance._blas;
-                box.instanceId = instance._instanceId;
-                box.origin = glm::vec3(instance._transform[3]);
-                const StructureRow* blasRow = findRow(rows, instance._blas);
-                if (blasRow != nullptr && hasBounds(blasRow->info))
-                {
-                    const VkmAccelerationStructureInfo& blasInfo =
-                        blasRow->info;
-                    box.world = VkmSceneAABB{ blasInfo._boundsMin, blasInfo._boundsMax, true }
-                                    .transformed(instance._transform);
-                    unionBounds.expand(box.world);
-                }
-                else
-                {
-                    unionBounds.expand(box.origin);
-                }
-                boxes.push_back(box);
+                unionBounds.expand(box.origin);
             }
+            boxes.push_back(box);
         }
         if (boxes.empty())
         {
@@ -611,7 +558,10 @@ namespace vkm
                                    "bottom-level structure's object-space bounds transformed by the\n"
                                    "instance matrix. A dot marks an instance whose structure has no\n"
                                    "recorded bounds. Click a rectangle to select its bottom-level\n"
-                                   "structure; the Structures tab details it.");
+                                   "structure; the Structures tab details it.\n"
+                                   "These rectangles are re-fitted to the world axes, so a rotated\n"
+                                   "instance reads larger than it is; \"Draw in 3D scene\" shows the\n"
+                                   "same instances as oriented boxes with their height.");
             ImGui::EndTooltip();
         }
 
@@ -648,7 +598,7 @@ namespace vkm
         {
             const InstanceBox& box = boxes[i];
             const bool selected = box.blas == _selected || box.tlas == _selected;
-            const StructureRow* blasRow = findRow(rows, box.blas);
+            const StructureRow* blasRow = vkmFindAccelerationStructure(rows, box.blas);
             const std::string label = "#" + std::to_string(box.instanceId) +
                                       (blasRow != nullptr ? " " + blasRow->name : "");
 

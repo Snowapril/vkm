@@ -5390,3 +5390,75 @@ bounded uploads — so on Vulkan the loop exited before anything happened and re
 texture was created at. Replaced with a fixed warm-up followed by the stability check: nothing
 observable from outside separates "converged" from "not yet started", so the test has to give the
 slow path room rather than try to detect it.
+## 2026-08-22 — Acceleration structure inspector: the 3D wireframe overlay
+
+The F4 inspector's three tabs are all flat ImGui, and its Spatial tab is a top-down world-XZ
+projection: it collapses Y, so instances stacked at one XZ read as one rectangle, and
+`VkmSceneAABB::transformed` re-fits a rotated instance to an inflated axis-aligned box. A
+checkbox above the tab bar now drives a fourth view that is not a tab — each top-level instance
+outlined as a true oriented box in the scene itself, drawn over the rendered image.
+
+Engine-recorded, so no sample opts in. `VkmAccelerationStructureDebugRenderer::record` slots into
+`VkmEngine::render()` between `_appDelegate->render()` and the `"EngineImGuiOverlay"` subgraph —
+over the scene, under the UI — on window 0 only, because set 1 carries the primary window's
+camera and the boxes live in that camera's world. The engine copies the inspector's toggle and
+selection across once per frame in `update()`, outside `draw()`, which is what keeps the overlay
+drawing while the F4 window is closed.
+
+Three constraints decided the shape and are worth recording, because each one rules out the
+obvious implementation:
+
+- **No vertex buffer API.** `VkmCommandBufferBase` has `draw()` and no `bindVertexBuffer`, so the
+  box is generated from `SV_VertexID`: 24 vertices, the 12 edges as corner-index pairs, a corner
+  index being a 3-bit mask over the box's own axes.
+- **`line_list`, not `fill_mode: "wireframe"`.** WebGPU rejects every non-`Solid` fill mode at PSO
+  creation, and the engine loads `Pipelines/Engine/` wholesale on every backend, so a wireframe
+  fill would break every WebGPU sample rather than just this view. `as_wireframe.json` is the
+  first `line_list` PSO in the tree. Line width is 1 px everywhere (Vulkan needs `wideLines`,
+  Metal has none), so selection is colour and alpha only.
+- **A set-2 `storage_buffer` is compute-visible only**, by the contract at
+  `VkmTableResourceType::StorageBuffer` — WebGPU forbids writable storage in the vertex stage, so
+  `toVkShaderStageFlags` gives it `COMPUTE` alone. The per-box array therefore rides a
+  `uniform_buffer`, which is vertex-visible like every other table type. A push-constant-per-box
+  alternative was rejected outright: the ring is 1024 entries per frame slot *engine-wide* and
+  every ordinary scene draw already takes one, which is why `gi_system.cpp:174` divides the budget
+  down for the probe capture.
+
+The uniform buffer caps the view at `kVkmAsDebugMaxBoxes` = 256 (256 x 64 B = 16 KiB, the
+`maxUniformBufferRange` every Vulkan device guarantees; nothing on `VkmDriverBase` reports the
+real one). Fixed, never grown — which is the point: a growth path needs a second buffer, a second
+table and a retirement list keyed on the frame counter, and the buffer being allocated once means
+the deferred-reclaimer question never arises outside `releaseResources()`. Over-capacity scenes
+clamp and warn once rather than truncate silently.
+
+`VkmAsDebugBox` is four `float4`s and nothing else: 64 B is the only size that is simultaneously a
+legal std140 uniform array element, a natural MSL constant struct and a legal WGSL uniform array
+element, and it is what keeps the count at a round 256 within 16 KiB. The CPU pre-transforms each
+box into its `(min, min, min)` corner plus three edge vectors, so the shader is three
+multiply-adds and no matrix, and the selected flag rides `_origin.w` rather than costing a fifth
+`float4`. Edge vectors are built with `w = 0` so the transform's translation does not apply to
+them.
+
+The shader uses `viewProjectionNoJitter`: the overlay draws over the tone-mapped, already-resolved
+back buffer at display extent, where the render extent's sub-pixel jitter does not apply. For the
+same reason `record()` is handed the swapchain extent, never `getRenderExtent()`.
+
+`collectRows`/`findRow`/`hasBounds` moved out of the inspector's anonymous namespace into
+`renderer/acceleration_structure_debug.h` so both views share one collector, keeping PR #62's rule
+that a row copies `VkmAccelerationStructureInfo` and holds no pool pointer — the deferred
+reclaimer's worker thread can free a structure mid-collect. The Spatial tab now builds its
+rectangles from the shared `vkmCollectInstanceBoxes` rather than its own loop; its behaviour is
+unchanged.
+
+Initialization is gated on `VkmDriverCapabilityFlags::RayTracing`, so a device that can hold no
+acceleration structure allocates nothing for a view that would always be empty, and a failure
+logs and leaves the pointer null rather than stopping engine startup.
+
+`TestAccelerationStructureDebug.cpp` pins the record layout and the capacity arithmetic (the same
+reason `TestReservoirLayout` exists — nothing in the build fails if the HLSL mirror drifts) and
+covers the corner math, the boundless-instance skip, the selection flag and the clamp. It needs no
+driver, which is why the collectors take a summary list rather than a pool.
+
+### Deviations
+
+(none)

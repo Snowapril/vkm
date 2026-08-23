@@ -53,7 +53,9 @@ set(SRCS
     ${SRC_DIR}/TestUpscaler.cpp
     ${SRC_DIR}/TestPathTracerMetrics.cpp
     ${SRC_DIR}/TestLightTable.cpp
+    ${SRC_DIR}/TestAccelerationStructureDebug.cpp
     ${SRC_DIR}/TestReservoirLayout.cpp
+    ${SRC_DIR}/TestScreenshotConversion.cpp
 )
 
 if (VKM_USE_METAL_API)

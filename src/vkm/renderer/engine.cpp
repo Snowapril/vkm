@@ -8,8 +8,13 @@
 #include <vkm/renderer/backend/common/frame_constants.h>
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/gpu_profiler.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
+#include <vkm/renderer/backend/common/render_resource_pool.hpp>
+#include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/camera.h>
 #include <vkm/renderer/memory_report.h>
+#include <vkm/renderer/screenshot.h>
+#include <vkm/platform/common/clipboard.h>
 #include <vkm/base/cpu_profiler.h>
 #include <vkm/base/global_variable.h>
 #include <cxxopts.hpp>
@@ -41,6 +46,7 @@
 #include <vkm/renderer/imgui/cpu_profiler_inspector.h>
 #include <vkm/renderer/imgui/gpu_profiler_inspector.h>
 #include <vkm/renderer/imgui/acceleration_structure_inspector.h>
+#include <vkm/renderer/acceleration_structure_debug_renderer.h>
 #include <imgui.h>
 #endif
 
@@ -166,6 +172,27 @@ namespace vkm
             VKM_DEBUG_ERROR(fmt::format("Failed to load engine pipeline states: {}", psoError).c_str());
             return VkmInitResult{VkmInitResultCode::Failed, psoError};
         }
+
+#if defined(VKM_ENABLE_IMGUI)
+        // Here rather than beside the inspector in initialize(): the pipeline it resolves only
+        // exists once the directory above has loaded. Skipped where no acceleration structure can
+        // exist, so a device without ray tracing allocates nothing for an always-empty view. A
+        // failure leaves the pointer null and is logged -- a debug overlay must not stop startup.
+        if ((_driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::RayTracing) != 0)
+        {
+            auto debugRenderer = std::make_unique<VkmAccelerationStructureDebugRenderer>();
+            std::string debugRendererError;
+            if (debugRenderer->initialize(_driver, _pipelineStateManager.get(), &debugRendererError))
+            {
+                _asDebugRenderer = std::move(debugRenderer);
+            }
+            else
+            {
+                VKM_DEBUG_ERROR(fmt::format("Failed to initialize the acceleration structure debug "
+                                            "renderer: {}", debugRendererError).c_str());
+            }
+        }
+#endif
 
 #if defined(VKM_GPU_CAPTURE)
         // Must run after driver init -- the Metal capture scope is created there, and
@@ -413,6 +440,11 @@ namespace vkm
         {
             _renderGraphInspector->releaseResources(_driver);
         }
+        if (_asDebugRenderer)
+        {
+            _asDebugRenderer->releaseResources();
+            _asDebugRenderer.reset();
+        }
 #endif
 #if defined(VKM_ENABLE_IMGUI)
         if (_imGuiRenderer)
@@ -529,6 +561,10 @@ namespace vkm
             {
                 _memoryInspector->toggleVisible();
             }
+            if (ImGui::IsKeyPressed(ImGuiKey_F3, false))
+            {
+                _clipboardCaptureArmed = true;
+            }
             if (ImGui::IsKeyPressed(ImGuiKey_F10, false))
             {
                 _renderGraphCapture->arm();
@@ -547,6 +583,14 @@ namespace vkm
                 _cpuProfilerInspector->draw();
                 _gpuProfilerInspector->draw(_driver->getGpuProfiler());
                 _accelerationStructureInspector->draw(_driver);
+            }
+
+            // Outside the draw above, so the overlay follows the toggle even while the window is
+            // closed -- draw() early-returns on !_visible without touching either value.
+            if (_asDebugRenderer)
+            {
+                _asDebugRenderer->setEnabled(_accelerationStructureInspector->isSceneOverlayEnabled());
+                _asDebugRenderer->setSelected(_accelerationStructureInspector->getSelected());
             }
 
             // Collection follows the window: closing it (with F7 or the title bar's close
@@ -622,6 +666,9 @@ namespace vkm
         {
             ImGui::Text("F2: upscale mode (%s)", vkmUpscaleModeName(_upscaleMode));
         }
+#if (defined(VKM_PLATFORM_APPLE) && defined(VKM_USE_METAL_API)) || (defined(VKM_PLATFORM_WINDOWS) && defined(VKM_USE_VULKAN_API))
+        ImGui::Text("F3: copy back buffer to clipboard");
+#endif
         ImGui::Text("F4: acceleration structures");
         ImGui::Text("F5: render graph inspector");
         ImGui::Text("F6: GPU profiler");
@@ -634,6 +681,48 @@ namespace vkm
         ImGui::End();
     }
 #endif
+
+    void VkmEngine::captureBackBufferToClipboard(VkmResourceHandle backBuffer, VkmFormat format)
+    {
+#if (defined(VKM_PLATFORM_APPLE) && defined(VKM_USE_METAL_API)) || (defined(VKM_PLATFORM_WINDOWS) && defined(VKM_USE_VULKAN_API))
+        // The back buffer is only created as a copy source when it was asked for at launch, since
+        // making it one costs the driver's framebuffer-only fast paths every frame.
+        if (!_engineOptions.enableBackBufferReadback)
+        {
+            VKM_DEBUG_WARN("Clipboard capture needs a readable back buffer; relaunch with --enable-backbuffer-readback");
+            return;
+        }
+#if defined(VKM_USE_VULKAN_API)
+        // Surfaces that cannot supply a transfer-source back buffer leave the flag unset; copying
+        // from one anyway would be invalid.
+        VkmTexture* texture = _driver->getRenderResourcePool()->getResource<VkmTexture>(backBuffer);
+        if (texture == nullptr ||
+            (texture->getTextureInfo()._flags & VkmResourceCreateInfo::AllowTransferSrc) == 0)
+        {
+            VKM_DEBUG_ERROR("Clipboard capture: this surface's back buffer is not a transfer source");
+            return;
+        }
+#endif
+        const VkmTextureReadbackResult readback = _driver->readbackTexture(backBuffer);
+        std::vector<uint8_t> rgba8;
+        if (!vkmConvertReadbackToRgba8(readback, format, rgba8))
+        {
+            return; // vkmConvertReadbackToRgba8 logged the reason
+        }
+        if (vkmSetClipboardImage(readback.width, readback.height, rgba8.data()))
+        {
+            VKM_DEBUG_INFO("Copied back buffer to clipboard");
+        }
+        else
+        {
+            VKM_DEBUG_ERROR("Clipboard capture: failed to set the OS clipboard");
+        }
+#else
+        (void)backBuffer;
+        (void)format;
+        VKM_DEBUG_WARN("Clipboard capture is not supported on this platform and backend");
+#endif
+    }
 
     void VkmEngine::render(const double deltaTime)
     {
@@ -772,6 +861,16 @@ namespace vkm
             }
 
 #if defined(VKM_ENABLE_IMGUI)
+            // Between the app's passes and the ImGui overlay: over the scene, under the UI.
+            // Window 0 only, because set 1 carries the primary window's camera and these boxes
+            // are in that camera's world. The swapchain extent, not the render extent: this draws
+            // into the back buffer, which an upscaler has already resolved to display size.
+            if (windowIndex == 0 && appRendersHere && _asDebugRenderer)
+            {
+                VKM_PROFILE_SCOPE("AsDebugRenderer::record");
+                _asDebugRenderer->record(renderGraph, currentBackBuffer, windowExtent, _currentFrameIndex);
+            }
+
             if (windowContext._isImGuiWindow && _imGuiRenderer)
             {
                 // If the app already recorded into this back buffer (single-window mode), load it;
@@ -837,6 +936,15 @@ namespace vkm
                 capture->finalize(_driver);
             }
 
+            if (windowIndex == 0 && _clipboardCaptureArmed)
+            {
+                // One deliberate hitch, as on a capture frame: the back buffer's last write must
+                // have completed before the blocking readback maps it.
+                _clipboardCaptureArmed = false;
+                renderGraph->ensureCompleted();
+                captureBackBufferToClipboard(currentBackBuffer, windowContext._backBufferFormat);
+            }
+
             {
                 VKM_PROFILE_SCOPE("SwapChain::present");
                 windowContext._swapChain->present();
@@ -875,7 +983,9 @@ namespace vkm
             ("gpu-capture-frame-count", "Number of consecutive frames to record into the .gputrace",
                 cxxopts::value<uint32_t>()->default_value(std::to_string(DEFAULT_ENGINE_LAUNCH_OPTIONS.gpuCaptureFrameCount)))
             ("enable-hdr", "Request an HDR swapchain (used only if the display supports it)",
-                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableHdr ? "true" : "false"));
+                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableHdr ? "true" : "false"))
+            ("enable-backbuffer-readback", "Make the back buffer readable so F2 can copy the frame to the clipboard (gives up the driver's framebuffer-only fast paths)",
+                cxxopts::value<bool>()->default_value(DEFAULT_ENGINE_LAUNCH_OPTIONS.enableBackBufferReadback ? "true" : "false"));
 
         VkmEngineLaunchOptions launchOptions = DEFAULT_ENGINE_LAUNCH_OPTIONS;
         try
@@ -889,6 +999,7 @@ namespace vkm
             launchOptions.gpuCaptureStartFrame = result["gpu-capture-start-frame"].as<uint32_t>();
             launchOptions.gpuCaptureFrameCount = result["gpu-capture-frame-count"].as<uint32_t>();
             launchOptions.enableHdr = result["enable-hdr"].as<bool>();
+            launchOptions.enableBackBufferReadback = result["enable-backbuffer-readback"].as<bool>();
             // The GPU frame capture scope only exists when enableGpuCapture is set --
             // a startup capture request implies it.
             launchOptions.enableGpuCapture |= launchOptions.captureGpuFrameOnStartup;
