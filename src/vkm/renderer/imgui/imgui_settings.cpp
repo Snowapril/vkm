@@ -77,12 +77,6 @@ namespace vkm
 
     void vkmLoadImGuiSettings()
     {
-        // Pin the scalable default font rather than letting ImGui's lazy AddFontDefault() choose
-        // between the bitmap and the vector Proggy from the scale in effect when the font is
-        // added: the scale is the user's to move at any time, and text has to stay crisp at all
-        // of it. The vector face is drawn to match the bitmap one, so 1.00x is unchanged.
-        ImGui::GetIO().Fonts->AddFontDefaultVector();
-
         const std::filesystem::path path = settingsFilePath();
         if (path.empty())
         {
