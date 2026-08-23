@@ -2,9 +2,11 @@
 
 #include <doctest/doctest.h>
 
+#include <vkm/renderer/backend/common/renderer_common.h>
 #include <vkm/renderer/scene/texture_streamer.h>
 
 #include <cstdint>
+#include <string>
 
 /*
 * Which mip level a texture should keep resident is ordinary arithmetic over a camera and a
@@ -136,4 +138,113 @@ TEST_CASE("vkmSelectStreamingBaseMip survives a camera inside the bounding spher
     const uint32_t level = vkm::vkmSelectStreamingBaseMip(view, /*distance=*/-5.0f, /*worldRadius=*/10.0f,
                                                           kTextureWidth, kMipCount, 0);
     CHECK(level == 0);
+}
+
+/*
+* The byte accounting behind the streaming readout. It is the number the whole feature is judged by,
+* and it is quietly easy to get wrong: the old computeTextureByteSize counted only level 0, which
+* under-reports a full chain by a quarter and would have made the reported saving wrong by the same
+* factor in both directions.
+*/
+
+TEST_CASE("vkmMipRangeByteSize sums a mip chain rather than its base level")
+{
+    // 4x4 RGBA8: 16 + 4 + 1 texels over three levels.
+    const glm::uvec3 extent(4, 4, 1);
+    constexpr uint32_t kBpp = 4;
+
+    CHECK(vkm::vkmMipRangeByteSize(extent, 1, vkm::VkmFormat::R8G8B8A8_UNORM, 0, 1) == 16 * kBpp);
+    CHECK(vkm::vkmMipRangeByteSize(extent, 1, vkm::VkmFormat::R8G8B8A8_UNORM, 0, 3) == (16 + 4 + 1) * kBpp);
+
+    // A range starting mid-chain is the sum of its own levels and nothing above them, which is
+    // exactly what a streamed texture holds.
+    CHECK(vkm::vkmMipRangeByteSize(extent, 1, vkm::VkmFormat::R8G8B8A8_UNORM, 1, 2) == (4 + 1) * kBpp);
+    CHECK(vkm::vkmMipRangeByteSize(extent, 1, vkm::VkmFormat::R8G8B8A8_UNORM, 2, 1) == 1 * kBpp);
+
+    // Array layers each carry their own copy.
+    CHECK(vkm::vkmMipRangeByteSize(extent, 6, vkm::VkmFormat::R8G8B8A8_UNORM, 0, 3) == 6 * (16 + 4 + 1) * kBpp);
+}
+
+TEST_CASE("vkmMipRangeByteSize approaches 4/3 of the base level for a full chain")
+{
+    // The classic result, and the reason counting level 0 alone under-reports by a quarter.
+    const glm::uvec3 extent(1024, 1024, 1);
+    const uint64_t base = vkm::vkmMipRangeByteSize(extent, 1, vkm::VkmFormat::R8G8B8A8_UNORM, 0, 1);
+    const uint64_t chain = vkm::vkmMipRangeByteSize(extent, 1, vkm::VkmFormat::R8G8B8A8_UNORM, 0, 11);
+
+    CHECK(base == 1024ull * 1024ull * 4ull);
+    CHECK(chain > base);
+    CHECK(static_cast<double>(chain) / static_cast<double>(base) == doctest::Approx(4.0 / 3.0).epsilon(0.001));
+}
+
+TEST_CASE("vkmMipRangeByteSize handles degenerate inputs without running away")
+{
+    const glm::uvec3 extent(8, 8, 1);
+
+    SUBCASE("an empty range is no bytes")
+    {
+        CHECK(vkm::vkmMipRangeByteSize(extent, 1, vkm::VkmFormat::R8G8B8A8_UNORM, 0, 0) == 0);
+    }
+
+    SUBCASE("no array layers is no bytes")
+    {
+        CHECK(vkm::vkmMipRangeByteSize(extent, 0, vkm::VkmFormat::R8G8B8A8_UNORM, 0, 4) == 0);
+    }
+
+    SUBCASE("an unknown format reports nothing rather than guessing")
+    {
+        CHECK(vkm::vkmMipRangeByteSize(extent, 1, vkm::VkmFormat::Undefined, 0, 4) == 0);
+    }
+
+    SUBCASE("levels past the 1x1 tail keep counting 1x1 rather than shifting off the end")
+    {
+        // Shifting by 32 or more is undefined behaviour, so the guard matters: ask for far more
+        // levels than the chain has and every extra one must contribute exactly one texel.
+        const uint64_t four = vkm::vkmMipRangeByteSize(extent, 1, vkm::VkmFormat::R8G8B8A8_UNORM, 0, 4);
+        const uint64_t forty = vkm::vkmMipRangeByteSize(extent, 1, vkm::VkmFormat::R8G8B8A8_UNORM, 0, 40);
+        CHECK(four == (64 + 16 + 4 + 1) * 4);
+        CHECK(forty == four + 36 * 4);
+    }
+}
+
+TEST_CASE("computeTextureByteSize covers every declared level")
+{
+    vkm::VkmTextureInfo info{};
+    info._extent = glm::uvec3(4, 4, 1);
+    info._numArrayLayers = 1;
+    info._format = vkm::VkmFormat::R8G8B8A8_UNORM;
+
+    info._numMipLevels = 1;
+    CHECK(vkm::computeTextureByteSize(info) == 16 * 4);
+
+    info._numMipLevels = 3;
+    CHECK(vkm::computeTextureByteSize(info) == (16 + 4 + 1) * 4);
+
+    // VkmTextureInfo has no default for _numMipLevels and several call sites clamp it, so a zero
+    // must still report the base level rather than collapsing a whole category total to nothing.
+    info._numMipLevels = 0;
+    CHECK(vkm::computeTextureByteSize(info) == 16 * 4);
+}
+
+TEST_CASE("vkmMaterialTextureDebugName names a texture after its file and colour space")
+{
+    // One file sampled in two colour spaces is two textures, so the name has to separate them or
+    // the texture browser lists two rows it calls the same thing.
+    CHECK(vkm::vkmMaterialTextureDebugName("/scenes/sponza/curtain_diff.png", true) ==
+          "SceneMaterialTexture:curtain_diff(srgb)");
+    CHECK(vkm::vkmMaterialTextureDebugName("/scenes/sponza/curtain_diff.png", false) ==
+          "SceneMaterialTexture:curtain_diff(linear)");
+
+    SUBCASE("a bare filename, a Windows separator, and a name with no extension all resolve")
+    {
+        CHECK(vkm::vkmMaterialTextureDebugName("brick.jpg", true) == "SceneMaterialTexture:brick(srgb)");
+        CHECK(vkm::vkmMaterialTextureDebugName("C:\\assets\\brick.jpg", true) ==
+              "SceneMaterialTexture:brick(srgb)");
+        CHECK(vkm::vkmMaterialTextureDebugName("assets/brick", true) == "SceneMaterialTexture:brick(srgb)");
+    }
+
+    SUBCASE("a dot in a directory is not mistaken for the extension separator")
+    {
+        CHECK(vkm::vkmMaterialTextureDebugName("/a.b/brick", true) == "SceneMaterialTexture:brick(srgb)");
+    }
 }

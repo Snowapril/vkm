@@ -5188,3 +5188,57 @@ afterwards. Neither implies the other: a solid-colour chain renders identically 
 pixels alone cannot prove a rebuild happened, and a rebuild that left the record naming the released
 slot would still move the level. `recordGBufferFrame` was split out of `fillGBuffer` so that test
 can render the same scene twice.
+
+## 2026-08-23 — Making the streaming gain visible
+
+Streaming shipped without a single number attached to it, so the only way to believe it was working
+was the heat-map debug view — which shows *which level* a surface sits at and says nothing about
+bytes. The engine overlay's `VRAM:` line is device-wide and refreshed at 2 Hz, so the delta was lost
+inside it. `src/samples/memory_aliasing/main.cpp:493-540` is the repo's precedent for exactly this
+problem, and this follows its shape.
+
+**The readout is a pair, not a number.** `VkmTextureStreamingStats` carries `_residentBytes` beside
+`_fullChainBytes` — what the streamed textures hold now, and what those same textures would hold
+unstreamed. A resident figure alone cannot answer "is this doing anything"; the counterfactual is the
+whole point. At scene load the two are equal by construction (the initial upload *is* the full chain),
+so the saving starts at an honest zero rather than a fudged one.
+
+`computeTextureByteSize` was counting only level 0 — it never read `_numMipLevels` — so every mipped
+texture was under-reported by a quarter. Material textures are the only mipped textures in the engine,
+which is to say the entire population being measured. It is now `vkmMipRangeByteSize(..., 0,
+_numMipLevels)`, and the streamer's own totals go through the same helper so the panel and the memory
+inspector cannot drift. The `std::max(1u, _numMipLevels)` guard is load-bearing: `VkmTextureInfo` has
+no default for that field and three sites already clamp it, so a naive `[0, count)` loop would have
+silently zeroed a category total.
+
+`computeStats()` takes no lock, and the header says why: `_mutex` guards only the decode worker's job
+and result queues, while `_entries`, `_build` and `_retired` belong outright to the thread that calls
+`update()`. It is safe from that thread only — a contract, not an accident.
+
+The panel reports `_rebuildInFlight` and `_pendingRetireCount` because live GPU bytes legitimately
+exceed `_residentBytes` mid-rebuild: the old texture, the new one and anything still in the retire
+queue are all allocated at once. It reports `_failedCount` because an entry pinned by a failed rebuild
+sits at resident == full chain forever and would otherwise just look like a texture the camera wants
+at level 0, quietly dragging the saving down.
+
+Material textures are now named after their file and colour space
+(`SceneMaterialTexture:curtain_diff(srgb)`) instead of all sharing one string, and a rebuild reuses its
+entry's name. The F5 texture browser already had extent, mip-count and byte columns plus a name
+filter — it just had no way to tell one row from another, so this makes an existing tool useful with
+no UI work.
+
+### Deviations
+
+- **Planned:** put the streaming stats block in the gi sample beside the existing toggle.
+  **Did instead:** ungated the whole streaming section from `_debugView == StreamingMip` first. The
+  toggle had been nested inside that branch, so the stats would have been invisible until the user
+  switched to a debug view — and "is streaming worth it" is not a question you ask only while looking
+  at the heat map. `model_viewer` was already unconditional; the asymmetry was accidental.
+- **Planned:** an overlay line showing the streaming saving.
+  **Did instead:** the whole Texture category's allocated bytes, labelled as such. `VkmEngine` has no
+  reference to `VkmScene` and the memory inspector has no public getter for a finer split, so a real
+  streaming figure there would have meant new plumbing for a line that already moves. It is the
+  always-visible "texture memory is changing" signal; the attribution lives in the sample panel.
+- **Planned:** store only the file stem in the debug name.
+  **Did instead:** stem plus colour space. One image sampled as both sRGB and linear is two separate
+  textures, so the stem alone still produced two rows with identical names.

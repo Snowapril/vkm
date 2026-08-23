@@ -177,3 +177,8 @@
 - `VkmMaterialData` carries the streamed level of the base-colour texture only; a material's four textures stream independently and the record has one pair of words.
 - `VkmScene::destroy()` releases material textures that were never declared as referenced resources, so the reclaimer has no recorded usage to wait on and relies on the caller having drained the queue.
 - Texture streaming selects from a bounding sphere rather than the real UV parameterisation, so `_mipBias` absorbs the per-scene difference.
+- The streaming readout's resident/full-chain figures are texel bytes, so they exclude tiling and alignment padding and will not reconcile exactly with the pool's `totalAllocatedBytes`.
+- The engine overlay's `Tex:` line covers the whole texture category (render targets, probe atlases, the ImGui font), not just streamed material textures: `VkmEngine` holds no `VkmScene` to ask for a finer split.
+- Texture-category bytes tick *up* before they come down on a pull-back: the rebuilt texture is allocated while the old one is still live, and the displaced one is held for `FRAME_BUFFER_COUNT + 1` ticks after that.
+- Material textures created before the bindless array was available, or after it was exhausted, burn texture-category bytes that `VkmTextureStreamingStats` cannot see.
+- `VkmTextureStreamingStats::_textureCount` counts `(path, colour space)` pairs, so one image sampled both ways counts twice — correct for memory, surprising as a texture count.

@@ -21,10 +21,12 @@
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
 #include <vkm/renderer/backend/common/render_graph.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/camera.h>
 #include <vkm/renderer/engine.h>
+#include <vkm/renderer/memory_report.h>
 #include <vkm/renderer/scene/gltf_importer.h>
 #include <vkm/renderer/scene/scene.h>
 #include <vkm/renderer/scene/scene_model.h>
@@ -41,6 +43,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -135,6 +138,64 @@ namespace
         const float radius = bounds._valid ? glm::length(bounds.getExtent()) * 0.5f : 1.0f;
         controller.frame(center, radius);
     }
+
+#if defined(VKM_ENABLE_IMGUI)
+    /*
+    * What streaming currently holds, against what the same textures would cost unstreamed.
+    *
+    * The baseline is the point. A resident figure on its own says nothing about whether streaming
+    * is doing anything, which is exactly the question this panel exists to answer.
+    */
+    void drawTextureStreamingStats(const VkmTextureStreamingStats& stats)
+    {
+        if (stats._textureCount == 0)
+        {
+            ImGui::TextDisabled("No streamed textures in this scene");
+            return;
+        }
+
+        const uint64_t saved =
+            (stats._fullChainBytes > stats._residentBytes) ? stats._fullChainBytes - stats._residentBytes : 0;
+        const double savedFraction =
+            stats._fullChainBytes > 0 ? static_cast<double>(saved) / static_cast<double>(stats._fullChainBytes) : 0.0;
+
+        ImGui::Text("Streamed textures: %u", stats._textureCount);
+        ImGui::Text("  resident   %s", formatByteSize(stats._residentBytes).c_str());
+        ImGui::Text("  full chain %s", formatByteSize(stats._fullChainBytes).c_str());
+        ImGui::Text("  saved      %s (%.1f%%)", formatByteSize(saved).c_str(), savedFraction * 100.0);
+
+        char overlay[64];
+        std::snprintf(overlay, sizeof(overlay), "%.0f%% of unstreamed", (1.0 - savedFraction) * 100.0);
+        ImGui::ProgressBar(static_cast<float>(1.0 - savedFraction), ImVec2(-FLT_MIN, 0.0f), overlay);
+
+        // Where the textures actually sit, which is what makes a small saving legible: a scene
+        // whose every texture is still at level 0 has nothing to give back yet.
+        std::string levels;
+        for (uint32_t level = 0; level < kVkmStreamingHistogramLevels; ++level)
+        {
+            if (stats._levelHistogram[level] != 0)
+            {
+                levels += "  " + std::to_string(level) + ":" + std::to_string(stats._levelHistogram[level]);
+            }
+        }
+        ImGui::Text("  at level %s", levels.c_str());
+
+        // Texel bytes, so this is what an upload writes rather than what the allocator committed;
+        // tiling and alignment padding are invisible from here and make the real saving smaller.
+        ImGui::TextDisabled("Texel bytes, excluding allocator padding");
+
+        if (stats._rebuildInFlight || stats._pendingRetireCount != 0)
+        {
+            // Says out loud why the engine-wide figure below can sit above the resident one.
+            ImGui::TextDisabled("Rebuilding: %s, %u texture(s) awaiting release",
+                                stats._rebuildInFlight ? "yes" : "no", stats._pendingRetireCount);
+        }
+        if (stats._failedCount != 0)
+        {
+            ImGui::TextDisabled("%u texture(s) pinned by a failed rebuild", stats._failedCount);
+        }
+    }
+#endif
 } // namespace
 
 class ModelViewerApplication : public AppDelegate
@@ -538,27 +599,37 @@ private:
 #if defined(VKM_ENABLE_IMGUI)
     void drawTextureStreamingUi()
     {
-        if (!_scene.isTextureStreamingAvailable())
+        if (_scene.isTextureStreamingAvailable())
+        {
+            VkmTextureStreamingSettings settings = _scene.getTextureStreamingSettings();
+            bool changed = ImGui::Checkbox("Texture streaming", &settings._enabled);
+
+            int mipBias = static_cast<int>(settings._mipBias);
+            if (ImGui::SliderInt("Mip bias", &mipBias, -4, 4))
+            {
+                settings._mipBias = static_cast<int32_t>(mipBias);
+                changed = true;
+            }
+            ImGui::TextDisabled("Negative keeps more detail than the screen needs, positive trades it for memory");
+
+            if (changed)
+            {
+                _scene.setTextureStreamingSettings(settings);
+            }
+
+            drawTextureStreamingStats(_scene.getTextureStreamingStats());
+        }
+        else
         {
             ImGui::TextDisabled("Texture streaming: unavailable (no bindless texture array)");
-            return;
         }
 
-        VkmTextureStreamingSettings settings = _scene.getTextureStreamingSettings();
-        bool changed = ImGui::Checkbox("Texture streaming", &settings._enabled);
-
-        int mipBias = static_cast<int>(settings._mipBias);
-        if (ImGui::SliderInt("Mip bias", &mipBias, -4, 4))
-        {
-            settings._mipBias = static_cast<int32_t>(mipBias);
-            changed = true;
-        }
-        ImGui::TextDisabled("Negative keeps more detail than the screen needs, positive trades it for memory");
-
-        if (changed)
-        {
-            _scene.setTextureStreamingSettings(settings);
-        }
+        // Drawn on every backend, streaming or not: it is the whole-engine figure the streamed
+        // total has to be read against, and the one number that includes render targets.
+        const VkmResourceCategoryUsage textures =
+            _engine->getDriver()->getRenderResourcePool()->getCategoryMemoryUsage(VkmResourceType::Texture);
+        ImGui::Text("All textures: %s live in %u", formatByteSize(textures.totalAllocatedBytes).c_str(),
+                    textures.liveCount);
     }
 #else
     void drawTextureStreamingUi() {}

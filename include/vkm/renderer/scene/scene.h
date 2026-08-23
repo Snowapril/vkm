@@ -385,6 +385,16 @@ namespace vkm
         inline bool isTextureStreamingAvailable() const { return _textureStreamingAvailable; }
 
         /*
+        * @brief What the streamed textures occupy now, beside what their full chains would.
+        * @details Cheap enough for a per-frame UI readout. Call from the thread that drives
+        * updateTextureStreaming(); see VkmTextureStreamer::computeStats.
+        */
+        inline VkmTextureStreamingStats getTextureStreamingStats() const
+        {
+            return _textureStreamer.computeStats();
+        }
+
+        /*
         * @brief The mip level a material channel's texture currently starts at.
         * @details The only externally observable proof that a rebuild actually happened -- the slot
         * and the texture handle are both internal, and the rendered pixels of a mip chain do not

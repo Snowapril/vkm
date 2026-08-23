@@ -42,6 +42,7 @@
 #include <vkm/renderer/backend/common/resource_table.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/render_graph.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/sampler.h>
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/texture.h>
@@ -51,6 +52,7 @@
 #include <vkm/renderer/gbuffer.h>
 #include <vkm/renderer/gi_composite.h>
 #include <vkm/renderer/gi_system.h>
+#include <vkm/renderer/memory_report.h>
 #include <vkm/renderer/screenshot.h>
 
 #include <cstdio>
@@ -189,6 +191,64 @@ namespace
         fb._colorAttachments[0] = target;
         return fb;
     }
+
+#if defined(VKM_ENABLE_IMGUI)
+    /*
+    * What streaming currently holds, against what the same textures would cost unstreamed.
+    *
+    * The baseline is the point. A resident figure on its own says nothing about whether streaming
+    * is doing anything, which is exactly the question this panel exists to answer.
+    */
+    void drawTextureStreamingStats(const VkmTextureStreamingStats& stats)
+    {
+        if (stats._textureCount == 0)
+        {
+            ImGui::TextDisabled("No streamed textures in this scene");
+            return;
+        }
+
+        const uint64_t saved =
+            (stats._fullChainBytes > stats._residentBytes) ? stats._fullChainBytes - stats._residentBytes : 0;
+        const double savedFraction =
+            stats._fullChainBytes > 0 ? static_cast<double>(saved) / static_cast<double>(stats._fullChainBytes) : 0.0;
+
+        ImGui::Text("Streamed textures: %u", stats._textureCount);
+        ImGui::Text("  resident   %s", formatByteSize(stats._residentBytes).c_str());
+        ImGui::Text("  full chain %s", formatByteSize(stats._fullChainBytes).c_str());
+        ImGui::Text("  saved      %s (%.1f%%)", formatByteSize(saved).c_str(), savedFraction * 100.0);
+
+        char overlay[64];
+        std::snprintf(overlay, sizeof(overlay), "%.0f%% of unstreamed", (1.0 - savedFraction) * 100.0);
+        ImGui::ProgressBar(static_cast<float>(1.0 - savedFraction), ImVec2(-FLT_MIN, 0.0f), overlay);
+
+        // Where the textures actually sit, which is what makes a small saving legible: a scene
+        // whose every texture is still at level 0 has nothing to give back yet.
+        std::string levels;
+        for (uint32_t level = 0; level < kVkmStreamingHistogramLevels; ++level)
+        {
+            if (stats._levelHistogram[level] != 0)
+            {
+                levels += "  " + std::to_string(level) + ":" + std::to_string(stats._levelHistogram[level]);
+            }
+        }
+        ImGui::Text("  at level %s", levels.c_str());
+
+        // Texel bytes, so this is what an upload writes rather than what the allocator committed;
+        // tiling and alignment padding are invisible from here and make the real saving smaller.
+        ImGui::TextDisabled("Texel bytes, excluding allocator padding");
+
+        if (stats._rebuildInFlight || stats._pendingRetireCount != 0)
+        {
+            // Says out loud why the engine-wide figure below can sit above the resident one.
+            ImGui::TextDisabled("Rebuilding: %s, %u texture(s) awaiting release",
+                                stats._rebuildInFlight ? "yes" : "no", stats._pendingRetireCount);
+        }
+        if (stats._failedCount != 0)
+        {
+            ImGui::TextDisabled("%u texture(s) pinned by a failed rebuild", stats._failedCount);
+        }
+    }
+#endif
 } // namespace
 
 class GiApplication : public AppDelegate
@@ -953,25 +1013,6 @@ private:
         if (_debugView == VkmGiDebugView::StreamingMip)
         {
             ImGui::TextDisabled("Green = the whole chain is resident, red = only the coarsest level");
-            if (_scene.isTextureStreamingAvailable())
-            {
-                VkmTextureStreamingSettings streaming = _scene.getTextureStreamingSettings();
-                bool changed = ImGui::Checkbox("Texture streaming", &streaming._enabled);
-                int mipBias = static_cast<int>(streaming._mipBias);
-                if (ImGui::SliderInt("Mip bias", &mipBias, -4, 4))
-                {
-                    streaming._mipBias = static_cast<int32_t>(mipBias);
-                    changed = true;
-                }
-                if (changed)
-                {
-                    _scene.setTextureStreamingSettings(streaming);
-                }
-            }
-            else
-            {
-                ImGui::TextDisabled("Streaming unavailable: no bindless texture array");
-            }
         }
         ImGui::DragFloat("Indirect intensity", &_indirectIntensity, 0.05f, 0.0f, 8.0f);
         VkmGiOptions& giOptions = _gi.options();
@@ -1008,6 +1049,9 @@ private:
                                          : (_renderExtent == _extent ? "no upscaler" : "bilinear"));
 
         ImGui::Separator();
+        drawTextureStreamingUi();
+
+        ImGui::Separator();
         const VkmProbeVolume& volume = _gi.getProbeVolume();
         const VkmProbeVolumeUpdater& updater = _gi.getProbeUpdater();
         ImGui::Text("Probes: %u, budget %u/frame", volume.getProbeCount(), updater.getDescriptor()._budget);
@@ -1025,6 +1069,44 @@ private:
     }
 
 #if defined(VKM_ENABLE_IMGUI)
+    /*
+    * @brief Texture streaming's controls and what it is currently saving.
+    *
+    * @details Shown whatever the debug view is: the heat map answers "which level is this surface
+    * at", and this answers "is any of that worth it", which is the question a memory optimization
+    * actually has to answer.
+    */
+    void drawTextureStreamingUi()
+    {
+        if (_scene.isTextureStreamingAvailable())
+        {
+            VkmTextureStreamingSettings streaming = _scene.getTextureStreamingSettings();
+            bool changed = ImGui::Checkbox("Texture streaming", &streaming._enabled);
+            int mipBias = static_cast<int>(streaming._mipBias);
+            if (ImGui::SliderInt("Mip bias", &mipBias, -4, 4))
+            {
+                streaming._mipBias = static_cast<int32_t>(mipBias);
+                changed = true;
+            }
+            if (changed)
+            {
+                _scene.setTextureStreamingSettings(streaming);
+            }
+            drawTextureStreamingStats(_scene.getTextureStreamingStats());
+        }
+        else
+        {
+            ImGui::TextDisabled("Streaming unavailable: no bindless texture array");
+        }
+
+        // Drawn on every backend, streaming or not: it is the whole-engine figure the streamed
+        // total has to be read against, and the one number that includes render targets.
+        const VkmResourceCategoryUsage textures =
+            _engine->getDriver()->getRenderResourcePool()->getCategoryMemoryUsage(VkmResourceType::Texture);
+        ImGui::Text("All textures: %s live in %u", formatByteSize(textures.totalAllocatedBytes).c_str(),
+                    textures.liveCount);
+    }
+
     /*
     * @brief The probe placement tool: show the grid, pick a probe, drag it with a gizmo.
     *

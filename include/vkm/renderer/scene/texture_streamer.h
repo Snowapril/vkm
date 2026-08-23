@@ -8,6 +8,7 @@
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -61,6 +62,44 @@ namespace vkm
         uint32_t _totalMipCount = 1;
     };
 
+    // Levels a histogram row exists for. 16 covers a 32768-texel chain; anything deeper is folded
+    // into the last row rather than dropped.
+    inline constexpr uint32_t kVkmStreamingHistogramLevels = 16;
+
+    /*
+    * @brief What streaming currently costs, and what it would have cost without.
+    * @details The pairing is the point: resident bytes alone say nothing, and the same figure beside
+    * the full-chain baseline is the whole readout. Both cover only the textures the streamer owns,
+    * so neither includes render targets, probe atlases or anything else in the texture category.
+    */
+    struct VkmTextureStreamingStats
+    {
+        uint32_t _textureCount = 0;
+        // What every entry's currently resident levels occupy.
+        uint64_t _residentBytes = 0;
+        // What those same textures would occupy holding their whole chain -- the counterfactual.
+        uint64_t _fullChainBytes = 0;
+        // Rebuilds published since the scene was built, so a panel can show churn rather than
+        // implying the state is static.
+        uint32_t _rebuildsApplied = 0;
+        /*
+        * Live GPU bytes exceed _residentBytes while these are non-zero: a rebuild in flight holds
+        * the old texture and the new one at once, and a retired entry is still allocated until its
+        * delay expires. Reported so a reader can account for the difference against the pool's
+        * category total rather than mistrusting both numbers.
+        */
+        bool _rebuildInFlight = false;
+        uint32_t _pendingRetireCount = 0;
+        /*
+        * Textures pinned at whatever they hold because a rebuild failed. They sit at
+        * resident == full chain forever and so quietly drag the saving down; reported separately
+        * rather than left to look like textures the camera simply wants at level 0.
+        */
+        uint32_t _failedCount = 0;
+        // How many textures sit at each base level; index 0 is "whole chain resident".
+        std::array<uint16_t, kVkmStreamingHistogramLevels> _levelHistogram{};
+    };
+
     struct VkmTextureStreamingSettings
     {
         bool _enabled = true;
@@ -100,6 +139,18 @@ namespace vkm
     */
     uint32_t vkmSelectStreamingBaseMip(const VkmTextureStreamingView& view, float distance, float worldRadius,
                                        uint32_t textureWidth, uint32_t totalMipCount, int32_t mipBias);
+
+    /*
+    * @brief The debug name a material texture carries, so the texture browser can tell them apart.
+    * @details Every material texture used to be named "SceneMaterialTexture", which made the
+    * browser's list unreadable and a rebuild impossible to follow. This keeps that prefix -- the
+    * browser's name filter isolates the group with it -- and appends the image's file stem plus its
+    * colour space, the two things that make an entry unique.
+    * @param path Image file the texture was decoded from.
+    * @param srgb Colour space the chain was built in; one file used both ways is two textures.
+    * @return The name, e.g. "SceneMaterialTexture:sponza_curtain_diff(srgb)".
+    */
+    std::string vkmMaterialTextureDebugName(const std::string& path, bool srgb);
 
     /*
     * @brief How wide a bounding sphere appears on screen, in pixels.
@@ -189,6 +240,16 @@ namespace vkm
         uint32_t getResidentBaseMip(uint32_t entryIndex) const;
         uint32_t getTotalMipCount(uint32_t entryIndex) const;
 
+        /*
+        * @brief Sums what the streamed textures occupy now against what their full chains would.
+        * @details Cheap enough to call every frame -- it walks the entry list and does no I/O and
+        * no allocation.
+        * Takes no lock, and must therefore be called from the same thread that calls update():
+        * the mutex guards only the decode worker's job and result queues, while the entry list this
+        * reads is owned outright by the updating thread.
+        */
+        VkmTextureStreamingStats computeStats() const;
+
         // Spawns the decode worker. A no-op on WASM, where update() decodes inline.
         void start();
 
@@ -220,6 +281,14 @@ namespace vkm
         struct Entry
         {
             std::string _path;
+            /*
+            * Debug name every rebuild of this texture reuses, so the texture browser shows one
+            * followable row per asset rather than a wall of identical ones. Owned here because
+            * VkmTextureInfo::_debugName is a borrowed pointer the texture keeps a copy of.
+            * Deliberately stable across rebuilds: the browser's own extent and mip columns are
+            * what show the level moving.
+            */
+            std::string _debugName;
             bool _srgb = false;
             glm::uvec2 _baseExtent{ 0, 0 };
             uint32_t _totalMipCount = 1;
@@ -290,6 +359,8 @@ namespace vkm
         // Entry a decode is running for, or INVALID_VALUE32. One at a time, engine-wide.
         uint32_t _jobEntryIndex = INVALID_VALUE32;
         uint64_t _tickCounter = 0;
+        // Rebuilds published, for computeStats. Cumulative over the scene's life.
+        uint32_t _rebuildsApplied = 0;
         // One past the largest material index any entry references, which sizes the reduction below.
         uint32_t _materialCount = 0;
         // Scratch for selectTargets, kept across ticks so a per-frame pass allocates nothing.

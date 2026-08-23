@@ -526,13 +526,31 @@ namespace vkm
     uint32_t vkmBytesPerTexel(VkmFormat format);
 
     /*
-    * @brief Best-effort estimate of a texture's base-mip-level byte footprint: extent x array
-    * layers x bytes-per-texel for the format.
-    * @details Does not sum the full mip chain -- a rough size estimate is all this is for, not an
-    * exact GPU byte count. Used as VkmResourceMemoryTag's requestedSize for textures on every
-    * backend, Metal and WebGPU having no format-size introspection API of their own.
+    * @brief Bytes one range of a texture's mip chain occupies.
+    * @details Level k of a chain whose level 0 is `baseExtent` measures max(1, e >> k) per axis,
+    * which is what every backend's copyBufferToTexture computes for that level -- so this sums
+    * exactly what an upload writes. Texel counts only: driver padding and alignment are not
+    * visible from here, which is why VkmResourceMemoryTag carries the API's own allocatedSize
+    * beside this.
+    * @param baseExtent Extent of level 0.
+    * @param numArrayLayers Layers, each carrying its own copy of the range.
+    * @param format Pixel format; an unknown or compressed one yields 0.
+    * @param baseLevel First level of the range.
+    * @param levelCount Levels in the range. A range running past the chain's 1x1 tail simply
+    * keeps adding 1x1 levels, so callers do not have to clamp it themselves.
+    * @return The byte size of the range.
+    */
+    uint64_t vkmMipRangeByteSize(const glm::uvec3& baseExtent, uint32_t numArrayLayers, VkmFormat format,
+                                 uint32_t baseLevel, uint32_t levelCount);
+
+    /*
+    * @brief A texture's whole byte footprint: every mip level it declares, times its array layers.
+    * @details Used as VkmResourceMemoryTag's requestedSize for textures on every backend, Metal and
+    * WebGPU having no format-size introspection API of their own. Summing the chain rather than the
+    * base level alone matters wherever mipped and unmipped textures are compared: a full chain is
+    * about 4/3 of its base level, so counting only level 0 under-reports it by a quarter.
     * @param info Texture description.
-    * @return The estimated byte size.
+    * @return The byte size.
     */
     uint64_t computeTextureByteSize(const VkmTextureInfo& info);
 

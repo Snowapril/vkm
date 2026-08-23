@@ -95,6 +95,21 @@ namespace vkm
                                                 textureWidth, totalMipCount, mipBias);
     }
 
+    std::string vkmMaterialTextureDebugName(const std::string& path, bool srgb)
+    {
+        // Hand-rolled rather than std::filesystem: this runs per texture at scene load on every
+        // platform including wasm, and the last separator is the whole of what is needed.
+        const size_t slash = path.find_last_of("/\\");
+        const size_t start = (slash == std::string::npos) ? 0 : slash + 1;
+        const size_t dot = path.find_last_of('.');
+        const size_t end = (dot == std::string::npos || dot < start) ? path.size() : dot;
+
+        std::string name = "SceneMaterialTexture:";
+        name.append(path, start, end - start);
+        name += srgb ? "(srgb)" : "(linear)";
+        return name;
+    }
+
     VkmTextureStreamer::~VkmTextureStreamer()
     {
         stopWorker();
@@ -105,6 +120,7 @@ namespace vkm
                                             VkmResourceHandle texture, uint32_t bindlessSlot)
     {
         Entry entry;
+        entry._debugName = vkmMaterialTextureDebugName(path, srgb);
         entry._path = std::move(path);
         entry._srgb = srgb;
         entry._baseExtent = baseExtent;
@@ -148,6 +164,36 @@ namespace vkm
     uint32_t VkmTextureStreamer::getTotalMipCount(uint32_t entryIndex) const
     {
         return (entryIndex < _entries.size()) ? _entries[entryIndex]._totalMipCount : 1u;
+    }
+
+    VkmTextureStreamingStats VkmTextureStreamer::computeStats() const
+    {
+        VkmTextureStreamingStats stats;
+        stats._textureCount = static_cast<uint32_t>(_entries.size());
+        stats._rebuildsApplied = _rebuildsApplied;
+        stats._rebuildInFlight = _build._active || _jobEntryIndex != INVALID_VALUE32;
+        stats._pendingRetireCount = static_cast<uint32_t>(_retired.size());
+
+        for (const Entry& entry : _entries)
+        {
+            const glm::uvec3 extent(entry._baseExtent.x, entry._baseExtent.y, 1);
+            const VkmFormat format = entry._srgb ? VkmFormat::R8G8B8A8_SRGB : VkmFormat::R8G8B8A8_UNORM;
+
+            stats._residentBytes += vkmMipRangeByteSize(extent, /*numArrayLayers=*/1, format,
+                                                        entry._residentBaseMip,
+                                                        entry._totalMipCount - entry._residentBaseMip);
+            stats._fullChainBytes += vkmMipRangeByteSize(extent, /*numArrayLayers=*/1, format,
+                                                         /*baseLevel=*/0, entry._totalMipCount);
+
+            const uint32_t bucket = std::min(entry._residentBaseMip, kVkmStreamingHistogramLevels - 1u);
+            ++stats._levelHistogram[bucket];
+
+            if (entry._streamingFailed)
+            {
+                ++stats._failedCount;
+            }
+        }
+        return stats;
     }
 
     void VkmTextureStreamer::start()
@@ -431,7 +477,9 @@ namespace vkm
             info._numMipLevels = static_cast<uint32_t>(_build._levels.size());
             info._numArrayLayers = 1;
             info._format = entry._srgb ? VkmFormat::R8G8B8A8_SRGB : VkmFormat::R8G8B8A8_UNORM;
-            info._debugName = "SceneMaterialTextureStreamed";
+            // The same name the initial upload used, so the browser shows one row per asset that
+            // survives a rebuild rather than a new anonymous one each time.
+            info._debugName = entry._debugName.c_str();
 
             VkmTexture* texture = driver->newTexture(info);
             if (texture == nullptr)
@@ -493,6 +541,7 @@ namespace vkm
         entry._texture = _build._texture;
         entry._bindlessSlot = newSlot;
         entry._residentBaseMip = _build._baseMip;
+        ++_rebuildsApplied;
 
         for (const std::pair<uint32_t, uint32_t>& reference : entry._references)
         {
@@ -580,6 +629,7 @@ namespace vkm
             _desiredBaseMips.clear();
             _materialProjectedPixels.clear();
             _materialCount = 0;
+            _rebuildsApplied = 0;
             _tickCounter = 0;
             return;
         }
@@ -608,6 +658,7 @@ namespace vkm
         _desiredBaseMips.clear();
         _materialProjectedPixels.clear();
         _materialCount = 0;
+        _rebuildsApplied = 0;
         _tickCounter = 0;
     }
 } // namespace vkm

@@ -428,7 +428,11 @@ namespace vkm
             // base colour and emissive are sRGB-encoded, metallic-roughness and normal are linear
             // data that must not be de-gamma'd on the way in.
             info._format = srgb ? VkmFormat::R8G8B8A8_SRGB : VkmFormat::R8G8B8A8_UNORM;
-            info._debugName = "SceneMaterialTexture";
+            // Named per asset rather than all alike, so the texture browser lists one followable
+            // row per image; a streamed rebuild reuses the same name. Held in a local because
+            // _debugName is borrowed and newTexture copies it.
+            const std::string debugName = vkmMaterialTextureDebugName(path, srgb);
+            info._debugName = debugName.c_str();
 
             VkmTexture* texture = driver->newTexture(info);
             bool uploadedAllLevels = texture != nullptr;
