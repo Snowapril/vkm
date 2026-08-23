@@ -118,6 +118,11 @@ VKM_GLOBAL_VARIABLE(float, gv_gi_probe_normal_bias, 0.25f);
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_x, 20u);
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_y, 10u);
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_z, 20u);
+// Uniform scale applied to the imported model. Everything the sample derives -- camera orbit,
+// shadow distance, probe grid -- follows the scene's bounds, so this is not a way to see more; it
+// is a way to check that the engine's absolute limits are not being leaned on. The shadow atlas
+// stores distance in RGBA16F against a sentinel of 60000, and both are absolute.
+VKM_GLOBAL_VARIABLE(float, gv_gi_scene_scale, 1.0f);
 // Fraction of the scene's radius to orbit at. Below 1 the camera starts inside the geometry, which
 // is where a probe volume is actually judged -- an exterior view can look right while the interior
 // is black, which is exactly how the scene-scale bug got past a screenshot.
@@ -642,7 +647,29 @@ private:
         VkmSceneModel model;
         std::string error;
         VkmGltfImportOptions importOptions;
-        if (!importGltfModel(path, &model, &error, importOptions) || !_scene.addModel(model, &error))
+        if (!importGltfModel(path, &model, &error, importOptions))
+        {
+            VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
+            return;
+        }
+        // Applied to the roots, so the draw list, the light placements and the bounds all follow
+        // from the hierarchy walk rather than from three separate corrections.
+        const float sceneScale = glm::max(gv_gi_scene_scale.get(), 1e-3f);
+        if (sceneScale != 1.0f)
+        {
+            const glm::mat4 scaling = glm::scale(glm::mat4(1.0f), glm::vec3(sceneScale));
+            for (const uint32_t root : model._rootNodeIndices)
+            {
+                model._nodes[root]._localTransform = scaling * model._nodes[root]._localTransform;
+            }
+            // A range is a world distance and does not ride a node transform, so it is the one
+            // thing the hierarchy walk cannot carry.
+            for (VkmScenePunctualLight& light : model._lights)
+            {
+                light._range *= sceneScale;
+            }
+        }
+        if (!_scene.addModel(model, &error))
         {
             VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
             return;
