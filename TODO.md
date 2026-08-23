@@ -184,4 +184,4 @@
 - Cascade boundary blending has no test gate; it is verified only by a pixel-difference measurement on the gi sample.
 - The probe budget and the shadow tile count are each sized against a hand-picked share of the push-constant ring, so a scene with more draw batches than Sponza silently clamps them again.
 - The probe capture's scene-fitted shadow tile is one tile for the whole scene, so its shadows are far coarser than the cascades the camera pass reads.
-- The probe capture costs budget x 6 faces x draw batches draws per frame with no per-face culling, which is 49 ms on Sponza at budget 32.
+- Per-face probe culling only removes 28% of the capture's draws, because a draw batch is a material run and half of Sponza's span more than half the model.

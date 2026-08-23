@@ -238,6 +238,12 @@ namespace vkm
         _captureConstantValues = VkmProbeCaptureConstants{};
         vkmBuildProbeFaceViewProjections(glm::vec3(0.0f), _descriptor._nearZ, _descriptor._farZ,
                                          _captureConstantValues._faceViewProjection);
+        // From the same matrices the capture renders with, so a batch this rejects is one the face
+        // would have clipped away anyway.
+        for (uint32_t face = 0; face < 6u; ++face)
+        {
+            vkmExtractFrustumPlanes(_captureConstantValues._faceViewProjection[face], _facePlanes[face]);
+        }
         if (!createAndUpload(&_captureConstantValues, sizeof(_captureConstantValues),
                              "VkmProbeCaptureConstants", _captureConstants))
         {
@@ -572,7 +578,27 @@ namespace vkm
                             _materialTables[static_cast<uint32_t>(batch._layout)].bind(cb, batch._materialIndex);
                             cb->setPushConstants(&push, sizeof(push));
                         },
-                        _descriptor._cullViewIndex);
+                        _descriptor._cullViewIndex,
+                        // Per face, not per frame: the GPU cull runs once for the whole slice, so
+                        // without this every face redraws every batch the slice's box kept --
+                        // including the five sixths of the scene behind it.
+                        [this, face, probePosition](const VkmScene::DrawBatch& batch) {
+                            // A batch with no bounds has to be drawn: radius 0 at the origin would
+                            // reject a batch that is merely unmeasured.
+                            if (batch._boundsRadius <= 0.0f)
+                            {
+                                return true;
+                            }
+                            const glm::vec3 relative = batch._boundsCenter - probePosition;
+                            for (const glm::vec4& plane : _facePlanes[face])
+                            {
+                                if (glm::dot(glm::vec3(plane), relative) + plane.w < -batch._boundsRadius)
+                                {
+                                    return false;
+                                }
+                            }
+                            return true;
+                        });
                 }
             }
         });

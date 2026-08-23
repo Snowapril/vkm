@@ -207,3 +207,34 @@ TEST_CASE("VkmScene - world bounds follow the node transforms") {
     CHECK(bounds._min.x == doctest::Approx(0.0f));
     CHECK(bounds._max.x == doctest::Approx(2.0f));
 }
+
+TEST_CASE("VkmScene - a batch's bounds enclose its objects in world space") {
+    VkmScene scene;
+    std::string error;
+    REQUIRE(scene.addModel(makeModel({ VkmVertexLayoutPreset::StandardPBR,
+                                       VkmVertexLayoutPreset::StandardPBR },
+                                     { 0, 0 }),
+                           &error));
+    REQUIRE(scene.getDrawBatches().size() == 1);
+
+    // A viewpoint culls a whole batch against this sphere, so it has to be conservative: every
+    // corner of the geometry it covers must be inside it. Bounds left in object space -- the
+    // meshes are identical and only their node transforms differ -- would enclose one triangle
+    // and cull the batch away from viewpoints looking straight at the other.
+    const vkm::VkmSceneAABB world = scene.computeWorldBounds();
+    REQUIRE(world._valid);
+    const VkmScene::DrawBatch& batch = scene.getDrawBatches()[0];
+    REQUIRE(batch._boundsRadius > 0.0f);
+    for (uint32_t corner = 0; corner < 8u; ++corner)
+    {
+        const glm::vec3 point((corner & 1u) ? world._max.x : world._min.x,
+                              (corner & 2u) ? world._max.y : world._min.y,
+                              (corner & 4u) ? world._max.z : world._min.z);
+        CHECK(glm::length(point - batch._boundsCenter) <= batch._boundsRadius + 1e-4f);
+    }
+
+    // And tight enough to be worth testing against: a sphere around the whole scene would pass
+    // the check above while culling nothing.
+    CHECK(batch._boundsCenter.x == doctest::Approx(1.0f));
+    CHECK(batch._boundsRadius < glm::length(world.getExtent()));
+}

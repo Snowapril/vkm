@@ -287,6 +287,33 @@ namespace vkm
             batch._objectCount = 1;
             _drawBatches.push_back(batch);
         }
+
+        // World bounds per batch, in a second pass: a batch's extent is only known once its whole
+        // object run is.
+        for (DrawBatch& batch : _drawBatches)
+        {
+            updateBatchBounds(batch);
+        }
+        _batchBoundsDirty = false;
+    }
+
+    void VkmScene::updateBatchBounds(DrawBatch& batch)
+    {
+        VkmSceneAABB bounds;
+        for (uint32_t i = 0; i < batch._objectCount; ++i)
+        {
+            const VkmSceneObject& object = _objects[batch._firstObject + i];
+            const VkmSceneAABB& local = _meshEntries[object._meshEntryIndex]._bounds;
+            if (!local._valid)
+            {
+                continue;
+            }
+            bounds.expand(local.transformed(object._worldTransform));
+        }
+        // Left at radius 0 when nothing in the batch had bounds, which a cull test must read as
+        // "cannot be excluded" rather than as a point at the origin.
+        batch._boundsCenter = bounds._valid ? bounds.getCenter() : glm::vec3(0.0f);
+        batch._boundsRadius = bounds._valid ? glm::length(bounds.getExtent()) * 0.5f : 0.0f;
     }
 
     void vkmBuildBoxPlanes(const glm::vec3& boxMin, const glm::vec3& boxMax, glm::vec4* outPlanes)
@@ -1076,6 +1103,10 @@ namespace vkm
         _objects[objectIndex]._worldTransform = worldTransform;
         _objectData[objectIndex]._worldTransform = worldTransform;
         _objectData[objectIndex]._normalTransform = glm::mat4(glm::inverseTranspose(glm::mat3(worldTransform)));
+        // The batch's world bounds are derived from these transforms, so moving an object after
+        // build() invalidates them. Flagged rather than recomputed here: recomputing a whole
+        // batch per moved object is quadratic, and a caller that animates a scene moves many.
+        _batchBoundsDirty = true;
 
         if (_dirtyFirst == _dirtyEnd)
         {
@@ -1087,12 +1118,28 @@ namespace vkm
         _dirtyEnd = std::max(_dirtyEnd, objectIndex + 1);
     }
 
+    void VkmScene::refreshBatchBounds()
+    {
+        if (!_batchBoundsDirty)
+        {
+            return;
+        }
+        for (DrawBatch& batch : _drawBatches)
+        {
+            updateBatchBounds(batch);
+        }
+        _batchBoundsDirty = false;
+    }
+
     void VkmScene::recordUpdate(VkmCommandBufferBase* commandBuffer, uint32_t frameIndex,
                                 const VkmFrameData& frameData, uint32_t viewIndex)
     {
         VKM_ASSERT(commandBuffer != nullptr, "VkmScene::recordUpdate requires a command buffer");
         VKM_ASSERT(frameIndex < FRAME_BUFFER_COUNT, "VkmScene::recordUpdate frame index is out of range");
         VKM_ASSERT(viewIndex < kVkmSceneMaxCullViews, "VkmScene::recordUpdate view index is out of range");
+
+        // Before this frame's draws, so a viewpoint culls against where the objects are now.
+        refreshBatchBounds();
 
         if (_objectData.empty())
         {
@@ -1214,7 +1261,8 @@ namespace vkm
     void VkmScene::recordDrawBatches(VkmCommandBufferBase* commandBuffer,
                                      const std::function<VkmPipelineStateBase*(const DrawBatch&)>& pipelineResolver,
                                      const std::function<void(VkmCommandBufferBase*, const DrawBatch&)>& beforeDraw,
-                                     uint32_t viewIndex)
+                                     uint32_t viewIndex,
+                                     const std::function<bool(const DrawBatch&)>& batchFilter)
     {
         VKM_ASSERT(commandBuffer != nullptr, "VkmScene::recordDrawBatches requires a command buffer");
         VKM_ASSERT(viewIndex < kVkmSceneMaxCullViews, "VkmScene::recordDrawBatches view index is out of range");
@@ -1225,6 +1273,10 @@ namespace vkm
 
         for (const DrawBatch& batch : _drawBatches)
         {
+            if (batchFilter && !batchFilter(batch))
+            {
+                continue;
+            }
             VkmPipelineStateBase* pipeline = pipelineResolver(batch);
             if (pipeline == nullptr)
             {

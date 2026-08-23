@@ -244,6 +244,12 @@ namespace vkm
         VkmResourceHandle _shadowStubTexture{ VKM_INVALID_RESOURCE_HANDLE };
         VkmResourceHandle _shadowStubConstants{ VKM_INVALID_RESOURCE_HANDLE };
         VkmProbeCaptureConstants _captureConstantValues{};
+        /*
+        * Frustum planes of the six capture faces, in PROBE-RELATIVE space -- the space the face
+        * matrices are built in, so one set serves every probe. A batch is tested by offsetting its
+        * centre by the probe's position rather than by rebuilding the planes per probe.
+        */
+        glm::vec4 _facePlanes[6][6]{};
 
         std::vector<bool> _everRefreshed;
         uint32_t _maxBudget = 1u;
