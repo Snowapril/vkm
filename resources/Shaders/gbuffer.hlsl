@@ -68,6 +68,17 @@ VKM_BINDLESS_OBJECT_DATA(ObjectData, g_ObjectData);
 VKM_BINDLESS_FRAME_DATA(FrameData, g_FrameData);
 VKM_MATERIAL_DECLARE();
 
+/*
+* Texture streaming's feedback channel. The G-buffer pass is the one that decides what is on screen
+* at render resolution, so it is the one that votes; the probe capture deliberately does not.
+* Never declared on the WebGPU branch -- that backend has no bindless texture array to key the
+* entries by, and its graphics bind group stops before the first writable singleton.
+*/
+#if !defined(VKM_BACKEND_WEBGPU)
+VKM_BINDLESS_TEXTURE_FEEDBACK(g_VkmTextureFeedback);
+VKM_MATERIAL_FEEDBACK_RECORDER(g_VkmTextureFeedback)
+#endif
+
 #if defined(VKM_VERTEX_LAYOUT_STANDARD_PBR)
     // position f32x3 @0, normal f32x3 @16, uv0 f32x2 @32, tangent f32x4 @48; stride 64 = 16 words
     #define VERTEX_STRIDE_WORDS 16
@@ -215,6 +226,24 @@ PSOutput PSMain(VSOutput input)
     const float4 baseColor = vkmSampleBaseColor(material, input.uv);
     const float2 metallicRoughness = vkmSampleMetallicRoughness(material, input.uv);
     const float3 emissive = vkmSampleEmissive(material, input.uv);
+
+#if !defined(VKM_BACKEND_WEBGPU)
+    /*
+    * Report what this pixel wanted, for texture streaming. Beside the samples and above the
+    * alpha-mask discard for the same reason they are: the LOD query is an implicit-derivative
+    * operation and must stay in uniform control flow.
+    * Only the three channels that are actually sampled vote -- a normal map nothing reads should
+    * not hold a texture resident.
+    */
+    const uint2 feedbackPixel = uint2(input.position.xy);
+    if ((feedbackPixel.x % VKM_TEXTURE_FEEDBACK_PIXEL_STRIDE) == 0u &&
+        (feedbackPixel.y % VKM_TEXTURE_FEEDBACK_PIXEL_STRIDE) == 0u)
+    {
+        vkmRecordTextureFeedback(material.baseColorSlot, input.uv);
+        vkmRecordTextureFeedback(material.metallicRoughnessSlot, input.uv);
+        vkmRecordTextureFeedback(material.emissiveSlot, input.uv);
+    }
+#endif
 
     /*
     * glTF alphaMode MASK. A masked material's base-colour alpha is a stencil, not an opacity:

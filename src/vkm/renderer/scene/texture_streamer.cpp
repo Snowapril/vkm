@@ -88,6 +88,14 @@ namespace vkm
         return static_cast<uint32_t>(biased);
     }
 
+    uint32_t vkmStreamingBaseMipFromFeedback(uint32_t reported, uint32_t residentBaseMip,
+                                             uint32_t totalMipCount)
+    {
+        const uint32_t lastLevel = (totalMipCount == 0u) ? 0u : (totalMipCount - 1u);
+        const uint32_t absolute = residentBaseMip + std::min(reported, kVkmTextureFeedbackMaxLevel);
+        return std::min(absolute, lastLevel);
+    }
+
     uint32_t vkmSelectStreamingBaseMip(const VkmTextureStreamingView& view, float distance, float worldRadius,
                                        uint32_t textureWidth, uint32_t totalMipCount, int32_t mipBias)
     {
@@ -192,6 +200,10 @@ namespace vkm
             {
                 ++stats._failedCount;
             }
+            if (entry._feedbackBaseMip != INVALID_VALUE32)
+            {
+                ++stats._feedbackCount;
+            }
         }
         return stats;
     }
@@ -208,6 +220,29 @@ namespace vkm
         }
         _workerThread = std::thread(&VkmTextureStreamer::workerLoop, this);
 #endif
+    }
+
+    void VkmTextureStreamer::applyFeedback(const uint32_t* feedback, uint32_t count)
+    {
+        for (Entry& entry : _entries)
+        {
+            // Cleared unconditionally: an entry nothing sampled this frame must fall back to the
+            // estimate rather than keep answering with a reading from whenever it was last visible.
+            entry._feedbackBaseMip = INVALID_VALUE32;
+
+            if (feedback == nullptr || entry._bindlessSlot >= count)
+            {
+                continue;
+            }
+            const uint32_t reported = feedback[entry._bindlessSlot];
+            if (reported == kVkmTextureFeedbackUnused)
+            {
+                continue;
+            }
+
+            entry._feedbackBaseMip =
+                vkmStreamingBaseMipFromFeedback(reported, entry._residentBaseMip, entry._totalMipCount);
+        }
     }
 
     void VkmTextureStreamer::stopWorker()
@@ -321,6 +356,21 @@ namespace vkm
             const Entry& entry = _entries[entryIndex];
             if (entry._streamingFailed)
             {
+                continue;
+            }
+
+            /*
+            * What the screen actually sampled beats what a bounding sphere predicts, so where the
+            * GPU reported a level the estimate is not consulted at all. The estimate cannot see UV
+            * density, grazing angles or occlusion; the reading is the ground truth for all three.
+            */
+            if (entry._feedbackBaseMip != INVALID_VALUE32)
+            {
+                const int32_t biased =
+                    static_cast<int32_t>(entry._feedbackBaseMip) + _settings._mipBias;
+                const int32_t lastLevel = static_cast<int32_t>(entry._totalMipCount) - 1;
+                _desiredBaseMips[entryIndex] =
+                    static_cast<uint32_t>(std::clamp(biased, 0, std::max(0, lastLevel)));
                 continue;
             }
 

@@ -40,6 +40,22 @@
 // alone. Mirrors INVALID_VALUE32.
 #define VKM_MATERIAL_NO_TEXTURE 0xFFFFFFFFu
 
+// Levels a feedback entry can report, and the "nothing sampled this" value the buffer is cleared
+// to. Mirrors kVkmTextureFeedbackMaxLevel / kVkmTextureFeedbackUnused in texture_streamer.h.
+#define VKM_TEXTURE_FEEDBACK_MAX_LEVEL 15u
+#define VKM_TEXTURE_FEEDBACK_UNUSED    0xFFFFFFFFu
+
+/*
+* Only pixels on this stride vote, which is what makes the feedback write cheap enough to leave on
+* unconditionally rather than gate behind a permutation.
+*
+* Every pixel voting would serialise a great many atomics onto the handful of slots a large surface
+* covers, and buy nothing: the answer wanted is the *minimum* level over a surface, and a surface
+* thin enough to fall entirely between votes is one whose texture detail cannot matter. 4 gives one
+* vote per 16 pixels.
+*/
+#define VKM_TEXTURE_FEEDBACK_PIXEL_STRIDE 4u
+
 struct VkmMaterial
 {
     float4 baseColorFactor;
@@ -188,6 +204,39 @@ float3 vkmStreamingMipHeatColor(float2 streamingMip)
     VKM_MATERIAL_LOADER()                                                                           \
     VKM_MATERIAL_STREAMING_LOADER()                                                                 \
     VKM_MATERIAL_SAMPLERS()
+
+/*
+* Reports the mip level this pixel wanted, for texture streaming to read back.
+*
+* Deliberately NOT part of VKM_MATERIAL_DECLARE(): eight shaders expand that macro, and only the
+* pass that decides what is on screen should vote. The probe capture in particular must not --
+* probes look in every direction, so letting them vote would drag every texture to full resolution
+* and defeat streaming entirely.
+*
+* The level is relative to the texture actually sampled, which for a streamed texture is already
+* reduced. The CPU adds that slot's resident base mip to recover a chain-absolute level; doing it
+* that way keeps the reading correct even while a rebuild is in flight, and needs nothing extra in
+* the material record.
+*
+* InterlockedMin because the finest level any pixel needed is the one that matters -- a plain store
+* would let an arbitrary distant pixel win and leave the surface under-resolved.
+*
+* Place after VKM_MATERIAL_DECLARE() and VKM_BINDLESS_TEXTURE_FEEDBACK(); it reads both.
+*/
+#define VKM_MATERIAL_FEEDBACK_RECORDER(feedbackBuffer)                                              \
+    void vkmRecordTextureFeedback(uint slot, float2 uv)                                             \
+    {                                                                                               \
+        if (slot == VKM_MATERIAL_NO_TEXTURE)                                                        \
+        {                                                                                           \
+            return;                                                                                 \
+        }                                                                                           \
+        const float lod = g_VkmMaterialTextures[NonUniformResourceIndex(slot)]                      \
+                              .CalculateLevelOfDetail(g_VkmMaterialSampler, uv);                    \
+        uint previous;                                                                              \
+        InterlockedMin(feedbackBuffer[slot],                                                        \
+                       (uint)clamp(round(lod), 0.0, (float)VKM_TEXTURE_FEEDBACK_MAX_LEVEL),         \
+                       previous);                                                                   \
+    }
 
 #endif
 

@@ -67,6 +67,19 @@ namespace vkm
     inline constexpr uint32_t kVkmStreamingHistogramLevels = 16;
 
     /*
+    * The GPU feedback channel's encoding. Mirrored by VKM_TEXTURE_FEEDBACK_* in vkm_material.hlsli.
+    * @details One u32 per bindless texture slot, atomically minimised by the G-buffer pass to the
+    * finest level any pixel wanted. The level is relative to the texture actually sampled, which
+    * for a streamed texture is already reduced -- the streamer adds the entry's resident base mip
+    * to recover a chain-absolute one.
+    */
+    inline constexpr uint32_t kVkmTextureFeedbackMaxLevel = 15;
+    // What the buffer is cleared to each frame; a slot still holding it was sampled by nothing.
+    inline constexpr uint32_t kVkmTextureFeedbackUnused = 0xFFFFFFFFu;
+    // One pixel in this many, per axis, votes. See the shader-side comment for why.
+    inline constexpr uint32_t kVkmTextureFeedbackPixelStride = 4;
+
+    /*
     * @brief What streaming currently costs, and what it would have cost without.
     * @details The pairing is the point: resident bytes alone say nothing, and the same figure beside
     * the full-chain baseline is the whole readout. Both cover only the textures the streamer owns,
@@ -96,6 +109,12 @@ namespace vkm
         * rather than left to look like textures the camera simply wants at level 0.
         */
         uint32_t _failedCount = 0;
+        /*
+        * Textures whose target came from GPU feedback rather than the bounding-sphere estimate.
+        * Zero means the readback is not arriving -- the tier fell back silently, which is exactly
+        * the failure a readout has to be able to show.
+        */
+        uint32_t _feedbackCount = 0;
         // How many textures sit at each base level; index 0 is "whole chain resident".
         std::array<uint16_t, kVkmStreamingHistogramLevels> _levelHistogram{};
     };
@@ -176,6 +195,23 @@ namespace vkm
                                               uint32_t totalMipCount, int32_t mipBias);
 
     /*
+    * @brief Converts one GPU feedback reading into a chain-absolute base level.
+    * @details The shader measures against the texture it sampled, which for a streamed texture
+    * already starts at `residentBaseMip` -- so a reading of 0 means "the finest level I currently
+    * hold", not "level 0 of the chain". Adding the base is what makes the loop self-correcting:
+    * stream out two levels and the next reading comes back two higher, naming the same absolute
+    * level again rather than chasing itself down to nothing.
+    * Free-standing for the same reason the projection maths is: this is where an off-by-one hides,
+    * and it is testable without a driver.
+    * @param reported What the shader wrote, clamped internally to kVkmTextureFeedbackMaxLevel.
+    * @param residentBaseMip The level the sampled texture currently starts at.
+    * @param totalMipCount Levels the full chain has.
+    * @return The absolute level, in [0, totalMipCount - 1].
+    */
+    uint32_t vkmStreamingBaseMipFromFeedback(uint32_t reported, uint32_t residentBaseMip,
+                                             uint32_t totalMipCount);
+
+    /*
     * @brief Keeps each material texture at the mip range the camera actually needs, by rebuilding
     * the texture rather than by narrowing a view.
     *
@@ -254,6 +290,20 @@ namespace vkm
         void start();
 
         /*
+        * @brief Hands the streamer one frame's GPU feedback, to use instead of the CPU estimate.
+        * @details What the screen actually sampled beats a bounding sphere: it accounts for UV
+        * density, grazing angles and occlusion, none of which a projected sphere can see. A slot
+        * still holding kVkmTextureFeedbackUnused was sampled by nothing this frame and keeps the
+        * estimate, which is what stops a texture evicting the instant it leaves the screen.
+        * The reading is several frames stale by construction -- it is read back without stalling --
+        * which streaming tolerates and nothing here should try to "fix".
+        * Call before update() each frame; a frame without a call simply falls back to the estimate.
+        * @param feedback One entry per bindless texture slot, as the shader left it. Not retained.
+        * @param count Entries in `feedback`.
+        */
+        void applyFeedback(const uint32_t* feedback, uint32_t count);
+
+        /*
         * @brief Advances the streaming state by one frame: picks targets, moves an in-flight
         * rebuild along, and releases what has aged out.
         * @details The one entry point that touches the driver, and the only one meant to be called
@@ -300,6 +350,13 @@ namespace vkm
             // Level the selection last asked for, and how many consecutive ticks it has asked it.
             uint32_t _candidateBaseMip = 0;
             uint32_t _candidateTickCount = 0;
+            /*
+            * Chain-absolute level the GPU reported for this entry, or INVALID_VALUE32 where the
+            * last feedback frame saw nobody sample it. Cleared every applyFeedback(), so a texture
+            * that leaves the screen falls back to the CPU estimate rather than holding a stale
+            * reading forever.
+            */
+            uint32_t _feedbackBaseMip = INVALID_VALUE32;
             // Set once a rebuild has failed, which pins the entry at whatever it already holds.
             // A file that cannot be re-read will not start reading correctly on a later tick, and
             // retrying would re-pay the decode every time the camera asked again.

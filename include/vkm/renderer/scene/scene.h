@@ -554,6 +554,26 @@ namespace vkm
 
         VkmTextureStreamer _textureStreamer;
         bool _textureStreamingAvailable = false;
+
+        /*
+        * Texture streaming's GPU feedback channel: one u32 per bindless texture slot, written by
+        * the G-buffer pass and read back a few frames later.
+        *
+        * The ring is one longer than the frame count on purpose. At the point this is read -- the
+        * top of updateTextureStreaming, before the frame records anything -- the newest frame
+        * provably complete is FRAME_BUFFER_COUNT + 1 back, because this frame's own wait has not
+        * happened yet. A ring of exactly FRAME_BUFFER_COUNT would hand back a slot still in
+        * flight; one more slot makes the read safe without a single extra wait.
+        */
+        static constexpr uint32_t kFeedbackRingSize = FRAME_BUFFER_COUNT + 1;
+        VkmResourceHandle _feedbackBuffer{ VKM_INVALID_RESOURCE_HANDLE };
+        // Zero-filled source for the per-frame reset, the same trick _countClearBuffer uses.
+        VkmResourceHandle _feedbackClearBuffer{ VKM_INVALID_RESOURCE_HANDLE };
+        std::array<VkmResourceHandle, kFeedbackRingSize> _feedbackStaging{};
+        std::array<VkmStagingBuffer*, kFeedbackRingSize> _feedbackStagingPointers{};
+        // Monotonic, incremented once per updateTextureStreaming, which indexes the ring.
+        uint64_t _feedbackFrameCounter = 0;
+        std::vector<uint32_t> _feedbackScratch;
         // Scratch for updateTextureStreaming, kept so a per-frame pass allocates nothing.
         std::vector<VkmTextureStreamingObject> _streamingObjects;
         std::vector<VkmTextureStreamingUpdate> _streamingUpdates;

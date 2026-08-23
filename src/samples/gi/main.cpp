@@ -247,6 +247,10 @@ namespace
         {
             ImGui::TextDisabled("%u texture(s) pinned by a failed rebuild", stats._failedCount);
         }
+
+        // Zero here with streaming on means the readback never arrived and the targets quietly
+        // came from the bounding-sphere estimate instead -- a silent fallback worth seeing.
+        ImGui::TextDisabled("Targets from GPU feedback: %u of %u", stats._feedbackCount, stats._textureCount);
     }
 #endif
 } // namespace

@@ -182,3 +182,9 @@
 - Texture-category bytes tick *up* before they come down on a pull-back: the rebuilt texture is allocated while the old one is still live, and the displaced one is held for `FRAME_BUFFER_COUNT + 1` ticks after that.
 - Material textures created before the bindless array was available, or after it was exhausted, burn texture-category bytes that `VkmTextureStreamingStats` cannot see.
 - `VkmTextureStreamingStats::_textureCount` counts `(path, colour space)` pairs, so one image sampled both ways counts twice — correct for memory, surprising as a texture count.
+- `VKM_BINDLESS_ACCELERATION_STRUCTURE`'s binding number is hardcoded in `vkm_bindless.hlsli` with no compile-time link to `VkmBindlessSingletonBuffer::Count`, so adding a singleton silently moves the structure out from under every ray-query shader.
+- `vkm_ray_tracing_shaders` is a separate build target from `vkm_engine_shaders`, so a set-0 layout change that is not built through both leaves half the shader caches stale.
+- Texture feedback is several frames stale by construction (a readback ring, deliberately no stall), so a texture entering the screen streams in a few frames after it appears.
+- Texture feedback is written only by the G-buffer pass, so a texture visible solely through a probe capture, the path tracer or model_viewer keeps the CPU bounding-sphere estimate.
+- One pixel in 16 votes for texture feedback, so a surface thinner than 4 pixels in either axis may never vote and falls back to the estimate.
+- Texture feedback rides a set-0 singleton the WebGPU graphics bind group deliberately omits, so that backend is tier 0 permanently; WGSL has no LOD-query builtin either.

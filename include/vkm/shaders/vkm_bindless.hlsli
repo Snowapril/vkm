@@ -141,6 +141,17 @@
     [[vk::binding(7, 0)]] RWStructuredBuffer<uint> name : register(u1, space0)
 
 /*
+* One u32 per bindless texture slot, holding the finest mip level any pixel wanted this frame.
+* Unlike the two singletons above, this one IS meant for a render pipeline's fragment shader --
+* reporting what the screen sampled is the whole point, and it is never fetched as an indirect
+* buffer, so the usage-scope conflict that keeps those two out of a render pass does not apply.
+* Declared on this branch only: the WebGPU graphics bind group stops before the first writable
+* singleton, and that backend has no bindless texture array to key the entries by regardless.
+*/
+#define VKM_BINDLESS_TEXTURE_FEEDBACK(name) \
+    [[vk::binding(8, 0)]] RWStructuredBuffer<uint> name : register(u2, space0)
+
+/*
 * The scene's top-level acceleration structure, at kVkmBindlessAccelerationStructureBinding --
 * one structure, not an array. A pointer-style bindless acceleration structure is not available on
 * the Metal path at all: spirv-cross throws on OpConvertUToAccelerationStructureKHR (restir.md
@@ -155,8 +166,11 @@
 * never reports VkmDriverCapabilityFlags::RayTracing, so a shader declaring this cannot build
 * there. A PSO whose stage sets "ray_query": true is what carries the SM 6.5 profile this needs.
 */
+// Binding 9 = kVkmBindlessAccelerationStructureBinding: the singletons start at 4 and there are
+// five of them, so this sits one past the last. Adding a singleton moves it, and the number here
+// must move with it or a shader binds the structure where the runtime published something else.
 #define VKM_BINDLESS_ACCELERATION_STRUCTURE(name) \
-    [[vk::binding(8, 0)]] RaytracingAccelerationStructure name : register(t5, space0)
+    [[vk::binding(9, 0)]] RaytracingAccelerationStructure name : register(t5, space0)
 
 #endif // VKM_BACKEND_WEBGPU
 

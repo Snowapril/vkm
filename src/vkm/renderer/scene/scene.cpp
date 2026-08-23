@@ -696,6 +696,56 @@ namespace vkm
             _countClearBuffer = clearBuffer->getHandle();
         }
 
+        /*
+        * The texture-streaming feedback channel. Created wherever the bindless texture array
+        * exists, whether or not streaming is enabled: the G-buffer shader writes it
+        * unconditionally, and a declared singleton nothing published is a descriptor the shader
+        * would write into nowhere.
+        */
+        if (_textureStreamingAvailable)
+        {
+            const uint64_t feedbackSize = kVkmBindlessTextureCapacity * sizeof(uint32_t);
+            const std::vector<uint32_t> unused(kVkmBindlessTextureCapacity, kVkmTextureFeedbackUnused);
+
+            VkmBuffer* feedbackBuffer = createStorageBuffer(driver, feedbackSize, "SceneTextureFeedback");
+            VkmBuffer* feedbackClear = createStorageBuffer(driver, feedbackSize, "SceneTextureFeedbackClear");
+            if (feedbackBuffer == nullptr || feedbackClear == nullptr ||
+                !driver->uploadToBuffer(feedbackClear->getHandle(), unused.data(), feedbackSize))
+            {
+                if (feedbackBuffer != nullptr) { _feedbackBuffer = feedbackBuffer->getHandle(); }
+                if (feedbackClear != nullptr) { _feedbackClearBuffer = feedbackClear->getHandle(); }
+                destroy(driver);
+                return fail(outError, "Failed to create the scene's texture feedback buffers");
+            }
+            _feedbackBuffer = feedbackBuffer->getHandle();
+            _feedbackClearBuffer = feedbackClear->getHandle();
+
+            if (!bindlessManager->setSingletonBuffer(VkmBindlessSingletonBuffer::TextureFeedback, _feedbackBuffer))
+            {
+                destroy(driver);
+                return fail(outError, "Failed to publish the scene's texture feedback buffer");
+            }
+
+            for (uint32_t slot = 0; slot < kFeedbackRingSize; ++slot)
+            {
+                // AllowTransferDst is what selects the host-readable shape; see newStagingBuffer.
+                VkmStagingBufferInfo stagingInfo{};
+                stagingInfo._flags = VkmResourceCreateInfo::AllowTransferDst;
+                stagingInfo._size = feedbackSize;
+                stagingInfo._debugName = "SceneTextureFeedbackReadback";
+
+                VkmStagingBuffer* staging = driver->newStagingBuffer(stagingInfo);
+                if (staging == nullptr)
+                {
+                    destroy(driver);
+                    return fail(outError, "Failed to create the scene's texture feedback readback ring");
+                }
+                _feedbackStaging[slot] = staging->getHandle();
+                _feedbackStagingPointers[slot] = staging;
+            }
+            _feedbackScratch.assign(kVkmBindlessTextureCapacity, kVkmTextureFeedbackUnused);
+        }
+
         // One staging buffer per frame slot, laid out as
         // [ObjectData array][FrameData per view][MaterialData array]. The material region is the
         // streaming path's: a rebuilt texture lands on a new bindless slot, so its records have to
@@ -1025,6 +1075,7 @@ namespace vkm
             bindlessManager->setSingletonBuffer(VkmBindlessSingletonBuffer::FrameData, VKM_INVALID_RESOURCE_HANDLE);
             bindlessManager->setSingletonBuffer(VkmBindlessSingletonBuffer::VisibleList, VKM_INVALID_RESOURCE_HANDLE);
             bindlessManager->setSingletonBuffer(VkmBindlessSingletonBuffer::IndirectArgument, VKM_INVALID_RESOURCE_HANDLE);
+            bindlessManager->setSingletonBuffer(VkmBindlessSingletonBuffer::TextureFeedback, VKM_INVALID_RESOURCE_HANDLE);
         }
         _materialPoolSlot = INVALID_VALUE32;
         _lightPoolSlot = INVALID_VALUE32;
@@ -1066,6 +1117,15 @@ namespace vkm
         release(_visibleListBuffer);
         release(_argumentBuffer);
         release(_countClearBuffer);
+        release(_feedbackBuffer);
+        release(_feedbackClearBuffer);
+        for (VkmResourceHandle& staging : _feedbackStaging)
+        {
+            release(staging);
+        }
+        _feedbackStagingPointers.fill(nullptr);
+        _feedbackFrameCounter = 0;
+        _feedbackScratch.clear();
         for (VkmResourceHandle& staging : _stagingBuffers)
         {
             release(staging);
@@ -1167,6 +1227,24 @@ namespace vkm
             _materialDirtyFirst = 0;
             _materialDirtyEnd = 0;
         }
+
+        /*
+        * Texture feedback, camera view only: the probe refresh's cull view draws nothing and would
+        * otherwise copy the same buffer twice for no reason.
+        *
+        * The copy takes last frame's contents -- it is recorded before this frame's G-buffer pass
+        * writes them -- which is exactly the intent. Reading the buffer this frame is about to
+        * write would need a barrier and a wait; reading what the previous frame left needs neither.
+        * The clear then follows in the same transfer subgraph, so the pass that runs after it
+        * starts from "nothing sampled".
+        */
+        if (viewIndex == 0 && _feedbackBuffer != VKM_INVALID_RESOURCE_HANDLE)
+        {
+            const uint64_t feedbackSize = kVkmBindlessTextureCapacity * sizeof(uint32_t);
+            const uint32_t ringSlot = static_cast<uint32_t>(_feedbackFrameCounter % kFeedbackRingSize);
+            commandBuffer->copyBuffer(_feedbackBuffer, _feedbackStaging[ringSlot], 0, 0, feedbackSize);
+            commandBuffer->copyBuffer(_feedbackClearBuffer, _feedbackBuffer, 0, 0, feedbackSize);
+        }
     }
 
     void VkmScene::markMaterialDirty(uint32_t materialIndex)
@@ -1210,6 +1288,30 @@ namespace vkm
         if (!_textureStreamingAvailable || _objectData.empty())
         {
             return;
+        }
+
+        /*
+        * Last the GPU told us what the screen actually wanted. The slot read here was filled
+        * kFeedbackRingSize frames ago, which is one further back than the deepest frame still in
+        * flight, so it needs no wait of its own -- see the ring's declaration.
+        * Before the streamer's own update(), so this frame's targets use it.
+        */
+        if (_feedbackBuffer != VKM_INVALID_RESOURCE_HANDLE)
+        {
+            const uint32_t ringSlot = static_cast<uint32_t>(_feedbackFrameCounter % kFeedbackRingSize);
+            VkmStagingBuffer* staging = _feedbackStagingPointers[ringSlot];
+            if (staging != nullptr && _feedbackFrameCounter >= kFeedbackRingSize)
+            {
+                staging->invalidate(0, _feedbackScratch.size() * sizeof(uint32_t));
+                if (const void* mapped = staging->map())
+                {
+                    std::memcpy(_feedbackScratch.data(), mapped, _feedbackScratch.size() * sizeof(uint32_t));
+                    staging->unmap();
+                    _textureStreamer.applyFeedback(_feedbackScratch.data(),
+                                                   static_cast<uint32_t>(_feedbackScratch.size()));
+                }
+            }
+            ++_feedbackFrameCounter;
         }
 
         // The streamer measures world-space spheres, so the object-space bounds every record
@@ -1402,6 +1504,16 @@ namespace vkm
                 // unconditionally for the same reason every staging buffer is: the declaration is
                 // what the subgraph may touch, not what it turned out to touch this frame.
                 append(_materialBuffer, VkmResourceAccess::TransferWrite);
+                // The feedback buffer is read out to the ring and then reset, both in this
+                // subgraph; the ring slots are declared like the staging buffers above, all of
+                // them, because this method does not know which frame slot is current.
+                append(_feedbackBuffer, VkmResourceAccess::TransferRead);
+                append(_feedbackBuffer, VkmResourceAccess::TransferWrite);
+                append(_feedbackClearBuffer, VkmResourceAccess::TransferRead);
+                for (VkmResourceHandle staging : _feedbackStaging)
+                {
+                    append(staging, VkmResourceAccess::TransferWrite);
+                }
                 break;
 
             case ReferencePhase::Cull:
@@ -1432,6 +1544,8 @@ namespace vkm
                 append(_lightBuffer, VkmResourceAccess::ShaderStorageRead);
                 append(_objectDataBuffer, VkmResourceAccess::ShaderStorageRead);
                 append(_frameDataBuffer, VkmResourceAccess::ShaderStorageRead);
+                // The drawing shader reports the mip level each pixel wanted into this.
+                append(_feedbackBuffer, VkmResourceAccess::ShaderStorageReadWrite);
                 append(_argumentBuffer, VkmResourceAccess::IndirectArgument);
                 break;
         }

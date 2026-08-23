@@ -248,3 +248,53 @@ TEST_CASE("vkmMaterialTextureDebugName names a texture after its file and colour
         CHECK(vkm::vkmMaterialTextureDebugName("/a.b/brick", true) == "SceneMaterialTexture:brick(srgb)");
     }
 }
+
+/*
+* The GPU feedback reading, decoded. The shader measures against the texture it sampled, which for a
+* streamed texture is already reduced -- so converting back to a chain-absolute level is the one
+* place an off-by-one silently turns streaming into a loop that chases itself down to nothing.
+*/
+
+TEST_CASE("vkmStreamingBaseMipFromFeedback adds the level the sampled texture already started at")
+{
+    // Nothing streamed out yet, so the reading is already absolute.
+    CHECK(vkm::vkmStreamingBaseMipFromFeedback(/*reported=*/0, /*residentBaseMip=*/0, /*totalMipCount=*/12) == 0);
+    CHECK(vkm::vkmStreamingBaseMipFromFeedback(3, 0, 12) == 3);
+
+    // Streamed out by three: the shader's "level 0" is the chain's level 3.
+    CHECK(vkm::vkmStreamingBaseMipFromFeedback(0, 3, 12) == 3);
+    CHECK(vkm::vkmStreamingBaseMipFromFeedback(2, 3, 12) == 5);
+}
+
+TEST_CASE("vkmStreamingBaseMipFromFeedback is a fixed point once the texture holds what was asked")
+{
+    // The property that keeps the loop stable: stream out to the level feedback asked for, and the
+    // next reading of the same surface names that same level rather than a coarser one.
+    constexpr uint32_t kMipCount = 12;
+    const uint32_t firstAsk = vkm::vkmStreamingBaseMipFromFeedback(4, 0, kMipCount);
+    CHECK(firstAsk == 4);
+
+    // Now resident at 4, that surface reports 0 -- the finest level it currently holds.
+    CHECK(vkm::vkmStreamingBaseMipFromFeedback(0, firstAsk, kMipCount) == firstAsk);
+}
+
+TEST_CASE("vkmStreamingBaseMipFromFeedback clamps to the chain rather than running past it")
+{
+    CHECK(vkm::vkmStreamingBaseMipFromFeedback(15, 10, 12) == 11);
+    CHECK(vkm::vkmStreamingBaseMipFromFeedback(0, 99, 12) == 11);
+
+    SUBCASE("a reading past the encoding's range saturates instead of wrapping")
+    {
+        CHECK(vkm::vkmStreamingBaseMipFromFeedback(1000, 0, 12) == 11);
+    }
+
+    SUBCASE("a single-level chain has nowhere to go")
+    {
+        CHECK(vkm::vkmStreamingBaseMipFromFeedback(7, 0, 1) == 0);
+    }
+
+    SUBCASE("an empty chain does not underflow computing its last level")
+    {
+        CHECK(vkm::vkmStreamingBaseMipFromFeedback(7, 0, 0) == 0);
+    }
+}

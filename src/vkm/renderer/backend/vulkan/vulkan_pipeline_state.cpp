@@ -223,11 +223,16 @@ namespace vkm
 
     VkShaderStageFlags toVkShaderStageFlags(VkmTableResourceType type)
     {
-        // Storage buffers are compute-only to match the constraint the other backends impose (see
-        // VkmTableResourceType::StorageBuffer); the rest are visible everywhere, like set 1.
+        /*
+        * Storage buffers reach the fragment stage as well as compute, but never the vertex stage.
+        * That is the narrowest set every backend can honour: WebGPU forbids a read-write storage
+        * binding in the vertex stage outright, while a fragment one is legal there and everywhere
+        * else. Excluding fragment would be wrong rather than merely conservative -- a declaration
+        * whose stageFlags omit the stage that reads it is a descriptor nothing can bind.
+        */
         if (type == VkmTableResourceType::StorageBuffer)
         {
-            return VK_SHADER_STAGE_COMPUTE_BIT;
+            return VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
         }
         return VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     }

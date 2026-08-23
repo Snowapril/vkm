@@ -5242,3 +5242,65 @@ no UI work.
 - **Planned:** store only the file stem in the debug name.
   **Did instead:** stem plus colour space. One image sampled as both sRGB and linear is two separate
   textures, so the stem alone still produced two rows with identical names.
+
+## 2026-08-23 — Texture streaming tier 1: GPU feedback
+
+The CPU estimate the streamer shipped with projects a bounding sphere. It cannot see UV density,
+grazing angles or occlusion, and its own header said so. Tier 1 replaces the *target* with what the
+pixel shader actually asked for, keeping the rebuild-based residency of tier 0 underneath. Tiers are
+a runtime choice on `VkmDriverCapabilityFlags`, never an `#ifdef`; WebGPU stays at tier 0 permanently
+because Tint has no `OpImageQueryLod` case and WGSL no LOD-query builtin.
+
+**The toolchain was spiked before anything else was written**, because the combination nobody had
+exercised — a runtime-array element inside a Tier-2 argument buffer, `NonUniformResourceIndex`, and a
+LOD query — could have sunk the whole design. It passed: SPIRV-Cross emits `calculate_clamped_lod` on
+the bindless array and casts the feedback buffer to `device atomic_uint*` for `InterlockedMin`. The
+`GetDimensions` + `ddx`/`ddy` fallback was therefore not needed and is recorded in
+`virtual_texturing.md` for whoever hits a backend where it is.
+
+`InterlockedMin` keyed by bindless slot: the finest level any pixel needed is the one that matters, and
+a plain store would let an arbitrary distant pixel win. One pixel in 16 votes, which is what makes the
+write cheap enough to leave on unconditionally rather than behind a PSO permutation — the answer wanted
+is a minimum over a surface, so a surface thin enough to fall between votes is one whose detail cannot
+matter.
+
+The reading is **relative to the texture actually sampled**, which for a streamed texture is already
+reduced. `vkmStreamingBaseMipFromFeedback` adds the resident base back, which is what makes the loop a
+fixed point instead of a chase: stream out four levels and the next reading comes back four higher,
+naming the same absolute level. That property is what the new tests pin.
+
+Readback rides a ring of `FRAME_BUFFER_COUNT + 1` staging buffers, mapped at the top of
+`updateTextureStreaming`. One longer than the frame count on purpose: at that point this frame's own
+wait has not happened, so a ring of exactly `FRAME_BUFFER_COUNT` hands back a slot still in flight.
+Feedback is several frames stale by construction and nothing should "fix" that with a stall.
+
+Fixed on the way through: `toVkShaderStageFlags` hard-coded set-2 storage buffers to compute only,
+which made feedback impossible **and** was already a latent bug — `gi_restir_lighting`'s fragment
+shader reads one, and ReSTIR is gated on `RayTracing` rather than on Metal, so on a Vulkan RT device
+that descriptor's stageFlags excluded the stage reading it.
+
+### Deviations
+
+- **Planned:** put the feedback buffer in set 2, on the G-buffer PSO's `per_pass_resources`.
+  **Did instead:** a set-0 singleton. The plan rejected set 0 over WebGPU fragment visibility, but that
+  does not bite: WebGPU already binds a placeholder for every unregistered singleton, its graphics
+  prefix simply omits this one, and it is tier 0 so it never writes feedback anyway. Set 2 would have
+  forced every `gbuffer_pso` user — the gi sample and two test fixtures — to build and bind a table
+  with a dummy buffer, because overlays cannot override `per_pass_resources`. The buffer is genuinely
+  engine-global and indexed by bindless slot, which is what a singleton is.
+- **Planned:** put the write in `vkmSampleMaterialTexture`, the "single chokepoint".
+  **Did instead:** in `gbuffer.hlsl`. Eight shaders expand that macro and only the pass that decides
+  what is on screen should vote — the probe capture especially must not, since probes look in every
+  direction and would drag every texture to full resolution.
+- **Planned:** gate the write behind a runtime `enabled` flag in set-2 constants.
+  **Did instead:** no flag. `VkmFrameData` is byte-full so there was nowhere to put one, and PSO
+  options multiply rather than compose (three vertex layouts would have become six variants). The
+  1-in-16 pixel stride makes it cheap enough to leave on.
+- **Unplanned:** moved `VKM_BINDLESS_ACCELERATION_STRUCTURE` from binding 8 to 9. Adding a singleton
+  shifts `kVkmBindlessAccelerationStructureBinding`, but `vkm_bindless.hlsli` hardcodes its binding
+  number with no compile-time link to the enum. Every ray query silently missed until five
+  ray-tracing tests caught it. Note also that `vkm_ray_tracing_shaders` is a separate build target
+  from `vkm_engine_shaders`, so a set-0 layout change needs both built.
+
+Measured on Sponza at the same viewpoint: texture-category bytes 389.1 -> 349.2 MiB, in the predicted
+direction. Metal, `MTL_DEBUG_LAYER=1`: 307/307 cases, no validation errors.
