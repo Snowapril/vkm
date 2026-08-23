@@ -45,8 +45,12 @@ namespace vkm
     * batch) plus once per batch for its cull, so the reserve is what bounds its tile count on a
     * scene with many batches. VkmGiSystem subtracts it before sizing the probe refresh's budget,
     * which is the other per-draw pusher.
+    *
+    * Sized to carry every tile the atlas can hold on a scene of Sponza's complexity:
+    * kVkmMaxShadowTiles across its 25 draw batches is 400 entries. Below that the clamp drops
+    * shadow-casting lights rather than reporting a limit the caller could act on.
     */
-    constexpr uint32_t kVkmShadowPushConstantReserve = 320;
+    constexpr uint32_t kVkmShadowPushConstantReserve = 1024;
 
     // Matches VKM_SHADOW_FAR_SENTINEL in shaders/vkm_shadow.hlsli: what the atlas clears to, so
     // an untouched texel reads as "nothing occludes" rather than "an occluder at the light".

@@ -95,8 +95,8 @@ namespace vkm
         * @details Metal and WebGPU hand out a push-constant ring entry per setPushConstants() call.
         * The capture pass pushes once per (probe, face, batch) and the blend pass once per
         * (probe, atlas), so a single-batch frame costs 6*budget + 2*budget entries. Each frame slot
-        * gets its own region of kVkmPushConstantRingEntryCount (1024) entries, rewound every frame,
-        * so this bounds one frame's pushes: 1024 / 8 = 128.
+        * gets its own region of kVkmPushConstantRingEntryCount entries, rewound every frame, so
+        * this bounds one frame's pushes at a single batch: 1024 / 8 = 128.
         * A scene with more than one draw batch costs proportionally more and has to lower the
         * budget itself, the capture's push count scaling with a batch count only the caller knows.
         */
