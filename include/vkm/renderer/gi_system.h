@@ -139,6 +139,14 @@ namespace vkm
         inline VkmGiOptions& options() { return _options; }
         inline const VkmGiOptions& options() const { return _options; }
 
+        /*
+        * @brief Changes how many probes a frame refreshes, at runtime.
+        * @details The probe tier's one cost dial: the capture draws once per (probe, face, batch),
+        * so this trades the pass's frame time against how long the grid takes to converge.
+        * Clamped to what prepareScene() validated against the push-constant ring.
+        */
+        inline void setProbeBudget(uint32_t budget) { _updater.setBudget(budget); }
+
         inline const VkmProbeVolume& getProbeVolume() const { return _volume; }
         inline const VkmProbeVolumeUpdater& getProbeUpdater() const { return _updater; }
         // The volume's shader constants, filled once in prepareScene(). Exposed so a debug view of

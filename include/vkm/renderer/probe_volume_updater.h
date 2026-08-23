@@ -163,6 +163,19 @@ namespace vkm
         */
         void setShadowSun(const VkmPunctualLight& sun, uint32_t tilesPerRow, uint32_t tileSize);
 
+        /*
+        * @brief Changes how many probes a frame refreshes.
+        * @details The capture draws once per (probe, face, batch), so this is the tier's frame
+        * cost dial and its convergence dial at the same time -- halving it halves the pass and
+        * doubles the round. Clamped to the budget initialize() was given, which is what the
+        * push-constant ring was sized against; raising past that would overflow the ring.
+        * @param budget Probes per frame; 0 is treated as 1.
+        */
+        void setBudget(uint32_t budget);
+
+        // The largest budget setBudget() will accept: the one initialize() validated.
+        inline uint32_t getMaxBudget() const { return _maxBudget; }
+
         // Frames a full sweep of the grid takes at the current budget.
         uint32_t getRoundLengthInFrames() const;
 
@@ -233,6 +246,7 @@ namespace vkm
         VkmProbeCaptureConstants _captureConstantValues{};
 
         std::vector<bool> _everRefreshed;
+        uint32_t _maxBudget = 1u;
         uint32_t _cursor = 0;
         // The atlases are cleared by the first blend pass's load action rather than by a pass of
         // their own. It has to happen: on Vulkan the first render pass transitions them from

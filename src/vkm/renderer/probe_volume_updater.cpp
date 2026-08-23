@@ -129,6 +129,7 @@ namespace vkm
         _driver = driver;
         _volume = volume;
         _descriptor = descriptor;
+        _maxBudget = std::max(descriptor._budget, 1u);
         _descriptor._budget = std::min(descriptor._budget, volume->getProbeCount());
 
         // Derive the probe range from the volume unless the caller pinned it. These are world-space
@@ -412,11 +413,17 @@ namespace vkm
         _driver = nullptr;
         _volume = nullptr;
         _descriptor = Descriptor{};
+        _maxBudget = 1u;
         _slice.clear();
         _sliceHysteresis.clear();
         _everRefreshed.clear();
         _cursor = 0;
         _atlasesCleared = false;
+    }
+
+    void VkmProbeVolumeUpdater::setBudget(uint32_t budget)
+    {
+        _descriptor._budget = std::clamp(budget, 1u, _maxBudget);
     }
 
     void VkmProbeVolumeUpdater::advanceSlice()

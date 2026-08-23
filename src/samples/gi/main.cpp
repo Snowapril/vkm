@@ -1140,7 +1140,20 @@ private:
         ImGui::Separator();
         const VkmProbeVolume& volume = _gi.getProbeVolume();
         const VkmProbeVolumeUpdater& updater = _gi.getProbeUpdater();
+        // The probe tier's cost dial. The capture draws once per (probe, face, batch), so this is
+        // linear in the pass's frame time and inverse in how fast the grid converges -- the two
+        // things the tier is always traded between, on one slider.
+        int probeBudget = static_cast<int>(updater.getDescriptor()._budget);
+        if (ImGui::SliderInt("Probe budget", &probeBudget, 1,
+                             static_cast<int>(glm::max(updater.getMaxBudget(), 1u))))
+        {
+            _gi.setProbeBudget(static_cast<uint32_t>(probeBudget));
+        }
         ImGui::Text("Probes: %u, budget %u/frame", volume.getProbeCount(), updater.getDescriptor()._budget);
+        ImGui::Text("Capture draws: %u/frame (budget x 6 faces x %u batches)",
+                    updater.getDescriptor()._budget * 6u *
+                        static_cast<uint32_t>(_scene.getDrawBatches().size()),
+                    static_cast<uint32_t>(_scene.getDrawBatches().size()));
         ImGui::Text("Round: %u frames", updater.getRoundLengthInFrames());
         // The number Phase 4 exists to surface: this tier trades rays for amortized rasterization,
         // and convergence time is the bill.
