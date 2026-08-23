@@ -197,6 +197,33 @@ namespace vkm
         */
         Aliasable = 0x00001000,
 
+        /*
+        * Which mip levels are actually backed by memory can change after creation, without
+        * recreating the texture. Vulkan binds tiles through vkQueueBindSparse; Metal places the
+        * texture against a sparse-capable heap and updates its mappings on the queue.
+        *
+        * Textures only, and only where the driver reports
+        * VkmDriverCapabilityFlags::SparseResidency.
+        *
+        * What it buys, and why texture streaming wants it: the image view covers the whole chain
+        * for the texture's life while residency changes underneath. Streaming a level in or out
+        * therefore costs a mapping update rather than a new texture, a new bindless slot, a
+        * rewrite of every material naming the old one, and a delay before the old one can be
+        * released.
+        *
+        * Two things it does not change:
+        *
+        * 1. A newly backed level still has no pixels. Binding memory and uploading are separate
+        *    steps, in that order.
+        * 2. The mip tail -- every level too small to fill one tile -- is indivisible and stays
+        *    backed for the texture's life. It is small (16 KiB for a 2048-wide RGBA8 chain at the
+        *    page size Metal uses here) but it is the floor on what streaming can give back.
+        *
+        * A request, not a guarantee: VkmTexture::isSparse() reports what was granted. Cannot be
+        * combined with Transient or Aliasable, both of which decide backing memory their own way.
+        */
+        Sparse = 0x00002000,
+
         AllowShaderReadWrite = AllowShaderRead | AllowShaderWrite,
     };
 

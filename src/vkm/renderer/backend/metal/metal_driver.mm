@@ -54,7 +54,8 @@ namespace vkm
         * therefore streams two more levels and leaves a sixteenth of the residue.
         * A texture and the heap it is placed in must agree on this, so there is one value.
         */
-        constexpr MTLSparsePageSize kSparsePageSize = MTLSparsePageSize16;
+        // Named in metal_util.h so the texture and the heap that maps its tiles cannot disagree.
+        constexpr MTLSparsePageSize kSparsePageSize = kVkmMetalSparsePageSize;
     } // namespace
 
     VkmDriverMetal::VkmDriverMetal(id<MTLDevice> mtlDevice)

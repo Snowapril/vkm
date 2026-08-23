@@ -73,6 +73,26 @@ namespace vkm
         inline bool isAliasPlaced() const { return !_isAliasable || _isAliasPlaced; }
 
         /*
+        * @brief Whether which mip levels are backed can change without recreating this texture.
+        * @details Set by the backend at creation from what it could actually do -- asking for a
+        * sparse texture is a request, not a guarantee, so this reports the outcome. False wherever
+        * the driver lacks VkmDriverCapabilityFlags::SparseResidency, where the texture is fully
+        * backed instead and behaves exactly as it always did.
+        *
+        * True means levels outside the mip tail start unbacked and must be given memory before
+        * they are uploaded or sampled -- see VkmResourceCreateInfo::Sparse.
+        */
+        inline bool isSparse() const { return _isSparse; }
+
+        /*
+        * @brief First mip level of the indivisible, permanently backed tail.
+        * @details Every level from here down is too small to fill one tile and shares a single
+        * allocation that is bound for the texture's life, so streaming can neither evict nor
+        * partially back it. Equal to the level count on a non-sparse texture, which has no tail.
+        */
+        inline uint32_t getMipTailFirstLevel() const { return _mipTailFirstLevel; }
+
+        /*
         * @brief Writes tightly-packed pixels straight into this texture's memory, with no
         * staging buffer and no queue submission. Only called when isHostWritable() is true.
         * @details The counterpart of VkmCommandBufferBase::copyBufferToTexture, and carries
@@ -129,5 +149,9 @@ namespace vkm
         // wait for a placement that will never come (see isAliasPlaced).
         bool _isAliasable = false;
         bool _isAliasPlaced = false;
+        bool _isSparse = false;
+        // Level count until a backend reports a real tail, so "no tail" is the safe default:
+        // getMipTailFirstLevel() then names a level past the end and nothing is treated as pinned.
+        uint32_t _mipTailFirstLevel = 0;
     };
 } // namespace vkm

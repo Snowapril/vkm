@@ -193,3 +193,29 @@ Three things follow:
 
 `VkmDriverCapabilityFlags::SparseResidency` now reports this: yes on the M3 Pro, no under MoltenVK
 (which has neither the feature bits nor ray tracing).
+
+## 9. Tier 2 progress: the mapping contract, verified
+
+Probed the full placement-sparse cycle on an M3 Pro before writing engine code — create, map the
+tail, map level 0, unmap it — under `MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1`. All of it is legal
+as written. Three things the probe settled that the headers do not say plainly:
+
+- **A placement-sparse texture is created standalone**, with `newTextureWithDescriptor:`, not out of
+  a heap. The page size buys a texture whose levels have addresses but no memory; the heap only
+  enters later, as the source of tiles in `updateTextureMappings:heap:operations:count:`. So a sparse
+  texture must *skip* the engine's heap-placement path rather than take it.
+- **A tail operation is addressed differently from a level one.** `textureLevel` is
+  `firstMipmapInTail` and the region is `(0, 0, 1, 1)` — one tile, not the tail's pixel extent.
+- **`allocatedSize` is not a residency signal.** It reported 192 KiB for a 2048x2048 12-level chain
+  and did not move across a full map and unmap of level 0's 32x32 tiles. That is page-table
+  footprint. The bytes live in the tile heap, which is where tier 2 has to account for them — and it
+  is why `VkmTextureMetal` reports zero rather than a number that never changes.
+
+Landed so far: `VkmResourceCreateInfo::Sparse` with the request-vs-grant contract the `Transient` and
+`Aliasable` flags already carry, `VkmTexture::isSparse()` / `getMipTailFirstLevel()`, and Metal
+creation. `TestSparseTextureShared.hpp` asserts the request is answered *coherently* — granted with a
+tail above level 0, or refused and downgraded to a fully backed texture — rather than asserting a
+value, since whether a device can do it is a property of the machine.
+
+Still to come: the tile heap, the `updateSparseTextureMapping` seam and its `MTLStageResourceState`
+barrier, and the streamer's residency path.

@@ -4,6 +4,8 @@
 #include <vkm/renderer/backend/common/texture_view.h>
 #include <vkm/renderer/backend/common/driver.h>
 
+#include <algorithm>
+
 namespace vkm
 {
     VkmTexture::VkmTexture(VkmDriverBase* driver)
@@ -32,6 +34,8 @@ namespace vkm
         }
 
         _textureInfo = info;
+        // "No tail" until a backend that actually pages this texture reports where one starts.
+        _mipTailFirstLevel = std::max(1u, info._numMipLevels);
         return true;
     }
 
