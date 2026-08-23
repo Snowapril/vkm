@@ -155,15 +155,30 @@ namespace vkm
     void vkmExtractFrustumPlanes(const glm::mat4& viewProjection, glm::vec4* outPlanes);
 
     /*
+    * @brief The six axis-aligned planes of `boxMin`..`boxMax`, in the same inward-facing form
+    * vkmExtractFrustumPlanes produces.
+    * @details For a view no single frustum describes. A probe capture sees in every direction and
+    * all six of its faces share one cull result; a shadow atlas pass fills several lights' tiles
+    * from one cull. In both cases a box around what the pass will draw from is the tightest
+    * correct test available.
+    * @param boxMin Minimum corner.
+    * @param boxMax Maximum corner.
+    * @param outPlanes Receives six planes, matching VkmFrameData::_frustumPlanes.
+    */
+    void vkmBuildBoxPlanes(const glm::vec3& boxMin, const glm::vec3& boxMax, glm::vec4* outPlanes);
+
+    /*
     * @brief How many independently culled views one frame may record.
     *
-    * @details Two, because a frame that refreshes GI probes needs a cull the probes can use
-    * alongside the camera's: a probe looks in every direction, so culling its capture against the
-    * camera frustum would drop exactly the geometry behind the camera that indirect light comes
-    * from. Each view gets its own frame data, its own counts and its own payload regions, so the
-    * two culls never write the same words and need no barrier between them.
+    * @details Three: the camera's, a GI probe refresh's, and a shadow atlas pass's. A probe looks
+    * in every direction, so culling its capture against the camera frustum would drop exactly the
+    * geometry behind the camera that indirect light comes from; a shadow pass draws from each
+    * light rather than from the eye, so it needs its own cull for the same reason. Each view gets
+    * its own frame data, its own counts and its own payload regions, so the culls never write the
+    * same words and need no barrier between them -- which is also what makes raising this a
+    * matter of buffer size alone.
     */
-    constexpr uint32_t kVkmSceneMaxCullViews = 2;
+    constexpr uint32_t kVkmSceneMaxCullViews = 3;
 
     class VkmScene
     {
@@ -184,6 +199,15 @@ namespace vkm
             uint32_t _countWordOffset = 0;     // the batch's visible count, in both buffers
             uint32_t _visibleWordOffset = 0;   // compacted object indices, in the visible list
             uint32_t _argumentWordOffset = 0;  // VkmDrawIndirectArguments records
+
+            /*
+            * World-space bounding sphere of every object in the batch. A batch is a material run,
+            * so this is only tight when a material's objects sit together; a material used across
+            * the whole model gives a sphere the size of the model, and culling against it removes
+            * nothing. Radius 0 means the batch had no valid bounds and must be treated as visible.
+            */
+            glm::vec3 _boundsCenter{ 0.0f, 0.0f, 0.0f };
+            float _boundsRadius = 0.0f;
         };
 
         // VkmResourceHandle has no default member initializer for its id, so the handle arrays
@@ -263,6 +287,15 @@ namespace vkm
         * @param commandBuffer Command buffer to record into.
         * @param viewIndex Which cull view this pass fills.
         */
+        /*
+        * @brief Brings every batch's world bounds back in line with its objects' transforms.
+        * @details A no-op unless setObjectTransform() has been called since the last one. Called
+        * by recordUpdate(), so a frame's draws always cull against current bounds; public because
+        * a caller that moves objects and inspects the bounds without recording a frame has no
+        * other way to ask.
+        */
+        void refreshBatchBounds();
+
         void recordCull(VkmCommandBufferBase* commandBuffer, uint32_t viewIndex = 0);
 
         /*
@@ -274,11 +307,18 @@ namespace vkm
         * point at which per-draw state can be set, push constants requiring a bound pipeline. The
         * probe capture uses it to push which cube face is being rendered.
         * @param viewIndex Which cull view's results to draw.
+        * @param batchFilter Optional. A batch it returns false for is not drawn at all -- no
+        * pipeline bind, no push, no indirect draw. For a caller that renders one cull result from
+        * several viewpoints, like the probe capture's six cube faces, this is the only place a
+        * per-viewpoint decision can be made: the GPU cull runs once per view, not once per
+        * viewport. Skipping is silent, unlike the nullptr-pipeline path, because a batch a
+        * viewpoint cannot see is the expected case rather than a misconfiguration.
         */
         void recordDrawBatches(VkmCommandBufferBase* commandBuffer,
                                const std::function<VkmPipelineStateBase*(const DrawBatch&)>& pipelineResolver,
                                const std::function<void(VkmCommandBufferBase*, const DrawBatch&)>& beforeDraw = {},
-                               uint32_t viewIndex = 0);
+                               uint32_t viewIndex = 0,
+                               const std::function<bool(const DrawBatch&)>& batchFilter = {});
 
         /*
         * @brief Which of a frame's three scene subgraphs is asking. The same buffer is touched
@@ -327,16 +367,31 @@ namespace vkm
         inline uint32_t getMaterialCount() const { return static_cast<uint32_t>(_materials.size()); }
 
         /*
-        * @brief Sets the directional light's radiance, carried in the light table's header so the
-        * traced passes can sample it.
-        * @details Must precede build() -- the table uploads once. The per-frame direction stays in
-        * VkmFrameData::_lightDirection; radiance is the static half of the pair.
+        * @brief Sets the scene's directional light: the single place its direction and radiance
+        * are stated.
+        * @details Must precede build() -- the light table uploads once. Both halves live here so
+        * they cannot disagree: the radiance reaches the traced tier through the light table's
+        * header and the raster tier through vkmBuildDeferredLightConstants, and the direction
+        * reaches every per-frame consumer through getDirectionalDirection().
+        * @param directionToLight World-space direction TOWARDS the light; normalized here.
+        * @param radiance Colour times intensity.
         */
-        void setDirectionalRadiance(const glm::vec3& radiance);
+        void setDirectionalLight(const glm::vec3& directionToLight, const glm::vec3& radiance);
+
+        inline const glm::vec3& getDirectionalDirection() const { return _directionalDirection; }
+        inline const glm::vec3& getDirectionalRadiance() const { return _directionalRadiance; }
 
         // Emissive triangles the built light table holds, past its header. CPU-known after
         // build(), so tests can assert the gather without a GPU readback.
         inline uint32_t getLightTriangleCount() const { return _lightTriangleCount; }
+
+        /*
+        * @brief Every punctual light the scene's models placed, in world space.
+        * @details Filled by addModel from each model's node hierarchy, so it is valid before
+        * build(). The scene's own directional light is NOT in here -- it is not a model's light;
+        * vkmBuildDeferredLightConstants appends it.
+        */
+        inline const std::vector<VkmPunctualLight>& getPunctualLights() const { return _punctualLights; }
 
         /*
         * @brief The textures a material samples, for building a per-draw (set 3) table.
@@ -389,6 +444,9 @@ namespace vkm
         // all three. The shader still reads the material index out of ObjectData; the split
         // exists so a backend that binds material textures per draw has somewhere to bind them.
         void buildDrawBatches();
+        // Recomputes one batch's world bounding sphere from its objects' current transforms.
+        void updateBatchBounds(DrawBatch& batch);
+
         void fillObjectData();
         bool buildLightTable(VkmDriverBase* driver, VkmBindlessResourceManagerBase* bindlessManager,
                              std::string* outError);
@@ -409,6 +467,8 @@ namespace vkm
         std::vector<VkmResourceHandle> _materialTextures;
         std::vector<uint32_t> _materialTextureSlots; // 1:1 with _materialTextures
         std::vector<MaterialTextures> _materialTextureHandles; // 1:1 with _materials
+        // Set when an object moves; cleared by refreshBatchBounds().
+        bool _batchBoundsDirty = false;
         std::vector<VkmObjectData> _objectData;
         std::vector<DrawBatch> _drawBatches;
 
@@ -419,6 +479,8 @@ namespace vkm
         uint32_t _lightPoolSlot = INVALID_VALUE32;
         uint32_t _lightTriangleCount = 0;
         glm::vec3 _directionalRadiance{ 0.0f };
+        glm::vec3 _directionalDirection{ 0.0f, 1.0f, 0.0f };
+        std::vector<VkmPunctualLight> _punctualLights;
 
         VkmResourceHandle _objectDataBuffer{ VKM_INVALID_RESOURCE_HANDLE };
         VkmResourceHandle _frameDataBuffer{ VKM_INVALID_RESOURCE_HANDLE };

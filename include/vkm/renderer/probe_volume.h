@@ -3,6 +3,7 @@
 #pragma once
 
 #include <vkm/renderer/backend/common/renderer_common.h>
+#include <vkm/renderer/scene/light_table.h>
 
 #include <glm/vec2.hpp>
 #include <glm/mat4x4.hpp>
@@ -71,8 +72,19 @@ namespace vkm
     struct VkmProbeCaptureConstants
     {
         glm::mat4 _faceViewProjection[6]{};
+        /*
+        * @brief The directional light the capture shades with, including its shadow tile.
+        * @details The capture shades forward with the scene's sun, so it needs the sun as a
+        * light record rather than just a direction -- the shadow lookup takes one. Its
+        * `_shadowTile` is assigned by VkmShadowAtlas::allocate, which runs after this buffer is
+        * first uploaded, so VkmProbeVolumeUpdater::setShadowSun rewrites it.
+        */
+        VkmPunctualLight _sun{};
+        // x = shadow atlas tiles per row, y = tile size in texels; zw unused. Zero disables the
+        // lookup, which is what an updater with no atlas supplies.
+        glm::uvec4 _shadowParams{ 0u, 0u, 0u, 0u };
     };
-    static_assert(sizeof(VkmProbeCaptureConstants) == 6 * 64,
+    static_assert(sizeof(VkmProbeCaptureConstants) == 6 * 64 + 64 + 16,
                   "VkmProbeCaptureConstants must match ProbeCaptureConstants in probe_capture.hlsl");
 
     /*

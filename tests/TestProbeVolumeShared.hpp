@@ -22,6 +22,7 @@
 #include <vkm/renderer/scene/scene.h>
 #include <vkm/renderer/scene/vertex_layout.h>
 #include <vkm/renderer/probe_volume.h>
+#include <vkm/renderer/shadow_atlas.h>
 
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/matrix.hpp>
@@ -465,9 +466,51 @@ namespace vkmtest
         REQUIRE(captureBuffer != nullptr);
         REQUIRE(driver->uploadToBuffer(captureBuffer->getHandle(), &captureConstants, sizeof(captureConstants)));
 
+        // The capture consults a shadow atlas now. This test has none, so it binds the same
+        // no-shadow configuration VkmProbeVolumeUpdater falls back to: a 1x1 texel holding the far
+        // sentinel and zeroed constants, with captureConstants._shadowParams left at 0 so the
+        // lookup is skipped entirely. Bound rather than omitted -- an unbound table entry is a
+        // validation error, not a silently-black sample.
+        vkm::VkmTextureInfo shadowStubInfo{};
+        shadowStubInfo._flags =
+            vkm::VkmResourceCreateInfo::AllowShaderRead | vkm::VkmResourceCreateInfo::AllowTransferDst;
+        shadowStubInfo._extent = glm::uvec3(1, 1, 1);
+        shadowStubInfo._numMipLevels = 1;
+        shadowStubInfo._numArrayLayers = 1;
+        shadowStubInfo._format = vkm::VkmFormat::R16G16B16A16_SFLOAT;
+        shadowStubInfo._debugName = "ProbeCaptureShadowStub";
+        vkm::VkmTexture* shadowStub = driver->newTexture(shadowStubInfo);
+        REQUIRE(shadowStub != nullptr);
+        {
+            const uint16_t sentinel[4] = { encodeHalf(vkm::kVkmShadowFarSentinel), 0, 0, encodeHalf(1.0f) };
+            REQUIRE(driver->uploadToTexture(shadowStub->getHandle(), sentinel, sizeof(sentinel)));
+        }
+
+        vkm::VkmBufferInfo shadowStubBufferInfo{};
+        shadowStubBufferInfo._flags =
+            vkm::VkmResourceCreateInfo::AllowShaderRead | vkm::VkmResourceCreateInfo::AllowTransferDst;
+        shadowStubBufferInfo._size = sizeof(vkm::VkmShadowAtlasConstants);
+        shadowStubBufferInfo._debugName = "ProbeCaptureShadowStubConstants";
+        vkm::VkmBuffer* shadowStubBuffer = driver->newBuffer(shadowStubBufferInfo);
+        REQUIRE(shadowStubBuffer != nullptr);
+        {
+            const vkm::VkmShadowAtlasConstants zeroed{};
+            REQUIRE(driver->uploadToBuffer(shadowStubBuffer->getHandle(), &zeroed, sizeof(zeroed)));
+        }
+
+        vkm::VkmSamplerInfo captureSamplerInfo{};
+        captureSamplerInfo._debugName = "ProbeCaptureShadowSampler";
+        vkm::VkmSampler* captureSampler = driver->newSampler(captureSamplerInfo);
+        REQUIRE(captureSampler != nullptr);
+
         std::string tableError;
         vkm::VkmResourceTableBase* table = driver->newResourceTable(
-            pso, vkm::VkmResourceSetKind::PerPass, {{ 0, captureBuffer->getHandle() }}, &tableError);
+            pso, vkm::VkmResourceSetKind::PerPass,
+            {{ 0, captureBuffer->getHandle() },
+             { 1, shadowStub->getHandle() },
+             { 2, captureSampler->getHandle() },
+             { 3, shadowStubBuffer->getHandle() }},
+            &tableError);
         REQUIRE_MESSAGE(table != nullptr, tableError);
 
         const glm::uvec2 captureExtent(kFaceSize * kFacesX, kFaceSize * kFacesY);

@@ -49,8 +49,10 @@
 #include <vkm/renderer/camera.h>
 #include <vkm/renderer/engine.h>
 #include <vkm/renderer/gbuffer.h>
+#include <vkm/renderer/deferred_lighting.h>
 #include <vkm/renderer/gi_composite.h>
 #include <vkm/renderer/gi_system.h>
+#include <vkm/renderer/shadow_atlas.h>
 #include <vkm/renderer/screenshot.h>
 
 #include <cstdio>
@@ -116,6 +118,11 @@ VKM_GLOBAL_VARIABLE(float, gv_gi_probe_normal_bias, 0.25f);
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_x, 20u);
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_y, 10u);
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_probes_z, 20u);
+// Uniform scale applied to the imported model. Everything the sample derives -- camera orbit,
+// shadow distance, probe grid -- follows the scene's bounds, so this is not a way to see more; it
+// is a way to check that the engine's absolute limits are not being leaned on. The shadow atlas
+// stores distance in RGBA16F against a sentinel of 60000, and both are absolute.
+VKM_GLOBAL_VARIABLE(float, gv_gi_scene_scale, 1.0f);
 // Fraction of the scene's radius to orbit at. Below 1 the camera starts inside the geometry, which
 // is where a probe volume is actually judged -- an exterior view can look right while the interior
 // is black, which is exactly how the scene-scale bug got past a screenshot.
@@ -138,13 +145,7 @@ namespace
 {
     constexpr VkmFormat kHdrFormat = VkmFormat::R16G16B16A16_SFLOAT;
     constexpr glm::vec3 kLightDirection{ 0.4f, 0.8f, 0.45f }; // towards the light
-
-    // Mirrors LightConstants in deferred_lighting.hlsl.
-    struct LightConstants
-    {
-        glm::vec4 _directionToLight{ 0.0f, 1.0f, 0.0f, 0.0f };
-        glm::vec4 _radiance{ 1.0f, 1.0f, 1.0f, 0.0f };
-    };
+    constexpr glm::vec3 kLightRadiance{ 3.0f, 3.0f, 2.8f };
 
     // Mirrors TonemapConstants in tonemap.hlsl.
     struct TonemapConstants
@@ -244,7 +245,7 @@ public:
         VkmSampler* sampler = driver->newSampler(samplerInfo);
         _sampler = sampler != nullptr ? sampler->getHandle() : VKM_INVALID_RESOURCE_HANDLE;
 
-        VkmBuffer* lightBuffer = createUniformBuffer(driver, sizeof(LightConstants), "GiLightConstants");
+        VkmBuffer* lightBuffer = createUniformBuffer(driver, sizeof(VkmDeferredLightConstants), "GiLightConstants");
         VkmBuffer* tonemapBuffer = createUniformBuffer(driver, sizeof(TonemapConstants), "GiTonemapConstants");
         VkmBuffer* compositeBuffer = createUniformBuffer(driver, sizeof(VkmGiCompositeConstants), "GiCompositeConstants");
         if (lightBuffer == nullptr || tonemapBuffer == nullptr || compositeBuffer == nullptr)
@@ -272,8 +273,6 @@ public:
             _compositeStagingPointers[frame] = staging;
         }
 
-        const LightConstants light{ glm::vec4(glm::normalize(kLightDirection), 0.0f), glm::vec4(3.0f, 3.0f, 2.8f, 0.0f) };
-        driver->uploadToBuffer(_lightBuffer, &light, sizeof(light));
         const TonemapConstants tonemap{};
         driver->uploadToBuffer(_tonemapBuffer, &tonemap, sizeof(tonemap));
         // Uploaded once the scene's scale is known; see loadScene.
@@ -292,6 +291,19 @@ public:
         giDescriptor._probeHysteresis = 0.9f;
         giDescriptor._probeNormalBiasFraction = gv_gi_probe_normal_bias.get();
         giDescriptor._probeCullView = kProbeCullView;
+        // The sample owns the atlas; the GI system only forwards it to the probe capture, which
+        // is the pass that needs it. The atlas is initialized above so its handles are valid.
+        giDescriptor._shadowAtlasTexture = _shadowAtlas.getAtlasTexture();
+        giDescriptor._shadowAtlasConstants = _shadowAtlas.getConstantBuffer();
+        VkmShadowAtlas::Descriptor shadowDescriptor;
+        shadowDescriptor._cullViewIndex = kShadowCullView;
+        std::string shadowError;
+        if (!_shadowAtlas.initialize(driver, manager, shadowDescriptor, &shadowError))
+        {
+            VKM_DEBUG_ERROR(("Failed to initialize the shadow atlas: " + shadowError).c_str());
+            return;
+        }
+
         std::string giError;
         if (!_gi.initialize(driver, manager, &_gbuffer, giDescriptor, &giError))
         {
@@ -321,6 +333,7 @@ public:
         _retiredTables.clear();
         destroyUpscaler(_upscaler);
         _upscaler = nullptr;
+        _shadowAtlas.destroy();
         _gi.destroy();
         _gbuffer.destroy();
         for (VkmSceneMaterialTables& tables : _gbufferMaterialTables)
@@ -338,6 +351,16 @@ public:
         }
         // The technique's own capability gate lives in VkmGiSystem now, clamped at record().
         _lastDeltaTime = static_cast<float>(deltaTime);
+
+        // Split the directional shadow into cascades across the camera's view. One tile cannot
+        // serve a whole view -- fitted tightly it runs out before the far geometry, fitted loosely
+        // it spends every texel on distance nothing needs. The atlas snaps each cascade to its own
+        // texel grid, so refitting every frame does not make the shadows crawl.
+        _shadowAtlas.setDirectionalView(_camera.getPosition(),
+                                        glm::normalize(_camera.getTarget() - _camera.getPosition()),
+                                        _camera.getFovYRadians(),
+                                        static_cast<float>(_extent.x) / static_cast<float>(glm::max(_extent.y, 1u)),
+                                        _shadowDistance);
         retireTables();
         ensureTargets();
         // Runs after ensureTargets so the phase count follows a resize immediately. The camera
@@ -373,14 +396,25 @@ public:
             return;
         }
 
+        // Republished here rather than from the UI: this runs before anything records, so the
+        // atlas tiles and the light constants a pass reads cannot change underneath it.
+        if (_lightsDirty)
+        {
+            _lightsDirty = false;
+            refreshLights();
+        }
+
         VkmFrameData frameData;
-        frameData._lightDirection = glm::vec4(glm::normalize(kLightDirection), 0.0f);
+        frameData._lightDirection = glm::vec4(sunDirectionToLight(), 0.0f);
 
         // 1. The camera's own update and cull, in view 0. (The GI system records its own
         // subgraphs — including the probe refresh's second cull view — from record() below.)
         const uint32_t frameIndex = renderGraph->frameIndex();
         VkmFrameData cameraFrameData = frameData;
         vkmExtractFrustumPlanes(_camera.getViewProjection(), cameraFrameData._frustumPlanes);
+
+        // Before everything else: the deferred pass below reads what this writes.
+        _shadowAtlas.record(renderGraph, &_scene, frameData, frameIndex);
 
         VkmRenderTransferSubGraph* updateSubGraph = renderGraph->beginTransferSubGraph("GiSceneUpdate");
         referenceScene(updateSubGraph, _scene, VkmScene::ReferencePhase::Update);
@@ -509,6 +543,8 @@ private:
     // The probe refresh takes the other one; see the file header.
     static constexpr uint32_t kCameraCullView = 0;
     static constexpr uint32_t kProbeCullView = 1;
+    // The shadow atlas draws from each light rather than from the eye, so it needs its own.
+    static constexpr uint32_t kShadowCullView = 2;
 
     struct Tables
     {
@@ -611,20 +647,64 @@ private:
         VkmSceneModel model;
         std::string error;
         VkmGltfImportOptions importOptions;
-        if (!importGltfModel(path, &model, &error, importOptions) || !_scene.addModel(model, &error))
+        if (!importGltfModel(path, &model, &error, importOptions))
         {
             VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
             return;
         }
-        // The same radiance the deferred pass's LightConstants carries (see postDriverReady):
-        // the sun in the light table is what the traced tier samples, and the two must stay in
-        // sync or ReSTIR and the deferred image disagree about how bright the sun is.
-        _scene.setDirectionalRadiance(glm::vec3(3.0f, 3.0f, 2.8f));
+        // Applied to the roots, so the draw list, the light placements and the bounds all follow
+        // from the hierarchy walk rather than from three separate corrections.
+        const float sceneScale = glm::max(gv_gi_scene_scale.get(), 1e-3f);
+        if (sceneScale != 1.0f)
+        {
+            const glm::mat4 scaling = glm::scale(glm::mat4(1.0f), glm::vec3(sceneScale));
+            for (const uint32_t root : model._rootNodeIndices)
+            {
+                model._nodes[root]._localTransform = scaling * model._nodes[root]._localTransform;
+            }
+            // A range is a world distance and does not ride a node transform, so it is the one
+            // thing the hierarchy walk cannot carry.
+            for (VkmScenePunctualLight& light : model._lights)
+            {
+                light._range *= sceneScale;
+            }
+        }
+        if (!_scene.addModel(model, &error))
+        {
+            VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
+            return;
+        }
+        // Stated once. The traced tier reads it from the light table's header and the deferred
+        // pass from the constants derived below, so the two cannot disagree about the sun.
+        _scene.setDirectionalLight(kLightDirection, kLightRadiance);
         if (!_scene.build(driver, _engine->getPipelineStateManager(), &error))
         {
             VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
             return;
         }
+
+        std::string shadowSceneError;
+        if (!_shadowAtlas.prepareScene(_scene, &shadowSceneError))
+        {
+            VKM_DEBUG_ERROR(("Failed to prepare the shadow atlas: " + shadowSceneError).c_str());
+            return;
+        }
+
+        // The sample's own copies of the lights, so the UI can turn the sun or drag a lamp. The
+        // scene's light table uploads once inside build() and cannot follow.
+        _sunRadiance = _scene.getDirectionalRadiance();
+        _sunEnabled = _sunRadiance.x > 0.0f || _sunRadiance.y > 0.0f || _sunRadiance.z > 0.0f;
+        setSunAngles(_scene.getDirectionalDirection());
+        _punctualLights = _scene.getPunctualLights();
+
+        // A fraction of the scene, so the cascades cover a useful depth range on any scale of
+        // model. Sponza lands at roughly 370 units of shadow distance, which the three cascades
+        // split so the nearest spends its texels on what is closest to the eye.
+        const VkmSceneAABB shadowBounds = _scene.computeWorldBounds();
+        _shadowDistance =
+            shadowBounds._valid ? glm::max(glm::length(shadowBounds.getExtent()) * 0.1f, 1.0f) : 32.0f;
+
+        refreshLights();
 
         // Must follow build(), which is where the material textures are created.
         for (uint32_t i = 0; i < static_cast<uint32_t>(VkmVertexLayoutPreset::Count); ++i)
@@ -831,7 +911,8 @@ private:
         _tables._lighting = driver->newResourceTable(
             _lightingPipeline, VkmResourceSetKind::PerPass,
             {{ 0, normal }, { 1, baseColor }, { 2, motion }, { 3, _sampler }, { 4, _lightBuffer },
-             { 5, _gbuffer.getTexture(VkmGBuffer::Target::Emissive) }}, &error);
+             { 5, _gbuffer.getTexture(VkmGBuffer::Target::Emissive) },
+             { 6, _shadowAtlas.getAtlasTexture() }, { 7, _shadowAtlas.getConstantBuffer() }}, &error);
         _tables._composite = driver->newResourceTable(
             _compositePipeline, VkmResourceSetKind::PerPass,
             {{ 0, _directTarget }, { 1, _gi.getIndirectTexture() }, { 2, baseColor }, { 3, normal },
@@ -916,6 +997,95 @@ private:
     }
 #endif
 
+    /*
+    * @brief The sun's direction, TOWARDS the light -- the convention VkmScene::setDirectionalLight
+    * states and every per-frame consumer reads.
+    */
+    glm::vec3 sunDirectionToLight() const
+    {
+        const float azimuth = glm::radians(_sunAzimuthDeg);
+        const float elevation = glm::radians(_sunElevationDeg);
+        const float horizontal = glm::cos(elevation);
+        return glm::vec3(horizontal * glm::cos(azimuth), glm::sin(elevation),
+                         horizontal * glm::sin(azimuth));
+    }
+
+    void setSunAngles(const glm::vec3& directionToLight)
+    {
+        const glm::vec3 aim = glm::normalize(directionToLight);
+        _sunElevationDeg = glm::degrees(glm::asin(glm::clamp(aim.y, -1.0f, 1.0f)));
+        _sunAzimuthDeg = glm::degrees(glm::atan(aim.z, aim.x));
+    }
+
+    /*
+    * @brief Rebuilds the light list from the sample's own state and republishes everything that
+    * reads it.
+    * @details Tile assignment first, then the constants: allocate() writes each light's
+    * _shadowTile and the deferred pass reads it, so building the constants from the scene instead
+    * of from this list would silently drop every assignment. The scene is not touched, so the
+    * traced tier keeps the sun the light table was built with and will disagree with the raster
+    * tier once the UI moves one.
+    */
+    void refreshLights()
+    {
+        VkmDriverBase* driver = _engine->getDriver();
+        if (driver == nullptr)
+        {
+            return;
+        }
+
+        _shadowLights.clear();
+        const bool hasSun =
+            _sunEnabled && (_sunRadiance.x > 0.0f || _sunRadiance.y > 0.0f || _sunRadiance.z > 0.0f);
+        if (hasSun)
+        {
+            VkmPunctualLight sun;
+            sun._type = static_cast<uint32_t>(VkmLightType::Directional);
+            const glm::vec3 aim = -sunDirectionToLight();
+            sun._directionWorld[0] = aim.x;
+            sun._directionWorld[1] = aim.y;
+            sun._directionWorld[2] = aim.z;
+            sun._radiance[0] = _sunRadiance.x;
+            sun._radiance[1] = _sunRadiance.y;
+            sun._radiance[2] = _sunRadiance.z;
+            _shadowLights.push_back(sun);
+        }
+        for (const VkmPunctualLight& light : _punctualLights)
+        {
+            _shadowLights.push_back(light);
+        }
+        _shadowAtlas.allocate(_scene, &_shadowLights);
+
+        // The probe capture shades with the sun alone, and zero tiles-per-row is its "no atlas"
+        // case. A disabled sun has to reach it that way, or probes keep capturing the old one for
+        // a full round after it is gone.
+        if (hasSun)
+        {
+            // The scene-fitted tile, not the cascades. A probe is a world-space cache, and the
+            // cascades follow the camera, so reading those would make a probe's irradiance depend
+            // on where the camera stood when it was last refreshed -- which the eye sees as the
+            // lighting pulsing while the camera moves.
+            VkmPunctualLight probeSun = _shadowLights[0];
+            const int32_t sceneTile = _shadowAtlas.getDirectionalSceneTile();
+            if (sceneTile >= 0)
+            {
+                probeSun._shadowTile = sceneTile;
+                probeSun._shadowTileCount = 1u;
+            }
+            _gi.setShadowSun(probeSun, _shadowAtlas.getTilesPerRow(),
+                             _shadowAtlas.getDescriptor()._tileSize);
+        }
+        else
+        {
+            _gi.setShadowSun(VkmPunctualLight{}, 0u, 0u);
+        }
+
+        VkmDeferredLightConstants lightConstants{};
+        vkmBuildDeferredLightConstants(_shadowLights, _shadowAtlas.getTilesPerRow(),
+                                       _shadowAtlas.getDescriptor()._tileSize, &lightConstants);
+        driver->uploadToBuffer(_lightBuffer, &lightConstants, sizeof(lightConstants));
+    }
+
     void drawUi()
     {
 #if defined(VKM_ENABLE_IMGUI)
@@ -970,7 +1140,20 @@ private:
         ImGui::Separator();
         const VkmProbeVolume& volume = _gi.getProbeVolume();
         const VkmProbeVolumeUpdater& updater = _gi.getProbeUpdater();
+        // The probe tier's cost dial. The capture draws once per (probe, face, batch), so this is
+        // linear in the pass's frame time and inverse in how fast the grid converges -- the two
+        // things the tier is always traded between, on one slider.
+        int probeBudget = static_cast<int>(updater.getDescriptor()._budget);
+        if (ImGui::SliderInt("Probe budget", &probeBudget, 1,
+                             static_cast<int>(glm::max(updater.getMaxBudget(), 1u))))
+        {
+            _gi.setProbeBudget(static_cast<uint32_t>(probeBudget));
+        }
         ImGui::Text("Probes: %u, budget %u/frame", volume.getProbeCount(), updater.getDescriptor()._budget);
+        ImGui::Text("Capture draws: %u/frame (budget x 6 faces x %u batches)",
+                    updater.getDescriptor()._budget * 6u *
+                        static_cast<uint32_t>(_scene.getDrawBatches().size()),
+                    static_cast<uint32_t>(_scene.getDrawBatches().size()));
         ImGui::Text("Round: %u frames", updater.getRoundLengthInFrames());
         // The number Phase 4 exists to surface: this tier trades rays for amortized rasterization,
         // and convergence time is the bill.
@@ -979,12 +1162,86 @@ private:
                                                             updater.getDescriptor()._budget,
                                                             updater.getDescriptor()._hysteresis, 0.1f));
 
+        drawLightUi();
         drawProbePlacementUi(volume);
         ImGui::End();
 #endif
     }
 
 #if defined(VKM_ENABLE_IMGUI)
+    /*
+    * @brief Sun direction and punctual-light placement: judge a shadow by moving what casts it.
+    *
+    * A shadow that looks wrong is hard to argue with from one angle. Turning the sun sweeps the
+    * whole family of them past the eye, which is what separates a bad shadow from a surface that
+    * is simply facing away from the light.
+    *
+    * These edit the sample's light list only. VkmScene's copy uploads once inside build(), so the
+    * traced tier keeps the sun it was built with and will disagree with the raster tier here.
+    */
+    void drawLightUi()
+    {
+        ImGui::Separator();
+        bool dirty = false;
+        dirty |= ImGui::Checkbox("Sun", &_sunEnabled);
+        if (_sunEnabled)
+        {
+            // Elevation stops short of the pole. Straight down leaves the cascade fit's up vector
+            // undetermined, and the shadows swing as it flips over.
+            dirty |= ImGui::SliderFloat("Sun azimuth", &_sunAzimuthDeg, -180.0f, 180.0f, "%.1f deg");
+            dirty |= ImGui::SliderFloat("Sun elevation", &_sunElevationDeg, -89.0f, 89.0f, "%.1f deg");
+            dirty |= ImGui::DragFloat3("Sun radiance", &_sunRadiance.x, 0.05f, 0.0f, 64.0f);
+        }
+
+        const int lightCount = static_cast<int>(_punctualLights.size());
+        ImGui::Text("Punctual lights: %d", lightCount);
+        if (lightCount > 0)
+        {
+            _selectedLight = glm::clamp(_selectedLight, 0, lightCount - 1);
+            ImGui::SliderInt("Selected light", &_selectedLight, 0, lightCount - 1);
+            // One gizmo at a time: ImGuizmo manipulates whichever transform it was handed last,
+            // and two in a frame fight over the same mouse drag.
+            ImGui::Checkbox("Drag the selected light", &_lightGizmo);
+
+            VkmPunctualLight& light = _punctualLights[static_cast<size_t>(_selectedLight)];
+            dirty |= ImGui::DragFloat3("Light position", light._positionWorld, 0.25f);
+            dirty |= ImGui::DragFloat("Light range", &light._range, 0.5f, 0.0f, 100000.0f);
+            dirty |= ImGui::DragFloat3("Light radiance", light._radiance, 0.5f, 0.0f, 100000.0f);
+            if (_lightGizmo)
+            {
+                dirty |= dragSelectedLight(light);
+            }
+        }
+
+        if (dirty)
+        {
+            _lightsDirty = true;
+        }
+    }
+
+    // Whether the gizmo moved the light this frame.
+    bool dragSelectedLight(VkmPunctualLight& light)
+    {
+        ImGuizmo::BeginFrame();
+        ImGuizmo::SetOrthographic(false);
+        ImGuizmo::SetRect(0.0f, 0.0f, static_cast<float>(_extent.x), static_cast<float>(_extent.y));
+
+        const glm::mat4 view = _camera.getView();
+        const glm::mat4 projection = _camera.getProjection();
+        const glm::vec3 position(light._positionWorld[0], light._positionWorld[1],
+                                 light._positionWorld[2]);
+        glm::mat4 transform = glm::translate(glm::mat4(1.0f), position);
+        if (!ImGuizmo::Manipulate(&view[0][0], &projection[0][0], ImGuizmo::TRANSLATE,
+                                  ImGuizmo::WORLD, &transform[0][0]))
+        {
+            return false;
+        }
+        light._positionWorld[0] = transform[3].x;
+        light._positionWorld[1] = transform[3].y;
+        light._positionWorld[2] = transform[3].z;
+        return true;
+    }
+
     /*
     * @brief The probe placement tool: show the grid, pick a probe, drag it with a gizmo.
     *
@@ -1019,6 +1276,10 @@ private:
         // ImGuizmo draws into the current ImGui frame and reads the mouse from it, so it belongs
         // here rather than in render(). It manipulates a full transform; only the translation
         // column is read back, the volume storing a displacement rather than a matrix.
+        if (_lightGizmo)
+        {
+            return;
+        }
         ImGuizmo::BeginFrame();
         ImGuizmo::SetOrthographic(false);
         ImGuizmo::SetRect(0.0f, 0.0f, static_cast<float>(_extent.x), static_cast<float>(_extent.y));
@@ -1041,6 +1302,7 @@ private:
     VkmScene _scene;
     VkmGBuffer _gbuffer;
     VkmGiSystem _gi;
+    VkmShadowAtlas _shadowAtlas;
 
     std::array<VkmPipelineStateBase*, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _gbufferPipelines{};
     // One set-3 table per material, per G-buffer permutation. Empty on a backend whose shader
@@ -1078,6 +1340,23 @@ private:
     VkmUpscaleMode _upscaleMode{ VkmUpscaleMode::Off };
     uint64_t _frameCounter = 0;
     bool _sceneReady = false;
+
+    // The atlas's tile assignments, kept because the deferred constants are derived from them.
+    std::vector<VkmPunctualLight> _shadowLights;
+    // The sample's editable lights, and the sun as angles rather than a vector so a slider can
+    // sweep it without the direction drifting off the unit sphere.
+    std::vector<VkmPunctualLight> _punctualLights;
+    glm::vec3 _sunRadiance{ 0.0f, 0.0f, 0.0f };
+    float _sunAzimuthDeg = 0.0f;
+    float _sunElevationDeg = 45.0f;
+    bool _sunEnabled = true;
+    bool _lightsDirty = false;
+    int _selectedLight = 0;
+    bool _lightGizmo = false;
+    // How far from the eye the directional shadow reaches, in world units. Derived from the
+    // scene at load rather than fixed: a constant here would be a guess about scene scale.
+    // Past it nothing casts, which reads as flat lighting rather than a black band.
+    float _shadowDistance = 1.0f;
 
     VkmGiDebugView _debugView = VkmGiDebugView::Composite;
     float _indirectIntensity = 1.0f;

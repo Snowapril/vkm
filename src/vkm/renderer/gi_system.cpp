@@ -2,6 +2,8 @@
 
 #include <vkm/renderer/gi_system.h>
 
+#include <vkm/renderer/shadow_atlas.h>
+
 #include <vkm/base/common.h>
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/buffer.h>
@@ -171,7 +173,12 @@ namespace vkm
         // The capture pass pushes once per (probe, face, batch), so the budget has to fit inside
         // one frame's push-constant ring region on Metal and WebGPU.
         const uint32_t batchCount = static_cast<uint32_t>(scene->getDrawBatches().size());
-        const uint32_t ringBudget = kVkmPushConstantRingEntryCount / std::max(1u, 6u * batchCount + 2u);
+        // Minus the shadow pass's share: the ring is one shared budget and both passes push per
+        // draw, so sizing this against the whole of it is what put a frame over the edge.
+        const uint32_t ringAvailable = kVkmPushConstantRingEntryCount > kVkmShadowPushConstantReserve
+                                           ? kVkmPushConstantRingEntryCount - kVkmShadowPushConstantReserve
+                                           : kVkmPushConstantRingEntryCount;
+        const uint32_t ringBudget = ringAvailable / std::max(1u, 6u * batchCount + 2u);
         const uint32_t requestedBudget = _descriptor._probeBudget;
         const uint32_t budget = std::clamp(std::min(requestedBudget, ringBudget), 1u,
                                            VkmProbeVolumeUpdater::kMaxBudget);
@@ -184,6 +191,8 @@ namespace vkm
 
         VkmProbeVolumeUpdater::Descriptor updaterDescriptor{};
         updaterDescriptor._cullViewIndex = _descriptor._probeCullView;
+        updaterDescriptor._shadowAtlasTexture = _descriptor._shadowAtlasTexture;
+        updaterDescriptor._shadowAtlasConstants = _descriptor._shadowAtlasConstants;
         updaterDescriptor._budget = budget;
         updaterDescriptor._hysteresis = _descriptor._probeHysteresis;
         std::string error;
@@ -433,6 +442,14 @@ namespace vkm
         else
         {
             recordProbeTier(renderGraph, frameData);
+        }
+    }
+
+    void VkmGiSystem::setShadowSun(const VkmPunctualLight& sun, uint32_t tilesPerRow, uint32_t tileSize)
+    {
+        if (_updater.isValid())
+        {
+            _updater.setShadowSun(sun, tilesPerRow, tileSize);
         }
     }
 

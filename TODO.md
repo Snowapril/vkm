@@ -172,3 +172,16 @@
 - VkmUpscalerMetal never queries MTLFXTemporalScalerDescriptor's supportedInputContentMin/MaxScale (1.0-3.0 on M3 Pro), so an out-of-range ratio fails as a nil scaler rather than a clear rejection.
 - model_viewer sizes its depth texture from the swapchain extent, so it cannot consume the engine's upscale mode until that follows getRenderExtent().
 - Stale .gcda files left by a recompiled coverage build crash UnitTests inside __llvm_gcov_writeout at exit, which run_tests.py reports as FAIL even though doctest printed SUCCESS; deleting build/<backend>/**/*.gcda clears it.
+- The traced tier's NEE does not see punctual lights, so ReSTIR and the reference path tracer light a point-lit scene differently from the deferred image.
+- Area lights are shadowed only in the traced tier; the raster tier neither shades nor shadows emissive triangles.
+- Cascades do not blend at their boundaries, so a receiver crossing one can show a visible step in shadow softness and bias.
+- Shadow-casting lights are capped by kVkmMaxShadowTiles (16 tiles: one per cascade for a directional light, six per point light, one per spot); past that a light shades unshadowed.
+- The shadow atlas culls every light against one union box, so a caster outside a given light's frustum is still submitted to that light's tile and clipped there.
+- Point-light shadow taps clamp at a cube-face edge rather than continuing into the adjacent face, so a receiver straddling a seam samples one face twice.
+- The shadow acne gates use flat receivers, so neither reproduces acne from geometry finer than a shadow texel, which is the case Sponza's roof showed.
+- Vulkan teardown destroys buffers, descriptor sets, samplers and pipelines still in use by RenderGraph.Frame1, raising five validation errors per UnitTests run.
+- Shadow bias is one global constant, so a scene whose geometry is finer than a shadow texel forces it up for every other surface too.
+- Cascade boundary blending has no test gate; it is verified only by a pixel-difference measurement on the gi sample.
+- The probe budget and the shadow tile count are each sized against a hand-picked share of the push-constant ring, so a scene with more draw batches than Sponza silently clamps them again.
+- The probe capture's scene-fitted shadow tile is one tile for the whole scene, so its shadows are far coarser than the cascades the camera pass reads.
+- Per-face probe culling only removes 28% of the capture's draws, because a draw batch is a material run and half of Sponza's span more than half the model.

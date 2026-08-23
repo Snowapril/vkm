@@ -20,6 +20,7 @@ namespace
 const std::string kGltfPath = std::string(RESOURCES_DIR) + "tests/gltf_triangle.gltf";
 const std::string kGlbPath = std::string(RESOURCES_DIR) + "tests/gltf_triangle.glb";
 const std::string kTexturedPath = std::string(RESOURCES_DIR) + "tests/gltf_textured.gltf";
+const std::string kPunctualPath = std::string(RESOURCES_DIR) + "tests/gltf_punctual_lights.gltf";
 
 // Keeps the file's own vertex/index ordering so the assertions below can address
 // individual vertices.
@@ -314,4 +315,76 @@ TEST_CASE("importGltfModel - fails gracefully on a truncated .glb") {
     CHECK_FALSE(error.empty());
 
     std::remove(truncatedPath.c_str());
+}
+
+TEST_CASE("importGltfModel - imports KHR_lights_punctual lights with their glTF parameters") {
+    vkm::VkmSceneModel model;
+    std::string error;
+    REQUIRE_MESSAGE(vkm::importGltfModel(kPunctualPath, &model, &error, unoptimizedOptions()), error);
+
+    REQUIRE(model._lights.size() == 3);
+
+    const vkm::VkmScenePunctualLight& point = model._lights[0];
+    CHECK(point._name == "point0");
+    CHECK(point._type == vkm::VkmLightType::Point);
+    CHECK(point._color.r == doctest::Approx(1.0f));
+    CHECK(point._color.g == doctest::Approx(0.5f));
+    CHECK(point._color.b == doctest::Approx(0.25f));
+    CHECK(point._intensity == doctest::Approx(40.0f));
+    CHECK(point._range == doctest::Approx(12.0f));
+
+    const vkm::VkmScenePunctualLight& spot = model._lights[1];
+    CHECK(spot._type == vkm::VkmLightType::Spot);
+    CHECK(spot._intensity == doctest::Approx(25.0f));
+    CHECK(spot._range == doctest::Approx(8.0f));
+    CHECK(spot._innerConeAngle == doctest::Approx(0.2f));
+    CHECK(spot._outerConeAngle == doctest::Approx(0.6f));
+
+    const vkm::VkmScenePunctualLight& sun = model._lights[2];
+    CHECK(sun._type == vkm::VkmLightType::Directional);
+    CHECK(sun._intensity == doctest::Approx(3.0f));
+    // glTF says an absent range means unlimited, which the importer carries as 0.
+    CHECK(sun._range == doctest::Approx(0.0f));
+}
+
+TEST_CASE("VkmSceneModel - places lights by their node's world transform") {
+    vkm::VkmSceneModel model;
+    std::string error;
+    REQUIRE_MESSAGE(vkm::importGltfModel(kPunctualPath, &model, &error, unoptimizedOptions()), error);
+
+    const std::vector<vkm::VkmSceneModel::LightItem> lights = model.buildLightList();
+    REQUIRE(lights.size() == 3);
+
+    // Every node sits under a root translated by (10, 0, 0), so a position that ignored the
+    // parent would be short by exactly that.
+    const vkm::VkmSceneModel::LightItem& point = lights[0];
+    CHECK(model._lights[point._lightIndex]._name == "point0");
+    CHECK(point._positionWorld.x == doctest::Approx(11.0f));
+    CHECK(point._positionWorld.y == doctest::Approx(2.0f));
+    CHECK(point._positionWorld.z == doctest::Approx(3.0f));
+
+    // The spot's node is rotated +90 degrees about X, which takes glTF's local -Z aim to world
+    // +Y. This is the assertion with teeth: reading the matrix's third *row* instead of its
+    // third column -- the classic transpose bug -- yields -Y here, and reading +Z instead of -Z
+    // yields -Y as well. An unrotated fixture would pass with either mistake.
+    const vkm::VkmSceneModel::LightItem& spot = lights[1];
+    CHECK(model._lights[spot._lightIndex]._name == "spot0");
+    CHECK(spot._positionWorld.x == doctest::Approx(10.0f));
+    CHECK(spot._positionWorld.y == doctest::Approx(5.0f));
+    CHECK(spot._directionWorld.x == doctest::Approx(0.0f).epsilon(1e-5));
+    CHECK(spot._directionWorld.y == doctest::Approx(1.0f).epsilon(1e-5));
+    CHECK(spot._directionWorld.z == doctest::Approx(0.0f).epsilon(1e-5));
+
+    // Unrotated: still glTF's default aim, straight down -Z.
+    const vkm::VkmSceneModel::LightItem& sun = lights[2];
+    CHECK(sun._directionWorld.z == doctest::Approx(-1.0f).epsilon(1e-5));
+}
+
+TEST_CASE("VkmSceneModel - a model with no lights builds an empty light list") {
+    vkm::VkmSceneModel model;
+    std::string error;
+    REQUIRE_MESSAGE(vkm::importGltfModel(kGltfPath, &model, &error, unoptimizedOptions()), error);
+
+    CHECK(model._lights.empty());
+    CHECK(model.buildLightList().empty());
 }
