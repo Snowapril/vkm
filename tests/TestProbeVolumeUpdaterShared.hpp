@@ -175,16 +175,17 @@ namespace vkmtest
             CHECK(unique.size() == ProbeUpdaterFixture::kProbeCount);
         }
 
-        SUBCASE("the last frame of a round is clamped rather than wrapped")
+        SUBCASE("the last frame of a round is clamped rather than wrapped, and the budget can move")
         {
             CHECK(recordOneFrame().size() == 3);
             // Wrapping would have refreshed 3 probes here too, two of them for the second time.
             CHECK(recordOneFrame().size() == 1);
             CHECK(recordOneFrame().size() == 3); // the next round starts clean
-        }
 
-        SUBCASE("the budget is the frame cost dial and takes effect on the next frame")
-        {
+            // Sharing this subcase rather than taking one of its own: doctest re-runs the whole
+            // body per subcase, so a third would build a third driver, scene and volume, and the
+            // software Vulkan driver CI runs against fails to allocate the third.
+            //
             // The capture draws once per (probe, face, batch), so the budget IS the pass's frame
             // time. Lowering it has to reach the schedule immediately, or a caller trading frame
             // rate for convergence would keep paying for probes it no longer asked for.
@@ -193,7 +194,7 @@ namespace vkmtest
             CHECK(fixture.updater.getRoundLengthInFrames() == ProbeUpdaterFixture::kProbeCount);
 
             // Never past what initialize() validated: that is the budget the push-constant ring
-            // was sized against, and the capture pushes once per (probe, face, batch).
+            // was sized against.
             fixture.updater.setBudget(1000);
             CHECK(fixture.updater.getDescriptor()._budget == fixture.updater.getMaxBudget());
             CHECK(fixture.updater.getMaxBudget() == kBudget);
