@@ -270,7 +270,6 @@ TEST_CASE("vkmStreamingBaseMipFromFeedback is a fixed point once the texture hol
 {
     // The property that keeps the loop stable: stream out to the level feedback asked for, and the
     // next reading of the same surface names that same level rather than a coarser one.
-    constexpr uint32_t kMipCount = 12;
     const uint32_t firstAsk = vkm::vkmStreamingBaseMipFromFeedback(4, 0, kMipCount);
     CHECK(firstAsk == 4);
 

@@ -5462,3 +5462,33 @@ driver, which is why the collectors take a summary list rather than a pool.
 ### Deviations
 
 (none)
+
+### CI caught three things a Debug-only, single-device run could not
+
+**Planned:** land the min-LOD clamp unconditionally, verified against `shaderResourceMinLod` on the
+development machine.
+
+**Did instead:** compiled the clamp only under `VKM_BACKEND_METAL`.
+
+**Why:** a clamped `Sample` lowers to SPIR-V's `MinLod` operand, whose capability requires
+`VkPhysicalDeviceFeatures::shaderResourceMinLod`. A module declaring a capability the device lacks
+fails `vkCreateShaderModule` **outright** — not merely where the operand is used — so the whole
+G-buffer pass died on lavapipe, which is what the Vulkan CI runs on. MoltenVK reports the feature as
+supported, so no local Vulkan run could have caught it. Sparse residency is Metal-only today, so
+Vulkan and WebGPU always clamp to zero and the operand is dead there; whoever implements
+`vkQueueBindSparse` owns the decision again, with a device in hand to answer it with.
+
+Verified statically rather than by another green local run, since the local device cannot distinguish
+the two: disassembling the shader cache shows `MinLod` absent from all three Vulkan G-buffer variants
+and `min_lod_clamp` still present in the Metal ones.
+
+Two more, both from CI building **Release** where local runs were Debug-only:
+
+- `metal_driver.mm` called `getResource<VkmTexture>` without including
+  `render_resource_pool.hpp`, which holds the template's definition. Debug linked it from another
+  TU's weak symbol; Release did not.
+- MSVC treats C4459 as an error, so a local `kMipCount` shadowing the file-scope one in
+  `TestTextureStreaming.cpp` broke the Windows build. Neither Clang nor AppleClang warns.
+
+**Standing lesson:** run at least one Release build before pushing a branch that adds a shader
+capability or a template call across a TU boundary. Debug on one device hides all three of these.

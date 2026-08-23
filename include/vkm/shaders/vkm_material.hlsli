@@ -200,6 +200,29 @@ float3 vkmStreamingMipHeatColor(float2 streamingMip)
 #else
 
 /*
+* The min-LOD clamp is compiled in only where a texture can actually be sparse.
+*
+* A clamped Sample lowers to SPIR-V's MinLod image operand, whose capability requires
+* VkPhysicalDeviceFeatures::shaderResourceMinLod -- and a module declaring a capability the device
+* lacks fails vkCreateShaderModule outright, not just where the clamp is used. Real GPUs offer it;
+* lavapipe, which is what the Vulkan CI runs on, does not. So an unconditional clamp costs every
+* device that cannot do it the entire G-buffer pass, in exchange for a value that is always zero
+* wherever nothing is sparse.
+*
+* Sparse residency is Metal-only today, so Vulkan and WebGPU always clamp to zero and the operand is
+* dead there. Whoever implements vkQueueBindSparse owns this decision again, and will have a device
+* in hand to answer it with.
+*/
+#if defined(VKM_BACKEND_METAL)
+#define VKM_SAMPLE_MATERIAL_TEXTURE_CLAMPED(slot, uv, minLod)                                       \
+    return g_VkmMaterialTextures[NonUniformResourceIndex(slot)]                                     \
+        .Sample(g_VkmMaterialSampler, uv, int2(0, 0), minLod);
+#else
+#define VKM_SAMPLE_MATERIAL_TEXTURE_CLAMPED(slot, uv, minLod)                                       \
+    return g_VkmMaterialTextures[NonUniformResourceIndex(slot)].Sample(g_VkmMaterialSampler, uv);
+#endif
+
+/*
 * NonUniformResourceIndex is required, not decorative: one indirect draw covers many materials, so
 * the slot is divergent across a wave, and this is exactly the case Vulkan's descriptor-indexing
 * non-uniform rule exists for. Without it a wave whose lanes hit different materials may sample one
@@ -214,8 +237,7 @@ float3 vkmStreamingMipHeatColor(float2 streamingMip)
         {                                                                                           \
             return float4(1.0, 1.0, 1.0, 1.0);                                                      \
         }                                                                                           \
-        return g_VkmMaterialTextures[NonUniformResourceIndex(slot)]                                 \
-            .Sample(g_VkmMaterialSampler, uv, int2(0, 0), minLod);                                  \
+        VKM_SAMPLE_MATERIAL_TEXTURE_CLAMPED(slot, uv, minLod)                                       \
     }                                                                                               \
     VKM_MATERIAL_LOADER()                                                                           \
     VKM_MATERIAL_STREAMING_LOADER()                                                                 \
