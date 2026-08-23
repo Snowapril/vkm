@@ -50,6 +50,13 @@ TEST_CASE("Metal sparse texture - granted with a usable mip tail, or honestly re
     vkmtest::runSparseTextureTest(f.driver.get());
 }
 
+TEST_CASE("Metal sparse texture - mapping a level backs it and unmapping gives the memory back")
+{
+    MetalSparseTextureFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+    vkmtest::runSparseMipResidencyTest(f.driver.get());
+}
+
 TEST_CASE("Metal sparse texture - loses to flags that decide backing memory another way")
 {
     MetalSparseTextureFixture f;

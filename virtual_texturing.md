@@ -219,3 +219,38 @@ value, since whether a device can do it is a property of the machine.
 
 Still to come: the tile heap, the `updateSparseTextureMapping` seam and its `MTLStageResourceState`
 barrier, and the streamer's residency path.
+
+## 10. Tier 2: residency works
+
+The tile heap and the mapping seam are in, and a level's memory can now be taken and given back
+without touching the texture, its view or its bindless slot.
+
+**`VkmDriverBase::updateSparseMipResidency(texture, level, resident)`** is deliberately a driver call
+rather than a command-buffer one: Metal updates mappings on the queue and Vulkan through
+`vkQueueBindSparse`, neither of which is an encoder operation, and routing it through the command
+buffer would mean opening an encoder to hold a barrier — something this backend has been bitten by
+before. Asking about a level in the mip tail succeeds and does nothing, so a caller can walk a whole
+chain without first finding where the tail starts.
+
+**`VkmSparseTileHeapMetal`** allocates *runs*, not tiles. One mapping operation covers a rectangular
+tile region of one level and draws it from a contiguous span starting at one tile offset, so the unit
+of allocation is a run of N tiles. It is a first-fit free list with coalescing on release: without the
+coalesce the list fragments into single tiles as levels stream in and out, and a level needing a
+contiguous run would then fail against a heap that is mostly empty.
+
+**Residency is measured in the heap, not on the texture.** A sparse texture's `allocatedSize` is
+page-table footprint and does not move, so the tile heap's own totals go into
+`VkmGpuMemoryStats::_poolUsedBytes`. That is the only place the cost of streaming a level in becomes
+visible, and it is what the test asserts against.
+
+### Two things the hardware taught us here
+
+- **A sparse texture must never be host-writable.** On unified memory the engine's storage-mode
+  policy would otherwise give it `MTLStorageModeShared`, and `uploadToTexture` would then take the
+  `replaceRegion:` path straight into sparse memory. That **hangs the queue** rather than failing —
+  far harder to diagnose than a copy that returns an error. Its pages come from a Private placement
+  heap and arrive one mapping at a time, so there is no CPU-visible allocation to write into.
+- **A copy into a freshly mapped level did not need an explicit `MTLStageResourceState` barrier** to
+  complete, tested with and without. The header still asks for one, so this is a "not observed"
+  rather than a "not required" — but it was not the cause of the hang above, which is worth recording
+  because it was the obvious suspect.

@@ -268,6 +268,7 @@ if (VKM_USE_METAL_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_allocator.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_gpu_image_heap.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_sparse_tile_heap.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_bindless_resource_manager.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_frame_constant_manager.h
     )
@@ -291,6 +292,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_allocator.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_gpu_image_heap.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_sparse_tile_heap.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_bindless_resource_manager.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_frame_constant_manager.mm
     )

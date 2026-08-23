@@ -50,6 +50,16 @@ namespace vkm
             {
                 return false;
             }
+            /*
+            * Never a sparse texture, whatever the memory architecture. Its pages come from a
+            * Private placement heap and arrive one mapping at a time, so there is no CPU-visible
+            * allocation for replaceRegion: to write into -- and taking that path anyway hangs the
+            * queue rather than failing, which is a great deal harder to diagnose than a copy.
+            */
+            if ((info._flags & VkmResourceCreateInfo::Sparse) != 0)
+            {
+                return false;
+            }
             if ((info._flags & VkmResourceCreateInfo::AllowTransferDst) == 0)
             {
                 return false;

@@ -349,6 +349,14 @@ namespace vkm
             _heapAllocator->destroy();
             _heapAllocator.reset();
         }
+        // Same ordering rule: the tile heap outlives the sparse textures mapped from it, and the
+        // run table has to go with it or it would name blocks that no longer exist.
+        _sparseTileRuns.clear();
+        if (_sparseTileHeap)
+        {
+            _sparseTileHeap->destroy();
+            _sparseTileHeap.reset();
+        }
     }
 
     VkmTexture* VkmDriverMetal::newTextureInner()
@@ -380,6 +388,95 @@ namespace vkm
     VkmBufferView* VkmDriverMetal::newBufferViewInner()
     {
         return new VkmBufferViewMetal(this);
+    }
+
+    bool VkmDriverMetal::updateSparseMipResidency(VkmResourceHandle textureHandle, uint32_t mipLevel, bool resident)
+    {
+        VkmTexture* texture = getRenderResourcePool()->getResource<VkmTexture>(textureHandle);
+        if (texture == nullptr || !texture->isSparse())
+        {
+            return false;
+        }
+
+        /*
+        * The tail is one indivisible allocation bound for the texture's life, so there is nothing
+        * to change. Reported as success rather than failure so a caller can walk every level of a
+        * chain without knowing where the tail starts.
+        */
+        if (mipLevel >= texture->getMipTailFirstLevel())
+        {
+            return true;
+        }
+
+        id<MTLTexture> mtlTexture = static_cast<VkmTextureMetal*>(texture)->getInternalHandle();
+        if (mtlTexture == nullptr)
+        {
+            return false;
+        }
+
+        if (_sparseTileHeap == nullptr)
+        {
+            _sparseTileHeap = std::make_unique<VkmSparseTileHeapMetal>(this);
+            if (!_sparseTileHeap->initialize())
+            {
+                _sparseTileHeap.reset();
+                return false;
+            }
+        }
+
+        // One key per (texture, level). The handle's id already distinguishes a recycled slot by
+        // generation, so a stale run cannot be mistaken for a live one.
+        const uint64_t key = (static_cast<uint64_t>(textureHandle.id) << 8) | (mipLevel & 0xFFu);
+        const auto existing = _sparseTileRuns.find(key);
+        const bool alreadyResident = existing != _sparseTileRuns.end();
+        if (resident == alreadyResident)
+        {
+            return true;
+        }
+
+        const VkmTextureInfo& info = texture->getTextureInfo();
+        const MTLSize tileSize = [_mtlDevice sparseTileSizeWithTextureType:[mtlTexture textureType]
+                                                               pixelFormat:[mtlTexture pixelFormat]
+                                                               sampleCount:1
+                                                            sparsePageSize:kSparsePageSize];
+        // Tiles this level needs, rounding up: a level narrower than one tile still costs one.
+        const uint32_t levelWidth = std::max(1u, info._extent.x >> mipLevel);
+        const uint32_t levelHeight = std::max(1u, info._extent.y >> mipLevel);
+        const uint32_t tilesX =
+            static_cast<uint32_t>((levelWidth + tileSize.width - 1) / tileSize.width);
+        const uint32_t tilesY =
+            static_cast<uint32_t>((levelHeight + tileSize.height - 1) / tileSize.height);
+
+        id<MTL4CommandQueue> queue =
+            static_cast<VkmCommandQueueMetal*>(getCommandQueue(VkmCommandQueueType::Graphics, 0))->getMTLCommandQueue();
+
+        MTL4UpdateSparseTextureMappingOperation operation{};
+        operation.textureRegion = MTLRegionMake2D(0, 0, tilesX, tilesY);
+        operation.textureLevel = mipLevel;
+        operation.textureSlice = 0;
+
+        if (resident)
+        {
+            const VkmSparseTileHeapMetal::TileRun run = _sparseTileHeap->allocate(tilesX * tilesY);
+            if (!run.isValid())
+            {
+                return false;
+            }
+            operation.mode = MTLSparseTextureMappingModeMap;
+            operation.heapOffset = run._firstTile;
+            [queue updateTextureMappings:mtlTexture heap:run._heap operations:&operation count:1];
+            _sparseTileRuns.emplace(key, run);
+        }
+        else
+        {
+            const VkmSparseTileHeapMetal::TileRun run = existing->second;
+            operation.mode = MTLSparseTextureMappingModeUnmap;
+            operation.heapOffset = run._firstTile;
+            [queue updateTextureMappings:mtlTexture heap:run._heap operations:&operation count:1];
+            _sparseTileRuns.erase(existing);
+            _sparseTileHeap->release(run);
+        }
+        return true;
     }
 
     bool VkmDriverMetal::onCreateAliasBlock(uint32_t blockIndex, uint64_t sizeBytes, uint32_t memoryTypeBits)
@@ -465,6 +562,21 @@ namespace vkm
             }
             stats._poolReservedBytes += static_cast<uint64_t>([heap currentAllocatedSize]);
             stats._poolUsedBytes += static_cast<uint64_t>([heap usedSize]);
+            stats._hasPoolStats = true;
+        }
+
+        /*
+        * The tile heap, for the same reason and more sharply: a placement-sparse texture's own
+        * allocatedSize is page-table footprint and does not move as levels are mapped and
+        * unmapped, so its per-texture tag reports zero. Every byte sparse residency actually costs
+        * is here, and this is the only place the cost of streaming a level in becomes visible.
+        * Counted from the allocator rather than [heap usedSize]: a placement heap does not track
+        * what the application has placed in it.
+        */
+        if (_sparseTileHeap)
+        {
+            stats._poolReservedBytes += _sparseTileHeap->getReservedBytes();
+            stats._poolUsedBytes += _sparseTileHeap->getAllocatedBytes();
             stats._hasPoolStats = true;
         }
 

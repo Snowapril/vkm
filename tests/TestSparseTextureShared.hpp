@@ -10,6 +10,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 /*
 * Sparse textures are the residency half of texture streaming: the same texture, the same view and
@@ -83,6 +84,75 @@ namespace vkmtest
             // ordinary texture has no tail to speak of.
             CHECK(texture->getMipTailFirstLevel() == info._numMipLevels);
         }
+
+        driver->getRenderResourcePool()->releaseResource(handle);
+    }
+
+    /*
+    * @brief Mapping a level actually backs it, and unmapping actually gives the memory back.
+    *
+    * @details The claim tier 2 rests on, and the one that cannot be checked by looking at the
+    * texture: a sparse texture's own allocatedSize is page-table footprint and does not move as
+    * tiles come and go. So residency is measured where the bytes really are -- the tile heap, via
+    * the driver's pool stats -- and confirmed by pixels, since an upload into an unbacked level has
+    * nothing to land in.
+    */
+    inline void runSparseMipResidencyTest(vkm::VkmDriverBase* driver)
+    {
+        if ((driver->getDriverCapabilityFlags() & vkm::VkmDriverCapabilityFlags::SparseResidency) == 0u)
+        {
+            MESSAGE("Skipping: this device reports no SparseResidency capability.");
+            return;
+        }
+
+        vkm::VkmTextureInfo info{};
+        info._flags = static_cast<vkm::VkmResourceCreateInfo>(
+            static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowShaderRead) |
+            static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowTransferSrc) |
+            static_cast<uint32_t>(vkm::VkmResourceCreateInfo::AllowTransferDst) |
+            static_cast<uint32_t>(vkm::VkmResourceCreateInfo::Sparse));
+        info._extent = glm::uvec3(256, 256, 1);
+        info._numMipLevels = 9;
+        info._numArrayLayers = 1;
+        info._format = vkm::VkmFormat::R8G8B8A8_UNORM;
+        info._debugName = "SparseResidencyTest";
+
+        vkm::VkmTexture* texture = driver->newTexture(info);
+        REQUIRE(texture != nullptr);
+        REQUIRE(texture->isSparse());
+        const vkm::VkmResourceHandle handle = texture->getHandle();
+
+        const uint64_t beforeMap = driver->getGpuMemoryStats()._poolUsedBytes;
+
+        REQUIRE(driver->updateSparseMipResidency(handle, /*mipLevel=*/0, /*resident=*/true));
+        const uint64_t afterMap = driver->getGpuMemoryStats()._poolUsedBytes;
+        // 256x256 at a 64x64 tile is 16 tiles; the exact figure is the device's business, but it
+        // cannot be nothing.
+        CHECK(afterMap > beforeMap);
+
+        // Pixels are the second, independent witness: this upload has nowhere to land unless the
+        // level really is backed now.
+        const std::vector<uint8_t> pixels(256ull * 256ull * 4ull, 0x7Fu);
+        REQUIRE(driver->uploadToTexture(handle, pixels.data(), pixels.size(), /*mipLevel=*/0));
+
+        const vkm::VkmTextureReadbackResult readback = driver->readbackTexture(handle);
+        REQUIRE(readback.channels == 4);
+        REQUIRE(readback.pixels.size() >= 4);
+        CHECK(readback.pixels[0] == 0x7Fu);
+        CHECK(readback.pixels[1] == 0x7Fu);
+
+        // Idempotent: asking for a level that is already resident must not take a second run of
+        // tiles, or streaming would leak the heap one re-request at a time.
+        REQUIRE(driver->updateSparseMipResidency(handle, /*mipLevel=*/0, /*resident=*/true));
+        CHECK(driver->getGpuMemoryStats()._poolUsedBytes == afterMap);
+
+        REQUIRE(driver->updateSparseMipResidency(handle, /*mipLevel=*/0, /*resident=*/false));
+        CHECK(driver->getGpuMemoryStats()._poolUsedBytes == beforeMap);
+
+        // The tail is indivisible and permanently bound, so asking about it succeeds and changes
+        // nothing -- that is what lets a caller walk every level without finding the tail first.
+        REQUIRE(driver->updateSparseMipResidency(handle, texture->getMipTailFirstLevel(), /*resident=*/false));
+        CHECK(driver->getGpuMemoryStats()._poolUsedBytes == beforeMap);
 
         driver->getRenderResourcePool()->releaseResource(handle);
     }
