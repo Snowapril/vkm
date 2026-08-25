@@ -6,8 +6,12 @@
 #include <vkm/renderer/backend/metal/metal_bindless_resource_manager.h>
 #include <vkm/renderer/backend/metal/metal_frame_constant_manager.h>
 
+#include <vkm/renderer/backend/metal/metal_sparse_tile_heap.h>
+
 #include <memory>
 #include <string>
+#include <map>
+#include <unordered_map>
 #include <vector>
 
 @protocol MTLDevice;
@@ -52,6 +56,16 @@ namespace vkm
 
         bool supportsResourceAliasing() const override final { return true; }
         bool onCreateAliasBlock(uint32_t blockIndex, uint64_t sizeBytes, uint32_t memoryTypeBits) override final;
+
+        bool updateSparseMipResidency(VkmResourceHandle texture, uint32_t mipLevel, bool resident) override final;
+
+        /*
+        * @brief Hands every tile backing one sparse texture back to the tile heap.
+        * @details Called by the texture's own teardown. The mappings are not unmapped first --
+        * the texture is going away, so nothing is left to address them through.
+        * @param texture The texture being destroyed.
+        */
+        void releaseSparseTextureMappings(VkmResourceHandle texture);
         void onDestroyAliasBlock(uint32_t blockIndex) override final;
 
         // Device-reported allocation size/budget plus the heap pool's reserved-vs-used split.
@@ -114,6 +128,18 @@ namespace vkm
         // Indexed by the block index VkmAliasedMemoryHeap hands out; append-only, freed only at
         // teardown since a live placement always points into one.
         std::vector<std::unique_ptr<VkmGpuImageHeapMetal>> _imageHeaps;
+
+        /*
+        * The tiles backing every sparse texture's resident levels, and which run belongs to which
+        * (texture, level). Created lazily on the first residency change, so a build with no sparse
+        * texture pays nothing.
+        * Keyed by handle id and level rather than held on the texture, because releasing the run is
+        * the driver's job either way -- the texture is destroyed through the pool and never sees it.
+        */
+        std::unique_ptr<VkmSparseTileHeapMetal> _sparseTileHeap;
+        // Ordered so every run of one texture is one contiguous range, which is what lets the
+        // texture's teardown reclaim them all without knowing which levels it ever backed.
+        std::map<uint64_t, VkmSparseTileHeapMetal::TileRun> _sparseTileRuns;
 
         // Owned +1 under MRC, like _captureScope below.
         id<MTL4CounterHeap> _timestampCounterHeap {nullptr};

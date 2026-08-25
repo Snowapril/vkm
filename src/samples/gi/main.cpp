@@ -42,6 +42,7 @@
 #include <vkm/renderer/backend/common/resource_table.h>
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 #include <vkm/renderer/backend/common/render_graph.h>
+#include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/sampler.h>
 #include <vkm/renderer/backend/common/swapchain.h>
 #include <vkm/renderer/backend/common/texture.h>
@@ -52,6 +53,7 @@
 #include <vkm/renderer/deferred_lighting.h>
 #include <vkm/renderer/gi_composite.h>
 #include <vkm/renderer/gi_system.h>
+#include <vkm/renderer/memory_report.h>
 #include <vkm/renderer/shadow_atlas.h>
 #include <vkm/renderer/screenshot.h>
 
@@ -135,6 +137,10 @@ VKM_GLOBAL_VARIABLE(float, gv_gi_camera_pitch, 17.2f); // the controller's 0.3 r
 // 0 on a device without ray tracing -- the selection is a runtime capability question, not a
 // build-time one (restir.md section 5).
 VKM_GLOBAL_VARIABLE(uint32_t, gv_gi_technique, 0u);
+// Whether a texture the driver granted sparse residency streams by binding and unbinding its own
+// levels instead of being rebuilt into a second texture. Off forces every texture down the rebuild
+// path, which is what makes the two comparable on one machine.
+VKM_GLOBAL_VARIABLE(bool, gv_gi_sparse_streaming, true);
 // 8.7's final-shading MIS blend: smooth surfaces lean on the pixel's own fresh sample instead of
 // the resampled one, whose cached radiance is the documented ReSTIR GI bias on low roughness.
 // Settable here so a screenshot run can A/B it.
@@ -190,6 +196,68 @@ namespace
         fb._colorAttachments[0] = target;
         return fb;
     }
+
+#if defined(VKM_ENABLE_IMGUI)
+    /*
+    * What streaming currently holds, against what the same textures would cost unstreamed.
+    *
+    * The baseline is the point. A resident figure on its own says nothing about whether streaming
+    * is doing anything, which is exactly the question this panel exists to answer.
+    */
+    void drawTextureStreamingStats(const VkmTextureStreamingStats& stats)
+    {
+        if (stats._textureCount == 0)
+        {
+            ImGui::TextDisabled("No streamed textures in this scene");
+            return;
+        }
+
+        const uint64_t saved =
+            (stats._fullChainBytes > stats._residentBytes) ? stats._fullChainBytes - stats._residentBytes : 0;
+        const double savedFraction =
+            stats._fullChainBytes > 0 ? static_cast<double>(saved) / static_cast<double>(stats._fullChainBytes) : 0.0;
+
+        ImGui::Text("Streamed textures: %u", stats._textureCount);
+        ImGui::Text("  resident   %s", formatByteSize(stats._residentBytes).c_str());
+        ImGui::Text("  full chain %s", formatByteSize(stats._fullChainBytes).c_str());
+        ImGui::Text("  saved      %s (%.1f%%)", formatByteSize(saved).c_str(), savedFraction * 100.0);
+
+        char overlay[64];
+        std::snprintf(overlay, sizeof(overlay), "%.0f%% of unstreamed", (1.0 - savedFraction) * 100.0);
+        ImGui::ProgressBar(static_cast<float>(1.0 - savedFraction), ImVec2(-FLT_MIN, 0.0f), overlay);
+
+        // Where the textures actually sit, which is what makes a small saving legible: a scene
+        // whose every texture is still at level 0 has nothing to give back yet.
+        std::string levels;
+        for (uint32_t level = 0; level < kVkmStreamingHistogramLevels; ++level)
+        {
+            if (stats._levelHistogram[level] != 0)
+            {
+                levels += "  " + std::to_string(level) + ":" + std::to_string(stats._levelHistogram[level]);
+            }
+        }
+        ImGui::Text("  at level %s", levels.c_str());
+
+        // Texel bytes, so this is what an upload writes rather than what the allocator committed;
+        // tiling and alignment padding are invisible from here and make the real saving smaller.
+        ImGui::TextDisabled("Texel bytes, excluding allocator padding");
+
+        if (stats._rebuildInFlight || stats._pendingRetireCount != 0)
+        {
+            // Says out loud why the engine-wide figure below can sit above the resident one.
+            ImGui::TextDisabled("Rebuilding: %s, %u texture(s) awaiting release",
+                                stats._rebuildInFlight ? "yes" : "no", stats._pendingRetireCount);
+        }
+        if (stats._failedCount != 0)
+        {
+            ImGui::TextDisabled("%u texture(s) pinned by a failed rebuild", stats._failedCount);
+        }
+
+        // Zero here with streaming on means the readback never arrived and the targets quietly
+        // came from the bounding-sphere estimate instead -- a silent fallback worth seeing.
+        ImGui::TextDisabled("Targets from GPU feedback: %u of %u", stats._feedbackCount, stats._textureCount);
+    }
+#endif
 } // namespace
 
 class GiApplication : public AppDelegate
@@ -315,6 +383,10 @@ public:
         _gi.options()._restirMisBlend = gv_gi_restir_mis.get();
 
         loadScene(gv_gi_model_path.get());
+
+        VkmTextureStreamingSettings streaming = _scene.getTextureStreamingSettings();
+        streaming._useSparseResidency = gv_gi_sparse_streaming.get();
+        _scene.setTextureStreamingSettings(streaming);
     }
 
     virtual void preShutdown() override final
@@ -375,6 +447,15 @@ public:
         {
             _camera.setJitterPixels(glm::vec2(0.0f));
         }
+        // Before the frame records anything: the streamer creates textures and uploads through the
+        // driver directly, which a recording command buffer cannot be open across. The render
+        // extent, not the display one, is what the G-buffer is rasterized at.
+        VkmTextureStreamingView streamingView;
+        streamingView._cameraPosition = _camera.getPosition();
+        streamingView._viewportHeight = _renderExtent.y;
+        streamingView._fovYRadians = _camera.getFovYRadians();
+        _scene.updateTextureStreaming(_engine->getDriver(), streamingView);
+
         takePendingScreenshot();
         drawUi();
     }
@@ -412,6 +493,12 @@ public:
         const uint32_t frameIndex = renderGraph->frameIndex();
         VkmFrameData cameraFrameData = frameData;
         vkmExtractFrustumPlanes(_camera.getViewProjection(), cameraFrameData._frustumPlanes);
+        // The streaming view is the one debug view the composite cannot read out of the G-buffer,
+        // so the G-buffer pass has to be told to write it. Only the camera's frame data carries
+        // it: the probe refresh shades with `frameData` and stays unaffected.
+        cameraFrameData._debugMode = (_debugView == VkmGiDebugView::StreamingMip)
+                                         ? kGBufferDebugStreamingMip
+                                         : 0u;
 
         // Before everything else: the deferred pass below reads what this writes.
         _shadowAtlas.record(renderGraph, &_scene, frameData, frameIndex);
@@ -542,6 +629,8 @@ public:
 private:
     // The probe refresh takes the other one; see the file header.
     static constexpr uint32_t kCameraCullView = 0;
+    // Mirrors VKM_GBUFFER_DEBUG_STREAMING_MIP in resources/Shaders/gbuffer.hlsl.
+    static constexpr uint32_t kGBufferDebugStreamingMip = 1;
     static constexpr uint32_t kProbeCullView = 1;
     // The shadow atlas draws from each light rather than from the eye, so it needs its own.
     static constexpr uint32_t kShadowCullView = 2;
@@ -953,6 +1042,15 @@ private:
         // --screenshot fires before the device has finished initializing and captures a blank page.
         dumpScreenshotAsBase64(gv_gi_screenshot.get());
 #endif
+        // What streaming settled at, alongside the screenshot: a headless run is the only place
+        // these get read, and the panel that shows them needs a window.
+        const VkmTextureStreamingStats stats = _scene.getTextureStreamingStats();
+        VKM_DEBUG_INFO(("[streaming] resident " + std::to_string(stats._residentBytes / (1024 * 1024)) +
+                        " MiB of " + std::to_string(stats._fullChainBytes / (1024 * 1024)) +
+                        " MiB full, textures=" + std::to_string(stats._textureCount) +
+                        " changes=" + std::to_string(stats._rebuildsApplied) +
+                        " inflight=" + std::to_string(stats._rebuildInFlight) +
+                        " retiring=" + std::to_string(stats._pendingRetireCount)).c_str());
         // A screenshot run exists to produce the file, so it stops once it has one.
         _engine->getInputHandler().requestExit();
     }
@@ -1103,6 +1201,10 @@ private:
             }
             ImGui::EndCombo();
         }
+        if (_debugView == VkmGiDebugView::StreamingMip)
+        {
+            ImGui::TextDisabled("Green = the whole chain is resident, red = only the coarsest level");
+        }
         ImGui::DragFloat("Indirect intensity", &_indirectIntensity, 0.05f, 0.0f, 8.0f);
         VkmGiOptions& giOptions = _gi.options();
         ImGui::Checkbox("SSGI contact term", &giOptions._ssgi);
@@ -1138,6 +1240,9 @@ private:
                                          : (_renderExtent == _extent ? "no upscaler" : "bilinear"));
 
         ImGui::Separator();
+        drawTextureStreamingUi();
+
+        ImGui::Separator();
         const VkmProbeVolume& volume = _gi.getProbeVolume();
         const VkmProbeVolumeUpdater& updater = _gi.getProbeUpdater();
         // The probe tier's cost dial. The capture draws once per (probe, face, batch), so this is
@@ -1169,6 +1274,48 @@ private:
     }
 
 #if defined(VKM_ENABLE_IMGUI)
+    /*
+    * @brief Texture streaming's controls and what it is currently saving.
+    *
+    * @details Shown whatever the debug view is: the heat map answers "which level is this surface
+    * at", and this answers "is any of that worth it", which is the question a memory optimization
+    * actually has to answer.
+    */
+    void drawTextureStreamingUi()
+    {
+        if (_scene.isTextureStreamingAvailable())
+        {
+            VkmTextureStreamingSettings streaming = _scene.getTextureStreamingSettings();
+            bool changed = ImGui::Checkbox("Texture streaming", &streaming._enabled);
+            // The two residency paths, on one machine: unbinding a texture's own levels against
+            // rebuilding it into a second one. Only meaningful where the driver granted sparse
+            // residency; where it did not, every texture already rebuilds whatever this says.
+            changed |= ImGui::Checkbox("Sparse residency", &streaming._useSparseResidency);
+            int mipBias = static_cast<int>(streaming._mipBias);
+            if (ImGui::SliderInt("Mip bias", &mipBias, -4, 4))
+            {
+                streaming._mipBias = static_cast<int32_t>(mipBias);
+                changed = true;
+            }
+            if (changed)
+            {
+                _scene.setTextureStreamingSettings(streaming);
+            }
+            drawTextureStreamingStats(_scene.getTextureStreamingStats());
+        }
+        else
+        {
+            ImGui::TextDisabled("Streaming unavailable: no bindless texture array");
+        }
+
+        // Drawn on every backend, streaming or not: it is the whole-engine figure the streamed
+        // total has to be read against, and the one number that includes render targets.
+        const VkmResourceCategoryUsage textures =
+            _engine->getDriver()->getRenderResourcePool()->getCategoryMemoryUsage(VkmResourceType::Texture);
+        ImGui::Text("All textures: %s live in %u", formatByteSize(textures.totalAllocatedBytes).c_str(),
+                    textures.liveCount);
+    }
+
     /*
     * @brief Sun direction and punctual-light placement: judge a shadow by moving what casts it.
     *

@@ -43,6 +43,7 @@ set(SRCS
     ${SRC_DIR}/TestGpuProfiler.cpp
     ${SRC_DIR}/TestImageLoader.cpp
     ${SRC_DIR}/TestMipChain.cpp
+    ${SRC_DIR}/TestTextureStreaming.cpp
     ${SRC_DIR}/TestCubemapTexture.cpp
     ${SRC_DIR}/TestBufferHostWrite.cpp
     ${SRC_DIR}/TestTransientTexture.cpp
@@ -72,6 +73,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
         ${SRC_DIR}/TestTexturePlacementMetal.mm
         ${SRC_DIR}/TestTransientTextureMetal.mm
+        ${SRC_DIR}/TestSparseTextureMetal.mm
         ${SRC_DIR}/TestAliasedTextureMetal.mm
         ${SRC_DIR}/TestResourceTablesMetal.mm
         ${SRC_DIR}/TestGBufferMetal.mm
@@ -100,6 +102,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/TestBufferHostWriteMetal.mm
         ${SRC_DIR}/TestTexturePlacementMetal.mm
         ${SRC_DIR}/TestTransientTextureMetal.mm
+        ${SRC_DIR}/TestSparseTextureMetal.mm
         ${SRC_DIR}/TestAliasedTextureMetal.mm
         ${SRC_DIR}/TestResourceTablesMetal.mm
         ${SRC_DIR}/TestGBufferMetal.mm

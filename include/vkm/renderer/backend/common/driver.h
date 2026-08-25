@@ -89,6 +89,16 @@ namespace vkm
         * clear on WebGPU, which has no upscaler library at all.
         */
         TemporalUpscaling       = 0x00000100,
+        /*
+        * Backend can change which mip levels of a texture are actually backed by memory, without
+        * recreating the texture. Texture streaming's high tier: the image view covers the whole
+        * chain for the texture's life, so a level arriving or leaving costs a mapping update
+        * rather than a new resource, a new bindless slot and a rewrite of every material naming it.
+        * Asked of the device rather than assumed from the API version -- placement sparse is a
+        * hardware tier on Metal and a feature bit on Vulkan, and both can be absent on a device
+        * whose API level otherwise has it.
+        */
+        SparseResidency         = 0x00000200,
     };
 
     inline VkmDriverCapabilityFlags operator|(VkmDriverCapabilityFlags lhs, VkmDriverCapabilityFlags rhs)
@@ -390,6 +400,35 @@ namespace vkm
         * request that is warned about and cleared where it cannot be served.
         */
         virtual bool supportsResourceAliasing() const { return false; }
+
+        /*
+        * @brief Gives one mip level of a sparse texture memory, or takes it away again.
+        *
+        * @details The residency half of texture streaming: the texture, its view and its bindless
+        * slot are untouched, and only what backs this level changes. Binding memory is all this
+        * does -- a level that has just become resident still holds nothing until it is uploaded,
+        * and in that order.
+        *
+        * Deliberately a driver call rather than a command-buffer one. Metal updates mappings on the
+        * queue and Vulkan through vkQueueBindSparse; neither is an encoder operation, and routing
+        * it through the command buffer would mean opening an encoder to hold a barrier, which this
+        * backend has been bitten by before. Call it between frames, not while recording.
+        *
+        * A level in the mip tail cannot be changed: the tail is one indivisible allocation that
+        * stays bound for the texture's life. Asking is not an error -- it reports success and does
+        * nothing -- so a caller may walk every level without special-casing the tail.
+        *
+        * @param texture A texture created with VkmResourceCreateInfo::Sparse and granted it.
+        * @param mipLevel Level to change.
+        * @param resident True to back it, false to release its tiles.
+        * @return False where the backend cannot do this, the texture is not sparse, or no tiles
+        * were available. The default is the "cannot" answer.
+        */
+        virtual bool updateSparseMipResidency(VkmResourceHandle texture, uint32_t mipLevel, bool resident)
+        {
+            (void)texture; (void)mipLevel; (void)resident;
+            return false;
+        }
 
         /*
         * @brief Create/destroy one block of aliasing-heap memory. Called only by

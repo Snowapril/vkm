@@ -62,7 +62,9 @@ namespace vkm
     protected:
         bool initializeCommon(VkmResourceHandle handle)
         {
-            if ( _handle.isValid() == false )
+            // The handle being taken, not the one already held: this runs on a resource that has
+            // not been given one yet, so the member says nothing about whether the pool succeeded.
+            if (handle.isValid() == false)
             {
                 VKM_DEBUG_ERROR("Invalid resource handle");
                 return false;

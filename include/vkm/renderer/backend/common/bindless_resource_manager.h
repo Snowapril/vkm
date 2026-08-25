@@ -39,7 +39,16 @@ namespace vkm
         // The culling pass's output and the emit pass's input: a per-batch visible count followed
         // by that batch's compacted object indices.
         VisibleList      = 3, // RWStructuredBuffer<uint>,     read-write, CS only
-        Count            = 4,
+        /*
+        * One u32 per bindless texture slot: the finest mip level any pixel asked that texture for
+        * this frame, atomically minimised. Texture streaming reads it back to learn what the
+        * screen actually needed rather than estimating from a bounding sphere.
+        * Read-write from the fragment stage, which is what makes it the one singleton the WebGPU
+        * graphics bind group cannot carry -- that layout stops before the first writable entry.
+        * Harmless there: WebGPU has no bindless texture array to key this by and never streams.
+        */
+        TextureFeedback  = 4, // RWStructuredBuffer<uint>,     read-write, PS + CS
+        Count            = 5,
     };
 
     // Engine-global bindless binding convention. These constants are the single source of

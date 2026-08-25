@@ -19,6 +19,7 @@ namespace vkm
             case VkmGiDebugView::Motion:          return "Motion vectors";
             case VkmGiDebugView::CameraDistance:  return "Camera distance";
             case VkmGiDebugView::Emissive:        return "Emissive";
+            case VkmGiDebugView::StreamingMip:    return "Streaming mip";
             case VkmGiDebugView::Count:           break;
         }
         return "Unknown";

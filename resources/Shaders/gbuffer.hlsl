@@ -45,6 +45,13 @@ struct ObjectData
     float4   boundsCenterRadius;
 };
 
+/*
+* What FrameData::debugMode selects here. The scene carries the value without interpreting it, so
+* the meanings are the drawing shader's own; 0 shades normally, as it does everywhere.
+* Kept in step with VkmGiDebugView::StreamingMip, which is what sets it (the gi sample).
+*/
+#define VKM_GBUFFER_DEBUG_STREAMING_MIP 1
+
 // Mirrors vkm::VkmFrameData. Carries no camera: that is set 1's job.
 struct FrameData
 {
@@ -60,6 +67,17 @@ VKM_BINDLESS_VERTEX_PULLING(uint);
 VKM_BINDLESS_OBJECT_DATA(ObjectData, g_ObjectData);
 VKM_BINDLESS_FRAME_DATA(FrameData, g_FrameData);
 VKM_MATERIAL_DECLARE();
+
+/*
+* Texture streaming's feedback channel. The G-buffer pass is the one that decides what is on screen
+* at render resolution, so it is the one that votes; the probe capture deliberately does not.
+* Never declared on the WebGPU branch -- that backend has no bindless texture array to key the
+* entries by, and its graphics bind group stops before the first writable singleton.
+*/
+#if !defined(VKM_BACKEND_WEBGPU)
+VKM_BINDLESS_TEXTURE_FEEDBACK(g_VkmTextureFeedback);
+VKM_MATERIAL_FEEDBACK_RECORDER(g_VkmTextureFeedback)
+#endif
 
 #if defined(VKM_VERTEX_LAYOUT_STANDARD_PBR)
     // position f32x3 @0, normal f32x3 @16, uv0 f32x2 @32, tangent f32x4 @48; stride 64 = 16 words
@@ -209,6 +227,24 @@ PSOutput PSMain(VSOutput input)
     const float2 metallicRoughness = vkmSampleMetallicRoughness(material, input.uv);
     const float3 emissive = vkmSampleEmissive(material, input.uv);
 
+#if !defined(VKM_BACKEND_WEBGPU)
+    /*
+    * Report what this pixel wanted, for texture streaming. Beside the samples and above the
+    * alpha-mask discard for the same reason they are: the LOD query is an implicit-derivative
+    * operation and must stay in uniform control flow.
+    * Only the three channels that are actually sampled vote -- a normal map nothing reads should
+    * not hold a texture resident.
+    */
+    const uint2 feedbackPixel = uint2(input.position.xy);
+    if ((feedbackPixel.x % VKM_TEXTURE_FEEDBACK_PIXEL_STRIDE) == 0u &&
+        (feedbackPixel.y % VKM_TEXTURE_FEEDBACK_PIXEL_STRIDE) == 0u)
+    {
+        vkmRecordTextureFeedback(material.baseColorSlot, input.uv);
+        vkmRecordTextureFeedback(material.metallicRoughnessSlot, input.uv);
+        vkmRecordTextureFeedback(material.emissiveSlot, input.uv);
+    }
+#endif
+
     /*
     * glTF alphaMode MASK. A masked material's base-colour alpha is a stencil, not an opacity:
     * a leaf or vine is a rectangle whose texture is transparent everywhere the plant is not.
@@ -225,9 +261,22 @@ PSOutput PSMain(VSOutput input)
         discard;
     }
 
+    /*
+    * The streaming debug view rides the base-colour channel, there being no spare G-buffer one --
+    * every channel of all four targets is already spoken for. The composite's matching view then
+    * shows it unlit. It does mean the passes that consume albedo (the indirect estimator, the
+    * temporal history) see the heat colour while this view is selected, so switching away leaves
+    * it in the history for a few frames; that is the same ghosting every non-composite gi debug
+    * view already has.
+    */
+    const float3 shadedBaseColor = (g_FrameData[0].debugMode == VKM_GBUFFER_DEBUG_STREAMING_MIP)
+        ? vkmStreamingMipHeatColor(
+              vkmLoadMaterialStreamingMip(g_FrameData[0].materialPoolSlot, input.materialIndex))
+        : baseColor.rgb;
+
     PSOutput output;
     output.normal = vkmPackGBufferNormals(shadingNormal, geometricNormal);
-    output.baseColorRoughness = float4(baseColor.rgb, metallicRoughness.y);
+    output.baseColorRoughness = float4(shadedBaseColor, metallicRoughness.y);
     // Distance from the camera rather than hardware depth, so consumers reconstruct world
     // positions from this instead of sampling the depth attachment. That matters beyond taste:
     // WebGPU validates a depth-format view against a depth sample type, so binding the depth

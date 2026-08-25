@@ -145,6 +145,54 @@ namespace vkm
             return flags;
         }
 
+        VkmResourceCreateInfo sanitizeSparseTextureFlags(VkmResourceCreateInfo flags, const char* debugName,
+                                                        bool backendSupportsSparse)
+        {
+            if ((flags & VkmResourceCreateInfo::Sparse) == 0)
+            {
+                return flags;
+            }
+
+            const char* name = debugName != nullptr ? debugName : "<unnamed>";
+            if (!backendSupportsSparse)
+            {
+                // Downgraded rather than rejected, the same contract Transient and Aliasable carry:
+                // one VkmTextureInfo stays portable, and the caller gets a fully backed texture.
+                VKM_DEBUG_WARN(fmt::format("VkmResourceCreateInfo::Sparse is not supported by this device; "
+                                           "texture '{}' will be fully backed", name).c_str());
+                return clearFlag(flags, VkmResourceCreateInfo::Sparse);
+            }
+            // Transient has no memory to page and Aliasable decides its backing from the render
+            // graph; either one combined with this is a caller asking for two answers at once.
+            constexpr VkmResourceCreateInfo kSparseIncompatibleFlags = static_cast<VkmResourceCreateInfo>(
+                static_cast<uint32_t>(VkmResourceCreateInfo::Transient) |
+                static_cast<uint32_t>(VkmResourceCreateInfo::Aliasable) |
+                static_cast<uint32_t>(VkmResourceCreateInfo::ExternalHandleOwner) |
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowPresent));
+            if ((flags & kSparseIncompatibleFlags) != 0)
+            {
+                VKM_DEBUG_WARN(fmt::format("VkmResourceCreateInfo::Sparse on texture '{}' is combined with a flag "
+                                           "that decides its memory another way; it will be fully backed",
+                                           name).c_str());
+                return clearFlag(flags, VkmResourceCreateInfo::Sparse);
+            }
+            return flags;
+        }
+
+        VkmResourceCreateInfo sanitizeSparseBufferFlags(VkmResourceCreateInfo flags, const char* debugName)
+        {
+            if ((flags & VkmResourceCreateInfo::Sparse) == 0)
+            {
+                return flags;
+            }
+
+            // Sparse buffers exist in both APIs, but nothing here streams one and the mip-tail
+            // reasoning that shapes this flag is a texture concept. Out of scope, not unsafe.
+            VKM_DEBUG_WARN(fmt::format("VkmResourceCreateInfo::Sparse is texture-only; ignored on buffer '{}'",
+                                       debugName != nullptr ? debugName : "<unnamed>").c_str());
+            return clearFlag(flags, VkmResourceCreateInfo::Sparse);
+        }
+
         VkmResourceCreateInfo sanitizeAliasableBufferFlags(VkmResourceCreateInfo flags, const char* debugName)
         {
             if ((flags & VkmResourceCreateInfo::Aliasable) == 0)
@@ -279,6 +327,11 @@ namespace vkm
         // After the Transient pass, so a texture asking for both is told about the one that
         // survived rather than about a combination it no longer has.
         info._flags = sanitizeAliasableTextureFlags(info._flags, info._debugName, supportsResourceAliasing());
+        // Last, for the same reason: a texture asking for Sparse alongside Transient or Aliasable
+        // hears about whichever of those actually survived.
+        info._flags = sanitizeSparseTextureFlags(
+            info._flags, info._debugName,
+            (getDriverCapabilityFlags() & VkmDriverCapabilityFlags::SparseResidency) != 0u);
 
         VkmResourcePoolType poolType = VkmResourcePoolType::Default;
         if ((info._flags & VkmResourceCreateInfo::Transient) != 0)
@@ -328,6 +381,7 @@ namespace vkm
         VkmBufferInfo info = bufferInfo;
         info._flags = sanitizeTransientBufferFlags(info._flags, info._debugName);
         info._flags = sanitizeAliasableBufferFlags(info._flags, info._debugName);
+        info._flags = sanitizeSparseBufferFlags(info._flags, info._debugName);
 
         VkmBuffer* buffer = newBufferInner();
         VkmResourceHandle handle = _renderResourcePool->allocateBuffer(buffer, VkmResourcePoolType::Default);
@@ -363,6 +417,7 @@ namespace vkm
         VkmStagingBufferInfo info = stagingBufferInfo;
         info._flags = sanitizeTransientBufferFlags(info._flags, info._debugName);
         info._flags = sanitizeAliasableBufferFlags(info._flags, info._debugName);
+        info._flags = sanitizeSparseBufferFlags(info._flags, info._debugName);
 
         VkmStagingBuffer* stagingBuffer = newStagingBufferInner();
         VkmResourceHandle handle = _renderResourcePool->allocateStagingBuffer(stagingBuffer, VkmResourcePoolType::Default);
@@ -532,6 +587,7 @@ namespace vkm
         {
             submitResult._gpuEventTimeline->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
         }
+        commandQueue->getCommandBufferPool()->release(commandBuffer);
 
         _renderResourcePool->releaseResource(stagingBuffer->getHandle());
         return true;

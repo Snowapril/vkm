@@ -28,9 +28,11 @@
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/matrix.hpp>
 
+#include <chrono>
 #include <cstdio>
 #include <cmath>
 #include <string>
+#include <thread>
 #include <vector>
 
 /*
@@ -59,6 +61,12 @@ namespace vkmtest
     * G-buffer to read. Returns the view-projection used, since a consumer reconstructing world
     * positions needs the same one.
     */
+    inline void recordGBufferFrame(vkm::VkmDriverBase* driver,
+                                   vkm::VkmScene& scene,
+                                   vkm::VkmGBuffer& gbuffer,
+                                   vkm::VkmPipelineStateBase* pso,
+                                   const vkm::VkmFrameData& frameData);
+
     inline glm::mat4 fillGBuffer(vkm::VkmDriverBase* driver,
                                  vkm::VkmPipelineStateManager& manager,
                                  vkm::VkmScene& scene,
@@ -112,6 +120,23 @@ namespace vkmtest
         frameConstants._prevViewProjection = viewProjection;
         driver->getFrameConstantManager()->update(/*frameIndex=*/0, frameConstants);
 
+        recordGBufferFrame(driver, scene, gbuffer, pso, frameData);
+
+        return viewProjection;
+    }
+
+    /*
+    * @brief Records and runs one G-buffer frame over an already-built scene.
+    *
+    * Split out of fillGBuffer so a test can render the same scene twice -- which is what checking
+    * a texture the streamer replaced between the two needs.
+    */
+    inline void recordGBufferFrame(vkm::VkmDriverBase* driver,
+                                   vkm::VkmScene& scene,
+                                   vkm::VkmGBuffer& gbuffer,
+                                   vkm::VkmPipelineStateBase* pso,
+                                   const vkm::VkmFrameData& frameData)
+    {
         std::vector<vkm::VkmResourceAccessDeclaration> referenced;
 
         const vkm::VkmFrameBufferDescriptor fbDesc = gbuffer.makeFrameBufferDescriptor();
@@ -144,8 +169,6 @@ namespace vkmtest
         renderGraph.compile();
         renderGraph.execute();
         renderGraph.ensureCompleted();
-
-        return viewProjection;
     }
 
     inline void runGBufferRenderTest(vkm::VkmDriverBase* driver)
@@ -253,6 +276,204 @@ namespace vkmtest
         // than as three unrelated channel failures.
         CHECK(texel[0] / 255.0f < kFixtureBaseColorR * 0.5f);
         CHECK(texel[2] / 255.0f < kFixtureBaseColorB * 0.5f);
+
+        gbuffer.destroy();
+        scene.destroy(driver);
+    }
+
+    /*
+    * @brief A streamed-out material texture is a different resource, and still samples correctly.
+    *
+    * @details The streamer answers a distant camera by building a *new*, smaller texture holding
+    * only the levels it needs and re-pointing the material at it -- not by narrowing a view. Two
+    * things have to hold afterwards, and neither implies the other:
+    *
+    *   - the resident base level actually moved, which is the only externally visible proof the
+    *     rebuild happened at all (a chain of a solid colour renders identically at every level, so
+    *     pixels alone cannot tell), and
+    *   - the material still samples green, which is what proves the new bindless slot reached the
+    *     material record. A swap that rebuilt the texture but left the record naming the released
+    *     slot would sample whatever took that slot over, or nothing.
+    *
+    * The camera is placed far enough out that the fixture's 64x64 texture cannot justify level 0,
+    * and the settings are wound down so the convergence this measures is correctness, not pacing.
+    */
+    inline void runTextureStreamingSwapTest(vkm::VkmDriverBase* driver)
+    {
+        vkm::VkmPipelineStateManager manager(driver);
+        vkm::VkmScene scene;
+        vkm::VkmGBuffer gbuffer;
+        fillGBuffer(driver, manager, scene, gbuffer, "tests/gltf_textured.gltf");
+
+        if (!scene.isTextureStreamingAvailable())
+        {
+            MESSAGE("Skipping: this backend has no bindless texture array, so nothing streams.");
+            gbuffer.destroy();
+            scene.destroy(driver);
+            return;
+        }
+
+        REQUIRE(scene.getStreamedBaseMip(/*materialIndex=*/0, /*channel=*/0) == 0);
+
+        vkm::VkmTextureStreamingSettings settings;
+        settings._stableTickCount = 0;      // act on the first tick that asks
+        settings._maxLevelUploadsPerTick = 64; // and finish the rebuild in that same tick
+        scene.setTextureStreamingSettings(settings);
+
+        vkm::VkmTextureStreamingView view;
+        view._viewportHeight = kGBufferRenderSize;
+        view._fovYRadians = 0.8726646f;
+        // Far enough that a 64x64 texture over a unit-ish object is well past one texel per pixel.
+        view._cameraPosition = glm::vec3(0.0f, 0.0f, 4096.0f);
+
+        // The decode runs on the streamer's worker, so the level moves some ticks after the first
+        // one asks. Bounded rather than open-ended: a streamer that never converges must fail here
+        // rather than hang the suite.
+        uint32_t streamedBaseMip = 0;
+        for (uint32_t tick = 0; tick < 256 && streamedBaseMip == 0; ++tick)
+        {
+            scene.updateTextureStreaming(driver, view);
+            streamedBaseMip = scene.getStreamedBaseMip(/*materialIndex=*/0, /*channel=*/0);
+            if (streamedBaseMip == 0)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        }
+        CHECK(streamedBaseMip > 0);
+
+        // Re-render through whatever the material now names.
+        const std::string psoName =
+            std::string("gbuffer_pso[") +
+            vkm::vkmVertexLayoutPresetName(vkm::VkmVertexLayoutPreset::StandardPBR) + "]";
+        vkm::VkmPipelineStateBase* pso = manager.getPipelineState(psoName, vkm::VkmPipelineStateOrigin::Engine);
+        REQUIRE(pso != nullptr);
+
+        vkm::VkmFrameData frameData;
+        const glm::mat4 viewProjection = glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, -1.0f, 0.5f)) *
+                                         glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 2.0f, 1.0f));
+        vkm::vkmExtractFrustumPlanes(viewProjection, frameData._frustumPlanes);
+        frameData._lightDirection = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
+        recordGBufferFrame(driver, scene, gbuffer, pso, frameData);
+
+        const uint32_t sampleX = kGBufferRenderSize / 4;
+        const uint32_t sampleY = kGBufferRenderSize * 3 / 4;
+        const vkm::VkmTextureReadbackResult readback =
+            driver->readbackTexture(gbuffer.getTexture(vkm::VkmGBuffer::Target::BaseColorRoughness));
+        REQUIRE(readback.channels == 4);
+        const uint8_t* texel =
+            &readback.pixels[(static_cast<size_t>(sampleY) * readback.width + sampleX) * readback.channels];
+
+        // Every level of a solid-green chain is solid green, so the same expectation the untouched
+        // material meets is the right one here -- what changed is which resource produced it.
+        CHECK(texel[0] / 255.0f == doctest::Approx(0.0f).epsilon(0.02));
+        CHECK(texel[1] / 255.0f == doctest::Approx(kFixtureBaseColorG).epsilon(0.02));
+        CHECK(texel[2] / 255.0f == doctest::Approx(0.0f).epsilon(0.02));
+
+        gbuffer.destroy();
+        scene.destroy(driver);
+    }
+
+    /*
+    * @brief The GPU feedback loop, end to end: the shader writes, the ring carries it back, the
+    * streamer acts on it.
+    *
+    * @details Everything between the pixel shader and `selectTargets` is machinery no pure-logic
+    * test can reach -- the LOD query surviving the shader toolchain, the atomic landing in the right
+    * bindless slot, the singleton being bound where the shader declared it, the readback ring's
+    * index arithmetic, and the relative-to-absolute decode. A silent failure anywhere in that chain
+    * looks exactly like "streaming is a bit conservative", which is why it needs asserting rather
+    * than eyeballing.
+    *
+    * What it does not check is whether the reported level is *numerically* right for a given
+    * geometry -- that needs a known UV parameterisation and is left to the Sponza A/B.
+    */
+    inline void runTextureFeedbackTest(vkm::VkmDriverBase* driver)
+    {
+        vkm::VkmPipelineStateManager manager(driver);
+        vkm::VkmScene scene;
+        vkm::VkmGBuffer gbuffer;
+        fillGBuffer(driver, manager, scene, gbuffer, "tests/gltf_textured.gltf");
+
+        if (!scene.isTextureStreamingAvailable())
+        {
+            MESSAGE("Skipping: this backend has no bindless texture array, so nothing streams.");
+            gbuffer.destroy();
+            scene.destroy(driver);
+            return;
+        }
+
+        // Nothing should have voted before a frame has been drawn.
+        REQUIRE(scene.getTextureStreamingStats()._feedbackCount == 0);
+
+        const std::string psoName =
+            std::string("gbuffer_pso[") +
+            vkm::vkmVertexLayoutPresetName(vkm::VkmVertexLayoutPreset::StandardPBR) + "]";
+        vkm::VkmPipelineStateBase* pso = manager.getPipelineState(psoName, vkm::VkmPipelineStateOrigin::Engine);
+        REQUIRE(pso != nullptr);
+
+        vkm::VkmFrameData frameData;
+        const glm::mat4 viewProjection = glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, -1.0f, 0.5f)) *
+                                         glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 2.0f, 1.0f));
+        vkm::vkmExtractFrustumPlanes(viewProjection, frameData._frustumPlanes);
+        frameData._lightDirection = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
+
+        // A camera close enough that the estimate alone would keep everything at level 0, so a
+        // target that ends up anywhere else came from the GPU rather than from the sphere.
+        vkm::VkmTextureStreamingView view;
+        view._viewportHeight = kGBufferRenderSize;
+        view._fovYRadians = 0.8726646f;
+        view._cameraPosition = glm::vec3(0.0f, 0.0f, 1.0f);
+
+        /*
+        * The reading is a whole ring behind by design, so a handful of frames have to go by before
+        * any of it comes back. Bounded rather than open-ended: a loop that never delivers must fail
+        * here rather than spin.
+        */
+        uint32_t feedbackCount = 0;
+        for (uint32_t frame = 0; frame < 32 && feedbackCount == 0; ++frame)
+        {
+            scene.updateTextureStreaming(driver, view);
+            recordGBufferFrame(driver, scene, gbuffer, pso, frameData);
+            feedbackCount = scene.getTextureStreamingStats()._feedbackCount;
+        }
+
+        // The fixture's material samples one texture, so exactly one slot can have voted.
+        CHECK(feedbackCount > 0);
+
+        /*
+        * And the loop must settle rather than walk the texture a level further every frame. Once
+        * the texture holds what the shader asked for, the reading names that same level again and
+        * nothing more should move -- so what is asserted is that the level stops changing, not what
+        * it stops at. The level itself is this fixture's own measurement (see the note above about
+        * numerical correctness) and is reported rather than pinned.
+        */
+        /*
+        * A fixed warm-up before the level is read at all, because "unchanged" and "not started" look
+        * identical from outside and the tiers differ in exactly that. Unbinding a level lands the
+        * whole move in one tick; rebuilding waits out the streamer's damping, then a decode on the
+        * worker, then a bounded number of uploads per tick. Sampling stability before all of that
+        * has had room to happen reports the level the texture began at and calls it settled.
+        */
+        for (uint32_t frame = 0; frame < 64; ++frame)
+        {
+            scene.updateTextureStreaming(driver, view);
+            recordGBufferFrame(driver, scene, gbuffer, pso, frameData);
+        }
+        const uint32_t settled = scene.getStreamedBaseMip(/*materialIndex=*/0, /*channel=*/0);
+        CHECK(settled != vkm::INVALID_VALUE32);
+        MESSAGE("Texture feedback settled this fixture at base mip " << settled);
+
+        // Settled means it stays there: once the texture holds what the shader asked for, the
+        // reading names that same level again and nothing more moves.
+        for (uint32_t frame = 0; frame < 8; ++frame)
+        {
+            scene.updateTextureStreaming(driver, view);
+            recordGBufferFrame(driver, scene, gbuffer, pso, frameData);
+            CHECK(scene.getStreamedBaseMip(/*materialIndex=*/0, /*channel=*/0) == settled);
+        }
+        // A runaway loop ends at the coarsest level the chain has; a settled one never gets there.
+        // The fixture's base colour image is 64x64, so its chain is 7 levels and 6 is the last.
+        CHECK(settled < 6u);
 
         gbuffer.destroy();
         scene.destroy(driver);

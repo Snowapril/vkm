@@ -172,6 +172,28 @@
 - VkmUpscalerMetal never queries MTLFXTemporalScalerDescriptor's supportedInputContentMin/MaxScale (1.0-3.0 on M3 Pro), so an out-of-range ratio fails as a nil scaler rather than a clear rejection.
 - model_viewer sizes its depth texture from the swapchain extent, so it cannot consume the engine's upscale mode until that follows getRenderExtent().
 - Stale .gcda files left by a recompiled coverage build crash UnitTests inside __llvm_gcov_writeout at exit, which run_tests.py reports as FAIL even though doctest printed SUCCESS; deleting build/<backend>/**/*.gcda clears it.
+<<<<<<< HEAD
+- Texture streaming holds no CPU pixels between rebuilds, so streaming *down* re-decodes the file and rebuilds the whole chain to keep only its tail.
+- Texture streaming runs one rebuild at a time and uploads `_maxLevelUploadsPerTick` levels per frame, so a large camera move converges over many frames.
+- Texture streaming is off without `VkmDriverCapabilityFlags::BindlessTextures` (WebGPU): a per-draw set-3 material table has no slot to re-point and is immutable once built.
+- The streaming mip debug view rides the G-buffer's base colour, so while it is selected the indirect estimator and the temporal history consume the heat colour, and switching away leaves it ghosting for a few frames.
+- `VkmMaterialData` carries the streamed level of the base-colour texture only; a material's four textures stream independently and the record has one pair of words.
+- `VkmScene::destroy()` releases material textures that were never declared as referenced resources, so the reclaimer has no recorded usage to wait on and relies on the caller having drained the queue.
+- Texture streaming selects from a bounding sphere rather than the real UV parameterisation, so `_mipBias` absorbs the per-scene difference.
+- The streaming readout's resident/full-chain figures are texel bytes, so they exclude tiling and alignment padding and will not reconcile exactly with the pool's `totalAllocatedBytes`.
+- The engine overlay's `Tex:` line covers the whole texture category (render targets, probe atlases, the ImGui font), not just streamed material textures: `VkmEngine` holds no `VkmScene` to ask for a finer split.
+- Texture-category bytes tick *up* before they come down on a pull-back: the rebuilt texture is allocated while the old one is still live, and the displaced one is held for `FRAME_BUFFER_COUNT + 1` ticks after that.
+- Material textures created before the bindless array was available, or after it was exhausted, burn texture-category bytes that `VkmTextureStreamingStats` cannot see.
+- `VkmTextureStreamingStats::_textureCount` counts `(path, colour space)` pairs, so one image sampled both ways counts twice — correct for memory, surprising as a texture count.
+- `VKM_BINDLESS_ACCELERATION_STRUCTURE`'s binding number is hardcoded in `vkm_bindless.hlsli` with no compile-time link to `VkmBindlessSingletonBuffer::Count`, so adding a singleton silently moves the structure out from under every ray-query shader.
+- `vkm_ray_tracing_shaders` is a separate build target from `vkm_engine_shaders`, so a set-0 layout change that is not built through both leaves half the shader caches stale.
+- Texture feedback is several frames stale by construction (a readback ring, deliberately no stall), so a texture entering the screen streams in a few frames after it appears.
+- Texture feedback is written only by the G-buffer pass, so a texture visible solely through a probe capture, the path tracer or model_viewer keeps the CPU bounding-sphere estimate.
+- One pixel in 16 votes for texture feedback, so a surface thinner than 4 pixels in either axis may never vote and falls back to the estimate.
+- Texture feedback rides a set-0 singleton the WebGPU graphics bind group deliberately omits, so that backend is tier 0 permanently; WGSL has no LOD-query builtin either.
+- MoltenVK reports no `RayTracing`, so on macOS Vulkan every ray-query, path-tracer and ReSTIR test skips: the acceleration-structure binding move and the `gi_restir_lighting` fragment-stage storage-buffer fix are verified on Metal only and need a discrete-GPU Vulkan run.
+- `TestAliasedTexture`'s "disjoint lifetimes share bytes" case segfaulted once in four full Vulkan runs and reproduced neither alone nor on repeat; the aliasing path is untouched by the streaming work.
+=======
 - The traced tier's NEE does not see punctual lights, so ReSTIR and the reference path tracer light a point-lit scene differently from the deferred image.
 - Area lights are shadowed only in the traced tier; the raster tier neither shades nor shadows emissive triangles.
 - Cascades do not blend at their boundaries, so a receiver crossing one can show a visible step in shadow softness and bias.
@@ -185,3 +207,4 @@
 - The probe budget and the shadow tile count are each sized against a hand-picked share of the push-constant ring, so a scene with more draw batches than Sponza silently clamps them again.
 - The probe capture's scene-fitted shadow tile is one tile for the whole scene, so its shadows are far coarser than the cascades the camera pass reads.
 - Per-face probe culling only removes 28% of the capture's draws, because a draw batch is a material run and half of Sponza's span more than half the model.
+>>>>>>> origin/main

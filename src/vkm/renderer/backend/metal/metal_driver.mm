@@ -14,6 +14,7 @@
 #include <vkm/renderer/backend/metal/metal_swapchain.h>
 #include <vkm/renderer/backend/metal/metal_command_queue.h>
 #include <vkm/renderer/backend/metal/metal_pipeline_state.h>
+#include <vkm/renderer/backend/common/render_resource_pool.hpp>
 #include <vkm/renderer/backend/metal/metal_render_resource_pool.h>
 #include <vkm/renderer/backend/metal/metal_upscaler.h>
 #include <vkm/renderer/backend/metal/metal_util.h>
@@ -39,6 +40,25 @@
 
 namespace vkm
 {
+    namespace
+    {
+        /*
+        * Page size every placement-sparse texture and its tile heap are created with. Lives here
+        * rather than in the header because metal_driver.h forward-declares its Metal types instead
+        * of importing Metal, and this is an NS_ENUM that cannot be forward-declared.
+        *
+        * The smallest Metal offers, chosen for the mip tail rather than for the tile. A texture's
+        * tail -- every level too small to fill one tile -- is indivisible and permanently resident,
+        * so the page size sets the floor on what streaming can ever give back. Measured on an
+        * M3 Pro against a 2048x2048 RGBA8 chain: 16 KiB pages put the tail at level 6 and 16 KiB,
+        * 64 KiB pages at level 5 and 64 KiB, 256 KiB at level 4 and 256 KiB. The smallest page
+        * therefore streams two more levels and leaves a sixteenth of the residue.
+        * A texture and the heap it is placed in must agree on this, so there is one value.
+        */
+        // Named in metal_util.h so the texture and the heap that maps its tiles cannot disagree.
+        constexpr MTLSparsePageSize kSparsePageSize = kVkmMetalSparsePageSize;
+    } // namespace
+
     VkmDriverMetal::VkmDriverMetal(id<MTLDevice> mtlDevice)
         : VkmDriverBase(), _mtlDevice(mtlDevice)
     {
@@ -98,6 +118,35 @@ namespace vkm
         {
             _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::RayTracing;
         }
+        /*
+        * Placement sparse: a hardware tier, not an API version. Queried through a throwaway
+        * descriptor because sparseTextureTier is a property of a texture's configuration rather
+        * than of the device -- the same reason the tile size query takes a texture type and format.
+        * Tier 1 is enough for per-mip residency: partial backing plus defined reads of unbacked
+        * texels. Tier 2 adds per-tile access counters, which this does not use.
+        */
+        {
+            MTLTextureDescriptor* probe = [[MTLTextureDescriptor alloc] init];
+            probe.textureType = MTLTextureType2D;
+            probe.pixelFormat = MTLPixelFormatRGBA8Unorm;
+            probe.width = 256;
+            probe.height = 256;
+            probe.mipmapLevelCount = 9;
+            probe.usage = MTLTextureUsageShaderRead;
+            probe.storageMode = MTLStorageModePrivate;
+            probe.placementSparsePageSize = kSparsePageSize;
+
+            id<MTLTexture> probeTexture = [_mtlDevice newTextureWithDescriptor:probe];
+            const MTLTextureSparseTier tier =
+                (probeTexture != nil) ? [probeTexture sparseTextureTier] : MTLTextureSparseTierNone;
+            if (tier != MTLTextureSparseTierNone)
+            {
+                _driverCapabilityFlags = _driverCapabilityFlags | VkmDriverCapabilityFlags::SparseResidency;
+            }
+            [probeTexture release];
+            [probe release];
+        }
+
         // Metal-4 MetalFX support is its own device question, separate from classic MetalFX.
         // Withheld while the Metal debug layer is active: MTL4FXTemporalScaler's encode aborts
         // the process under the debug layer's wrapper objects, so the capability stays clear
@@ -301,6 +350,14 @@ namespace vkm
             _heapAllocator->destroy();
             _heapAllocator.reset();
         }
+        // Same ordering rule: the tile heap outlives the sparse textures mapped from it, and the
+        // run table has to go with it or it would name blocks that no longer exist.
+        _sparseTileRuns.clear();
+        if (_sparseTileHeap)
+        {
+            _sparseTileHeap->destroy();
+            _sparseTileHeap.reset();
+        }
     }
 
     VkmTexture* VkmDriverMetal::newTextureInner()
@@ -332,6 +389,120 @@ namespace vkm
     VkmBufferView* VkmDriverMetal::newBufferViewInner()
     {
         return new VkmBufferViewMetal(this);
+    }
+
+    void VkmDriverMetal::releaseSparseTextureMappings(VkmResourceHandle textureHandle)
+    {
+        if (_sparseTileHeap == nullptr)
+        {
+            return;
+        }
+        // Mappings are not unmapped, only their tiles reclaimed: the texture is going away, so
+        // there is nothing left to address them through.
+        const uint64_t first = static_cast<uint64_t>(textureHandle.id) << 8;
+        auto run = _sparseTileRuns.lower_bound(first);
+        while (run != _sparseTileRuns.end() && run->first < first + 256u)
+        {
+            _sparseTileHeap->release(run->second);
+            run = _sparseTileRuns.erase(run);
+        }
+    }
+
+    bool VkmDriverMetal::updateSparseMipResidency(VkmResourceHandle textureHandle, uint32_t mipLevel, bool resident)
+    {
+        VkmTexture* texture = getRenderResourcePool()->getResource<VkmTexture>(textureHandle);
+        if (texture == nullptr || !texture->isSparse())
+        {
+            return false;
+        }
+
+        id<MTLTexture> mtlTexture = static_cast<VkmTextureMetal*>(texture)->getInternalHandle();
+        if (mtlTexture == nullptr)
+        {
+            return false;
+        }
+
+        const bool isTailLevel = mipLevel >= texture->getMipTailFirstLevel();
+        /*
+        * Releasing the tail is the one request that is refused by doing nothing: it is a single
+        * indivisible allocation that stays bound for the texture's life, and reporting success
+        * lets a caller walk a whole chain without first finding where the tail starts.
+        * Backing it, on the other hand, is real work exactly once -- an unmapped tail means the
+        * coarsest levels sample as blank however much is resident above them.
+        */
+        if (isTailLevel && !resident)
+        {
+            return true;
+        }
+
+        // The tail is packed: every level in it shares one allocation, addressed at its first
+        // level. Folding the request onto that level is what stops a caller that walks levels
+        // 9, 10, 11 from taking three runs for memory it already has.
+        const uint32_t mappingLevel = isTailLevel ? texture->getMipTailFirstLevel() : mipLevel;
+
+        if (_sparseTileHeap == nullptr)
+        {
+            _sparseTileHeap = std::make_unique<VkmSparseTileHeapMetal>(this);
+            if (!_sparseTileHeap->initialize())
+            {
+                _sparseTileHeap.reset();
+                return false;
+            }
+        }
+
+        // One key per (texture, level). The handle's id already distinguishes a recycled slot by
+        // generation, so a stale run cannot be mistaken for a live one.
+        const uint64_t key = (static_cast<uint64_t>(textureHandle.id) << 8) | (mappingLevel & 0xFFu);
+        const auto existing = _sparseTileRuns.find(key);
+        const bool alreadyResident = existing != _sparseTileRuns.end();
+        if (resident == alreadyResident)
+        {
+            return true;
+        }
+
+        const VkmTextureInfo& info = texture->getTextureInfo();
+        const MTLSize tileSize = [_mtlDevice sparseTileSizeWithTextureType:[mtlTexture textureType]
+                                                               pixelFormat:[mtlTexture pixelFormat]
+                                                               sampleCount:1
+                                                            sparsePageSize:kSparsePageSize];
+        // Tiles this level needs, rounding up: a level narrower than one tile still costs one.
+        const uint32_t levelWidth = std::max(1u, info._extent.x >> mappingLevel);
+        const uint32_t levelHeight = std::max(1u, info._extent.y >> mappingLevel);
+        const uint32_t tilesX =
+            static_cast<uint32_t>((levelWidth + tileSize.width - 1) / tileSize.width);
+        const uint32_t tilesY =
+            static_cast<uint32_t>((levelHeight + tileSize.height - 1) / tileSize.height);
+
+        id<MTL4CommandQueue> queue =
+            static_cast<VkmCommandQueueMetal*>(getCommandQueue(VkmCommandQueueType::Graphics, 0))->getMTLCommandQueue();
+
+        MTL4UpdateSparseTextureMappingOperation operation{};
+        operation.textureRegion = MTLRegionMake2D(0, 0, tilesX, tilesY);
+        operation.textureLevel = mappingLevel;
+        operation.textureSlice = 0;
+
+        if (resident)
+        {
+            const VkmSparseTileHeapMetal::TileRun run = _sparseTileHeap->allocate(tilesX * tilesY);
+            if (!run.isValid())
+            {
+                return false;
+            }
+            operation.mode = MTLSparseTextureMappingModeMap;
+            operation.heapOffset = run._firstTile;
+            [queue updateTextureMappings:mtlTexture heap:run._heap operations:&operation count:1];
+            _sparseTileRuns.emplace(key, run);
+        }
+        else
+        {
+            const VkmSparseTileHeapMetal::TileRun run = existing->second;
+            operation.mode = MTLSparseTextureMappingModeUnmap;
+            operation.heapOffset = run._firstTile;
+            [queue updateTextureMappings:mtlTexture heap:run._heap operations:&operation count:1];
+            _sparseTileRuns.erase(existing);
+            _sparseTileHeap->release(run);
+        }
+        return true;
     }
 
     bool VkmDriverMetal::onCreateAliasBlock(uint32_t blockIndex, uint64_t sizeBytes, uint32_t memoryTypeBits)
@@ -417,6 +588,21 @@ namespace vkm
             }
             stats._poolReservedBytes += static_cast<uint64_t>([heap currentAllocatedSize]);
             stats._poolUsedBytes += static_cast<uint64_t>([heap usedSize]);
+            stats._hasPoolStats = true;
+        }
+
+        /*
+        * The tile heap, for the same reason and more sharply: a placement-sparse texture's own
+        * allocatedSize is page-table footprint and does not move as levels are mapped and
+        * unmapped, so its per-texture tag reports zero. Every byte sparse residency actually costs
+        * is here, and this is the only place the cost of streaming a level in becomes visible.
+        * Counted from the allocator rather than [heap usedSize]: a placement heap does not track
+        * what the application has placed in it.
+        */
+        if (_sparseTileHeap)
+        {
+            stats._poolReservedBytes += _sparseTileHeap->getReservedBytes();
+            stats._poolUsedBytes += _sparseTileHeap->getAllocatedBytes();
             stats._hasPoolStats = true;
         }
 

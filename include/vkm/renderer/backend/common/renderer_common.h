@@ -197,6 +197,33 @@ namespace vkm
         */
         Aliasable = 0x00001000,
 
+        /*
+        * Which mip levels are actually backed by memory can change after creation, without
+        * recreating the texture. Vulkan binds tiles through vkQueueBindSparse; Metal places the
+        * texture against a sparse-capable heap and updates its mappings on the queue.
+        *
+        * Textures only, and only where the driver reports
+        * VkmDriverCapabilityFlags::SparseResidency.
+        *
+        * What it buys, and why texture streaming wants it: the image view covers the whole chain
+        * for the texture's life while residency changes underneath. Streaming a level in or out
+        * therefore costs a mapping update rather than a new texture, a new bindless slot, a
+        * rewrite of every material naming the old one, and a delay before the old one can be
+        * released.
+        *
+        * Two things it does not change:
+        *
+        * 1. A newly backed level still has no pixels. Binding memory and uploading are separate
+        *    steps, in that order.
+        * 2. The mip tail -- every level too small to fill one tile -- is indivisible and stays
+        *    backed for the texture's life. It is small (16 KiB for a 2048-wide RGBA8 chain at the
+        *    page size Metal uses here) but it is the floor on what streaming can give back.
+        *
+        * A request, not a guarantee: VkmTexture::isSparse() reports what was granted. Cannot be
+        * combined with Transient or Aliasable, both of which decide backing memory their own way.
+        */
+        Sparse = 0x00002000,
+
         AllowShaderReadWrite = AllowShaderRead | AllowShaderWrite,
     };
 
@@ -526,13 +553,31 @@ namespace vkm
     uint32_t vkmBytesPerTexel(VkmFormat format);
 
     /*
-    * @brief Best-effort estimate of a texture's base-mip-level byte footprint: extent x array
-    * layers x bytes-per-texel for the format.
-    * @details Does not sum the full mip chain -- a rough size estimate is all this is for, not an
-    * exact GPU byte count. Used as VkmResourceMemoryTag's requestedSize for textures on every
-    * backend, Metal and WebGPU having no format-size introspection API of their own.
+    * @brief Bytes one range of a texture's mip chain occupies.
+    * @details Level k of a chain whose level 0 is `baseExtent` measures max(1, e >> k) per axis,
+    * which is what every backend's copyBufferToTexture computes for that level -- so this sums
+    * exactly what an upload writes. Texel counts only: driver padding and alignment are not
+    * visible from here, which is why VkmResourceMemoryTag carries the API's own allocatedSize
+    * beside this.
+    * @param baseExtent Extent of level 0.
+    * @param numArrayLayers Layers, each carrying its own copy of the range.
+    * @param format Pixel format; an unknown or compressed one yields 0.
+    * @param baseLevel First level of the range.
+    * @param levelCount Levels in the range. A range running past the chain's 1x1 tail simply
+    * keeps adding 1x1 levels, so callers do not have to clamp it themselves.
+    * @return The byte size of the range.
+    */
+    uint64_t vkmMipRangeByteSize(const glm::uvec3& baseExtent, uint32_t numArrayLayers, VkmFormat format,
+                                 uint32_t baseLevel, uint32_t levelCount);
+
+    /*
+    * @brief A texture's whole byte footprint: every mip level it declares, times its array layers.
+    * @details Used as VkmResourceMemoryTag's requestedSize for textures on every backend, Metal and
+    * WebGPU having no format-size introspection API of their own. Summing the chain rather than the
+    * base level alone matters wherever mipped and unmipped textures are compared: a full chain is
+    * about 4/3 of its base level, so counting only level 0 under-reports it by a quarter.
     * @param info Texture description.
-    * @return The estimated byte size.
+    * @return The byte size.
     */
     uint64_t computeTextureByteSize(const VkmTextureInfo& info);
 

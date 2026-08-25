@@ -655,6 +655,16 @@ namespace vkm
             ImGui::Text("VRAM: %s / %s", formatByteSize(memory._gpu._deviceAllocatedBytes).c_str(),
                         formatByteSize(memory._gpu._deviceBudgetBytes).c_str());
         }
+        /*
+        * Every texture, not just the streamed ones -- render targets, probe atlases and the ImGui
+        * font are in here too, and the engine has no scene to ask for a finer split. It is the
+        * always-visible "texture memory is moving" signal; a sample's own panel is where the
+        * attribution lives. Refreshed with the snapshot above, so it lags a rebuild by up to
+        * half a second.
+        */
+        const VkmResourceCategoryUsage& textures =
+            memory._gpuByCategory[static_cast<size_t>(VkmResourceType::Texture)];
+        ImGui::Text("Tex: %s in %u", formatByteSize(textures.totalAllocatedBytes).c_str(), textures.liveCount);
 
         if (_upscaleModeAvailable)
         {

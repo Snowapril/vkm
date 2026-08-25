@@ -50,6 +50,16 @@ namespace vkm
             {
                 return false;
             }
+            /*
+            * Never a sparse texture, whatever the memory architecture. Its pages come from a
+            * Private placement heap and arrive one mapping at a time, so there is no CPU-visible
+            * allocation for replaceRegion: to write into -- and taking that path anyway hangs the
+            * queue rather than failing, which is a great deal harder to diagnose than a copy.
+            */
+            if ((info._flags & VkmResourceCreateInfo::Sparse) != 0)
+            {
+                return false;
+            }
             if ((info._flags & VkmResourceCreateInfo::AllowTransferDst) == 0)
             {
                 return false;
@@ -101,6 +111,14 @@ namespace vkm
 
     VkmTextureMetal::~VkmTextureMetal()
     {
+        // Before the texture object goes, since the runs are keyed by its handle. The tile heap
+        // reclaims nothing on its own, so a scene torn down mid-session would otherwise hold every
+        // tile it ever streamed in.
+        if (isSparse())
+        {
+            static_cast<VkmDriverMetal*>(_driver)->releaseSparseTextureMappings(getHandle());
+        }
+
         _mtlTexture = nil; // ARC releases the Metal object
         // A placement heap reclaims nothing on its own, so the range has to go back by hand.
         // Ordered after the release above: the range must not be reusable while the object
@@ -162,6 +180,17 @@ namespace vkm
                                                   : (_isHostWritable ? MTLStorageModeShared : MTLStorageModePrivate);
 
             /*
+            * A placement-sparse texture is created standalone, like any other: what the page size
+            * buys is a texture whose levels have addresses but no memory until the queue maps tiles
+            * to them. It is therefore not a heap-placed texture and must not take that path below.
+            */
+            _isSparse = (info._flags & VkmResourceCreateInfo::Sparse) != 0;
+            if (_isSparse)
+            {
+                descriptor.placementSparsePageSize = kVkmMetalSparsePageSize;
+            }
+
+            /*
             * An aliasable texture stops here with a descriptor but no texture object: how many
             * bytes at what alignment it needs is knowable now, but who else shares those bytes
             * is not until VkmRenderGraph::compile() has seen the whole frame. Unlike Vulkan
@@ -209,7 +238,9 @@ namespace vkm
                 _memoryAlignment = (uint32_t)sizeAndAlign.align;
             }
 
-            if (isHeapPlaceable && !shouldUseCommittedTexture(info, _isHostWritable))
+            // A sparse texture owns no bytes at creation, so there is nothing to sub-allocate from
+            // the shared heap; its memory arrives later, one tile at a time, from the tile heap.
+            if (isHeapPlaceable && !_isSparse && !shouldUseCommittedTexture(info, _isHostWritable))
             {
                 _mtlTexture = driverMetal->getHeapAllocator()->allocateTexture(
                     descriptor, sizeAndAlign.size, sizeAndAlign.align, &_heapPlacement);
@@ -228,6 +259,33 @@ namespace vkm
             // A memoryless texture has no IOAccelResource at any point in its lifetime, so this
             // is the size it occupies -- stated rather than queried, matching the Vulkan path.
             _allocatedSize = _isTransient ? 0 : [_mtlTexture allocatedSize];
+
+            if (_isSparse)
+            {
+                /*
+                * Where the indivisible tail begins. Metal decides it from the tile size, so it is
+                * asked rather than derived: at the 16 KiB page size a 2048-wide RGBA8 chain tails
+                * at level 6, but the answer moves with format, extent and page size.
+                * A device that quietly refused the sparse request reports no tail, which leaves
+                * every level pinned and streaming correctly inert rather than subtly wrong.
+                */
+                if ([_mtlTexture sparseTextureTier] != MTLTextureSparseTierNone)
+                {
+                    _mipTailFirstLevel = static_cast<uint32_t>([_mtlTexture firstMipmapInTail]);
+                }
+                else
+                {
+                    _isSparse = false;
+                    VKM_DEBUG_WARN("A sparse texture was requested but the device made it fully backed");
+                }
+                /*
+                * Deliberately not [_mtlTexture allocatedSize]: on a placement-sparse texture that
+                * reports the page-table footprint and never moves as tiles are mapped and unmapped
+                * (measured: 192 KiB for a 2048x2048 12-level chain, constant across a full map and
+                * unmap cycle). The bytes live in the tile heap, which is where they are accounted.
+                */
+                _allocatedSize = 0;
+            }
         }
 
         return true;

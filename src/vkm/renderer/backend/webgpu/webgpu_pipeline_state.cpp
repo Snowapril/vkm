@@ -210,13 +210,14 @@ namespace vkm
         }
 
         // Shader visibility for a set-2 binding, derived from its type rather than declared (see
-        // VkmTableResourceType). Storage buffers are compute-only because WebGPU forbids
-        // writable storage in the vertex stage -- the constraint that shaped the common enum.
+        // VkmTableResourceType). Storage buffers exclude the vertex stage, which is the one place
+        // WebGPU forbids writable storage -- the constraint that shaped the common enum. Fragment
+        // is legal here and is what a shader reporting per-pixel results needs.
         WGPUShaderStage toWGPUShaderStage(VkmTableResourceType type)
         {
             if (type == VkmTableResourceType::StorageBuffer)
             {
-                return WGPUShaderStage_Compute;
+                return WGPUShaderStage_Fragment | WGPUShaderStage_Compute;
             }
             return WGPUShaderStage_Vertex | WGPUShaderStage_Fragment | WGPUShaderStage_Compute;
         }

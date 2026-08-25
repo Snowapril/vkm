@@ -5,7 +5,7 @@
 namespace vkm
 {
     VkmRenderResource::VkmRenderResource(VkmDriverBase* driver)
-        : _driver(driver)
+        : _driver(driver), _handle(VKM_INVALID_RESOURCE_HANDLE)
     {
     }
 

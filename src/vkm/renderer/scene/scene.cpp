@@ -448,10 +448,26 @@ namespace vkm
         // the shader's bindless branch is never taken.
         const bool bindlessAvailable =
             (driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::BindlessTextures) != 0u;
+        /*
+        * Where sparse residency is granted, a streamed texture changes level by binding and
+        * unbinding levels of itself rather than being rebuilt into a second texture, so it is
+        * created once at full size and never replaced. Requested rather than assumed -- the driver
+        * grants or refuses per texture, and isSparse() reports which happened.
+        */
+        const bool sparseAvailable =
+            (driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::SparseResidency) != 0u;
+
+        // Streaming re-points a bindless slot at a rebuilt texture, so it is exactly the bindless
+        // backends it can run on. Elsewhere a material's textures reach the shader through an
+        // immutable per-draw table, which has no slot to re-point and cannot be patched in place.
+        _textureStreamingAvailable = bindlessAvailable;
 
         // Keyed on (path, sRGB) so one image serving two colour spaces gets one texture each.
         std::map<std::pair<std::string, bool>, uint32_t> uploaded;
         std::map<std::pair<std::string, bool>, VkmResourceHandle> textureHandles;
+        // Same key again, naming the streamer entry that owns the texture, so the per-material
+        // loop below can record which channels sample it.
+        std::map<std::pair<std::string, bool>, uint32_t> streamerEntries;
         bool slotsExhausted = false;
 
         const auto slotFor = [&](const std::string& path, bool srgb) -> uint32_t {
@@ -479,7 +495,8 @@ namespace vkm
             VkmTextureInfo info{};
             info._flags = static_cast<VkmResourceCreateInfo>(
                 static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
-                static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst));
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst) |
+                ((bindlessAvailable && sparseAvailable) ? static_cast<uint32_t>(VkmResourceCreateInfo::Sparse) : 0u));
             // A full mip chain. Without one, a minified material texture samples a single texel
             // per pixel and sparkles under any camera motion -- Sponza's roof tiles are the
             // obvious case. The levels are built on the CPU and uploaded like any other level,
@@ -494,10 +511,25 @@ namespace vkm
             // base colour and emissive are sRGB-encoded, metallic-roughness and normal are linear
             // data that must not be de-gamma'd on the way in.
             info._format = srgb ? VkmFormat::R8G8B8A8_SRGB : VkmFormat::R8G8B8A8_UNORM;
-            info._debugName = "SceneMaterialTexture";
+            // Named per asset rather than all alike, so the texture browser lists one followable
+            // row per image; a streamed rebuild reuses the same name. Held in a local because
+            // _debugName is borrowed and newTexture copies it.
+            const std::string debugName = vkmMaterialTextureDebugName(path, srgb);
+            info._debugName = debugName.c_str();
 
             VkmTexture* texture = driver->newTexture(info);
             bool uploadedAllLevels = texture != nullptr;
+            if (uploadedAllLevels && texture->isSparse())
+            {
+                // Nothing is backed at creation, and a copy into an unbacked level has nowhere to
+                // land. The upload below fills the whole chain, so the whole chain is backed first;
+                // the first streaming ticks are what take the finer levels back off.
+                for (uint32_t level = 0; uploadedAllLevels && level < info._numMipLevels; ++level)
+                {
+                    uploadedAllLevels = driver->updateSparseMipResidency(texture->getHandle(), level,
+                                                                         /*resident=*/true);
+                }
+            }
             if (uploadedAllLevels)
             {
                 uploadedAllLevels =
@@ -531,9 +563,19 @@ namespace vkm
                     slotsExhausted = true;
                     return INVALID_VALUE32;
                 }
-                _materialTextureSlots.push_back(slot);
+                // The streamer takes ownership of the texture and its slot from here: a rebuild
+                // replaces both, so a second record of either would name a released resource.
+                // Level 0 is what was just uploaded, and the first streaming ticks take it down
+                // from there -- build() has no camera to size it against.
+                const uint32_t entryIndex = _textureStreamer.addTexture(
+                    path, srgb, glm::uvec2(image._width, image._height), info._numMipLevels,
+                    /*residentBaseMip=*/0u, texture->getHandle(), slot);
+                streamerEntries.emplace(key, entryIndex);
             }
-            _materialTextures.push_back(texture->getHandle());
+            else
+            {
+                _materialTextures.push_back(texture->getHandle());
+            }
             textureHandles.emplace(key, texture->getHandle());
             uploaded.emplace(key, slot);
             return slot;
@@ -547,6 +589,17 @@ namespace vkm
             return (existing != textureHandles.end()) ? existing->second : VKM_INVALID_RESOURCE_HANDLE;
         };
 
+        // Tells the streamer that material `materialIndex`'s `channel` samples this image, so a
+        // rebuild knows every record it has to re-point.
+        const auto referenceFor = [&](const std::string& path, bool srgb, uint32_t materialIndex,
+                                      uint32_t channel) {
+            const auto existing = streamerEntries.find(std::make_pair(path, srgb));
+            if (existing != streamerEntries.end())
+            {
+                _textureStreamer.addReference(existing->second, materialIndex, channel);
+            }
+        };
+
         for (size_t i = 0; i < _materials.size(); ++i)
         {
             const MaterialImageRefs& refs = _materialImages[i];
@@ -556,11 +609,33 @@ namespace vkm
             slots.z = slotFor(refs._normal, /*srgb=*/false);
             slots.w = slotFor(refs._emissive, /*srgb=*/true);
 
+            const uint32_t materialIndex = static_cast<uint32_t>(i);
+            referenceFor(refs._baseColor, /*srgb=*/true, materialIndex, 0);
+            referenceFor(refs._metallicRoughness, /*srgb=*/false, materialIndex, 1);
+            referenceFor(refs._normal, /*srgb=*/false, materialIndex, 2);
+            referenceFor(refs._emissive, /*srgb=*/true, materialIndex, 3);
+
             MaterialTextures& handles = _materialTextureHandles[i];
             handles._baseColor = handleFor(refs._baseColor, true);
             handles._metallicRoughness = handleFor(refs._metallicRoughness, false);
             handles._emissive = handleFor(refs._emissive, true);
         }
+
+        // The debug view reads the base-colour channel's level out of the record, so it has to
+        // start describing what was actually uploaded rather than zero.
+        for (size_t i = 0; i < _materials.size(); ++i)
+        {
+            const uint32_t materialIndex = static_cast<uint32_t>(i);
+            const uint32_t entryIndex = _textureStreamer.findEntry(materialIndex, /*channel=*/0);
+            if (entryIndex != INVALID_VALUE32)
+            {
+                publishStreamingMip(materialIndex, /*channel=*/0, _textureStreamer.getResidentBaseMip(entryIndex),
+                                    _textureStreamer.getTotalMipCount(entryIndex));
+            }
+        }
+        // Nothing has reached the GPU yet -- build() uploads the whole array right after this.
+        _materialDirtyFirst = 0;
+        _materialDirtyEnd = 0;
 
         if (slotsExhausted)
         {
@@ -715,13 +790,68 @@ namespace vkm
             _countClearBuffer = clearBuffer->getHandle();
         }
 
-        // One staging buffer per frame slot, laid out as [ObjectData array][FrameData per view].
+        /*
+        * The texture-streaming feedback channel. Created wherever the bindless texture array
+        * exists, whether or not streaming is enabled: the G-buffer shader writes it
+        * unconditionally, and a declared singleton nothing published is a descriptor the shader
+        * would write into nowhere.
+        */
+        if (_textureStreamingAvailable)
+        {
+            const uint64_t feedbackSize = kVkmBindlessTextureCapacity * sizeof(uint32_t);
+            const std::vector<uint32_t> unused(kVkmBindlessTextureCapacity, kVkmTextureFeedbackUnused);
+
+            VkmBuffer* feedbackBuffer = createStorageBuffer(driver, feedbackSize, "SceneTextureFeedback");
+            VkmBuffer* feedbackClear = createStorageBuffer(driver, feedbackSize, "SceneTextureFeedbackClear");
+            if (feedbackBuffer == nullptr || feedbackClear == nullptr ||
+                !driver->uploadToBuffer(feedbackClear->getHandle(), unused.data(), feedbackSize))
+            {
+                if (feedbackBuffer != nullptr) { _feedbackBuffer = feedbackBuffer->getHandle(); }
+                if (feedbackClear != nullptr) { _feedbackClearBuffer = feedbackClear->getHandle(); }
+                destroy(driver);
+                return fail(outError, "Failed to create the scene's texture feedback buffers");
+            }
+            _feedbackBuffer = feedbackBuffer->getHandle();
+            _feedbackClearBuffer = feedbackClear->getHandle();
+
+            if (!bindlessManager->setSingletonBuffer(VkmBindlessSingletonBuffer::TextureFeedback, _feedbackBuffer))
+            {
+                destroy(driver);
+                return fail(outError, "Failed to publish the scene's texture feedback buffer");
+            }
+
+            for (uint32_t slot = 0; slot < kFeedbackRingSize; ++slot)
+            {
+                // AllowTransferDst is what selects the host-readable shape; see newStagingBuffer.
+                VkmStagingBufferInfo stagingInfo{};
+                stagingInfo._flags = VkmResourceCreateInfo::AllowTransferDst;
+                stagingInfo._size = feedbackSize;
+                stagingInfo._debugName = "SceneTextureFeedbackReadback";
+
+                VkmStagingBuffer* staging = driver->newStagingBuffer(stagingInfo);
+                if (staging == nullptr)
+                {
+                    destroy(driver);
+                    return fail(outError, "Failed to create the scene's texture feedback readback ring");
+                }
+                _feedbackStaging[slot] = staging->getHandle();
+                _feedbackStagingPointers[slot] = staging;
+            }
+            _feedbackScratch.assign(kVkmBindlessTextureCapacity, kVkmTextureFeedbackUnused);
+        }
+
+        // One staging buffer per frame slot, laid out as
+        // [ObjectData array][FrameData per view][MaterialData array]. The material region is the
+        // streaming path's: a rebuilt texture lands on a new bindless slot, so its records have to
+        // reach the GPU again, and they take the same per-frame-slot route the object data does.
+        const uint64_t materialDataSize = _materials.size() * sizeof(VkmMaterialData);
         _frameDataStagingOffset = objectDataSize;
+        _materialStagingOffset = _frameDataStagingOffset + sizeof(VkmFrameData) * kVkmSceneMaxCullViews;
         for (uint32_t frame = 0; frame < FRAME_BUFFER_COUNT; ++frame)
         {
             VkmStagingBufferInfo stagingInfo{};
             stagingInfo._flags = VkmResourceCreateInfo::AllowTransferSrc;
-            stagingInfo._size = objectDataSize + sizeof(VkmFrameData) * kVkmSceneMaxCullViews;
+            stagingInfo._size = _materialStagingOffset + materialDataSize;
             stagingInfo._debugName = "SceneUploadStaging";
 
             VkmStagingBuffer* staging = driver->newStagingBuffer(stagingInfo);
@@ -740,6 +870,12 @@ namespace vkm
         {
             destroy(driver);
             return false;
+        }
+
+        // Last, so a failed build never leaves a worker running against a half-torn-down scene.
+        if (_textureStreamingAvailable)
+        {
+            _textureStreamer.start();
         }
         return true;
     }
@@ -1028,15 +1164,12 @@ namespace vkm
             {
                 bindlessManager->unregisterBuffer(_lightPoolSlot, VkmBindlessArrayType::Buffer);
             }
-            for (const uint32_t slot : _materialTextureSlots)
-            {
-                bindlessManager->unregisterTexture(slot);
-            }
             // Unbind before the buffers go away so the set never names a released resource.
             bindlessManager->setSingletonBuffer(VkmBindlessSingletonBuffer::ObjectData, VKM_INVALID_RESOURCE_HANDLE);
             bindlessManager->setSingletonBuffer(VkmBindlessSingletonBuffer::FrameData, VKM_INVALID_RESOURCE_HANDLE);
             bindlessManager->setSingletonBuffer(VkmBindlessSingletonBuffer::VisibleList, VKM_INVALID_RESOURCE_HANDLE);
             bindlessManager->setSingletonBuffer(VkmBindlessSingletonBuffer::IndirectArgument, VKM_INVALID_RESOURCE_HANDLE);
+            bindlessManager->setSingletonBuffer(VkmBindlessSingletonBuffer::TextureFeedback, VKM_INVALID_RESOURCE_HANDLE);
         }
         _materialPoolSlot = INVALID_VALUE32;
         _lightPoolSlot = INVALID_VALUE32;
@@ -1056,12 +1189,21 @@ namespace vkm
             handle = VKM_INVALID_RESOURCE_HANDLE;
         };
 
+        // Owns the streamed textures and their slots on a bindless backend, so it has to run
+        // before the buffers below go away.
+        _textureStreamer.destroy(driver);
+        _textureStreamingAvailable = false;
+
         for (VkmResourceHandle& texture : _materialTextures)
         {
             release(texture);
         }
         _materialTextures.clear();
-        _materialTextureSlots.clear();
+        // Both are filled in lockstep with _materials -- _materialImages by addModel(), the handles
+        // by uploadMaterialTextures() -- so leaving either behind makes the next addModel() append
+        // onto a stale prefix that build()'s resize() then keeps in place of the new scene's.
+        _materialImages.clear();
+        _materialTextureHandles.clear();
 
         release(_materialBuffer);
         release(_lightBuffer);
@@ -1070,6 +1212,15 @@ namespace vkm
         release(_visibleListBuffer);
         release(_argumentBuffer);
         release(_countClearBuffer);
+        release(_feedbackBuffer);
+        release(_feedbackClearBuffer);
+        for (VkmResourceHandle& staging : _feedbackStaging)
+        {
+            release(staging);
+        }
+        _feedbackStagingPointers.fill(nullptr);
+        _feedbackFrameCounter = 0;
+        _feedbackScratch.clear();
         for (VkmResourceHandle& staging : _stagingBuffers)
         {
             release(staging);
@@ -1091,9 +1242,14 @@ namespace vkm
         _objectData.clear();
         _drawBatches.clear();
         _frameDataStagingOffset = 0;
+        _materialStagingOffset = 0;
         _countRegionSize = 0;
         _dirtyFirst = 0;
         _dirtyEnd = 0;
+        _materialDirtyFirst = 0;
+        _materialDirtyEnd = 0;
+        _streamingObjects.clear();
+        _streamingUpdates.clear();
     }
 
     void VkmScene::setObjectTransform(uint32_t objectIndex, const glm::mat4& worldTransform)
@@ -1172,6 +1328,152 @@ namespace vkm
             commandBuffer->copyBuffer(_stagingBuffers[frameIndex], _objectDataBuffer, byteOffset, byteOffset, byteSize);
             _dirtyFirst = 0;
             _dirtyEnd = 0;
+        }
+
+        if (_materialDirtyFirst != _materialDirtyEnd)
+        {
+            const uint64_t byteOffset = static_cast<uint64_t>(_materialDirtyFirst) * sizeof(VkmMaterialData);
+            const uint64_t byteSize =
+                static_cast<uint64_t>(_materialDirtyEnd - _materialDirtyFirst) * sizeof(VkmMaterialData);
+            staging->writeDirect(_materialStagingOffset + byteOffset, _materials.data() + _materialDirtyFirst,
+                                 byteSize);
+            commandBuffer->copyBuffer(_stagingBuffers[frameIndex], _materialBuffer,
+                                      _materialStagingOffset + byteOffset, byteOffset, byteSize);
+            _materialDirtyFirst = 0;
+            _materialDirtyEnd = 0;
+        }
+
+        /*
+        * Texture feedback, camera view only: the probe refresh's cull view draws nothing and would
+        * otherwise copy the same buffer twice for no reason.
+        *
+        * The copy takes last frame's contents -- it is recorded before this frame's G-buffer pass
+        * writes them -- which is exactly the intent. Reading the buffer this frame is about to
+        * write would need a barrier and a wait; reading what the previous frame left needs neither.
+        * The clear then follows in the same transfer subgraph, so the pass that runs after it
+        * starts from "nothing sampled".
+        */
+        if (viewIndex == 0 && _feedbackBuffer != VKM_INVALID_RESOURCE_HANDLE)
+        {
+            const uint64_t feedbackSize = kVkmBindlessTextureCapacity * sizeof(uint32_t);
+            const uint32_t ringSlot = static_cast<uint32_t>(_feedbackFrameCounter % kFeedbackRingSize);
+            commandBuffer->copyBuffer(_feedbackBuffer, _feedbackStaging[ringSlot], 0, 0, feedbackSize);
+            commandBuffer->copyBuffer(_feedbackClearBuffer, _feedbackBuffer, 0, 0, feedbackSize);
+        }
+    }
+
+    void VkmScene::markMaterialDirty(uint32_t materialIndex)
+    {
+        VKM_ASSERT(materialIndex < _materials.size(), "VkmScene::markMaterialDirty index is out of range");
+
+        if (_materialDirtyFirst == _materialDirtyEnd)
+        {
+            _materialDirtyFirst = materialIndex;
+            _materialDirtyEnd = materialIndex + 1;
+            return;
+        }
+        _materialDirtyFirst = std::min(_materialDirtyFirst, materialIndex);
+        _materialDirtyEnd = std::max(_materialDirtyEnd, materialIndex + 1);
+    }
+
+    void VkmScene::publishStreamingMip(uint32_t materialIndex, uint32_t channel, uint32_t baseMip,
+                                       uint32_t totalMipCount)
+    {
+        // Only the base-colour channel has somewhere to go: the record carries one pair of words,
+        // and a material's four textures stream independently. The other channels still stream,
+        // they are just not what the debug view shows.
+        if (channel != 0u || materialIndex >= _materials.size())
+        {
+            return;
+        }
+        _materials[materialIndex]._metallicRoughness.z = static_cast<float>(baseMip);
+        _materials[materialIndex]._metallicRoughness.w = static_cast<float>(totalMipCount);
+    }
+
+    uint32_t VkmScene::getStreamedBaseMip(uint32_t materialIndex, uint32_t channel) const
+    {
+        const uint32_t entryIndex = _textureStreamer.findEntry(materialIndex, channel);
+        return (entryIndex == INVALID_VALUE32) ? INVALID_VALUE32 : _textureStreamer.getResidentBaseMip(entryIndex);
+    }
+
+    void VkmScene::updateTextureStreaming(VkmDriverBase* driver, const VkmTextureStreamingView& view)
+    {
+        VKM_ASSERT(driver != nullptr, "VkmScene::updateTextureStreaming requires a driver");
+
+        if (!_textureStreamingAvailable || _objectData.empty())
+        {
+            return;
+        }
+
+        /*
+        * Last the GPU told us what the screen actually wanted. The slot read here was filled
+        * kFeedbackRingSize frames ago, which is one further back than the deepest frame still in
+        * flight, so it needs no wait of its own -- see the ring's declaration.
+        * Before the streamer's own update(), so this frame's targets use it.
+        */
+        if (_feedbackBuffer != VKM_INVALID_RESOURCE_HANDLE)
+        {
+            /*
+            * Advanced first, so recordUpdate later this frame writes the very slot read here.
+            * That is what makes the latency a whole ring: slot F holds what frame F - ring wrote,
+            * and reading it before this frame's copy overwrites it is free. Splitting the counter
+            * across the read and the write instead would leave one frame of latency and hand back
+            * a slot whose copy may still be executing.
+            */
+            ++_feedbackFrameCounter;
+            const uint32_t ringSlot = static_cast<uint32_t>(_feedbackFrameCounter % kFeedbackRingSize);
+            VkmStagingBuffer* staging = _feedbackStagingPointers[ringSlot];
+            // Strictly greater: at exactly kFeedbackRingSize this slot has never been written, and
+            // a staging buffer's contents before its first copy are whatever the allocator left.
+            if (staging != nullptr && _feedbackFrameCounter > kFeedbackRingSize)
+            {
+                staging->invalidate(0, _feedbackScratch.size() * sizeof(uint32_t));
+                if (const void* mapped = staging->map())
+                {
+                    std::memcpy(_feedbackScratch.data(), mapped, _feedbackScratch.size() * sizeof(uint32_t));
+                    staging->unmap();
+                    _textureStreamer.applyFeedback(_feedbackScratch.data(),
+                                                   static_cast<uint32_t>(_feedbackScratch.size()));
+                }
+            }
+        }
+
+        // The streamer measures world-space spheres, so the object-space bounds every record
+        // carries are transformed here -- the radius by the largest scale the transform applies,
+        // which is the conservative choice for a sphere under a non-uniform one.
+        _streamingObjects.clear();
+        _streamingObjects.reserve(_objectData.size());
+        for (const VkmObjectData& object : _objectData)
+        {
+            const glm::mat3 linear(object._worldTransform);
+            const float maxScale = std::sqrt(std::max({ glm::dot(linear[0], linear[0]),
+                                                        glm::dot(linear[1], linear[1]),
+                                                        glm::dot(linear[2], linear[2]) }));
+
+            VkmTextureStreamingObject entry;
+            entry._worldCenter =
+                glm::vec3(object._worldTransform * glm::vec4(glm::vec3(object._boundsCenterRadius), 1.0f));
+            entry._worldRadius = object._boundsCenterRadius.w * maxScale;
+            entry._materialIndex = object._materialIndex;
+            _streamingObjects.push_back(entry);
+        }
+
+        _streamingUpdates.clear();
+        _textureStreamer.update(driver, view, _streamingObjects, &_streamingUpdates);
+
+        for (const VkmTextureStreamingUpdate& update : _streamingUpdates)
+        {
+            if (update._materialIndex >= _materials.size() || update._channel > 3u)
+            {
+                continue;
+            }
+            _materials[update._materialIndex]._textureSlots[static_cast<int>(update._channel)] =
+                update._bindlessSlot;
+            // Component for component with the slot above: what the shader clamps that sample to.
+            _materials[update._materialIndex]._streamingMinLod[static_cast<int>(update._channel)] =
+                update._minLod;
+            publishStreamingMip(update._materialIndex, update._channel, update._baseMip, update._totalMipCount);
+            markMaterialDirty(update._materialIndex);
         }
     }
 
@@ -1330,6 +1632,20 @@ namespace vkm
                 }
                 append(_frameDataBuffer, VkmResourceAccess::TransferWrite);
                 append(_objectDataBuffer, VkmResourceAccess::TransferWrite);
+                // Written only on a frame where a streamed texture changed slots, but declared
+                // unconditionally for the same reason every staging buffer is: the declaration is
+                // what the subgraph may touch, not what it turned out to touch this frame.
+                append(_materialBuffer, VkmResourceAccess::TransferWrite);
+                // The feedback buffer is read out to the ring and then reset, both in this
+                // subgraph; the ring slots are declared like the staging buffers above, all of
+                // them, because this method does not know which frame slot is current.
+                append(_feedbackBuffer, VkmResourceAccess::TransferRead);
+                append(_feedbackBuffer, VkmResourceAccess::TransferWrite);
+                append(_feedbackClearBuffer, VkmResourceAccess::TransferRead);
+                for (VkmResourceHandle staging : _feedbackStaging)
+                {
+                    append(staging, VkmResourceAccess::TransferWrite);
+                }
                 break;
 
             case ReferencePhase::Cull:
@@ -1360,6 +1676,8 @@ namespace vkm
                 append(_lightBuffer, VkmResourceAccess::ShaderStorageRead);
                 append(_objectDataBuffer, VkmResourceAccess::ShaderStorageRead);
                 append(_frameDataBuffer, VkmResourceAccess::ShaderStorageRead);
+                // The drawing shader reports the mip level each pixel wanted into this.
+                append(_feedbackBuffer, VkmResourceAccess::ShaderStorageReadWrite);
                 append(_argumentBuffer, VkmResourceAccess::IndirectArgument);
                 break;
         }

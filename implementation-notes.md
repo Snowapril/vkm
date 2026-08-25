@@ -5114,6 +5114,282 @@ cannot encode under it.
 
 (none)
 
+## 2026-08-22 — Camera-distance texture mip streaming
+
+Material textures no longer hold their whole mip chain for the life of a scene. A new
+`VkmTextureStreamer` (`renderer/scene/texture_streamer.{h,cpp}`), owned by `VkmScene`, keeps each
+one at the level the camera actually needs and **rebuilds the texture** to get there — a smaller
+allocation holding levels `[base, last]`, not a view narrowed over a full-size one, which would
+still pay for level 0.
+
+**Selection** is screen-space texel density, not raw distance: `vkmSelectStreamingBaseMip()` projects
+an object's bounding sphere (`2*r*viewportHeight / (2*d*tan(fovY/2))`) and takes
+`round(log2(texWidth / projectedPixels)) + bias`. That makes a 4K texture on a small distant object
+drop further than a 256px one, which a distance-only rule cannot express. The closest object naming
+a texture wins, since a texture is one resource however many objects share it. Free-standing so
+`TestTextureStreaming.cpp` can pin it without a driver, a scene or a camera.
+
+**The swap takes a new bindless slot rather than rewriting the old one.** The set is
+`UPDATE_AFTER_BIND | PARTIALLY_BOUND` but not `UPDATE_UNUSED_WHILE_PENDING`, and a submitted frame is
+still sampling the old index — so an in-place descriptor write would need a `waitIdle()` per swap.
+A fresh slot needs none. The displaced texture and slot then retire on a tick counter before
+release: material textures are declared nowhere in `collectReferencedResources`, so they carry no
+recorded GPU usage for `VkmDeferredResourceReclaimer` to wait on, and `VkmBindlessSlotAllocator` is
+LIFO — a released slot is the *first* one handed back out. The delay is load-bearing on both counts.
+
+`VkmScene` gained a material dirty range beside the object one, a third staging region
+(`[ObjectData][FrameData x views][MaterialData]`), and `_materialBuffer` declared `TransferWrite` in
+the Update phase. The streamer owns the textures and slots on a bindless backend, so
+`_materialTextureSlots` is gone and `_materialTextures` now holds only the no-bindless path's.
+
+**Debug view.** `VkmMaterialData::_metallicRoughness.z/.w` were unread padding (`vkmLoadMaterial`
+reads words 0-9 and 12-15), so the base-colour texture's level and chain length ride there with no
+layout change. They load through their own `vkmLoadMaterialStreamingMip()` rather than through
+`VKM_MATERIAL_LOADER()`: eight shaders expand that macro, including ray-tracing kernels that
+evaluate a material per hit, and none of them draws the visualisation. `model_viewer` gets
+`DebugMode::StreamingMip` (Num5); gi gets `VkmGiDebugView::StreamingMip`, which also puts the
+G-buffer pass into `VKM_GBUFFER_DEBUG_STREAMING_MIP` — there is no spare G-buffer channel, so the
+heat colour rides base colour and the composite shows it unlit.
+
+Two pre-existing bugs surfaced because streaming hammers the paths they sit on, and both are fixed
+here: `VkmDriverBase::uploadToTexture` never released its command buffer (`readbackTexture` does),
+which was bounded at scene load and unbounded once a rebuild calls it per frame; and
+`VkmScene::destroy()` never cleared `_materialImages`/`_materialTextureHandles`, so a `model_viewer`
+scene swap left `build()`'s `resize()` keeping the *previous* scene's texture paths.
+
+### Deviations
+
+- **Planned:** create each texture at its distance-appropriate level during `uploadMaterialTextures`.
+  **Did instead:** upload the full chain there and let the first ticks stream down. `build()` takes
+  only a driver and a PSO manager — it has no camera to size anything against, and inventing one
+  would have been worse than costing one frame of streaming.
+- **Planned:** apply whole rebuilds, bounded per tick by texture count.
+  **Did instead:** bounded by *mip level* (`_maxLevelUploadsPerTick`), with the new texture published
+  only once every level is in place. `uploadToTexture` submits and blocks once per level wherever
+  the destination is not host-writable — which is every discrete-GPU Vulkan device — so a 4K
+  texture streaming to level 0 would otherwise have been 13 full GPU stalls inside one `update()`.
+  Conservative: the old texture keeps serving until the new one is complete.
+- **Planned:** one shared `vkmLoadMaterial()` carrying the streaming words.
+  **Did instead:** a separate loader, for the per-hit cost reason above.
+- **Planned:** stop the decode worker the way `VkmDeferredResourceReclaimer` does.
+  **Did instead:** clear `_running` *under* `_mutex` before notifying. The reclaimer flips it
+  unlocked and gets away with it because its worker uses a 4 ms `wait_for`, so a lost wakeup costs
+  one poll interval. This worker waits on an untimed predicate, where the same race is permanent:
+  clearing the flag between the predicate's evaluation and the sleep it precedes loses the notify
+  and `join()` never returns. It hung `TestAccelerationStructureMetal.mm`'s ray-query case on every
+  run — a scene with no textures at all still spawns the worker — and was found by that test, not
+  by review.
+
+Coverage: `TestTextureStreaming.cpp` pins the selection arithmetic (one level per doubling of
+distance, one per doubling of texture width, the bias, and every degenerate camera), and
+`runTextureStreamingSwapTest` in `TestGBufferRenderShared.hpp` drives a real rebuild on Vulkan and
+Metal — it asserts the resident level actually moved *and* that the material still samples green
+afterwards. Neither implies the other: a solid-colour chain renders identically at every level, so
+pixels alone cannot prove a rebuild happened, and a rebuild that left the record naming the released
+slot would still move the level. `recordGBufferFrame` was split out of `fillGBuffer` so that test
+can render the same scene twice.
+
+## 2026-08-23 — Making the streaming gain visible
+
+Streaming shipped without a single number attached to it, so the only way to believe it was working
+was the heat-map debug view — which shows *which level* a surface sits at and says nothing about
+bytes. The engine overlay's `VRAM:` line is device-wide and refreshed at 2 Hz, so the delta was lost
+inside it. `src/samples/memory_aliasing/main.cpp:493-540` is the repo's precedent for exactly this
+problem, and this follows its shape.
+
+**The readout is a pair, not a number.** `VkmTextureStreamingStats` carries `_residentBytes` beside
+`_fullChainBytes` — what the streamed textures hold now, and what those same textures would hold
+unstreamed. A resident figure alone cannot answer "is this doing anything"; the counterfactual is the
+whole point. At scene load the two are equal by construction (the initial upload *is* the full chain),
+so the saving starts at an honest zero rather than a fudged one.
+
+`computeTextureByteSize` was counting only level 0 — it never read `_numMipLevels` — so every mipped
+texture was under-reported by a quarter. Material textures are the only mipped textures in the engine,
+which is to say the entire population being measured. It is now `vkmMipRangeByteSize(..., 0,
+_numMipLevels)`, and the streamer's own totals go through the same helper so the panel and the memory
+inspector cannot drift. The `std::max(1u, _numMipLevels)` guard is load-bearing: `VkmTextureInfo` has
+no default for that field and three sites already clamp it, so a naive `[0, count)` loop would have
+silently zeroed a category total.
+
+`computeStats()` takes no lock, and the header says why: `_mutex` guards only the decode worker's job
+and result queues, while `_entries`, `_build` and `_retired` belong outright to the thread that calls
+`update()`. It is safe from that thread only — a contract, not an accident.
+
+The panel reports `_rebuildInFlight` and `_pendingRetireCount` because live GPU bytes legitimately
+exceed `_residentBytes` mid-rebuild: the old texture, the new one and anything still in the retire
+queue are all allocated at once. It reports `_failedCount` because an entry pinned by a failed rebuild
+sits at resident == full chain forever and would otherwise just look like a texture the camera wants
+at level 0, quietly dragging the saving down.
+
+Material textures are now named after their file and colour space
+(`SceneMaterialTexture:curtain_diff(srgb)`) instead of all sharing one string, and a rebuild reuses its
+entry's name. The F5 texture browser already had extent, mip-count and byte columns plus a name
+filter — it just had no way to tell one row from another, so this makes an existing tool useful with
+no UI work.
+
+### Deviations
+
+- **Planned:** put the streaming stats block in the gi sample beside the existing toggle.
+  **Did instead:** ungated the whole streaming section from `_debugView == StreamingMip` first. The
+  toggle had been nested inside that branch, so the stats would have been invisible until the user
+  switched to a debug view — and "is streaming worth it" is not a question you ask only while looking
+  at the heat map. `model_viewer` was already unconditional; the asymmetry was accidental.
+- **Planned:** an overlay line showing the streaming saving.
+  **Did instead:** the whole Texture category's allocated bytes, labelled as such. `VkmEngine` has no
+  reference to `VkmScene` and the memory inspector has no public getter for a finer split, so a real
+  streaming figure there would have meant new plumbing for a line that already moves. It is the
+  always-visible "texture memory is changing" signal; the attribution lives in the sample panel.
+- **Planned:** store only the file stem in the debug name.
+  **Did instead:** stem plus colour space. One image sampled as both sRGB and linear is two separate
+  textures, so the stem alone still produced two rows with identical names.
+
+## 2026-08-23 — Texture streaming tier 1: GPU feedback
+
+The CPU estimate the streamer shipped with projects a bounding sphere. It cannot see UV density,
+grazing angles or occlusion, and its own header said so. Tier 1 replaces the *target* with what the
+pixel shader actually asked for, keeping the rebuild-based residency of tier 0 underneath. Tiers are
+a runtime choice on `VkmDriverCapabilityFlags`, never an `#ifdef`; WebGPU stays at tier 0 permanently
+because Tint has no `OpImageQueryLod` case and WGSL no LOD-query builtin.
+
+**The toolchain was spiked before anything else was written**, because the combination nobody had
+exercised — a runtime-array element inside a Tier-2 argument buffer, `NonUniformResourceIndex`, and a
+LOD query — could have sunk the whole design. It passed: SPIRV-Cross emits `calculate_clamped_lod` on
+the bindless array and casts the feedback buffer to `device atomic_uint*` for `InterlockedMin`. The
+`GetDimensions` + `ddx`/`ddy` fallback was therefore not needed and is recorded in
+`virtual_texturing.md` for whoever hits a backend where it is.
+
+`InterlockedMin` keyed by bindless slot: the finest level any pixel needed is the one that matters, and
+a plain store would let an arbitrary distant pixel win. One pixel in 16 votes, which is what makes the
+write cheap enough to leave on unconditionally rather than behind a PSO permutation — the answer wanted
+is a minimum over a surface, so a surface thin enough to fall between votes is one whose detail cannot
+matter.
+
+The reading is **relative to the texture actually sampled**, which for a streamed texture is already
+reduced. `vkmStreamingBaseMipFromFeedback` adds the resident base back, which is what makes the loop a
+fixed point instead of a chase: stream out four levels and the next reading comes back four higher,
+naming the same absolute level. That property is what the new tests pin.
+
+Readback rides a ring of `FRAME_BUFFER_COUNT + 1` staging buffers, mapped at the top of
+`updateTextureStreaming`. One longer than the frame count on purpose: at that point this frame's own
+wait has not happened, so a ring of exactly `FRAME_BUFFER_COUNT` hands back a slot still in flight.
+Feedback is several frames stale by construction and nothing should "fix" that with a stall.
+
+Fixed on the way through: `toVkShaderStageFlags` hard-coded set-2 storage buffers to compute only,
+which made feedback impossible **and** was already a latent bug — `gi_restir_lighting`'s fragment
+shader reads one, and ReSTIR is gated on `RayTracing` rather than on Metal, so on a Vulkan RT device
+that descriptor's stageFlags excluded the stage reading it.
+
+### Deviations
+
+- **Planned:** put the feedback buffer in set 2, on the G-buffer PSO's `per_pass_resources`.
+  **Did instead:** a set-0 singleton. The plan rejected set 0 over WebGPU fragment visibility, but that
+  does not bite: WebGPU already binds a placeholder for every unregistered singleton, its graphics
+  prefix simply omits this one, and it is tier 0 so it never writes feedback anyway. Set 2 would have
+  forced every `gbuffer_pso` user — the gi sample and two test fixtures — to build and bind a table
+  with a dummy buffer, because overlays cannot override `per_pass_resources`. The buffer is genuinely
+  engine-global and indexed by bindless slot, which is what a singleton is.
+- **Planned:** put the write in `vkmSampleMaterialTexture`, the "single chokepoint".
+  **Did instead:** in `gbuffer.hlsl`. Eight shaders expand that macro and only the pass that decides
+  what is on screen should vote — the probe capture especially must not, since probes look in every
+  direction and would drag every texture to full resolution.
+- **Planned:** gate the write behind a runtime `enabled` flag in set-2 constants.
+  **Did instead:** no flag. `VkmFrameData` is byte-full so there was nowhere to put one, and PSO
+  options multiply rather than compose (three vertex layouts would have become six variants). The
+  1-in-16 pixel stride makes it cheap enough to leave on.
+- **Unplanned:** moved `VKM_BINDLESS_ACCELERATION_STRUCTURE` from binding 8 to 9. Adding a singleton
+  shifts `kVkmBindlessAccelerationStructureBinding`, but `vkm_bindless.hlsli` hardcodes its binding
+  number with no compile-time link to the enum. Every ray query silently missed until five
+  ray-tracing tests caught it. Note also that `vkm_ray_tracing_shaders` is a separate build target
+  from `vkm_engine_shaders`, so a set-0 layout change needs both built.
+
+Measured on Sponza at the same viewpoint: texture-category bytes 389.1 -> 349.2 MiB, in the predicted
+direction. Metal, `MTL_DEBUG_LAYER=1`: 307/307 cases, no validation errors.
+
+### 2026-08-23 — Tier 1 follow-up: Vulkan verification and a readback-ring off-by-one
+
+Building the Vulkan backend for the first time this cycle turned up one real bug and one honest gap.
+
+**The readback ring read and wrote different frame numbers.** `updateTextureStreaming` read slot
+`counter % ring` and then incremented, while `recordUpdate` — which runs later in the same frame —
+wrote slot `(counter + 1) % ring`. The read therefore returned what the *previous* frame wrote rather
+than what a frame a whole ring back wrote, which is one frame of latency where four were intended,
+against a copy that may still have been executing. The counter now advances once at the top of
+`updateTextureStreaming`, so both sides name the same slot and the latency is the ring again. The
+guard also moved from `>=` to `>`: at exactly the ring size that slot has never been written, and a
+staging buffer before its first copy holds whatever the allocator left. Found by reasoning about the
+ordering while writing the GPU test, not by the test failing.
+
+**MoltenVK reports no `RayTracing`.** Every ray-query, path-tracer and ReSTIR case skips on macOS
+Vulkan, so the acceleration-structure binding move — the trap that broke every ray query on Metal —
+is still unverified on Vulkan, as is the `gi_restir_lighting` stage-flags fix it was supposed to
+repair. Both need a discrete-GPU run. Recorded in TODO.md rather than left as an assumption.
+
+Vulkan validation output is the four "destroyed while still in use" VUIDs TODO.md already records
+against `main` (`vkDestroyBuffer-buffer-00922`, `vkFreeDescriptorSets-pDescriptorSets-00309`,
+`vkDestroySampler-sampler-01082`, `vkDestroyPipeline-pipeline-00765`) and no new class. The feedback
+path's own buffers go through the same teardown lambda as the existing ones, so they inherit that
+pre-existing bug rather than introducing a different one.
+
+`runTextureFeedbackTest` covers what no pure-logic test can reach: the LOD query surviving the shader
+toolchain, the atomic landing in the right bindless slot, the singleton being bound where the shader
+declared it, the ring's index arithmetic, and the relative-to-absolute decode. It asserts the loop
+delivers and then settles rather than walking a texture down a level per frame. It deliberately does
+not assert a numerically exact level — that needs a known UV parameterisation, and the Sponza A/B
+covers it instead.
+
+### Tier 2 streamer integration: the feedback test's bound was measuring tier 0's lag
+
+**Planned:** land the sparse residency path behind the existing streamer with no test changes.
+
+**Done instead:** `runTextureFeedbackTest` had to be rewritten from a fixed frame count plus
+`CHECK(settled <= 1)` to a converge-then-assert loop.
+
+**Why:** with the level moving by unbinding, the whole change lands in one tick, so the test now
+sampled a *converged* streamer where before it had sampled one still in flight. The shader's reading
+for that fixture was never `<= 1` — instrumenting `applyFeedback` showed it reporting 2 from the
+first frame at `resident = 0`, before any of this work. `<= 1` was passing on a value still in
+transit, which means it was asserting how slow rebuilding is, not that the loop converges. The test
+now runs until the level stops moving and asserts that it does, which is the property its own
+comment always claimed.
+
+Two things the rewrite surfaced and did not fix:
+
+- ~~**The two backends disagree on the reported level**~~ — **retracted, see below.** They do not:
+  both report 2. The Vulkan reading of 0 was the replacement test exiting before the level had begun
+  to move.
+- **Feedback on a rebuilt texture is a ratchet.** A texture reduced to base B cannot report a level
+  finer than B — its level 0 *is* B — so tier 0 and tier 1 can walk a texture out but never bring it
+  back on the reading alone. Tier 2 does not have this problem, because the texture keeps its full
+  extent whatever is backed. This is the sharpest argument for tier 2 that is not about memory.
+
+### `_rebuildInFlight == false` after settling is a tier-2 property, not a shared one
+
+**Planned:** assert in the feedback test that nothing is left in flight once the level settles.
+
+**Done instead:** dropped that assertion.
+
+**Why:** on tier 0 the level can sit still while a rebuild toward it is still uploading, so the
+assertion is only true where residency changed by unbinding. Asserting it in a test that runs on
+both tiers would have meant asserting a tier-2 property against tier 0. The stat going permanently
+quiet on Sponza is where that claim belongs.
+
+
+### Retraction: the cross-backend LOD "discrepancy" was the test, not the toolchain
+
+**Claimed:** SPIRV-Cross's MSL and MoltenVK's SPIR-V translate `CalculateLevelOfDetail` differently,
+reading 2 and 0 for the same fixture on the same GPU.
+
+**Actually:** both read 2. Dumping the raw feedback buffer on the Vulkan run showed slot 0 = 2 with
+4095 of 4096 slots `UNUSED`, so the clear works and the reading matches Metal's exactly.
+
+**Why the wrong conclusion:** the converge-then-assert loop introduced in the previous entry ran
+until the level had not changed for eight frames, and "has not changed" is indistinguishable from
+"has not started". Tier 2 moves the level in the first tick, so on Metal eight stable frames meant
+settled. Tier 0 waits out the streamer's damping, then the ring latency, then a worker decode, then
+bounded uploads — so on Vulkan the loop exited before anything happened and reported the level the
+texture was created at. Replaced with a fixed warm-up followed by the stability check: nothing
+observable from outside separates "converged" from "not yet started", so the test has to give the
+slow path room rather than try to detect it.
 ## 2026-08-22 — Acceleration structure inspector: the 3D wireframe overlay
 
 The F4 inspector's three tabs are all flat ImGui, and its Spatial tab is a top-down world-XZ
@@ -5186,6 +5462,71 @@ driver, which is why the collectors take a summary list rather than a pool.
 ### Deviations
 
 (none)
+<<<<<<< HEAD
+
+### CI caught three things a Debug-only, single-device run could not
+
+**Planned:** land the min-LOD clamp unconditionally, verified against `shaderResourceMinLod` on the
+development machine.
+
+**Did instead:** compiled the clamp only under `VKM_BACKEND_METAL`.
+
+**Why:** a clamped `Sample` lowers to SPIR-V's `MinLod` operand, whose capability requires
+`VkPhysicalDeviceFeatures::shaderResourceMinLod`. A module declaring a capability the device lacks
+fails `vkCreateShaderModule` **outright** — not merely where the operand is used — so the whole
+G-buffer pass died on lavapipe, which is what the Vulkan CI runs on. MoltenVK reports the feature as
+supported, so no local Vulkan run could have caught it. Sparse residency is Metal-only today, so
+Vulkan and WebGPU always clamp to zero and the operand is dead there; whoever implements
+`vkQueueBindSparse` owns the decision again, with a device in hand to answer it with.
+
+Verified statically rather than by another green local run, since the local device cannot distinguish
+the two: disassembling the shader cache shows `MinLod` absent from all three Vulkan G-buffer variants
+and `min_lod_clamp` still present in the Metal ones.
+
+Two more, both from CI building **Release** where local runs were Debug-only:
+
+- `metal_driver.mm` called `getResource<VkmTexture>` without including
+  `render_resource_pool.hpp`, which holds the template's definition. Debug linked it from another
+  TU's weak symbol; Release did not.
+- MSVC treats C4459 as an error, so a local `kMipCount` shadowing the file-scope one in
+  `TestTextureStreaming.cpp` broke the Windows build. Neither Clang nor AppleClang warns.
+
+**Standing lesson:** run at least one Release build before pushing a branch that adds a shader
+capability or a template call across a TU boundary. Debug on one device hides all three of these.
+
+### The Ubuntu Vulkan CI failure was a read of uninitialized memory, on main
+
+**Symptom:** three `Failed to initialize texture`, then `gbuffer.initialize` returning false and a
+SIGSEGV, on Ubuntu 22.04 + lavapipe. One of four compiler configs on `main`; all four on this branch.
+No `VkResult`, no validation error — it never reached Vulkan at all.
+
+**Cause:** `VkmRenderResource::_handle` is never initialized. `VkmResourceHandle::id` has no default
+member initializer and the constructor does not set it, so the member is whatever the allocator last
+left there. `initializeCommon` then checked **`_handle.isValid()`** — the member, before assignment —
+rather than the handle being passed in. It therefore passed whenever the garbage was not
+`(uint64_t)-1` and failed when it was.
+
+That explains every part of the shape: no driver error because Vulkan was never called; different
+compilers and optimisation levels disagreeing; and this branch tipping three more configs over simply
+by allocating differently ahead of the failing test.
+
+**Fix:** check the parameter, which is the only thing that says whether the pool succeeded, and give
+`_handle` an explicit `VKM_INVALID_RESOURCE_HANDLE` in the constructor so the member is never garbage.
+The check on its own is not enough — a resource that is asked for its handle before `initialize()`
+would still read uninitialized memory.
+
+Pre-existing on `main` and not introduced here, but this branch made it fire far more often, so it is
+fixed here rather than filed.
+
+### Observed once, unexplained: an intermittent black sample on Metal
+
+`runMaterialTextureTest` failed one Release run with the base colour reading 0 instead of 0.5, and
+passed on the next with no change. Recorded rather than dismissed, because on Metal that texture is
+now sparse and mapping updates are queue operations: a copy running ahead of the mapping that backs
+its level would look exactly like this. `virtual_texturing.md` §10 already records that the
+`MTLStageResourceState` barrier the header asks for was "not observed to be required" rather than
+shown unnecessary — this is the first evidence that the question is still open.
+=======
 ## 2026-08-22 — Punctual lights and shadow maps
 
 Point and spot lights did not exist in the engine at all; the raster tier cast no shadow of any
@@ -5253,3 +5594,4 @@ them:
   **Done instead:** rounded to two decimals before serializing.
   **Why:** a float widened to double serializes as `1.2400000095367432`. Two decimals is exactly
   what the slider displays, and keeps a file a user may hand-edit readable.
+>>>>>>> origin/main

@@ -177,9 +177,12 @@ namespace vkm
         Sampler = 1,
         /*
         * RWStructuredBuffer at register(u#, spaceN).
-        * Compute-visible only, as set 0's two read-write singletons are: WebGPU forbids writable
-        * storage in the vertex stage, and a buffer used as writable storage inside a render pass's
-        * usage scope may not also be fetched as an indirect argument in that scope.
+        * Visible to the fragment and compute stages, never the vertex one: WebGPU forbids writable
+        * storage there, which is the narrowest rule every backend can honour. A fragment shader
+        * reporting per-pixel results into a buffer is the case this exists for.
+        * Set 0's two read-write singletons are compute-only for a separate reason that does not
+        * generalise -- a buffer used as writable storage inside a render pass's usage scope may not
+        * also be fetched as an indirect argument in that scope.
         */
         StorageBuffer = 2,
         // ConstantBuffer at register(b#, spaceN): constants that outgrow the 128-byte vertex-only

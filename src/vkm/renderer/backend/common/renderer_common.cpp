@@ -2,6 +2,8 @@
 
 #include <vkm/renderer/backend/common/renderer_common.h>
 
+#include <algorithm>
+
 namespace vkm
 {
     VkmResourceCreateInfo operator|(VkmResourceCreateInfo lhs, VkmResourceCreateInfo rhs)
@@ -140,8 +142,30 @@ namespace vkm
         }
     }
 
+    uint64_t vkmMipRangeByteSize(const glm::uvec3& baseExtent, uint32_t numArrayLayers, VkmFormat format,
+                                 uint32_t baseLevel, uint32_t levelCount)
+    {
+        const uint64_t bytesPerTexel = vkmBytesPerTexel(format);
+        if (bytesPerTexel == 0 || numArrayLayers == 0)
+        {
+            return 0;
+        }
+
+        uint64_t texels = 0;
+        for (uint32_t level = baseLevel; level < baseLevel + levelCount; ++level)
+        {
+            // Shifting by 32 or more is undefined, and a level that far down is 1x1 regardless.
+            const auto extentAt = [level](uint32_t extent) -> uint64_t {
+                return (level >= 32u) ? 1ull : std::max(1u, extent >> level);
+            };
+            texels += extentAt(baseExtent.x) * extentAt(baseExtent.y) * extentAt(baseExtent.z);
+        }
+        return texels * numArrayLayers * bytesPerTexel;
+    }
+
     uint64_t computeTextureByteSize(const VkmTextureInfo& info)
     {
-        return (uint64_t)info._extent.x * info._extent.y * info._extent.z * info._numArrayLayers * vkmBytesPerTexel(info._format);
+        return vkmMipRangeByteSize(info._extent, info._numArrayLayers, info._format,
+                                   /*baseLevel=*/0, std::max(1u, info._numMipLevels));
     }
 } // namespace vkm

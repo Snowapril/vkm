@@ -72,6 +72,7 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_geometry_pool.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/scene/scene_material_tables.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/scene/texture_streamer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/engine.h
 )
 
@@ -141,6 +142,7 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/scene/scene_geometry_pool.cpp
     ${SRC_DIR}/vkm/renderer/scene/scene.cpp
     ${SRC_DIR}/vkm/renderer/scene/scene_material_tables.cpp
+    ${SRC_DIR}/vkm/renderer/scene/texture_streamer.cpp
     ${SRC_DIR}/vkm/renderer/engine.cpp
 )
 
@@ -279,6 +281,7 @@ if (VKM_USE_METAL_API)
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_allocator.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_gpu_image_heap.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_sparse_tile_heap.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_bindless_resource_manager.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/backend/metal/metal_frame_constant_manager.h
     )
@@ -302,6 +305,7 @@ if (VKM_USE_METAL_API)
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_pool.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_gpu_heap_allocator.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_gpu_image_heap.mm
+        ${SRC_DIR}/vkm/renderer/backend/metal/metal_sparse_tile_heap.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_bindless_resource_manager.mm
         ${SRC_DIR}/vkm/renderer/backend/metal/metal_frame_constant_manager.mm
     )

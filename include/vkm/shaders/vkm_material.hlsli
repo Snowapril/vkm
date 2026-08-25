@@ -34,11 +34,27 @@
 #include "vkm_bindless.hlsli"
 
 // Mirrors vkm::VkmMaterialData (include/vkm/renderer/scene/scene.h), 64 bytes = 16 words.
-#define VKM_MATERIAL_WORD_STRIDE 16
+#define VKM_MATERIAL_WORD_STRIDE 20
 
 // A slot of this value means the material has no texture for that channel, so its factor stands
 // alone. Mirrors INVALID_VALUE32.
 #define VKM_MATERIAL_NO_TEXTURE 0xFFFFFFFFu
+
+// Levels a feedback entry can report, and the "nothing sampled this" value the buffer is cleared
+// to. Mirrors kVkmTextureFeedbackMaxLevel / kVkmTextureFeedbackUnused in texture_streamer.h.
+#define VKM_TEXTURE_FEEDBACK_MAX_LEVEL 15u
+#define VKM_TEXTURE_FEEDBACK_UNUSED    0xFFFFFFFFu
+
+/*
+* Only pixels on this stride vote, which is what makes the feedback write cheap enough to leave on
+* unconditionally rather than gate behind a permutation.
+*
+* Every pixel voting would serialise a great many atomics onto the handful of slots a large surface
+* covers, and buy nothing: the answer wanted is the *minimum* level over a surface, and a surface
+* thin enough to fall entirely between votes is one whose texture detail cannot matter. 4 gives one
+* vote per 16 pixels.
+*/
+#define VKM_TEXTURE_FEEDBACK_PIXEL_STRIDE 4u
 
 struct VkmMaterial
 {
@@ -52,7 +68,44 @@ struct VkmMaterial
     uint   metallicRoughnessSlot;
     uint   normalSlot;
     uint   emissiveSlot;
+    /*
+    * Finest mip level each channel's texture actually has memory for, in that texture's own level
+    * numbering, one component per slot in the same order. Zero unless the texture is sparse: a
+    * rebuilt texture is physically only as large as what it holds, so its level 0 is always
+    * backed, while a sparse one keeps its full extent and the levels streamed off the front read
+    * as blank. Passed to the sample as its min-LOD clamp, which is what keeps them unread.
+    */
+    float4 minLod;
 };
+
+/*
+* The base-colour texture's streamed mip range: words 10 and 11, which vkmLoadMaterial does not
+* read. x is the level the resident texture starts at, y how many levels its full chain has.
+*
+* Separate from VkmMaterial, and loaded by its own function, because only the streaming debug view
+* wants it: folding two more word loads into vkmLoadMaterial would charge every shader that
+* evaluates a material -- including the ray-tracing kernels, which do it per hit -- for a
+* visualisation none of them draws.
+*/
+#define VKM_MATERIAL_STREAMING_LOADER()                                                             \
+    float2 vkmLoadMaterialStreamingMip(uint materialPoolSlot, uint materialIndex)                   \
+    {                                                                                               \
+        const uint base = materialIndex * VKM_MATERIAL_WORD_STRIDE;                                 \
+        return float2(asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 10)),                        \
+                      asfloat(VKM_LOAD_VERTEX(materialPoolSlot, base + 11)));                       \
+    }
+
+/*
+* Green where the whole chain is resident through cool blue to red at the coarsest level, so a
+* surface that has streamed out reads as hot. A material with no streamed texture reports a chain
+* of one level and comes back green, which is what "nothing to stream" should look like.
+*/
+float3 vkmStreamingMipHeatColor(float2 streamingMip)
+{
+    const float lastLevel = max(streamingMip.y - 1.0, 1.0);
+    const float t = saturate(streamingMip.x / lastLevel);
+    return float3(t, 1.0 - t, 0.5 * saturate(1.0 - abs(t * 2.0 - 1.0)));
+}
 
 // Reads one material record out of the pool, which is an untyped u32 word array (it shares the
 // bindless Buffer array with the geometry pools) -- so this is a word unpack, the same shape
@@ -76,6 +129,10 @@ struct VkmMaterial
         material.metallicRoughnessSlot = VKM_LOAD_VERTEX(materialPoolSlot, base + 13);              \
         material.normalSlot            = VKM_LOAD_VERTEX(materialPoolSlot, base + 14);              \
         material.emissiveSlot          = VKM_LOAD_VERTEX(materialPoolSlot, base + 15);              \
+        material.minLod = float4(VKM_LOAD_VERTEX(materialPoolSlot, base + 16),                      \
+                                 VKM_LOAD_VERTEX(materialPoolSlot, base + 17),                      \
+                                 VKM_LOAD_VERTEX(materialPoolSlot, base + 18),                      \
+                                 VKM_LOAD_VERTEX(materialPoolSlot, base + 19));                     \
         return material;                                                                            \
     }
 
@@ -84,16 +141,19 @@ struct VkmMaterial
 #define VKM_MATERIAL_SAMPLERS()                                                                     \
     float4 vkmSampleBaseColor(VkmMaterial material, float2 uv)                                      \
     {                                                                                               \
-        return material.baseColorFactor * vkmSampleMaterialTexture(material.baseColorSlot, uv);     \
+        return material.baseColorFactor *                                                           \
+               vkmSampleMaterialTexture(material.baseColorSlot, uv, material.minLod.x);              \
     }                                                                                               \
     float2 vkmSampleMetallicRoughness(VkmMaterial material, float2 uv)                              \
     {                                                                                               \
-        const float4 s = vkmSampleMaterialTexture(material.metallicRoughnessSlot, uv);              \
+        const float4 s =                                                                            \
+            vkmSampleMaterialTexture(material.metallicRoughnessSlot, uv, material.minLod.y);        \
         return float2(material.metallic * s.b, material.roughness * s.g);                           \
     }                                                                                               \
     float3 vkmSampleEmissive(VkmMaterial material, float2 uv)                                       \
     {                                                                                               \
-        return material.emissiveFactor * vkmSampleMaterialTexture(material.emissiveSlot, uv).rgb;   \
+        return material.emissiveFactor *                                                            \
+               vkmSampleMaterialTexture(material.emissiveSlot, uv, material.minLod.w).rgb;           \
     }
 
 #if defined(VKM_BACKEND_WEBGPU)
@@ -121,6 +181,7 @@ struct VkmMaterial
     [[vk::binding(2, 3)]] SamplerState g_VkmMaterialSampler           : register(s0, space3);       \
     [[vk::binding(3, 3)]] Texture2D    g_VkmMaterialEmissive          : register(t2, space3);       \
     VKM_MATERIAL_LOADER()                                                                           \
+    VKM_MATERIAL_STREAMING_LOADER()                                                                 \
     float4 vkmSampleBaseColor(VkmMaterial material, float2 uv)                                      \
     {                                                                                               \
         return material.baseColorFactor *                                                           \
@@ -139,6 +200,29 @@ struct VkmMaterial
 #else
 
 /*
+* The min-LOD clamp is compiled in only where a texture can actually be sparse.
+*
+* A clamped Sample lowers to SPIR-V's MinLod image operand, whose capability requires
+* VkPhysicalDeviceFeatures::shaderResourceMinLod -- and a module declaring a capability the device
+* lacks fails vkCreateShaderModule outright, not just where the clamp is used. Real GPUs offer it;
+* lavapipe, which is what the Vulkan CI runs on, does not. So an unconditional clamp costs every
+* device that cannot do it the entire G-buffer pass, in exchange for a value that is always zero
+* wherever nothing is sparse.
+*
+* Sparse residency is Metal-only today, so Vulkan and WebGPU always clamp to zero and the operand is
+* dead there. Whoever implements vkQueueBindSparse owns this decision again, and will have a device
+* in hand to answer it with.
+*/
+#if defined(VKM_BACKEND_METAL)
+#define VKM_SAMPLE_MATERIAL_TEXTURE_CLAMPED(slot, uv, minLod)                                       \
+    return g_VkmMaterialTextures[NonUniformResourceIndex(slot)]                                     \
+        .Sample(g_VkmMaterialSampler, uv, int2(0, 0), minLod);
+#else
+#define VKM_SAMPLE_MATERIAL_TEXTURE_CLAMPED(slot, uv, minLod)                                       \
+    return g_VkmMaterialTextures[NonUniformResourceIndex(slot)].Sample(g_VkmMaterialSampler, uv);
+#endif
+
+/*
 * NonUniformResourceIndex is required, not decorative: one indirect draw covers many materials, so
 * the slot is divergent across a wave, and this is exactly the case Vulkan's descriptor-indexing
 * non-uniform rule exists for. Without it a wave whose lanes hit different materials may sample one
@@ -147,16 +231,50 @@ struct VkmMaterial
 #define VKM_MATERIAL_DECLARE()                                                                      \
     VKM_BINDLESS_TEXTURE_2D_ARRAY(g_VkmMaterialTextures);                                           \
     VKM_BINDLESS_SAMPLER(g_VkmMaterialSampler);                                                     \
-    float4 vkmSampleMaterialTexture(uint slot, float2 uv)                                           \
+    float4 vkmSampleMaterialTexture(uint slot, float2 uv, float minLod)                             \
     {                                                                                               \
         if (slot == VKM_MATERIAL_NO_TEXTURE)                                                        \
         {                                                                                           \
             return float4(1.0, 1.0, 1.0, 1.0);                                                      \
         }                                                                                           \
-        return g_VkmMaterialTextures[NonUniformResourceIndex(slot)].Sample(g_VkmMaterialSampler, uv); \
+        VKM_SAMPLE_MATERIAL_TEXTURE_CLAMPED(slot, uv, minLod)                                       \
     }                                                                                               \
     VKM_MATERIAL_LOADER()                                                                           \
+    VKM_MATERIAL_STREAMING_LOADER()                                                                 \
     VKM_MATERIAL_SAMPLERS()
+
+/*
+* Reports the mip level this pixel wanted, for texture streaming to read back.
+*
+* Deliberately NOT part of VKM_MATERIAL_DECLARE(): eight shaders expand that macro, and only the
+* pass that decides what is on screen should vote. The probe capture in particular must not --
+* probes look in every direction, so letting them vote would drag every texture to full resolution
+* and defeat streaming entirely.
+*
+* The level is relative to the texture actually sampled, which for a streamed texture is already
+* reduced. The CPU adds that slot's resident base mip to recover a chain-absolute level; doing it
+* that way keeps the reading correct even while a rebuild is in flight, and needs nothing extra in
+* the material record.
+*
+* InterlockedMin because the finest level any pixel needed is the one that matters -- a plain store
+* would let an arbitrary distant pixel win and leave the surface under-resolved.
+*
+* Place after VKM_MATERIAL_DECLARE() and VKM_BINDLESS_TEXTURE_FEEDBACK(); it reads both.
+*/
+#define VKM_MATERIAL_FEEDBACK_RECORDER(feedbackBuffer)                                              \
+    void vkmRecordTextureFeedback(uint slot, float2 uv)                                             \
+    {                                                                                               \
+        if (slot == VKM_MATERIAL_NO_TEXTURE)                                                        \
+        {                                                                                           \
+            return;                                                                                 \
+        }                                                                                           \
+        const float lod = g_VkmMaterialTextures[NonUniformResourceIndex(slot)]                      \
+                              .CalculateLevelOfDetail(g_VkmMaterialSampler, uv);                    \
+        uint previous;                                                                              \
+        InterlockedMin(feedbackBuffer[slot],                                                        \
+                       (uint)clamp(round(lod), 0.0, (float)VKM_TEXTURE_FEEDBACK_MAX_LEVEL),         \
+                       previous);                                                                   \
+    }
 
 #endif
 
