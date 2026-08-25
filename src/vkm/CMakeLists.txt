@@ -62,6 +62,8 @@ set(PUBLIC_HDRS
     ${PUBLIC_HDR_DIR}/vkm/renderer/path_tracer.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/indirect_pass.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/restir.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/deferred_lighting.h
+    ${PUBLIC_HDR_DIR}/vkm/renderer/shadow_atlas.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/gi_composite.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/gi_system.h
     ${PUBLIC_HDR_DIR}/vkm/renderer/probe_volume.h
@@ -127,6 +129,8 @@ set(SRCS
     ${SRC_DIR}/vkm/renderer/path_tracer.cpp
     ${SRC_DIR}/vkm/renderer/indirect_pass.cpp
     ${SRC_DIR}/vkm/renderer/restir.cpp
+    ${SRC_DIR}/vkm/renderer/deferred_lighting.cpp
+    ${SRC_DIR}/vkm/renderer/shadow_atlas.cpp
     ${SRC_DIR}/vkm/renderer/gi_composite.cpp
     ${SRC_DIR}/vkm/renderer/gi_system.cpp
     ${SRC_DIR}/vkm/renderer/scene/light_table.cpp
@@ -146,6 +150,7 @@ if (VKM_ENABLE_IMGUI)
     list(APPEND PUBLIC_HDRS
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/imgui_renderer.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/imgui_canvas.h
+        ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/imgui_settings.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/render_graph_inspector.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/texture_browser.h
         ${PUBLIC_HDR_DIR}/vkm/renderer/imgui/memory_inspector.h
@@ -158,6 +163,7 @@ if (VKM_ENABLE_IMGUI)
     list(APPEND SRCS
         ${SRC_DIR}/vkm/renderer/imgui/imgui_renderer.cpp
         ${SRC_DIR}/vkm/renderer/imgui/imgui_canvas.cpp
+        ${SRC_DIR}/vkm/renderer/imgui/imgui_settings.cpp
         ${SRC_DIR}/vkm/renderer/imgui/render_graph_inspector.cpp
         ${SRC_DIR}/vkm/renderer/imgui/texture_browser.cpp
         ${SRC_DIR}/vkm/renderer/imgui/memory_inspector.cpp

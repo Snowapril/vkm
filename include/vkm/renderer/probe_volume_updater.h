@@ -74,6 +74,16 @@ namespace vkm
             // view must give them different indices: a probe looks in every direction, so the two
             // cannot share a cull result.
             uint32_t _cullViewIndex = 0u;
+            /*
+            * @brief The shadow atlas the capture consults, if the caller has one.
+            * @details Handles rather than a VkmShadowAtlas reference, and optional: per-pass
+            * tables are immutable, so what the capture binds has to be known at initialize(),
+            * and an updater used without shadows must still bind something. Leave these invalid
+            * and the updater creates a 1x1 sentinel of its own, which reads as "nothing
+            * occludes" -- so no caller is forced to own an atlas to refresh probes.
+            */
+            VkmResourceHandle _shadowAtlasTexture{ VKM_INVALID_RESOURCE_HANDLE };
+            VkmResourceHandle _shadowAtlasConstants{ VKM_INVALID_RESOURCE_HANDLE };
         };
 
         // Face tiles per capture-atlas row. Six faces land as a 3x2 block per probe, which keeps the
@@ -85,8 +95,8 @@ namespace vkm
         * @details Metal and WebGPU hand out a push-constant ring entry per setPushConstants() call.
         * The capture pass pushes once per (probe, face, batch) and the blend pass once per
         * (probe, atlas), so a single-batch frame costs 6*budget + 2*budget entries. Each frame slot
-        * gets its own region of kVkmPushConstantRingEntryCount (1024) entries, rewound every frame,
-        * so this bounds one frame's pushes: 1024 / 8 = 128.
+        * gets its own region of kVkmPushConstantRingEntryCount entries, rewound every frame, so
+        * this bounds one frame's pushes at a single batch: 1024 / 8 = 128.
         * A scene with more than one draw batch costs proportionally more and has to lower the
         * budget itself, the capture's push count scaling with a batch count only the caller knows.
         */
@@ -140,6 +150,31 @@ namespace vkm
         * @param probeIndex Linear probe index; out-of-range indices are ignored.
         */
         void invalidateProbe(uint32_t probeIndex);
+
+        /*
+        * @brief Tells the capture which light to shade with and where its shadow tile is.
+        * @details Separate from initialize() because a shadow tile is assigned by
+        * VkmShadowAtlas::allocate, which cannot run until the scene is built -- long after the
+        * capture's immutable table was created. Only the constant buffer's contents change here,
+        * never its binding.
+        * @param sun The directional light, with its _shadowTile filled in.
+        * @param tilesPerRow Shadow atlas tiles per row; 0 disables the lookup.
+        * @param tileSize Shadow atlas tile size in texels.
+        */
+        void setShadowSun(const VkmPunctualLight& sun, uint32_t tilesPerRow, uint32_t tileSize);
+
+        /*
+        * @brief Changes how many probes a frame refreshes.
+        * @details The capture draws once per (probe, face, batch), so this is the tier's frame
+        * cost dial and its convergence dial at the same time -- halving it halves the pass and
+        * doubles the round. Clamped to the budget initialize() was given, which is what the
+        * push-constant ring was sized against; raising past that would overflow the ring.
+        * @param budget Probes per frame; 0 is treated as 1.
+        */
+        void setBudget(uint32_t budget);
+
+        // The largest budget setBudget() will accept: the one initialize() validated.
+        inline uint32_t getMaxBudget() const { return _maxBudget; }
 
         // Frames a full sweep of the grid takes at the current budget.
         uint32_t getRoundLengthInFrames() const;
@@ -204,7 +239,20 @@ namespace vkm
         // A probe's first refresh blends against a cleared cell, so it takes the capture whole
         // instead of 3% of it. Without this every probe would spend a full convergence just
         // climbing out of black.
+        // Bound when the caller supplied no atlas: one texel holding the far sentinel, so the
+        // lookup reads "nothing occludes" rather than the table having an unbound entry.
+        VkmResourceHandle _shadowStubTexture{ VKM_INVALID_RESOURCE_HANDLE };
+        VkmResourceHandle _shadowStubConstants{ VKM_INVALID_RESOURCE_HANDLE };
+        VkmProbeCaptureConstants _captureConstantValues{};
+        /*
+        * Frustum planes of the six capture faces, in PROBE-RELATIVE space -- the space the face
+        * matrices are built in, so one set serves every probe. A batch is tested by offsetting its
+        * centre by the probe's position rather than by rebuilding the planes per probe.
+        */
+        glm::vec4 _facePlanes[6][6]{};
+
         std::vector<bool> _everRefreshed;
+        uint32_t _maxBudget = 1u;
         uint32_t _cursor = 0;
         // The atlases are cleared by the first blend pass's load action rather than by a pass of
         // their own. It has to happen: on Vulkan the first render pass transitions them from

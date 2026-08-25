@@ -2,6 +2,8 @@
 
 #include <vkm/renderer/probe_volume_updater.h>
 
+#include <vkm/renderer/shadow_atlas.h>
+
 #include <vkm/base/common.h>
 #include <vkm/renderer/backend/common/buffer.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
@@ -36,23 +38,6 @@ namespace vkm
             return false;
         }
 
-        /*
-        * @brief The six axis-aligned planes of `min`..`max`, in the engine's inward-facing form.
-        *
-        * A probe sees in every direction and all six of its faces share one cull result, so the
-        * capture cannot be culled by any single frustum -- a box around the probes being refreshed
-        * is the tightest correct test available.
-        */
-        void buildBoxPlanes(const glm::vec3& boxMin, const glm::vec3& boxMax, glm::vec4* outPlanes)
-        {
-            // Same sign convention scene_cull.hlsl tests with: dot(n, c) + w < -radius rejects.
-            outPlanes[0] = glm::vec4(1.0f, 0.0f, 0.0f, -boxMin.x);
-            outPlanes[1] = glm::vec4(-1.0f, 0.0f, 0.0f, boxMax.x);
-            outPlanes[2] = glm::vec4(0.0f, 1.0f, 0.0f, -boxMin.y);
-            outPlanes[3] = glm::vec4(0.0f, -1.0f, 0.0f, boxMax.y);
-            outPlanes[4] = glm::vec4(0.0f, 0.0f, 1.0f, -boxMin.z);
-            outPlanes[5] = glm::vec4(0.0f, 0.0f, -1.0f, boxMax.z);
-        }
     } // namespace
 
     VkmProbeVolumeUpdater::~VkmProbeVolumeUpdater()
@@ -66,6 +51,21 @@ namespace vkm
         {
             _everRefreshed[probeIndex] = false;
         }
+    }
+
+    void VkmProbeVolumeUpdater::setShadowSun(const VkmPunctualLight& sun, uint32_t tilesPerRow,
+                                             uint32_t tileSize)
+    {
+        VKM_ASSERT(isValid(), "VkmProbeVolumeUpdater::setShadowSun requires an initialized updater");
+
+        _captureConstantValues._sun = sun;
+        // Zero either dimension and the shader skips the lookup, which is what an updater with no
+        // atlas leaves in place.
+        const bool usable = _descriptor._shadowAtlasTexture.isValid() && tilesPerRow > 0u && tileSize > 0u;
+        _captureConstantValues._shadowParams =
+            usable ? glm::uvec4(tilesPerRow, tileSize, 0u, 0u) : glm::uvec4(0u);
+        _driver->uploadToBuffer(_captureConstants, &_captureConstantValues,
+                                sizeof(_captureConstantValues));
     }
 
     uint32_t VkmProbeVolumeUpdater::getRoundLengthInFrames() const
@@ -129,6 +129,7 @@ namespace vkm
         _driver = driver;
         _volume = volume;
         _descriptor = descriptor;
+        _maxBudget = std::max(descriptor._budget, 1u);
         _descriptor._budget = std::min(descriptor._budget, volume->getProbeCount());
 
         // Derive the probe range from the volume unless the caller pinned it. These are world-space
@@ -234,13 +235,49 @@ namespace vkm
             return true;
         };
 
-        VkmProbeCaptureConstants captureConstants{};
+        _captureConstantValues = VkmProbeCaptureConstants{};
         vkmBuildProbeFaceViewProjections(glm::vec3(0.0f), _descriptor._nearZ, _descriptor._farZ,
-                                         captureConstants._faceViewProjection);
-        if (!createAndUpload(&captureConstants, sizeof(captureConstants), "VkmProbeCaptureConstants",
-                             _captureConstants))
+                                         _captureConstantValues._faceViewProjection);
+        // From the same matrices the capture renders with, so a batch this rejects is one the face
+        // would have clipped away anyway.
+        for (uint32_t face = 0; face < 6u; ++face)
+        {
+            vkmExtractFrustumPlanes(_captureConstantValues._faceViewProjection[face], _facePlanes[face]);
+        }
+        if (!createAndUpload(&_captureConstantValues, sizeof(_captureConstantValues),
+                             "VkmProbeCaptureConstants", _captureConstants))
         {
             return fail(outError, "Failed to create the probe capture constant buffer");
+        }
+
+        // No atlas from the caller: bind a sentinel of our own rather than leaving a table entry
+        // unbound, which is a validation error on every backend. One texel reading the far
+        // sentinel means "nothing occludes", and _shadowParams stays zero so the lookup is
+        // skipped outright.
+        if (!_descriptor._shadowAtlasTexture.isValid() || !_descriptor._shadowAtlasConstants.isValid())
+        {
+            VkmTextureInfo stubInfo{};
+            stubInfo._flags = static_cast<VkmResourceCreateInfo>(
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
+                static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst));
+            stubInfo._extent = glm::uvec3(1, 1, 1);
+            stubInfo._numMipLevels = 1;
+            stubInfo._numArrayLayers = 1;
+            stubInfo._format = VkmFormat::R16G16B16A16_SFLOAT;
+            stubInfo._debugName = "VkmProbeShadowStub";
+            VkmTexture* stub = _driver->newTexture(stubInfo);
+            if (stub == nullptr)
+            {
+                return fail(outError, "Failed to create the probe capture's shadow stub texture");
+            }
+            _shadowStubTexture = stub->getHandle();
+
+            const VkmShadowAtlasConstants zeroed{};
+            if (!createAndUpload(&zeroed, sizeof(zeroed), "VkmProbeShadowStubConstants",
+                                 _shadowStubConstants))
+            {
+                return fail(outError, "Failed to create the probe capture's shadow stub constants");
+            }
         }
 
         const glm::uvec2 captureExtent = getCaptureAtlasExtent();
@@ -294,7 +331,18 @@ namespace vkm
                 return fail(outError, "A probe_capture_pso vertex-layout permutation is missing");
             }
             _capturePipelines[preset] = pipeline;
-            if (!buildTable(pipeline, {{ 0, _captureConstants }}, _captureTables[preset]))
+            const VkmResourceHandle shadowTexture = _descriptor._shadowAtlasTexture.isValid()
+                                                       ? _descriptor._shadowAtlasTexture
+                                                       : _shadowStubTexture;
+            const VkmResourceHandle shadowConstants = _descriptor._shadowAtlasConstants.isValid()
+                                                          ? _descriptor._shadowAtlasConstants
+                                                          : _shadowStubConstants;
+            if (!buildTable(pipeline,
+                            {{ 0, _captureConstants },
+                             { 1, shadowTexture },
+                             { 2, _sampler },
+                             { 3, shadowConstants }},
+                            _captureTables[preset]))
             {
                 return false;
             }
@@ -360,6 +408,8 @@ namespace vkm
         release(_captureDepth);
         release(_sampler);
         release(_captureConstants);
+        release(_shadowStubTexture);
+        release(_shadowStubConstants);
         release(_irradianceBlendConstants);
         release(_distanceBlendConstants);
 
@@ -369,11 +419,17 @@ namespace vkm
         _driver = nullptr;
         _volume = nullptr;
         _descriptor = Descriptor{};
+        _maxBudget = 1u;
         _slice.clear();
         _sliceHysteresis.clear();
         _everRefreshed.clear();
         _cursor = 0;
         _atlasesCleared = false;
+    }
+
+    void VkmProbeVolumeUpdater::setBudget(uint32_t budget)
+    {
+        _descriptor._budget = std::clamp(budget, 1u, _maxBudget);
     }
 
     void VkmProbeVolumeUpdater::advanceSlice()
@@ -441,7 +497,7 @@ namespace vkm
         boxMax += glm::vec3(_descriptor._farZ);
 
         VkmFrameData probeFrameData = frameData;
-        buildBoxPlanes(boxMin, boxMax, probeFrameData._frustumPlanes);
+        vkmBuildBoxPlanes(boxMin, boxMax, probeFrameData._frustumPlanes);
 
         const uint32_t frameIndex = renderGraph->frameIndex();
         const auto referenceScene = [&sceneResources, scene](VkmRenderSubGraph* subGraph,
@@ -522,7 +578,27 @@ namespace vkm
                             _materialTables[static_cast<uint32_t>(batch._layout)].bind(cb, batch._materialIndex);
                             cb->setPushConstants(&push, sizeof(push));
                         },
-                        _descriptor._cullViewIndex);
+                        _descriptor._cullViewIndex,
+                        // Per face, not per frame: the GPU cull runs once for the whole slice, so
+                        // without this every face redraws every batch the slice's box kept --
+                        // including the five sixths of the scene behind it.
+                        [this, face, probePosition](const VkmScene::DrawBatch& batch) {
+                            // A batch with no bounds has to be drawn: radius 0 at the origin would
+                            // reject a batch that is merely unmeasured.
+                            if (batch._boundsRadius <= 0.0f)
+                            {
+                                return true;
+                            }
+                            const glm::vec3 relative = batch._boundsCenter - probePosition;
+                            for (const glm::vec4& plane : _facePlanes[face])
+                            {
+                                if (glm::dot(glm::vec3(plane), relative) + plane.w < -batch._boundsRadius)
+                                {
+                                    return false;
+                                }
+                            }
+                            return true;
+                        });
                 }
             }
         });

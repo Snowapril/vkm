@@ -49,6 +49,42 @@ namespace vkm
                   "VkmLightTableHeader must match VKM_LIGHT_HEADER_WORDS in vkm_lights.hlsli");
 
     /*
+    * @brief One placed punctual light, as every GPU consumer sees it.
+    * @details A VkmScenePunctualLight resolved against its node's world transform, with the
+    * colour and intensity already multiplied together so a shader never has to know glTF's
+    * split. Directional lights carry a meaningless position and point lights a meaningless
+    * direction; both stay finite rather than zeroed so no consumer divides by them.
+    * 64 bytes, matching VkmLightTableTriangle's stride, so the two can share a blob if the
+    * traced tier ever reads punctual lights (see TODO.md).
+    */
+    struct VkmPunctualLight
+    {
+        float _positionWorld[3] = { 0.0f, 0.0f, 0.0f };
+        // glTF's range: the distance past which the light contributes nothing. 0 = unlimited.
+        float _range = 0.0f;
+        float _directionWorld[3] = { 0.0f, 0.0f, -1.0f };
+        // Cosine of the spot's outer cone half-angle. 1 would be a degenerate zero-width cone,
+        // so a non-spot carries -1: every direction is inside it.
+        float _cosOuter = -1.0f;
+        float _radiance[3] = { 0.0f, 0.0f, 0.0f }; // colour * intensity
+        float _cosInner = -1.0f;
+        uint32_t _type = 0; // VkmLightType
+        // Index of this light's first tile in the shadow atlas, or -1 when it casts none.
+        int32_t _shadowTile = -1;
+        /*
+        * @brief How many consecutive tiles from _shadowTile this light owns.
+        * @details Six for a point light, one per cube face; one for a spot; and one per cascade
+        * for a directional light. Explicit rather than implied by the type, because the cascade
+        * count is a runtime choice and a lookup that assumed one would silently read a
+        * neighbouring light's tile.
+        */
+        uint32_t _shadowTileCount = 0u;
+        float _pad = 0.0f;
+    };
+    static_assert(sizeof(VkmPunctualLight) == 64,
+                  "VkmPunctualLight must match VkmPunctualLight in shaders/vkm_punctual_lights.hlsli");
+
+    /*
     * @brief Appends one triangle record per triangle of `mesh`, in object space.
     * @details Positions are read through the mesh's own vertex layout; `_area` and `_cdf` are
     * left zero — they are meaningless before the world transform is applied, which is

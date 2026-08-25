@@ -112,8 +112,15 @@ namespace vkm
     * safe only because a slot's region is rewritten after that slot's render graph has been waited
     * on. It is a budget callers plan against: a pass that pushes per (item, sub-item, batch), like
     * the probe capture, can reach it.
+    *
+    * Sized so the probe capture can actually run at its own default budget. It pushes per
+    * (probe, face, batch), so 32 probes across Sponza's 25 batches costs 6*32*25 + 2*32 = 4864
+    * entries, and the shadow atlas reserves a few hundred more. At 1024 the clamp cut the budget
+    * to 4, which multiplies every probe convergence time by eight and leaves a scene looking
+    * unlit rather than looking wrong. An entry is kVkmBindlessPushConstantSize bytes, so the
+    * whole ring is 8192 * 128 * FRAME_BUFFER_COUNT = 3 MiB.
     */
-    inline constexpr uint32_t kVkmPushConstantRingEntryCount = 1024;
+    inline constexpr uint32_t kVkmPushConstantRingEntryCount = 8192;
 
     // Total entries the ring buffer holds: one region per frame slot.
     inline constexpr uint32_t kVkmPushConstantRingTotalEntryCount =

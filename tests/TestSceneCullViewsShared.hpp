@@ -102,7 +102,9 @@ namespace vkmtest
         scene.setObjectTransform(0, glm::mat4(1.0f));
 
         // The fixture triangle spans x,y in [0,1] at z = 0. One camera in front of it, one behind
-        // and facing away, so the same object is inside exactly one of the two frusta.
+        // and facing away, so the same object is inside exactly one of the two frusta. The third
+        // view is culled against a BOX rather than a frustum -- the shape a probe refresh and a
+        // shadow atlas pass both need, since neither draws from a single eye.
         const glm::mat4 projection = glm::perspectiveRH_ZO(glm::radians(60.0f), 1.0f, 0.1f, 50.0f);
         const glm::mat4 looking =
             projection * glm::lookAtRH(glm::vec3(0.5f, 0.5f, -3.0f), glm::vec3(0.5f, 0.5f, 0.0f),
@@ -115,6 +117,14 @@ namespace vkmtest
         vkm::vkmExtractFrustumPlanes(looking, seeing._frustumPlanes);
         vkm::VkmFrameData blind;
         vkm::vkmExtractFrustumPlanes(lookingAway, blind._frustumPlanes);
+        // A box that contains the triangle outright.
+        vkm::VkmFrameData boxed;
+        vkm::vkmBuildBoxPlanes(glm::vec3(-1.0f, -1.0f, -1.0f), glm::vec3(2.0f, 2.0f, 1.0f),
+                               boxed._frustumPlanes);
+        // And one well away from it, to prove the box is tested rather than ignored.
+        vkm::VkmFrameData boxedAway;
+        vkm::vkmBuildBoxPlanes(glm::vec3(20.0f, 20.0f, 20.0f), glm::vec3(21.0f, 21.0f, 21.0f),
+                               boxedAway._frustumPlanes);
 
         std::vector<vkm::VkmResourceAccessDeclaration> referenced;
 
@@ -124,9 +134,10 @@ namespace vkmtest
         updateSubGraph->addReferencedResources(referenced);
         // Both views published in one subgraph, which is the arrangement a GI frame uses: it means
         // neither cull ever writes frame data the other has already read.
-        updateSubGraph->setTransferCallback([&scene, seeing, blind](vkm::VkmCommandBufferBase* commandBuffer) {
+        updateSubGraph->setTransferCallback([&scene, seeing, blind, boxed](vkm::VkmCommandBufferBase* commandBuffer) {
             scene.recordUpdate(commandBuffer, /*frameIndex=*/0, seeing, /*viewIndex=*/0);
             scene.recordUpdate(commandBuffer, /*frameIndex=*/0, blind, /*viewIndex=*/1);
+            scene.recordUpdate(commandBuffer, /*frameIndex=*/0, boxed, /*viewIndex=*/2);
         });
 
         auto* cullSubGraph = renderGraph.beginComputeSubGraph("CullViewsCull");
@@ -136,6 +147,7 @@ namespace vkmtest
         cullSubGraph->setComputeCallback([&scene](vkm::VkmCommandBufferBase* commandBuffer) {
             scene.recordCull(commandBuffer, /*viewIndex=*/0);
             scene.recordCull(commandBuffer, /*viewIndex=*/1);
+            scene.recordCull(commandBuffer, /*viewIndex=*/2);
         });
 
         renderGraph.compile();
@@ -144,6 +156,9 @@ namespace vkmtest
 
         CHECK(readVisibleCountForView(driver, scene, /*viewIndex=*/0) == 1);
         CHECK(readVisibleCountForView(driver, scene, /*viewIndex=*/1) == 0);
+        // Three views recorded in one frame, each with its own count region: the third is what a
+        // shadow pass will use, and it must not have been overwritten by either of the first two.
+        CHECK(readVisibleCountForView(driver, scene, /*viewIndex=*/2) == 1);
 
         scene.destroy(driver);
     }

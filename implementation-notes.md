@@ -5462,6 +5462,7 @@ driver, which is why the collectors take a summary list rather than a pool.
 ### Deviations
 
 (none)
+<<<<<<< HEAD
 
 ### CI caught three things a Debug-only, single-device run could not
 
@@ -5525,3 +5526,72 @@ now sparse and mapping updates are queue operations: a copy running ahead of the
 its level would look exactly like this. `virtual_texturing.md` §10 already records that the
 `MTLStageResourceState` barrier the header asks for was "not observed to be required" rather than
 shown unnecessary — this is the first evidence that the question is still open.
+=======
+## 2026-08-22 — Punctual lights and shadow maps
+
+Point and spot lights did not exist in the engine at all; the raster tier cast no shadow of any
+kind. Five commits on `shadow-maps`. Deviations from the plan, and the constraints that forced
+them:
+
+- **The atlas is RGBA16F holding linear world distance, not a depth texture and not a
+  single-channel float.** The plan's first instinct — add `VkmFormat::R32_SFLOAT` — was wrong
+  twice: no single-channel format exists in the engine at all, and `r32float`/`rgba32float` are
+  non-filterable in core WebGPU while the per-pass bind-group layout hardcodes a filterable float
+  sample type. RGBA16F distance is what `probe_capture` already renders on all three backends.
+- **An atlas, not a texture array or cube map, is the only expressible shape.** No attachment
+  descriptor carries a slice or face index, Vulkan pins `layerCount` to 1, Metal never sets
+  `renderTargetArrayLength`, and there is no `SV_RenderTargetArrayIndex` or geometry stage.
+- **Bias is in-shader.** `VkmRasterizationStateDescriptor` has no depth bias, slope factor or
+  depth clamp, and the compared value is a colour attachment's contents rather than the
+  rasterizer's depth, so a hardware bias would not touch it.
+- **The shadow pass indexes FrameData by its own cull view.** Every other scene shader reads
+  `g_FrameData[0]`, which is safe only because the camera publishes view 0 first. That holds in a
+  full frame and fails anywhere else — here `materialPoolSlot` read garbage and the alpha test
+  discarded every fragment.
+- **Distance is computed per fragment, not interpolated.** Distance is not linear across a
+  triangle. The gate's fixture has three equidistant vertices, so the interpolated value was
+  constant at 4.06 while the true distance dips to 4.00 under the light.
+- **Two pre-existing defects surfaced.** The deferred lighting test's linearity assertion was
+  vacuous — the fixture's shading normal faces -Z while the light shone from +Z, so the lit term
+  was zero and "doubling the light doubles the result" compared 0 against 0. And
+  `buildBoxPlanes`' sign convention was asserted nowhere despite `scene_cull.hlsl` depending on
+  it.
+- **Two things about testing this, both non-obvious.** A light directly above an occluder cannot
+  be gated from a top-down camera: the camera sees the occluder's lit top face where the umbra is
+  and never the floor beneath. And the camera must be perspective —
+  `vkmReconstructWorldPosition` walks `cameraDistance` along a ray from `cameraPositionWorld`,
+  which is a pinhole construction, so under an orthographic projection the reconstruction is
+  correct only at the image centre and drifts outward, reading exactly like a broken lookup.
+- **`probe_capture` consults the atlas, and the ownership question resolved without a new owner.**
+  The atlas stays with the caller; `VkmProbeVolumeUpdater::Descriptor` takes *handles*, not a
+  `VkmShadowAtlas&`, because a per-pass table is immutable and must name what it binds at
+  `initialize()`. Leave them invalid and the updater builds a 1x1 far-sentinel of its own, so no
+  caller is forced to own an atlas to refresh probes. `VkmGiSystem` forwards the handles without
+  owning anything. The sun's tile is only known after `VkmShadowAtlas::allocate`, long after the
+  table was built, so `setShadowSun` rewrites the constant buffer's contents rather than its
+  binding.
+
+
+## 2026-08-22 — ImGui font scale slider with local persistence
+
+- New `imgui_settings.{h,cpp}` (two free functions, no state -- the value lives in
+  `ImGuiStyle::FontScaleMain`): `vkmLoadImGuiSettings()` seeds the atlas and applies the cached
+  scale, `vkmDrawImGuiFontScaleSlider()` submits the slider and writes on drag end.
+- Cached as JSON at `$HOME/.vkm/ui_settings.json` (`%APPDATA%/vkm/` on Windows); no cache under
+  Emscripten, whose MEMFS is recreated every run.
+- `VkmEngine::addSwapChain` calls the loader right after the ImGui renderer initializes (context
+  alive, no frame opened yet); `renderDebugOverlay` hosts the slider, so every sample gets it.
+- Font only (`FontScaleMain`), not `ImGuiStyle::ScaleAllSizes`: widget padding stays at 1x.
+  ImGui 1.92's dynamic font system re-rasterizes on change and all three backends already set
+  `ImGuiBackendFlags_RendererHasTextures`, so no atlas plumbing was needed.
+- `AddFontDefaultVector()` is called explicitly. `AddFontDefault()` picks the bitmap ProggyClean
+  below an effective 15px and the vector ProggyForever above it, deciding once from whatever
+  scale is in effect when the font is added -- but the scale is the user's to move at any time.
+
+### Deviations
+
+- **Planned:** write `style.FontScaleMain` to the cache file as-is.
+  **Done instead:** rounded to two decimals before serializing.
+  **Why:** a float widened to double serializes as `1.2400000095367432`. Two decimals is exactly
+  what the slider displays, and keeps a file a user may hand-edit readable.
+>>>>>>> origin/main

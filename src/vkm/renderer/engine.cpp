@@ -32,6 +32,7 @@
 
 #if defined(VKM_ENABLE_IMGUI)
 #include <vkm/renderer/imgui/imgui_renderer.h>
+#include <vkm/renderer/imgui/imgui_settings.h>
 #if defined(VKM_USE_VULKAN_API)
 #include <vkm/renderer/imgui/vulkan_imgui_renderer.h>
 #include <vkm/renderer/backend/vulkan/vulkan_driver.h>
@@ -506,6 +507,9 @@ namespace vkm
 #endif
             const bool imGuiInitialized = _imGuiRenderer->initialize(windowInfo._windowHandle, backBufferFormat);
             VKM_ASSERT(imGuiInitialized, "Failed to initialize ImGui renderer");
+            // The context exists and no frame has opened yet, which is what the font atlas and
+            // style the cached settings touch require.
+            vkmLoadImGuiSettings();
             _imGuiWindowIndex = windowIndex;
         }
 #else
@@ -678,6 +682,9 @@ namespace vkm
 #if defined(VKM_USE_METAL_API) && defined(VKM_GPU_CAPTURE)
         ImGui::Text("F9: capture GPU frame (.gputrace)");
 #endif
+
+        ImGui::Separator();
+        vkmDrawImGuiFontScaleSlider();
         ImGui::End();
     }
 #endif

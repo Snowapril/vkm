@@ -18,6 +18,8 @@
 
 #include "vkm_bindless.hlsli"
 #include "vkm_material.hlsli"
+#include "vkm_punctual_lights.hlsli"
+#include "vkm_shadow.hlsli"
 
 // Deliberately not scene_common.hlsli: that header also declares the compute-only read-write
 // singletons, which a render pipeline must never declare (see vkm_bindless.hlsli).
@@ -54,6 +56,12 @@ struct FrameData
 struct ProbeCaptureConstants
 {
     float4x4 faceViewProjection[6];
+    // The sun as a light record rather than a bare direction: the shadow lookup takes one, and
+    // its shadowTile is only known once VkmShadowAtlas has assigned tiles.
+    VkmPunctualLight sun;
+    // x = shadow atlas tiles per row, y = tile size in texels. Either zero disables the lookup,
+    // which is what an updater with no atlas leaves in place.
+    uint4 shadowParams;
 };
 
 // Mirrors vkm::VkmProbeCapturePushConstants. Everything genuinely per-probe fits in 16 bytes,
@@ -71,6 +79,11 @@ VKM_BINDLESS_FRAME_DATA(FrameData, g_FrameData);
 VKM_MATERIAL_DECLARE();
 
 [[vk::binding(0, 2)]] ConstantBuffer<ProbeCaptureConstants> g_Capture : register(b0, space2);
+[[vk::binding(1, 2)]] Texture2D    g_ShadowAtlas   : register(t0, space2);
+[[vk::binding(2, 2)]] SamplerState g_ShadowSampler : register(s0, space2);
+[[vk::binding(3, 2)]] ConstantBuffer<VkmShadowAtlasConstants> g_ShadowAtlasConstants : register(b1, space2);
+
+VKM_SHADOW_LOADER(g_ShadowAtlas, g_ShadowSampler, g_ShadowAtlasConstants);
 
 #if defined(VKM_VERTEX_LAYOUT_STANDARD_PBR)
     #define VERTEX_STRIDE_WORDS 16
@@ -93,6 +106,10 @@ struct VSOutput
     [[vk::location(1)]] float3 worldNormal : NORMAL0;
     [[vk::location(2)]] nointerpolation uint materialIndex : TEXCOORD1;
     [[vk::location(3)]] float2 uv : TEXCOORD2;
+    // The probe position the offsets above are relative to. Carried as a varying for the same
+    // reason they are relative in the first place: the fragment stage cannot read the push
+    // constant that holds it. Constant across the primitive, so it interpolates to itself.
+    [[vk::location(4)]] nointerpolation float3 probePositionWorld : TEXCOORD3;
 };
 
 float3 loadFloat3(uint slot, uint wordBase)
@@ -147,6 +164,7 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
     VSOutput output;
     output.position = mul(g_Capture.faceViewProjection[g_Face.faceIndex], float4(probeRelative, 1.0));
     output.probeRelativePosition = probeRelative;
+    output.probePositionWorld = g_Face.probePositionWorld;
     output.worldNormal = mul((float3x3)obj.normalTransform, fetchNormal(obj, wordBase));
     output.materialIndex = obj.materialIndex;
     output.uv = fetchUV(obj, wordBase);
@@ -175,10 +193,23 @@ float4 PSMain(VSOutput input) : SV_TARGET0
     const float3 baseColor = sampledBaseColor.rgb;
     const float nDotL = saturate(dot(normal, normalize(g_FrameData[0].lightDirection.xyz)));
 
+    // Shadowed, and this is the term that decides whether the probe tier over-reports indoors: a
+    // probe that captures a sunlit wall it cannot actually see the sun from hands that brightness
+    // to every surface around it. The lookup wants a world position and this shader works in
+    // probe-relative space, so the probe's own position -- already pushed per draw -- puts it
+    // back. Zero shadowParams skips the lookup entirely, for a capture with no atlas.
+    float visibility = 1.0;
+    if (g_Capture.shadowParams.x > 0u && g_Capture.shadowParams.y > 0u)
+    {
+        const float3 worldPosition = input.probeRelativePosition + input.probePositionWorld;
+        visibility = vkmShadowFactor(g_Capture.sun, worldPosition, geometricNormal, nDotL,
+                                     g_Capture.shadowParams.x, g_Capture.shadowParams.y);
+    }
+
     // Lambert only. A probe records low-frequency incoming radiance, and the specular lobe of a
     // surface the probe happens to see says nothing useful about the directions it will be asked
     // about later.
-    const float3 radiance = baseColor * nDotL;
+    const float3 radiance = baseColor * nDotL * visibility;
 
     return float4(radiance, length(input.probeRelativePosition));
 }
