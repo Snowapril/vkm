@@ -5492,3 +5492,36 @@ Two more, both from CI building **Release** where local runs were Debug-only:
 
 **Standing lesson:** run at least one Release build before pushing a branch that adds a shader
 capability or a template call across a TU boundary. Debug on one device hides all three of these.
+
+### The Ubuntu Vulkan CI failure was a read of uninitialized memory, on main
+
+**Symptom:** three `Failed to initialize texture`, then `gbuffer.initialize` returning false and a
+SIGSEGV, on Ubuntu 22.04 + lavapipe. One of four compiler configs on `main`; all four on this branch.
+No `VkResult`, no validation error — it never reached Vulkan at all.
+
+**Cause:** `VkmRenderResource::_handle` is never initialized. `VkmResourceHandle::id` has no default
+member initializer and the constructor does not set it, so the member is whatever the allocator last
+left there. `initializeCommon` then checked **`_handle.isValid()`** — the member, before assignment —
+rather than the handle being passed in. It therefore passed whenever the garbage was not
+`(uint64_t)-1` and failed when it was.
+
+That explains every part of the shape: no driver error because Vulkan was never called; different
+compilers and optimisation levels disagreeing; and this branch tipping three more configs over simply
+by allocating differently ahead of the failing test.
+
+**Fix:** check the parameter, which is the only thing that says whether the pool succeeded, and give
+`_handle` an explicit `VKM_INVALID_RESOURCE_HANDLE` in the constructor so the member is never garbage.
+The check on its own is not enough — a resource that is asked for its handle before `initialize()`
+would still read uninitialized memory.
+
+Pre-existing on `main` and not introduced here, but this branch made it fire far more often, so it is
+fixed here rather than filed.
+
+### Observed once, unexplained: an intermittent black sample on Metal
+
+`runMaterialTextureTest` failed one Release run with the base colour reading 0 instead of 0.5, and
+passed on the next with no change. Recorded rather than dismissed, because on Metal that texture is
+now sparse and mapping updates are queue operations: a copy running ahead of the mapping that backs
+its level would look exactly like this. `virtual_texturing.md` §10 already records that the
+`MTLStageResourceState` barrier the header asks for was "not observed to be required" rather than
+shown unnecessary — this is the first evidence that the question is still open.

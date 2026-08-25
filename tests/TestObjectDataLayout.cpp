@@ -145,3 +145,24 @@ TEST_CASE("vkmGetIndirectArgumentStride - agrees with the record it names") {
     CHECK(vkm::vkmGetIndirectArgumentStride(vkm::VkmIndirectArgumentLayout::NonIndexed) % sizeof(uint32_t) == 0);
     CHECK(vkm::vkmGetIndirectArgumentStride(vkm::VkmIndirectArgumentLayout::Indexed) % sizeof(uint32_t) == 0);
 }
+
+/*
+* A resource that has not been handed a pool slot yet must say so. VkmRenderResource::_handle has no
+* default member initializer of its own, so leaving the constructor without setting it means every
+* read of it before initialize() -- including initializeCommon's own validity check, which used to
+* test the member rather than the handle being taken -- is a read of uninitialized memory. That
+* passes or fails on whatever the allocator last left there, which is how it survived on one
+* compiler while failing on another.
+*/
+TEST_CASE("VkmRenderResource - a resource reports no handle until it is given one") {
+    // The constant the constructor must use, so that a resource without a slot never reads as
+    // holding one.
+    CHECK(vkm::VKM_INVALID_RESOURCE_HANDLE.isValid() == false);
+    CHECK(vkm::VKM_INVALID_RESOURCE_HANDLE.id == static_cast<vkm::VkmResourceHandle::IdType>(-1));
+
+    // The id is what isValid() reads, and every other value is a live slot -- including 0, which a
+    // first allocation legitimately returns and which must never read as "no handle".
+    vkm::VkmResourceHandle firstSlot{ 0u, vkm::VkmResourcePoolType::Default, vkm::VkmResourceType::Texture };
+    CHECK(firstSlot.isValid());
+    CHECK(firstSlot != vkm::VKM_INVALID_RESOURCE_HANDLE);
+}
