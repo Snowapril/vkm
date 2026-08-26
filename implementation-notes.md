@@ -5674,3 +5674,56 @@ texture but left the material naming the released slot would still report level 
 
 - A moved emitter still lights from where it was loaded: the light table bakes emissive triangles
   into world space at `build()` (TODO.md). Both samples say so next to the gizmo.
+
+
+## 2026-08-26 — Probe volume: the scalloped teeth at an emitter's shadow terminator
+
+A bright emitter near a wall leaves a row of regular triangular teeth along its shadow
+terminator. Traced to the probe volume, not to shadows, and **not fixed** -- what follows is
+the evidence and two attempts that did not earn their place.
+
+Diagnosis, each step a render:
+
+- Present with the emitter absent, so it is not the multi-model change.
+- A 12,096-triangle sphere gives teeth identical to a 720-triangle one, so it is not the
+  caster's silhouette.
+- `--gv_gi_debug_view=1` (direct) is black across the region; `=2` (indirect) carries all of it.
+  So it is the probe lookup, not the shadow atlas.
+- Teeth per unit wall track probe spacing: 10x6x10 gives four broad lobes, 40x20x40 none.
+- `--gv_gi_probe_normal_bias=0.8` makes it worse, hard black slivers replacing soft teeth --
+  the query point lands past the geometry.
+
+The mechanism is the lookup being effectively binary. `sampleProbeVolume` folds the Chebyshev
+term into the same weight it normalizes by, so the normalization divides visibility straight
+back out: one surviving probe returns full irradiance, and the last one dropping out returns
+black. The teeth are the boundary of the region where all eight probes reject, at probe
+resolution.
+
+**Attempt 1, reverted:** keep visibility out of the normalization -- accumulate
+`geometric * visibility * irradiance` over `sum(geometric)`. Correct on paper, and much worse
+on screen: the binary lookup was masking how much the Chebyshev term varies between adjacent
+probes, and attenuating properly exposed all of it as a broad dark band.
+
+**Attempt 2, not landed:** square the Chebyshev weight instead of cubing it. This does remove
+most of the hard black cores, and all 337 test cases still pass -- but the tests cannot see the
+difference. `runProbeLightingTest` authors its distance atlas with variance exactly zero, where
+cube and square are both exactly zero, so no existing assertion discriminates the two. What the
+function actually does, per standard deviation of the probe's recorded depth:
+
+| delta / sd | chebyshev | cubed | squared | squared/cubed |
+|---|---|---|---|---|
+| 0.5 | 0.800 | 0.512 | 0.640 | 1.25x |
+| 1.0 | 0.500 | 0.125 | 0.250 | 2x |
+| 2.0 | 0.200 | 0.008 | 0.040 | 5x |
+| 4.0 | 0.059 | 0.0002 | 0.0035 | 17x |
+| 8.0 | 0.015 | 0.0000 | 0.0002 | 65x |
+
+Squaring is nearly free where the surface is barely behind what the probe saw, and 5x to 65x
+more permissive where it is well behind -- which is exactly the through-a-wall case the term
+exists to reject. Measured scenes show no leak (Cornell + emitter +0.8% indirect, Sponza's
+interior -0.07%, i.e. nothing), but neither exercises deep occlusion with real variance, so
+that is absence of evidence. Trading the deep end of the rejection curve for a boundary
+artifact is the wrong way round, and the test suite would not catch the regression.
+
+What would actually fix it: more probes, or the traced tier, which does not interpolate between
+probes at all. Both are already the documented answers (TODO.md).

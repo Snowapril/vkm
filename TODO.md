@@ -148,6 +148,8 @@
 - Adding or removing one model in the model_viewer re-imports every other loaded glTF, `addModel` being callable only before `build()`.
 - NEE draws one light sample per vertex with no BSDF-sampling MIS, so large emitters converge slowly; small ones are the designed case.
 - The probe tier's capture pass shades no emission, so probes stay blind to emitters and only the traced tier sees them.
+- `sampleProbeVolume` normalizes by the same weight the Chebyshev term is folded into, so the lookup is binary -- one visible probe returns full irradiance and none returns black, which scallops a shadow terminator into teeth at probe resolution.
+- No probe-lighting test discriminates the Chebyshev exponent: `runProbeLightingTest` authors variance of exactly zero, where every exponent gives zero.
 - The deferred pass's directional light casts no shadow ray while the reference's sun NEE does, so their images differ in sun shadows until a shadowing technique exists.
 - The 1-spp indirect pass still excludes the G-buffer surface's own emission by design: the deferred composite adds it, and adding it again in the estimator would double it.
 - The reservoir's reserved eighth word is written as zero and never read; 8.4 chose to recompute the target pdf per neighbour rather than cache it there, so it is 4 bytes per reservoir of nothing.
