@@ -428,6 +428,36 @@ namespace vkm
         }
     }
 
+    void VkmTextureStreamer::selectFullResidencyTargets()
+    {
+        for (Entry& entry : _entries)
+        {
+            if (entry._streamingFailed)
+            {
+                // Its file could not be re-read, and level 0 is exactly what re-reading would take.
+                continue;
+            }
+            entry._candidateBaseMip = 0;
+            entry._candidateTickCount = _settings._stableTickCount;
+        }
+    }
+
+    bool VkmTextureStreamer::hasFullResidencyWorkLeft() const
+    {
+        if (_build._active || _jobEntryIndex != INVALID_VALUE32 || !_retired.empty())
+        {
+            return true;
+        }
+        for (const Entry& entry : _entries)
+        {
+            if (!entry._streamingFailed && entry._residentBaseMip != 0u)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void VkmTextureStreamer::queueJob()
     {
         uint32_t bestEntry = INVALID_VALUE32;
@@ -766,7 +796,7 @@ namespace vkm
         VKM_ASSERT(driver != nullptr, "VkmTextureStreamer::update requires a driver");
         VKM_ASSERT(outUpdates != nullptr, "VkmTextureStreamer::update requires an output vector");
 
-        if (!_settings._enabled || _entries.empty())
+        if (_entries.empty() || (!_settings._enabled && !_fullResidencyPending))
         {
             return;
         }
@@ -774,14 +804,29 @@ namespace vkm
         ++_tickCounter;
         drainRetired(driver, /*force=*/false);
         advanceBuild(driver, outUpdates);
-        selectTargets(view, objects);
-        releaseSparseLevels(driver, outUpdates);
+
+        if (_settings._enabled)
+        {
+            selectTargets(view, objects);
+            // Only ever coarsens, which is the one thing restoring never asks for.
+            releaseSparseLevels(driver, outUpdates);
+        }
+        else
+        {
+            selectFullResidencyTargets();
+        }
 
         // One rebuild in flight at a time: a decode holds a whole chain in memory and an upload
         // blocks, so letting them overlap would multiply both costs.
         if (!_build._active && _jobEntryIndex == INVALID_VALUE32)
         {
             queueJob();
+        }
+
+        if (!_settings._enabled)
+        {
+            // After the queue, so a decode started this tick counts as work outstanding.
+            _fullResidencyPending = hasFullResidencyWorkLeft();
         }
     }
 
@@ -802,6 +847,7 @@ namespace vkm
             _materialCount = 0;
             _rebuildsApplied = 0;
             _tickCounter = 0;
+            _fullResidencyPending = false;
             return;
         }
 
@@ -831,5 +877,6 @@ namespace vkm
         _materialCount = 0;
         _rebuildsApplied = 0;
         _tickCounter = 0;
+        _fullResidencyPending = false;
     }
 } // namespace vkm

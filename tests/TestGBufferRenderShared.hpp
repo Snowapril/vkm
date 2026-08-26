@@ -374,6 +374,104 @@ namespace vkmtest
     }
 
     /*
+    * @brief Turning streaming off is an instruction to restore, not a freeze.
+    *
+    * @details The switch is what an A/B against the unstreamed baseline is made of, so a texture
+    * the camera already coarsened has to come back to its whole chain when it flips -- and the
+    * camera stays exactly where it was throughout, which is what separates "restored because the
+    * switch went off" from "the selection simply changed its mind".
+    *
+    * Driver-level rather than arithmetic because every step of the way back is: the decode, the
+    * refill of a sparse texture's finer levels or the rebuild into a larger one, the new bindless
+    * slot, and the material record being re-pointed at it. The final sample is what proves the last
+    * of those -- a restore that rebuilt the texture but left the record naming the released slot
+    * would sample whatever took that slot over.
+    */
+    inline void runTextureStreamingDisableRestoresChainTest(vkm::VkmDriverBase* driver)
+    {
+        vkm::VkmPipelineStateManager manager(driver);
+        vkm::VkmScene scene;
+        vkm::VkmGBuffer gbuffer;
+        fillGBuffer(driver, manager, scene, gbuffer, "tests/gltf_textured.gltf");
+
+        if (!scene.isTextureStreamingAvailable())
+        {
+            MESSAGE("Skipping: this backend has no bindless texture array, so nothing streams.");
+            gbuffer.destroy();
+            scene.destroy(driver);
+            return;
+        }
+
+        vkm::VkmTextureStreamingSettings settings;
+        settings._stableTickCount = 0;         // act on the first tick that asks
+        settings._maxLevelUploadsPerTick = 64; // and finish the rebuild in that same tick
+        scene.setTextureStreamingSettings(settings);
+
+        vkm::VkmTextureStreamingView view;
+        view._viewportHeight = kGBufferRenderSize;
+        view._fovYRadians = 0.8726646f;
+        // Far enough that a 64x64 texture over a unit-ish object is well past one texel per pixel.
+        view._cameraPosition = glm::vec3(0.0f, 0.0f, 4096.0f);
+
+        uint32_t streamedBaseMip = 0;
+        for (uint32_t tick = 0; tick < 256 && streamedBaseMip == 0; ++tick)
+        {
+            scene.updateTextureStreaming(driver, view);
+            streamedBaseMip = scene.getStreamedBaseMip(/*materialIndex=*/0, /*channel=*/0);
+            if (streamedBaseMip == 0)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        }
+        // Nothing to restore otherwise, which would make the check below pass for the wrong reason.
+        REQUIRE(streamedBaseMip > 0);
+
+        settings._enabled = false;
+        scene.setTextureStreamingSettings(settings);
+
+        // The same bounded loop and the same view: only the switch changed.
+        for (uint32_t tick = 0; tick < 256 && streamedBaseMip != 0; ++tick)
+        {
+            scene.updateTextureStreaming(driver, view);
+            streamedBaseMip = scene.getStreamedBaseMip(/*materialIndex=*/0, /*channel=*/0);
+            if (streamedBaseMip != 0)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        }
+        CHECK(streamedBaseMip == 0);
+
+        // Re-render through whatever the material now names.
+        const std::string psoName =
+            std::string("gbuffer_pso[") +
+            vkm::vkmVertexLayoutPresetName(vkm::VkmVertexLayoutPreset::StandardPBR) + "]";
+        vkm::VkmPipelineStateBase* pso = manager.getPipelineState(psoName, vkm::VkmPipelineStateOrigin::Engine);
+        REQUIRE(pso != nullptr);
+
+        vkm::VkmFrameData frameData;
+        const glm::mat4 viewProjection = glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, -1.0f, 0.5f)) *
+                                         glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 2.0f, 1.0f));
+        vkm::vkmExtractFrustumPlanes(viewProjection, frameData._frustumPlanes);
+        frameData._lightDirection = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
+        recordGBufferFrame(driver, scene, gbuffer, pso, frameData);
+
+        const uint32_t sampleX = kGBufferRenderSize / 4;
+        const uint32_t sampleY = kGBufferRenderSize * 3 / 4;
+        const vkm::VkmTextureReadbackResult readback =
+            driver->readbackTexture(gbuffer.getTexture(vkm::VkmGBuffer::Target::BaseColorRoughness));
+        REQUIRE(readback.channels == 4);
+        const uint8_t* texel =
+            &readback.pixels[(static_cast<size_t>(sampleY) * readback.width + sampleX) * readback.channels];
+
+        CHECK(texel[0] / 255.0f == doctest::Approx(0.0f).epsilon(0.02));
+        CHECK(texel[1] / 255.0f == doctest::Approx(kFixtureBaseColorG).epsilon(0.02));
+        CHECK(texel[2] / 255.0f == doctest::Approx(0.0f).epsilon(0.02));
+
+        gbuffer.destroy();
+        scene.destroy(driver);
+    }
+
+    /*
     * @brief The GPU feedback loop, end to end: the shader writes, the ring carries it back, the
     * streamer acts on it.
     *

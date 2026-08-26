@@ -129,6 +129,13 @@ namespace vkm
 
     struct VkmTextureStreamingSettings
     {
+        /*
+        * Whether the camera decides what each texture holds. Off returns every texture the streamer
+        * owns to its whole chain, which is what makes the switch an A/B against the unstreamed
+        * baseline rather than a freeze at whatever the last camera position happened to ask for.
+        * Restoring re-reads and re-uploads, so it converges over as many ticks as
+        * _maxLevelUploadsPerTick needs rather than landing the frame the switch flips.
+        */
         bool _enabled = true;
         /*
         * Added to the selected level: negative keeps more detail resident than the screen strictly
@@ -263,7 +270,18 @@ namespace vkm
         VkmTextureStreamer(const VkmTextureStreamer&) = delete;
         VkmTextureStreamer& operator=(const VkmTextureStreamer&) = delete;
 
-        inline void setSettings(const VkmTextureStreamingSettings& settings) { _settings = settings; }
+        /*
+        * @brief Replaces the settings, and notices the switch being turned off.
+        * @details Turning it off is an instruction to restore, not merely to stop: the transition is
+        * latched here because update() sees only the settled state, in which "off with textures
+        * still coarse" and "off with nothing left to do" look identical.
+        * @param settings The new settings.
+        */
+        inline void setSettings(const VkmTextureStreamingSettings& settings)
+        {
+            _fullResidencyPending = _fullResidencyPending || (_settings._enabled && !settings._enabled);
+            _settings = settings;
+        }
         inline const VkmTextureStreamingSettings& getSettings() const { return _settings; }
 
         /*
@@ -327,7 +345,9 @@ namespace vkm
         * @brief Advances the streaming state by one frame: picks targets, moves an in-flight
         * rebuild along, and releases what has aged out.
         * @details The one entry point that touches the driver, and the only one meant to be called
-        * per frame. Does nothing while disabled, so the cost of the feature being off is a branch.
+        * per frame. Does nothing while disabled and settled, so the cost of the feature being off is
+        * a branch; the ticks between the switch going off and every texture holding its whole chain
+        * again are the exception.
         * Must be called once per rendered frame and before that frame records anything, the retire
         * delay being counted in calls to this.
         * @param driver Driver the textures belong to.
@@ -434,6 +454,15 @@ namespace vkm
         void stopWorker();
         void selectTargets(const VkmTextureStreamingView& view,
                            const std::vector<VkmTextureStreamingObject>& objects);
+        /*
+        * Aims every entry at level 0, for the ticks after the switch is turned off. Undamped: the
+        * tick count exists to absorb a camera that keeps changing its mind, and a target that is
+        * pinned has nothing to absorb.
+        */
+        void selectFullResidencyTargets();
+        // Whether restoring has anything left to do: a texture short of its whole chain, a decode or
+        // a fill in flight, or a retired texture and slot still waiting on their delay.
+        bool hasFullResidencyWorkLeft() const;
         // Queues at most one decode, for the entry whose target differs and has held longest.
         void queueJob();
         void advanceBuild(VkmDriverBase* driver, std::vector<VkmTextureStreamingUpdate>* outUpdates);
@@ -454,6 +483,9 @@ namespace vkm
         static Result runJob(const Job& job);
 
         VkmTextureStreamingSettings _settings;
+        // Raised when the switch is turned off, and lowered once every texture holds its whole chain
+        // again. What keeps a disabled-and-settled update() to a single branch.
+        bool _fullResidencyPending = false;
         std::vector<Entry> _entries;
         std::vector<Retired> _retired;
         PendingBuild _build;

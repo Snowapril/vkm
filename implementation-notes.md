@@ -5592,3 +5592,43 @@ them:
   **Done instead:** rounded to two decimals before serializing.
   **Why:** a float widened to double serializes as `1.2400000095367432`. Two decimals is exactly
   what the slider displays, and keeps a file a user may hand-edit readable.
+
+## 2026-08-26 — Turning streaming off restores the full chain
+
+`_enabled` was a freeze, not a switch. `VkmTextureStreamer::update()` returned on it before doing
+anything, so a texture the camera had already coarsened stayed coarse for the rest of the run.
+That makes the checkbox useless for the one thing it exists for -- an A/B against the unstreamed
+baseline -- because the "off" side never returns to that baseline. Load-time residency was never
+the problem: `uploadMaterialTextures` always decodes and uploads the whole chain and registers the
+entry at level 0, so only the mid-run toggle was broken.
+
+**Restoring is the "camera got closer" case, not a new path.** Off pins every entry's target at
+level 0 and lets the existing pipeline carry it: `queueJob` picks the entry furthest from its
+target, the worker re-decodes, and `advanceBuild` either backs and fills the finer levels of a
+sparse texture or rebuilds a larger one onto a new bindless slot and re-points the material
+records. No new upload, residency, retire or rewrite code, and the per-tick upload budget still
+bounds the hitch -- restoring a scene converges over several seconds rather than stalling for one
+long frame, which is the same trade every other level change already makes.
+
+`selectFullResidencyTargets` sets `_candidateTickCount` to `_stableTickCount` outright. The
+hysteresis exists to absorb a camera that keeps changing its mind; a target pinned by a switch has
+nothing to absorb, and making the restore wait out the damping would be latency for its own sake.
+Entries pinned by `_streamingFailed` are skipped -- level 0 is exactly what re-reading a file that
+cannot be re-read would take.
+
+`_fullResidencyPending` is latched in `setSettings` rather than derived in `update`, because
+`update` sees only the settled state, where "off with textures still coarse" and "off with nothing
+left to do" are indistinguishable. It drops only once no entry is short of its chain *and* no
+decode, fill or retired texture is outstanding -- which incidentally fixes a leak the old early
+return had: `drainRetired` and `advanceBuild` sat behind it, so switching off mid-rebuild stranded
+a second texture and a bindless slot for the whole disabled period.
+
+A decode queued just before the switch flipped still lands and applies its coarser target, so one
+texture can dip for a few frames after the toggle before being re-queued for level 0. Guarding
+against it means a staleness rule in `advanceBuild` that changes the enabled path too, and the
+enabled path has tolerated the same race since it shipped.
+
+The end-to-end test is the assertion that matters: the camera does not move between streaming out
+and restoring, which is what separates "restored because the switch went off" from "the selection
+changed its mind". It re-samples the G-buffer texel afterwards, since a restore that rebuilt the
+texture but left the material naming the released slot would still report level 0.
