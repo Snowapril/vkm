@@ -37,12 +37,14 @@ struct VkmPunctualLight
 };
 
 /*
-* @brief What a shading point needs to know about one light: where it is and how bright.
+* @brief What a shading point needs to know about one punctual light: where it is and how
+* bright. Named apart from vkm_lights.hlsli's VkmLightSample because a traced shader includes
+* both -- that one is a sampled point on an emissive triangle, this one a delta light resolved.
 * @details `direction` points FROM the surface TOWARDS the light, which is the convention every
 * BRDF term here already uses. `distance` is 1e30 for a directional light so a caller can use it
 * as a shadow ray's TMax without branching.
 */
-struct VkmLightSample
+struct VkmPunctualSample
 {
     float3 direction;
     float  distance;
@@ -88,9 +90,9 @@ float vkmPunctualSpotAttenuation(float cosAngle, float cosInner, float cosOuter)
 * @details Returns radiance 0 for a surface outside a spot's cone or past a light's range, so a
 * caller can shade unconditionally and let the zero fall out.
 */
-VkmLightSample vkmSamplePunctualLight(VkmPunctualLight light, float3 worldPosition)
+VkmPunctualSample vkmSamplePunctualLight(VkmPunctualLight light, float3 worldPosition)
 {
-    VkmLightSample result;
+    VkmPunctualSample result;
 
     if (light.type == VKM_LIGHT_TYPE_DIRECTIONAL)
     {

@@ -93,6 +93,13 @@ TEST_CASE("NEE - the area estimator matches the analytic plane on Vulkan" * doct
     vkmtest::runNeeAnalyticPlaneTest(fixture.driver.get());
 }
 
+TEST_CASE("NEE - a punctual light reaches the traced tier, shadowed, on Vulkan" * doctest::timeout(400.0))
+{
+    VulkanAccelerationStructureFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runNeePunctualLightTest(fixture.driver.get());
+}
+
 TEST_CASE("NEE - the emissive Cornell converges deferred against reference on Vulkan" * doctest::timeout(400.0))
 {
     VulkanAccelerationStructureFixture fixture;

@@ -202,9 +202,9 @@
 - `runMaterialTextureTest` failed one Metal Release run with the base colour sampling black and passed on re-run unchanged; that texture is sparse now and mapping updates are queue operations, so a copy running ahead of the mapping that backs its level would look exactly like this.
 - The min-LOD clamp is compiled only under `VKM_BACKEND_METAL`: SPIR-V's `MinLod` capability requires `shaderResourceMinLod`, which lavapipe lacks, and a module declaring a capability the device lacks fails `vkCreateShaderModule` outright.
 - ImGui renders nothing in either sample, including panels this work did not touch, so the texture-streaming controls and readout have been asserted by tests but never looked at.
-- The traced tier's NEE does not see punctual lights, so ReSTIR and the reference path tracer light a point-lit scene differently from the deferred image.
+- The traced tier's NEE loops every punctual light exhaustively, one shadow ray each per bounce, with no cap or importance sampling.
+- The raster tier caps punctual lights at kVkmMaxPunctualLights (16) while the traced tier reads the whole table, so a scene past the cap lights differently in the two tiers.
 - Area lights are shadowed only in the traced tier; the raster tier neither shades nor shadows emissive triangles.
-- Cascades do not blend at their boundaries, so a receiver crossing one can show a visible step in shadow softness and bias.
 - Shadow-casting lights are capped by kVkmMaxShadowTiles (16 tiles: one per cascade for a directional light, six per point light, one per spot); past that a light shades unshadowed.
 - The shadow atlas culls every light against one union box, so a caster outside a given light's frustum is still submitted to that light's tile and clipped there.
 - Point-light shadow taps clamp at a cube-face edge rather than continuing into the adjacent face, so a receiver straddling a seam samples one face twice.

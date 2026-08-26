@@ -1155,15 +1155,27 @@ namespace
         header._sunRadiance[0] = _directionalRadiance.x;
         header._sunRadiance[1] = _directionalRadiance.y;
         header._sunRadiance[2] = _directionalRadiance.z;
+        header._punctualCount = static_cast<uint32_t>(_punctualLights.size());
 
-        const uint64_t byteSize =
-            sizeof(VkmLightTableHeader) + triangles.size() * sizeof(VkmLightTableTriangle);
+        // The punctual records follow the triangles in the same blob, at the same 64-byte stride.
+        // They are the model-placed lights only: the scene's own directional light is the header's
+        // sun, and appending it here as well would light every traced path twice.
+        const uint64_t byteSize = sizeof(VkmLightTableHeader) +
+                                  triangles.size() * sizeof(VkmLightTableTriangle) +
+                                  _punctualLights.size() * sizeof(VkmPunctualLight);
         std::vector<uint8_t> bytes(byteSize);
         std::memcpy(bytes.data(), &header, sizeof(header));
         if (!triangles.empty())
         {
             std::memcpy(bytes.data() + sizeof(header), triangles.data(),
                         triangles.size() * sizeof(VkmLightTableTriangle));
+        }
+        if (!_punctualLights.empty())
+        {
+            std::memcpy(bytes.data() + sizeof(header) +
+                            triangles.size() * sizeof(VkmLightTableTriangle),
+                        _punctualLights.data(),
+                        _punctualLights.size() * sizeof(VkmPunctualLight));
         }
 
         VkmBuffer* lightBuffer = createStorageBuffer(driver, byteSize, "SceneLightTable");

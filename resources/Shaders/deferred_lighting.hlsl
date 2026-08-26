@@ -122,7 +122,7 @@ float4 PSMain(VSOutput input) : SV_TARGET0
     float3 shaded = float3(0.0, 0.0, 0.0);
     for (uint lightIndex = 0; lightIndex < g_Light.lightCount.x; ++lightIndex)
     {
-        const VkmLightSample lightSample =
+        const VkmPunctualSample lightSample =
             vkmSamplePunctualLight(g_Light.lights[lightIndex], worldPosition);
 
         const float nDotL = saturate(dot(shadingNormal, lightSample.direction));

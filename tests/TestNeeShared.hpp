@@ -13,6 +13,9 @@
 // 2. The directional light reaches the traced tier, shadowed. One floor pixel in the open must
 //    add exactly (albedo/pi) * cos * R; one under an emitter's footprint must not.
 //
+// 4. Punctual lights reach the traced tier, shadowed. A delta light is closed form, so a floor
+//    point under one is exactly (albedo/pi) * (I/d^2) * cos, or zero behind an occluder.
+//
 // 3. The emission-at-first-vertex convention holds in a closed scene: the emissive Cornell box is
 //    lit only by its ceiling patch, and the deferred 1-spp estimator (emission-on-hit at its
 //    first traced vertex) must converge to the reference (NEE at its primary hit) -- the two
@@ -339,6 +342,218 @@ namespace vkmtest
         * missing shadow ray each move whole pixels by tens of percent.
         */
         CHECK(worstRelative < 0.05);
+
+        driver->waitIdle();
+        tracer.destroy(driver);
+        scene.destroy(driver);
+        driver->getDeferredReclaimer()->flushBlocking();
+    }
+
+    /*
+    * Gate 4: a punctual light reaches the traced tier, shadowed.
+    *
+    * A delta light has no area to importance-sample, so its NEE contribution is closed form and
+    * this gate is exact rather than convergent: a floor point sees
+    * (albedo/pi) * (I / d^2) * cos, or nothing at all when the occluder stands between it and
+    * the light. That makes it the cheapest place to catch every link in the new chain at once --
+    * the glTF import, the punctual records appended to the light table blob, the loader's word
+    * offsets past the triangles, glTF's inverse-square falloff, and the distance-bounded shadow
+    * ray. Each of those fails as a WRONG MEAN, which no comparison against another estimator
+    * sharing the same code could see.
+    *
+    * The fixture is the shadow-occluder floor with one point light 4 units up: the occluder
+    * spans |x|,|z| <= 1 at y = 2, so it halves onto |x|,|z| <= 2 on the floor and the frame
+    * carries both lit and shadowed floor in quantity.
+    */
+    inline void runNeePunctualLightTest(vkm::VkmDriverBase* driver)
+    {
+        REQUIRE(driver != nullptr);
+        if ((driver->getDriverCapabilityFlags() & vkm::VkmDriverCapabilityFlags::RayTracing) == 0)
+        {
+            MESSAGE("Skipping: this backend reports no RayTracing capability.");
+            return;
+        }
+
+        // Mirrors gltf_punctual_occluder.gltf.
+        constexpr float kLightIntensity = 100.0f;
+        constexpr float kFloorAlbedo = 0.8f;
+        constexpr float kOccluderHalf = 1.0f;
+        constexpr float kOccluderY = 2.0f;
+        const glm::vec3 lightPosition(0.0f, 4.0f, 0.0f);
+
+        vkm::VkmGltfImportOptions importOptions;
+        importOptions._optimizeMeshes = false;
+
+        vkm::VkmSceneModel model;
+        std::string error;
+        REQUIRE_MESSAGE(vkm::importGltfModel(std::string(RESOURCES_DIR) + "tests/gltf_punctual_occluder.gltf",
+                                             &model, &error, importOptions),
+                        error);
+
+        vkm::VkmPipelineStateManager manager(driver);
+        REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(TEST_ENGINE_PIPELINE_DIR,
+                                                                TEST_ENGINE_SHADER_CACHE_DIR,
+                                                                vkm::VkmPipelineStateOrigin::Engine, &error),
+                        error);
+
+        vkm::VkmScene scene;
+        REQUIRE(scene.addModel(model, &error));
+        // No sun and no emitters: whatever the floor shows came from the punctual light, so a
+        // regression cannot hide behind another term.
+        REQUIRE_MESSAGE(scene.build(driver, &manager, &error), error);
+        CHECK(scene.getLightTriangleCount() == 0);
+        REQUIRE(scene.getPunctualLights().size() == 1);
+        REQUIRE_MESSAGE(scene.buildAccelerationStructures(driver, &error), error);
+
+        REQUIRE_MESSAGE(vkm::vkmLoadRayTracingPipelineStates(&manager, &error), error);
+
+        vkm::VkmPathTracer tracer;
+        REQUIRE_MESSAGE(tracer.initialize(driver, &manager, needetail::kPlaneWidth,
+                                          needetail::kPlaneHeight, &error),
+                        error);
+
+        const glm::vec3 eye(0.0f, 9.0f, 7.0f);
+        const glm::mat4 view = glm::lookAtRH(eye, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        const glm::mat4 projection = glm::perspectiveRH_ZO(glm::radians(50.0f), 1.0f, 0.1f, 100.0f);
+        const glm::mat4 viewProjection = projection * view;
+        const glm::mat4 inverseViewProjection = glm::inverse(viewProjection);
+
+        vkm::VkmFrameConstants frameConstants{};
+        frameConstants._view = view;
+        frameConstants._projection = projection;
+        frameConstants._viewProjection = viewProjection;
+        frameConstants._inverseViewProjection = inverseViewProjection;
+        frameConstants._prevViewProjection = viewProjection;
+        frameConstants._cameraPositionWorld = glm::vec4(eye, 1.0f);
+        driver->getFrameConstantManager()->update(/*frameIndex=*/0, frameConstants);
+
+        vkm::VkmFrameData frameData;
+        vkm::vkmExtractFrustumPlanes(viewProjection, frameData._frustumPlanes);
+        // Deliberately black: the sun stratum must contribute nothing here.
+        frameData._lightDirection = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
+
+        const vkm::VkmPathTraceOptions options{
+            /*_maxBounces=*/1,
+            /*_jitterPrimaryRay=*/false,
+            glm::vec3(0.0f)
+        };
+
+        std::vector<vkm::VkmResourceAccessDeclaration> referenced;
+        for (uint32_t sample = 0; sample < needetail::kPlaneSamples; ++sample)
+        {
+            vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+            auto* updateSubGraph = renderGraph.beginTransferSubGraph("NeePunctualUpdate");
+            referenced.clear();
+            scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Update, &referenced);
+            updateSubGraph->addReferencedResources(referenced);
+            updateSubGraph->setTransferCallback([&scene, frameData](vkm::VkmCommandBufferBase* commandBuffer) {
+                scene.recordUpdate(commandBuffer, /*frameIndex=*/0, frameData, /*viewIndex=*/0);
+            });
+            auto* traceSubGraph = renderGraph.beginComputeSubGraph("NeePunctualTrace");
+            referenced.clear();
+            scene.collectReferencedResources(vkm::VkmScene::ReferencePhase::Draw, &referenced);
+            traceSubGraph->addReferencedResources(referenced);
+            traceSubGraph->addReferencedResource(scene.getTopLevelAccelerationStructure(),
+                                                vkm::VkmResourceAccess::AccelerationStructureShaderRead);
+            traceSubGraph->addReferencedResource(tracer.getAccumulationBuffer(),
+                                                vkm::VkmResourceAccess::ShaderStorageReadWrite);
+            traceSubGraph->setComputeCallback([&tracer, options](vkm::VkmCommandBufferBase* commandBuffer) {
+                tracer.recordAccumulate(commandBuffer, options);
+            });
+            renderGraph.compile();
+            renderGraph.execute();
+            renderGraph.ensureCompleted();
+        }
+
+        const std::vector<float> image = needetail::readAccumulation(
+            driver, tracer.getAccumulationBuffer(), needetail::kPlaneWidth, needetail::kPlaneHeight);
+
+        uint32_t litChecked = 0;
+        uint32_t shadowChecked = 0;
+        double worstLitRelative = 0.0;
+        double worstShadowAbsolute = 0.0;
+        for (uint32_t y = 0; y < needetail::kPlaneHeight; ++y)
+        {
+            for (uint32_t x = 0; x < needetail::kPlaneWidth; ++x)
+            {
+                const float u = (static_cast<float>(x) + 0.5f) / needetail::kPlaneWidth;
+                const float v = (static_cast<float>(y) + 0.5f) / needetail::kPlaneHeight;
+                const glm::vec4 nearPoint =
+                    inverseViewProjection * glm::vec4(u * 2.0f - 1.0f, 1.0f - v * 2.0f, 0.0f, 1.0f);
+                const glm::vec4 farPoint =
+                    inverseViewProjection * glm::vec4(u * 2.0f - 1.0f, 1.0f - v * 2.0f, 1.0f, 1.0f);
+                const glm::vec3 origin = glm::vec3(nearPoint) / nearPoint.w;
+                const glm::vec3 direction =
+                    glm::normalize(glm::vec3(farPoint) / farPoint.w - origin);
+                if (direction.y >= -1.0e-4f)
+                {
+                    continue;
+                }
+
+                // Skip pixels whose camera ray meets the occluder before the floor -- those show
+                // the occluder's own shading, which this gate says nothing about.
+                const float tOccluder = (kOccluderY - origin.y) / direction.y;
+                if (tOccluder > 0.0f)
+                {
+                    const glm::vec3 atOccluder = origin + direction * tOccluder;
+                    if (std::abs(atOccluder.x) <= kOccluderHalf && std::abs(atOccluder.z) <= kOccluderHalf)
+                    {
+                        continue;
+                    }
+                }
+
+                const float t = -origin.y / direction.y;
+                const glm::vec3 hit = origin + direction * t;
+                if (std::abs(hit.x) > 3.8f || std::abs(hit.z) > 3.8f)
+                {
+                    continue; // floor edge, where a half-pixel ray drift may miss
+                }
+
+                // Where the segment from the floor point to the light crosses the occluder plane.
+                const glm::vec3 toLight = lightPosition - hit;
+                const float crossing = (kOccluderY - hit.y) / toLight.y;
+                const glm::vec3 atPlane = hit + toLight * crossing;
+                const bool shadowed = std::abs(atPlane.x) <= kOccluderHalf &&
+                                      std::abs(atPlane.z) <= kOccluderHalf;
+
+                const size_t pixel = (static_cast<size_t>(y) * needetail::kPlaneWidth + x) * 4;
+                const float samples = image[pixel + 3];
+                REQUIRE(samples > 0.0f);
+                const float measured = image[pixel + 0] / samples;
+
+                if (shadowed)
+                {
+                    worstShadowAbsolute = std::max(worstShadowAbsolute, double(std::abs(measured)));
+                    ++shadowChecked;
+                    continue;
+                }
+
+                const float distanceSquared = glm::dot(toLight, toLight);
+                const float distanceToLight = std::sqrt(distanceSquared);
+                const float cosSurface = toLight.y / distanceToLight;
+                const float expected = (kFloorAlbedo / 3.14159265f) *
+                                       (kLightIntensity / distanceSquared) * cosSurface;
+                const double relative =
+                    std::abs(measured - expected) / std::max(expected, 1.0e-4f);
+                worstLitRelative = std::max(worstLitRelative, relative);
+                ++litChecked;
+            }
+        }
+
+        MESSAGE("punctual NEE: " << litChecked << " lit + " << shadowChecked
+                                 << " shadowed pixels, worst lit relative error " << worstLitRelative
+                                 << ", worst shadowed value " << worstShadowAbsolute);
+        // Both halves must actually run, or the gate proves half of what it claims.
+        CHECK(litChecked > 50);
+        CHECK(shadowChecked > 5);
+        /*
+        * A delta light is closed form and the estimator draws no randoms for it, so the lit
+        * bound is tight -- what is left is fp16 accumulation and the half-pixel drift between
+        * the CPU's reconstructed hit and the GPU's. Dropping the 1/d^2, the cosine or the
+        * shadow ray each move pixels by tens of percent.
+        */
+        CHECK(worstLitRelative < 0.02);
+        CHECK(worstShadowAbsolute < 1.0e-3);
 
         driver->waitIdle();
         tracer.destroy(driver);

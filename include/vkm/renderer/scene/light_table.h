@@ -43,7 +43,15 @@ namespace vkm
     struct VkmLightTableHeader
     {
         float _sunRadiance[3] = { 0.0f, 0.0f, 0.0f };
-        float _pad = 0.0f;
+        /*
+        * @brief Punctual light records following the triangles, as a count.
+        * @details The blob is [header][triangle * N][punctual * M]. N rides FrameData's
+        * _lightCount because every consumer already needs it to sample the triangles; M lives
+        * here because nothing outside the table needs it, and the header had an unused word.
+        * A reader finds the first punctual record at header + N * stride -- the two record types
+        * share a 64-byte stride so that arithmetic is one multiply.
+        */
+        uint32_t _punctualCount = 0u;
     };
     static_assert(sizeof(VkmLightTableHeader) == 16,
                   "VkmLightTableHeader must match VKM_LIGHT_HEADER_WORDS in vkm_lights.hlsli");
@@ -54,8 +62,9 @@ namespace vkm
     * colour and intensity already multiplied together so a shader never has to know glTF's
     * split. Directional lights carry a meaningless position and point lights a meaningless
     * direction; both stay finite rather than zeroed so no consumer divides by them.
-    * 64 bytes, matching VkmLightTableTriangle's stride, so the two can share a blob if the
-    * traced tier ever reads punctual lights (see TODO.md).
+    * 64 bytes, matching VkmLightTableTriangle's stride, so the two share one blob: the raster
+    * tier reads this record out of a set-2 uniform buffer and the traced tier reads the very
+    * same bytes out of the bindless light table.
     */
     struct VkmPunctualLight
     {
