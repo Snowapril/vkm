@@ -34,8 +34,11 @@ VkmSceneMesh makeTriangleMesh(VkmVertexLayoutPreset preset, uint32_t materialInd
 * A model with one node per mesh, each node translated along X so the objects are distinguishable.
 * Materials are one per mesh so material ordering is observable.
 */
+// `spacing` is how far apart consecutive nodes are placed. Zero stacks them, which is how a test
+// isolates the (pipeline, layout, material) grouping from the spatial split that also breaks runs.
 VkmSceneModel makeModel(const std::vector<VkmVertexLayoutPreset>& presets,
-                        const std::vector<uint32_t>& materialIndices)
+                        const std::vector<uint32_t>& materialIndices,
+                        float spacing = 1.0f)
 {
     REQUIRE(presets.size() == materialIndices.size());
 
@@ -46,7 +49,8 @@ VkmSceneModel makeModel(const std::vector<VkmVertexLayoutPreset>& presets,
 
         vkm::VkmSceneNode node;
         node._name = "node" + std::to_string(i);
-        node._localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(static_cast<float>(i), 0.0f, 0.0f));
+        node._localTransform =
+            glm::translate(glm::mat4(1.0f), glm::vec3(spacing * static_cast<float>(i), 0.0f, 0.0f));
         node._meshIndices.push_back(static_cast<uint32_t>(i));
         model._nodes.push_back(node);
         model._rootNodeIndices.push_back(static_cast<uint32_t>(i));
@@ -71,7 +75,7 @@ TEST_CASE("VkmScene - one batch per (pipeline, vertex layout, material) run") {
         REQUIRE(scene.addModel(makeModel({ VkmVertexLayoutPreset::StandardPBR,
                                            VkmVertexLayoutPreset::StandardPBR,
                                            VkmVertexLayoutPreset::StandardPBR },
-                                         { 0, 0, 0 }),
+                                         { 0, 0, 0 }, /*spacing=*/0.0f),
                                &error));
         CHECK(error.empty());
         REQUIRE(scene.getObjects().size() == 3);
@@ -91,7 +95,7 @@ TEST_CASE("VkmScene - one batch per (pipeline, vertex layout, material) run") {
                                            VkmVertexLayoutPreset::PositionOnly,
                                            VkmVertexLayoutPreset::StandardPBR,
                                            VkmVertexLayoutPreset::Compact },
-                                         { 0, 0, 0, 0 }),
+                                         { 0, 0, 0, 0 }, /*spacing=*/0.0f),
                                &error));
         REQUIRE(scene.getObjects().size() == 4);
         REQUIRE(scene.getDrawBatches().size() == 3);
@@ -128,7 +132,7 @@ TEST_CASE("VkmScene - material index splits a batch and its runs stay contiguous
                                        VkmVertexLayoutPreset::StandardPBR,
                                        VkmVertexLayoutPreset::StandardPBR,
                                        VkmVertexLayoutPreset::StandardPBR },
-                                     { 2, 0, 2, 1 }),
+                                     { 2, 0, 2, 1 }, /*spacing=*/0.0f),
                            &error));
 
     // Three distinct materials (0, 1, 2) over four objects, so three batches -- one of them two
@@ -215,26 +219,70 @@ TEST_CASE("VkmScene - a batch's bounds enclose its objects in world space") {
                                        VkmVertexLayoutPreset::StandardPBR },
                                      { 0, 0 }),
                            &error));
-    REQUIRE(scene.getDrawBatches().size() == 1);
+    REQUIRE(!scene.getDrawBatches().empty());
 
     // A viewpoint culls a whole batch against this sphere, so it has to be conservative: every
-    // corner of the geometry it covers must be inside it. Bounds left in object space -- the
-    // meshes are identical and only their node transforms differ -- would enclose one triangle
-    // and cull the batch away from viewpoints looking straight at the other.
+    // corner of every object the batch covers must be inside it. Bounds left in object space --
+    // the meshes are identical and only their node transforms differ -- would enclose the mesh at
+    // the origin and cull the batch away from viewpoints looking straight at the moved one.
+    const auto& objects = scene.getObjects();
+    uint32_t covered = 0;
+    for (const VkmScene::DrawBatch& batch : scene.getDrawBatches())
+    {
+        REQUIRE(batch._boundsRadius > 0.0f);
+        for (uint32_t i = 0; i < batch._objectCount; ++i)
+        {
+            covered++;
+            const glm::mat4& transform = objects[batch._firstObject + i]._worldTransform;
+            for (uint32_t corner = 0; corner < 8u; ++corner)
+            {
+                // The fixture's mesh spans the unit cube's x,y at z = 0.
+                const glm::vec3 local((corner & 1u) ? 1.0f : 0.0f,
+                                      (corner & 2u) ? 1.0f : 0.0f,
+                                      0.0f);
+                const glm::vec3 world(transform * glm::vec4(local, 1.0f));
+                CHECK(glm::length(world - batch._boundsCenter) <= batch._boundsRadius + 1e-4f);
+            }
+        }
+    }
+    CHECK(covered == static_cast<uint32_t>(objects.size()));
+}
+
+TEST_CASE("VkmScene - one material spread across the scene splits into cullable batches") {
+    VkmScene scene;
+    std::string error;
+    // One material, one layout: nothing here can break a run except distance.
+    REQUIRE(scene.addModel(makeModel({ VkmVertexLayoutPreset::StandardPBR,
+                                       VkmVertexLayoutPreset::StandardPBR,
+                                       VkmVertexLayoutPreset::StandardPBR,
+                                       VkmVertexLayoutPreset::StandardPBR },
+                                     { 0, 0, 0, 0 }),
+                           &error));
+
+    // Without the split this is one batch spanning the model, and a batch that spans the model is
+    // one no viewpoint can ever reject -- its whole argument range is re-encoded for every probe
+    // face. Metal encodes one indirect draw per object in a batch it draws, so that cost is the
+    // object count, not the batch count.
+    REQUIRE(scene.getDrawBatches().size() > 1);
+
     const vkm::VkmSceneAABB world = scene.computeWorldBounds();
     REQUIRE(world._valid);
-    const VkmScene::DrawBatch& batch = scene.getDrawBatches()[0];
-    REQUIRE(batch._boundsRadius > 0.0f);
-    for (uint32_t corner = 0; corner < 8u; ++corner)
+    const float sceneDiagonal = glm::length(world.getExtent());
+    // Each batch covers a part of the model rather than the whole of it. The split measures the
+    // spread of object centres, so a batch is never smaller than one object however tight the
+    // fraction is -- what it bounds is how far a run may reach, not how big one object may be.
+    for (const VkmScene::DrawBatch& batch : scene.getDrawBatches())
     {
-        const glm::vec3 point((corner & 1u) ? world._max.x : world._min.x,
-                              (corner & 2u) ? world._max.y : world._min.y,
-                              (corner & 4u) ? world._max.z : world._min.z);
-        CHECK(glm::length(point - batch._boundsCenter) <= batch._boundsRadius + 1e-4f);
+        CHECK(batch._materialIndex == 0);
+        CHECK(2.0f * batch._boundsRadius < sceneDiagonal);
     }
 
-    // And tight enough to be worth testing against: a sphere around the whole scene would pass
-    // the check above while culling nothing.
-    CHECK(batch._boundsCenter.x == doctest::Approx(1.0f));
-    CHECK(batch._boundsRadius < glm::length(world.getExtent()));
+    // Still contiguous and still covering: the split moves where runs break, not what they hold.
+    uint32_t expectedFirst = 0;
+    for (const VkmScene::DrawBatch& batch : scene.getDrawBatches())
+    {
+        CHECK(batch._firstObject == expectedFirst);
+        expectedFirst += batch._objectCount;
+    }
+    CHECK(expectedFirst == static_cast<uint32_t>(scene.getObjects().size()));
 }

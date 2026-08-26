@@ -120,7 +120,7 @@ namespace vkm
     * unlit rather than looking wrong. An entry is kVkmBindlessPushConstantSize bytes, so the
     * whole ring is 8192 * 128 * FRAME_BUFFER_COUNT = 3 MiB.
     */
-    inline constexpr uint32_t kVkmPushConstantRingEntryCount = 8192;
+    inline constexpr uint32_t kVkmPushConstantRingEntryCount = 16384;
 
     // Total entries the ring buffer holds: one region per frame slot.
     inline constexpr uint32_t kVkmPushConstantRingTotalEntryCount =

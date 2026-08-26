@@ -168,6 +168,15 @@ namespace vkm
     * convention (+Y up, [0,1] depth). Free-standing so the culling test can build the same planes
     * the scene does.
     */
+    /*
+    * @brief How much of the scene one draw batch may span, as a fraction of the scene's diagonal.
+    * @details A batch is the unit a viewpoint accepts or rejects whole, so its size is a trade:
+    * larger batches encode fewer draws, smaller ones can actually be culled. A material used
+    * across a whole model produces a batch that spans it and can never be rejected, which is what
+    * this bounds.
+    */
+    inline constexpr float kBatchSplitFraction = 0.15f;
+
     void vkmExtractFrustumPlanes(const glm::mat4& viewProjection, glm::vec4* outPlanes);
 
     /*
