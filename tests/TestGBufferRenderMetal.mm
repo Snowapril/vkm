@@ -68,6 +68,13 @@ TEST_CASE("Metal texture streaming - a streamed-out material texture is a new re
     vkmtest::runTextureStreamingSwapTest(fixture.driver.get());
 }
 
+TEST_CASE("Metal texture streaming - turning the switch off returns a coarsened texture to its whole chain")
+{
+    MetalGBufferRenderFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runTextureStreamingDisableRestoresChainTest(fixture.driver.get());
+}
+
 TEST_CASE("Metal texture feedback - the shader reports the level it wanted and the streamer acts on it") {
     MetalGBufferRenderFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
