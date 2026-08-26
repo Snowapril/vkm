@@ -172,7 +172,6 @@
 - VkmUpscalerMetal never queries MTLFXTemporalScalerDescriptor's supportedInputContentMin/MaxScale (1.0-3.0 on M3 Pro), so an out-of-range ratio fails as a nil scaler rather than a clear rejection.
 - model_viewer sizes its depth texture from the swapchain extent, so it cannot consume the engine's upscale mode until that follows getRenderExtent().
 - Stale .gcda files left by a recompiled coverage build crash UnitTests inside __llvm_gcov_writeout at exit, which run_tests.py reports as FAIL even though doctest printed SUCCESS; deleting build/<backend>/**/*.gcda clears it.
-<<<<<<< HEAD
 - Texture streaming holds no CPU pixels between rebuilds, so streaming *down* re-decodes the file and rebuilds the whole chain to keep only its tail.
 - Texture streaming runs one rebuild at a time and uploads `_maxLevelUploadsPerTick` levels per frame, so a large camera move converges over many frames.
 - Texture streaming is off without `VkmDriverCapabilityFlags::BindlessTextures` (WebGPU): a per-draw set-3 material table has no slot to re-point and is immutable once built.
@@ -193,7 +192,10 @@
 - Texture feedback rides a set-0 singleton the WebGPU graphics bind group deliberately omits, so that backend is tier 0 permanently; WGSL has no LOD-query builtin either.
 - MoltenVK reports no `RayTracing`, so on macOS Vulkan every ray-query, path-tracer and ReSTIR test skips: the acceleration-structure binding move and the `gi_restir_lighting` fragment-stage storage-buffer fix are verified on Metal only and need a discrete-GPU Vulkan run.
 - `TestAliasedTexture`'s "disjoint lifetimes share bytes" case segfaulted once in four full Vulkan runs and reproduced neither alone nor on repeat; the aliasing path is untouched by the streaming work.
-=======
+- Sparse per-mip residency is Metal-only: `vkQueueBindSparse` takes `VkBindSparseInfo` rather than `VkSubmitInfo2` so it cannot reuse `submit()`, and MoltenVK reports `sparseResidencyImage2D = false`, so the path needs a discrete-GPU device to be written against at all.
+- `runMaterialTextureTest` failed one Metal Release run with the base colour sampling black and passed on re-run unchanged; that texture is sparse now and mapping updates are queue operations, so a copy running ahead of the mapping that backs its level would look exactly like this.
+- The min-LOD clamp is compiled only under `VKM_BACKEND_METAL`: SPIR-V's `MinLod` capability requires `shaderResourceMinLod`, which lavapipe lacks, and a module declaring a capability the device lacks fails `vkCreateShaderModule` outright.
+- ImGui renders nothing in either sample, including panels this work did not touch, so the texture-streaming controls and readout have been asserted by tests but never looked at.
 - The traced tier's NEE does not see punctual lights, so ReSTIR and the reference path tracer light a point-lit scene differently from the deferred image.
 - Area lights are shadowed only in the traced tier; the raster tier neither shades nor shadows emissive triangles.
 - Cascades do not blend at their boundaries, so a receiver crossing one can show a visible step in shadow softness and bias.
@@ -207,4 +209,3 @@
 - The probe budget and the shadow tile count are each sized against a hand-picked share of the push-constant ring, so a scene with more draw batches than Sponza silently clamps them again.
 - The probe capture's scene-fitted shadow tile is one tile for the whole scene, so its shadows are far coarser than the cascades the camera pass reads.
 - Per-face probe culling only removes 28% of the capture's draws, because a draw batch is a material run and half of Sponza's span more than half the model.
->>>>>>> origin/main
