@@ -5462,7 +5462,6 @@ driver, which is why the collectors take a summary list rather than a pool.
 ### Deviations
 
 (none)
-<<<<<<< HEAD
 
 ### CI caught three things a Debug-only, single-device run could not
 
@@ -5526,7 +5525,6 @@ now sparse and mapping updates are queue operations: a copy running ahead of the
 its level would look exactly like this. `virtual_texturing.md` §10 already records that the
 `MTLStageResourceState` barrier the header asks for was "not observed to be required" rather than
 shown unnecessary — this is the first evidence that the question is still open.
-=======
 ## 2026-08-22 — Punctual lights and shadow maps
 
 Point and spot lights did not exist in the engine at all; the raster tier cast no shadow of any
@@ -5594,4 +5592,3 @@ them:
   **Done instead:** rounded to two decimals before serializing.
   **Why:** a float widened to double serializes as `1.2400000095367432`. Two decimals is exactly
   what the slider displays, and keeps a file a user may hand-edit readable.
->>>>>>> origin/main
