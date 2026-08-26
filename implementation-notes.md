@@ -5725,5 +5725,27 @@ interior -0.07%, i.e. nothing), but neither exercises deep occlusion with real v
 that is absence of evidence. Trading the deep end of the rejection curve for a boundary
 artifact is the wrong way round, and the test suite would not catch the regression.
 
+That last point is now fixed regardless of the artifact: a case authoring real variance and
+splitting the probes into a visible half and a partly occluded one reads the curve directly,
+and separates the two exponents at 0.146 against 0.233.
+
+**Attempt 3, reverted:** leave the Chebyshev curve and the normalization alone, and replace
+only the hard `totalWeight <= 1e-6` cliff with a smoothstep over the fraction of the
+surrounding grid that can see the point. Designed to touch nothing else -- at or above the
+threshold the confidence is 1 -- and the new test confirmed that precisely, reading 0.14563
+either way. It still came out looking like attempt 1: bigger, blacker teeth, and the indirect
+channel down 10% overall (6.655 to 5.967).
+
+That third result is what settles the question. The teeth are not a cliff sitting on an
+otherwise smooth field, so no reshaping of the output can soften them. Around each black tooth
+is a broad region whose visibility is low but non-zero, and the normalization renders all of it
+at full brightness; any mapping that attenuates by visibility -- proportional, ramped, or
+otherwise -- necessarily reveals that region instead, and it is larger than the teeth were. The
+spikiness is in the visibility field itself, sampled at probe spacing. The lookup's arithmetic
+is not where it can be fixed.
+
 What would actually fix it: more probes, or the traced tier, which does not interpolate between
-probes at all. Both are already the documented answers (TODO.md).
+probes at all. Both are already the documented answers (TODO.md). A third would be making the
+visibility field itself smoother -- interpolating the moments across probes before the
+Chebyshev test rather than testing per probe and blending the verdicts -- which is a change to
+what the distance atlas means, not to the lookup, and was not attempted.
