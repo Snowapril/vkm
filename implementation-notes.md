@@ -5593,6 +5593,7 @@ them:
   **Why:** a float widened to double serializes as `1.2400000095367432`. Two decimals is exactly
   what the slider displays, and keeps a file a user may hand-edit readable.
 
+
 ## 2026-08-26 — Turning streaming off restores the full chain
 
 `_enabled` was a freeze, not a switch. `VkmTextureStreamer::update()` returned on it before doing
@@ -5632,3 +5633,119 @@ The end-to-end test is the assertion that matters: the camera does not move betw
 and restoring, which is what separates "restored because the switch went off" from "the selection
 changed its mind". It re-samples the G-buffer texel afterwards, since a restore that rebuilt the
 texture but left the material naming the released slot would still report level 0.
+
+
+## 2026-08-26 — Multiple glTF scenes per sample, with a per-model gizmo
+
+- `VkmSceneObject` gains `_modelIndex`, stamped by `addModel()` from a per-scene counter and
+  reset by `destroy()`. Needed because `addModel()` ends with `buildDrawBatches()`, which
+  `stable_sort`s `_objects` -- a model's objects are not a contiguous range, so an index range
+  recorded at add time is worthless and the tag is the only way to name them afterwards.
+- Both samples take a comma-separated path list in their existing cvar and keep, per model, a
+  gizmo matrix plus a snapshot of its objects' baked world transforms taken right after
+  `build()`. A drag republishes `gizmo * baked[i]` for every object of that model, so repeated
+  drags compose onto the load-time placement instead of accumulating drift.
+- Nothing else is refreshed for rasterization: `setObjectTransform()` already rewrites the GPU
+  record and the normal transform, widens the dirty range `recordUpdate()` uploads, and flags the
+  batch bounds that `recordUpdate()` then refreshes on its own.
+- `model_viewer` gets an Available/Loaded browser; Add, Replace and Remove all route through one
+  `rebuildScene(paths)` because `addModel()` must precede `build()`. `gi` loads from the command
+  line only.
+
+### Deviations
+
+- **Planned:** one place for the comma-splitting helper.
+  **Done instead:** `splitScenePaths()` is duplicated in each sample's anonymous namespace.
+  **Why:** `src/samples` must not be referenced by the library and there is no shared sample
+  utility, so the alternative was adding a general string-split to `vkm/base` for two callers of
+  sample CLI parsing. Twelve duplicated lines is the smaller cost.
+- **Planned:** leave `gi`'s existing gizmo arbitration alone.
+  **Done instead:** added a `_modelGizmo` flag that the light and probe gizmos both yield to.
+  **Why:** the existing single `_lightGizmo` bool cannot express three states. Converting it to an
+  enum would have changed the probe gizmo's implicit always-on-unless-light behavior; the extra
+  flag leaves both existing paths byte-identical when the model gizmo is off.
+- **Planned:** leave `model_viewer`'s default scene alone.
+  **Done instead:** its `gv_model_path` default now points at the committed EmissiveSphere rather
+  than DamagedHelmet.
+  **Why:** the whole point of committing the sphere is that the sample opens something without
+  `download_scenes.py` having run. DamagedHelmet is still one Add away in the browser.
+
+### Not addressed
+
+- A moved emitter still lights from where it was loaded: the light table bakes emissive triangles
+  into world space at `build()` (TODO.md). Both samples say so next to the gizmo.
+
+
+## 2026-08-26 — Probe volume: the scalloped teeth at an emitter's shadow terminator
+
+A bright emitter near a wall leaves a row of regular triangular teeth along its shadow
+terminator. Traced to the probe volume, not to shadows, and **not fixed** -- what follows is
+the evidence and two attempts that did not earn their place.
+
+Diagnosis, each step a render:
+
+- Present with the emitter absent, so it is not the multi-model change.
+- A 12,096-triangle sphere gives teeth identical to a 720-triangle one, so it is not the
+  caster's silhouette.
+- `--gv_gi_debug_view=1` (direct) is black across the region; `=2` (indirect) carries all of it.
+  So it is the probe lookup, not the shadow atlas.
+- Teeth per unit wall track probe spacing: 10x6x10 gives four broad lobes, 40x20x40 none.
+- `--gv_gi_probe_normal_bias=0.8` makes it worse, hard black slivers replacing soft teeth --
+  the query point lands past the geometry.
+
+The mechanism is the lookup being effectively binary. `sampleProbeVolume` folds the Chebyshev
+term into the same weight it normalizes by, so the normalization divides visibility straight
+back out: one surviving probe returns full irradiance, and the last one dropping out returns
+black. The teeth are the boundary of the region where all eight probes reject, at probe
+resolution.
+
+**Attempt 1, reverted:** keep visibility out of the normalization -- accumulate
+`geometric * visibility * irradiance` over `sum(geometric)`. Correct on paper, and much worse
+on screen: the binary lookup was masking how much the Chebyshev term varies between adjacent
+probes, and attenuating properly exposed all of it as a broad dark band.
+
+**Attempt 2, not landed:** square the Chebyshev weight instead of cubing it. This does remove
+most of the hard black cores, and all 337 test cases still pass -- but the tests cannot see the
+difference. `runProbeLightingTest` authors its distance atlas with variance exactly zero, where
+cube and square are both exactly zero, so no existing assertion discriminates the two. What the
+function actually does, per standard deviation of the probe's recorded depth:
+
+| delta / sd | chebyshev | cubed | squared | squared/cubed |
+|---|---|---|---|---|
+| 0.5 | 0.800 | 0.512 | 0.640 | 1.25x |
+| 1.0 | 0.500 | 0.125 | 0.250 | 2x |
+| 2.0 | 0.200 | 0.008 | 0.040 | 5x |
+| 4.0 | 0.059 | 0.0002 | 0.0035 | 17x |
+| 8.0 | 0.015 | 0.0000 | 0.0002 | 65x |
+
+Squaring is nearly free where the surface is barely behind what the probe saw, and 5x to 65x
+more permissive where it is well behind -- which is exactly the through-a-wall case the term
+exists to reject. Measured scenes show no leak (Cornell + emitter +0.8% indirect, Sponza's
+interior -0.07%, i.e. nothing), but neither exercises deep occlusion with real variance, so
+that is absence of evidence. Trading the deep end of the rejection curve for a boundary
+artifact is the wrong way round, and the test suite would not catch the regression.
+
+That last point is now fixed regardless of the artifact: a case authoring real variance and
+splitting the probes into a visible half and a partly occluded one reads the curve directly,
+and separates the two exponents at 0.146 against 0.233.
+
+**Attempt 3, reverted:** leave the Chebyshev curve and the normalization alone, and replace
+only the hard `totalWeight <= 1e-6` cliff with a smoothstep over the fraction of the
+surrounding grid that can see the point. Designed to touch nothing else -- at or above the
+threshold the confidence is 1 -- and the new test confirmed that precisely, reading 0.14563
+either way. It still came out looking like attempt 1: bigger, blacker teeth, and the indirect
+channel down 10% overall (6.655 to 5.967).
+
+That third result is what settles the question. The teeth are not a cliff sitting on an
+otherwise smooth field, so no reshaping of the output can soften them. Around each black tooth
+is a broad region whose visibility is low but non-zero, and the normalization renders all of it
+at full brightness; any mapping that attenuates by visibility -- proportional, ramped, or
+otherwise -- necessarily reveals that region instead, and it is larger than the teeth were. The
+spikiness is in the visibility field itself, sampled at probe spacing. The lookup's arithmetic
+is not where it can be fixed.
+
+What would actually fix it: more probes, or the traced tier, which does not interpolate between
+probes at all. Both are already the documented answers (TODO.md). A third would be making the
+visibility field itself smoother -- interpolating the moments across probes before the
+Chebyshev test rather than testing per probe and blending the verdicts -- which is a change to
+what the distance atlas means, not to the lookup, and was not attempted.

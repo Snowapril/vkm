@@ -229,8 +229,10 @@ namespace vkm
             VkmSceneObject object;
             object._worldTransform = item._worldTransform;
             object._meshEntryIndex = meshEntryIndex;
+            object._modelIndex = _modelCount;
             _objects.push_back(object);
         }
+        ++_modelCount;
 
         // Batching depends only on the objects and their mesh entries, so it is kept up to date
         // here rather than in build(): that keeps getDrawBatches() meaningful (and testable)
@@ -1339,6 +1341,7 @@ namespace
 
         _meshEntries.clear();
         _objects.clear();
+        _modelCount = 0;
         _materials.clear();
         _objectData.clear();
         _drawBatches.clear();

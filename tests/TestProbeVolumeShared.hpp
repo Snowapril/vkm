@@ -29,6 +29,7 @@
 
 #include <vector>
 
+#include <functional>
 #include <set>
 
 namespace vkmtest
@@ -399,6 +400,95 @@ namespace vkmtest
 
             volume.clearProbeOffsets();
             REQUIRE(volume.uploadProbeOffsets());
+        }
+
+        /*
+        * Every other case here authors a variance of exactly zero, where the Chebyshev term is
+        * either 1 or 0 and its shape past that is invisible -- so none of them can tell the
+        * rejection curve apart from any other curve through the same two points. This one gives
+        * the probes a real variance and splits them, so the returned colour is a blend whose
+        * value depends on how hard a partially occluded probe is rejected.
+        */
+        SUBCASE("a partly occluded probe contributes in proportion to how well it is seen")
+        {
+            // Half the probes fully visible and black, half partly occluded and white. The result
+            // is therefore the occluded half's weight as a fraction of the total -- a direct read
+            // of the rejection curve rather than of the irradiance, which normalization would
+            // otherwise divide straight back out. That is why a uniform fill cannot see this.
+            const auto fillPerProbe = [&](vkm::VkmResourceHandle handle, const glm::uvec2& extent,
+                                          uint32_t resolution,
+                                          const std::function<glm::uvec2(uint32_t)>& originOf,
+                                          const std::function<glm::vec4(uint32_t)>& valueOf) {
+                std::vector<uint16_t> texels(static_cast<size_t>(extent.x) * extent.y * 4, 0);
+                const uint32_t cellSize = resolution + 2u * vkm::VkmProbeVolume::kBorderTexels;
+                for (uint32_t probe = 0; probe < volume.getProbeCount(); ++probe)
+                {
+                    // The border is written too: a lookup lands on interior texels, but leaving the
+                    // border at zero makes any bilinear tap near an edge blend towards black and
+                    // turns this into a test of the border rather than of the weight. The getter
+                    // returns the cell's own origin -- adding kBorderTexels is what reaches the
+                    // interior -- so the whole cell starts here.
+                    const glm::uvec2 origin = originOf(probe);
+                    const glm::vec4 value = valueOf(probe);
+                    for (uint32_t y = 0; y < cellSize; ++y)
+                    {
+                        for (uint32_t x = 0; x < cellSize; ++x)
+                        {
+                            const size_t texel =
+                                (static_cast<size_t>(origin.y + y) * extent.x + (origin.x + x)) * 4;
+                            for (uint32_t c = 0; c < 4; ++c)
+                            {
+                                texels[texel + c] = encodeHalf(value[static_cast<int>(c)]);
+                            }
+                        }
+                    }
+                }
+                REQUIRE(driver->uploadToTexture(handle, texels.data(), texels.size() * sizeof(uint16_t)));
+            };
+
+            // Probes are indexed x-major (VkmProbeVolume::getProbeCoord); the parity of the index
+            // splits the eight surrounding the shaded point into two groups of four.
+            const auto isOccluded = [](uint32_t probe) { return (probe & 1u) != 0u; };
+
+            fillPerProbe(volume.getIrradianceTexture(), volume.getIrradianceAtlasExtent(),
+                         descriptor._irradianceResolution,
+                         [&](uint32_t p) { return volume.getIrradianceProbeTexelOrigin(p); },
+                         [&](uint32_t p) {
+                             return isOccluded(p) ? glm::vec4(1.0f, 1.0f, 1.0f, 1.0f)
+                                                  : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+                         });
+
+            // moments = (mean, mean^2 + variance). A visible probe reports a wall far past the
+            // shaded point, so it accepts outright; an occluded one reports a wall 2 units away
+            // with a variance of 1, and the eight probes sit 2.9 to 4.5 units off, so each lands
+            // partway down the curve rather than at either end of it.
+            fillPerProbe(volume.getDistanceTexture(), volume.getDistanceAtlasExtent(),
+                         descriptor._distanceResolution,
+                         [&](uint32_t p) { return volume.getDistanceProbeTexelOrigin(p); },
+                         [&](uint32_t p) {
+                             return isOccluded(p) ? glm::vec4(2.0f, 5.0f, 0.0f, 1.0f)
+                                                  : glm::vec4(1000.0f, 1000000.0f, 0.0f, 1.0f);
+                         });
+
+            const vkm::VkmTextureReadbackResult readback = shade();
+            const float partial = readHalfComponent(centerTexel(readback), 0);
+            MESSAGE("partial occlusion blend = " << partial);
+
+            // Strictly between the two ends: neither "an occluded probe is dropped" (0) nor "it is
+            // taken at face value" (the visible half is black, so a weight of 1 would read 0.5).
+            CHECK(partial > 0.02f);
+            CHECK(partial < 0.45f);
+            /*
+            * The curve's actual shape, measured rather than derived -- the trilinear and cosine
+            * terms weight the eight probes unequally, so this is not a closed form worth writing
+            * out. Cubing the Chebyshev weight reads 0.146 here and squaring it reads 0.233, so the
+            * bound has to sit between them to be worth anything.
+            *
+            * Deliberately not doctest::Approx: its epsilon multiplies (1.0 + the larger magnitude),
+            * so on a value this small even epsilon(0.25) admits +-0.31 and accepts both exponents.
+            */
+            CHECK(partial > 0.11f);
+            CHECK(partial < 0.19f);
         }
 
         driver->getRenderResourcePool()->releaseResource(target->getHandle());

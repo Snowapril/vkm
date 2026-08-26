@@ -158,6 +158,9 @@ namespace vkm
         // Batching key. 0 is the scene's default opaque pipeline; a caller assigns other ids when
         // it wants a distinct PSO for a subset of objects.
         uint32_t _pipelineId = 0;
+        // Which addModel() call placed this object. Batching reorders _objects, so a model's
+        // objects are not a contiguous run and this is the only way to name them afterwards.
+        uint32_t _modelIndex = INVALID_VALUE32;
     };
 
     /*
@@ -367,6 +370,8 @@ namespace vkm
 
         inline const std::vector<DrawBatch>& getDrawBatches() const { return _drawBatches; }
         inline const std::vector<VkmSceneObject>& getObjects() const { return _objects; }
+        // How many models addModel() has placed; a VkmSceneObject::_modelIndex is below this.
+        inline uint32_t getModelCount() const { return _modelCount; }
         /*
         * @brief The buffer the culling pass fills and the draws fetch from. Exposed so tooling and
         * tests can read back a batch's visible count, which lives at
@@ -541,6 +546,7 @@ namespace vkm
         std::array<std::unique_ptr<VkmSceneGeometryPool>, static_cast<size_t>(VkmVertexLayoutPreset::Count)> _pools;
         std::vector<MeshEntry> _meshEntries;
         std::vector<VkmSceneObject> _objects;
+        uint32_t _modelCount = 0; // addModel() calls so far; stamped into VkmSceneObject::_modelIndex
         std::vector<VkmMaterialData> _materials;
         std::vector<MaterialImageRefs> _materialImages; // 1:1 with _materials
         /*
