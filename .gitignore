@@ -444,5 +444,9 @@ dependencies/dxc-macos-build/
 # Sample scenes fetched by scripts/download_scenes.py
 resources/Scenes/*
 !resources/Scenes/.gitkeep
+# EmissiveSphere is committed, not downloaded: the directory has to be un-ignored before
+# anything inside it can be, the pattern above being Scenes/* rather than Scenes/**.
+!resources/Scenes/EmissiveSphere/
+!resources/Scenes/EmissiveSphere/**
 
 .DS_Store

@@ -6,6 +6,7 @@
 
 #if defined(VKM_ENABLE_IMGUI)
 #include <imgui.h>
+#include <ImGuizmo.h>
 #endif
 
 #include <vkm/base/common.h>
@@ -50,11 +51,13 @@
 
 using namespace vkm;
 
-// Which glTF to open at startup: ./model_viewer --gv_model_path=/path/to/scene.gltf
-// Defaults to the asset scripts/download_scenes.py drops into resources/Scenes/; when that
-// file is absent the viewer starts empty and the scene browser lists whatever else is there.
+// Which glTF(s) to open at startup, comma-separated:
+//   ./model_viewer --gv_model_path=/path/one.gltf,/path/two.gltf
+// Every listed file is loaded into one scene at the transform its own nodes give it; the Scene
+// Browser's gizmo is how two assets authored around the origin get separated. Defaults to the
+// sphere committed under resources/Scenes/, which is present without running download_scenes.py.
 VKM_GLOBAL_VARIABLE(std::string, gv_model_path,
-                    std::string(RESOURCES_DIR) + "Scenes/DamagedHelmet/DamagedHelmet.gltf");
+                    std::string(RESOURCES_DIR) + "Scenes/EmissiveSphere/EmissiveSphere.gltf");
 
 namespace
 {
@@ -92,6 +95,32 @@ namespace
         std::string _displayName; // path relative to the scenes directory
         std::string _path;
     };
+
+    /*
+    * @brief Splits a comma-separated cvar into individual paths, dropping empty entries.
+    * @details A global variable is a single string, so this is how one names several scenes. A
+    * value with no comma yields exactly one path, which is the single-scene case unchanged.
+    */
+    std::vector<std::string> splitScenePaths(const std::string& value)
+    {
+        std::vector<std::string> paths;
+        size_t begin = 0;
+        while (begin <= value.size())
+        {
+            const size_t comma = value.find(',', begin);
+            const size_t end = (comma == std::string::npos) ? value.size() : comma;
+            if (end > begin)
+            {
+                paths.push_back(value.substr(begin, end - begin));
+            }
+            if (comma == std::string::npos)
+            {
+                break;
+            }
+            begin = comma + 1;
+        }
+        return paths;
+    }
 
     // Walks resources/Scenes/ for glTF files. Scenes are one directory per asset (that is
     // how scripts/download_scenes.py lays them out), so the search has to be recursive.
@@ -233,16 +262,23 @@ public:
 
         _sceneEntries = scanSceneDirectory();
 
-        const std::string startupPath = gv_model_path.get();
+        std::vector<std::string> startupPaths;
         std::error_code ec;
-        if (std::filesystem::is_regular_file(startupPath, ec))
+        for (const std::string& path : splitScenePaths(gv_model_path.get()))
         {
-            loadScene(startupPath);
+            if (std::filesystem::is_regular_file(path, ec))
+            {
+                startupPaths.push_back(path);
+            }
+            else
+            {
+                VKM_DEBUG_INFO(("No scene at '" + path +
+                                "'; pick one in the Scene Browser or run scripts/download_scenes.py").c_str());
+            }
         }
-        else
+        if (!startupPaths.empty())
         {
-            VKM_DEBUG_INFO(("No scene at '" + startupPath +
-                            "'; pick one in the Scene Browser or run scripts/download_scenes.py").c_str());
+            rebuildScene(startupPaths);
         }
     }
 
@@ -274,12 +310,13 @@ public:
 #endif
 
         // Deferred to here so the swap never happens while the browser window is still
-        // being built (loadScene() invalidates what that code is iterating over).
-        if (!_pendingScenePath.empty())
+        // being built (rebuildScene() invalidates what that code is iterating over).
+        if (_hasPendingScenePaths)
         {
-            const std::string path = std::move(_pendingScenePath);
-            _pendingScenePath.clear();
-            loadScene(path);
+            const std::vector<std::string> paths = std::move(_pendingScenePaths);
+            _pendingScenePaths.clear();
+            _hasPendingScenePaths = false;
+            rebuildScene(paths);
         }
     }
 
@@ -344,6 +381,19 @@ public:
             _scene.recordUpdate(commandBuffer, frameIndex, frameData);
         });
 
+        // A moved object changes only its instance transform, so the structure the gizmo
+        // invalidated is rebuilt in place rather than recreated.
+        if (_accelerationStructureDirty)
+        {
+            auto rebuildSubGraph = renderGraph->beginComputeSubGraph("SceneAccelerationStructureRebuild");
+            rebuildSubGraph->addReferencedResource(_scene.getTopLevelAccelerationStructure(),
+                                                   VkmResourceAccess::AccelerationStructureBuildWrite);
+            rebuildSubGraph->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
+                _scene.recordAccelerationStructureUpdate(commandBuffer);
+            });
+            _accelerationStructureDirty = false;
+        }
+
         // Frustum culling and the emit pass that writes this frame's indirect draw arguments.
         auto cullSubGraph = renderGraph->beginComputeSubGraph("SceneCull");
         referenced.clear();
@@ -371,20 +421,40 @@ public:
 
 private:
     /*
-    * Replaces whatever is loaded with the glTF at `path`. Synchronous and stalling by
-    * nature -- VkmDriverBase::uploadToBuffer already blocks per buffer -- so the frame that
-    * triggers a load simply takes as long as the load does.
+    * @brief Replaces whatever is loaded with the glTFs at `paths`, in order.
+    * @details Synchronous and stalling by nature -- VkmDriverBase::uploadToBuffer already blocks
+    * per buffer -- so the frame that triggers a load simply takes as long as the load does. A
+    * model that fails to import is skipped and reported; the rest still load. Every model is
+    * placed at the transform its own nodes give it, and each keeps a gizmo transform on top of
+    * that, reset to identity here because a rebuild re-imports from scratch.
+    * @param paths Files to load. An empty list leaves the viewer with no scene.
     */
-    void loadScene(const std::string& path)
+    void rebuildScene(const std::vector<std::string>& paths)
     {
         VkmDriverBase* driver = _engine->getDriver();
 
-        VkmSceneModel model;
+        // Imported before anything is torn down, so a failed import leaves the current scene
+        // standing rather than emptying the viewer.
+        std::vector<VkmSceneModel> models;
+        std::vector<std::string> loadedPaths;
         std::string error;
-        if (!importGltfModel(path, &model, &error))
+        std::string failures;
+        for (const std::string& path : paths)
         {
-            _loadError = error;
-            VKM_DEBUG_ERROR(("Failed to import the model: " + error).c_str());
+            VkmSceneModel model;
+            if (!importGltfModel(path, &model, &error))
+            {
+                failures += (failures.empty() ? "" : "; ") + path + ": " + error;
+                VKM_DEBUG_ERROR(("Failed to import '" + path + "': " + error).c_str());
+                continue;
+            }
+            models.push_back(std::move(model));
+            loadedPaths.push_back(path);
+        }
+
+        if (models.empty() && !paths.empty())
+        {
+            _loadError = failures;
             return;
         }
 
@@ -394,31 +464,66 @@ private:
         driver->getCommandQueue(VkmCommandQueueType::Graphics, 0)->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
         _sceneReady = false;
         _scene.destroy(driver);
+        _models.clear();
+        _bakedTransforms.clear();
+        _meshCount = 0;
+        _vertexCount = 0;
 
-        if (!_scene.addModel(model, &error) ||
-            !_scene.build(driver, _engine->getPipelineStateManager(), &error))
+        for (size_t i = 0; i < models.size(); ++i)
+        {
+            if (!_scene.addModel(models[i], &error))
+            {
+                _loadError = error;
+                VKM_DEBUG_ERROR(("Failed to add '" + loadedPaths[i] + "': " + error).c_str());
+                _scene.destroy(driver);
+                _models.clear();
+                return;
+            }
+            LoadedModel entry;
+            entry._path = loadedPaths[i];
+            entry._displayName = std::filesystem::path(loadedPaths[i]).filename().string();
+            _models.push_back(std::move(entry));
+            _meshCount += models[i]._meshes.size();
+            _vertexCount += models[i].getTotalVertexCount();
+        }
+
+        if (!_models.empty() && !_scene.build(driver, _engine->getPipelineStateManager(), &error))
         {
             _loadError = error;
             VKM_DEBUG_ERROR(("Failed to build the scene: " + error).c_str());
             // Unlike a failed import, this already tore the previous scene down.
             _scene.destroy(driver);
-            _currentScenePath.clear();
+            _models.clear();
             return;
         }
 
         // Optional: the structures give the F4 inspector (and any ray-query pass) something to
         // show, and a backend without the capability just skips.
-        if ((driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::RayTracing) != 0)
+        _accelerationStructureReady = false;
+        if (!_models.empty() &&
+            (driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::RayTracing) != 0)
         {
             std::string asError;
-            if (!_scene.buildAccelerationStructures(driver, &asError))
+            if (_scene.buildAccelerationStructures(driver, &asError))
+            {
+                _accelerationStructureReady = true;
+            }
+            else
             {
                 VKM_DEBUG_ERROR(("Failed to build acceleration structures: " + asError).c_str());
             }
         }
 
-        _meshCount = model._meshes.size();
-        _vertexCount = model.getTotalVertexCount();
+        // The placement each object was built with. A gizmo drag composes onto this rather than
+        // onto the object's current transform, so dragging cannot accumulate drift.
+        const std::vector<VkmSceneObject>& objects = _scene.getObjects();
+        _bakedTransforms.reserve(objects.size());
+        for (const VkmSceneObject& object : objects)
+        {
+            _bakedTransforms.push_back(object._worldTransform);
+        }
+
+        _selectedModel = _models.empty() ? -1 : 0;
         // frame() moves the shared camera whether or not the orbit controller is the registered
         // one, so in fly mode the fly controller has to adopt the framed pose or its next tick
         // would snap the view back.
@@ -427,14 +532,47 @@ private:
         {
             _flyController.syncFromCamera();
         }
-        _currentScenePath = path;
-        _loadError.clear();
-        _sceneReady = true;
+        _loadError = failures;
+        _sceneReady = !_models.empty();
 
-        VKM_DEBUG_LOG(("Imported '" + path + "': " +
+        VKM_DEBUG_LOG((std::to_string(_models.size()) + " model(s): " +
                        std::to_string(_meshCount) + " meshes, " +
                        std::to_string(_vertexCount) + " vertices, " +
                        std::to_string(_scene.getDrawBatches().size()) + " draw batches").c_str());
+    }
+
+    // The paths currently loaded, in order -- what a rebuild after an add or a remove replays.
+    std::vector<std::string> loadedPaths() const
+    {
+        std::vector<std::string> paths;
+        paths.reserve(_models.size());
+        for (const LoadedModel& model : _models)
+        {
+            paths.push_back(model._path);
+        }
+        return paths;
+    }
+
+    /*
+    * @brief Republishes every object of `modelIndex` under that model's gizmo transform.
+    * @details Batching reorders the scene's objects, so the model's objects are found by their
+    * _modelIndex rather than by a contiguous range. setObjectTransform widens the range
+    * recordUpdate() re-uploads and flags the batch bounds, so nothing else has to be refreshed
+    * here for rasterization.
+    * @param modelIndex Which loaded model moved.
+    */
+    void applyModelTransform(size_t modelIndex)
+    {
+        const glm::mat4& gizmo = _models[modelIndex]._transform;
+        const std::vector<VkmSceneObject>& objects = _scene.getObjects();
+        for (uint32_t i = 0; i < static_cast<uint32_t>(objects.size()); ++i)
+        {
+            if (objects[i]._modelIndex == static_cast<uint32_t>(modelIndex))
+            {
+                _scene.setObjectTransform(i, gizmo * _bakedTransforms[i]);
+            }
+        }
+        _accelerationStructureDirty = _accelerationStructureReady;
     }
 
 #if defined(VKM_ENABLE_IMGUI)
@@ -459,14 +597,17 @@ private:
                                "the sample scenes, then press Rescan.");
         }
 
-        if (ImGui::BeginListBox("##scenes", ImVec2(-FLT_MIN, 8 * ImGui::GetTextLineHeightWithSpacing())))
+        // Available: what is on disk. Selecting here picks what Add and Replace will load, and
+        // says nothing about what is currently in the scene -- that is the Loaded list below.
+        ImGui::TextDisabled("Available");
+        if (ImGui::BeginListBox("##scenes", ImVec2(-FLT_MIN, 6 * ImGui::GetTextLineHeightWithSpacing())))
         {
-            for (const SceneEntry& entry : _sceneEntries)
+            for (int i = 0; i < static_cast<int>(_sceneEntries.size()); ++i)
             {
-                const bool selected = (entry._path == _currentScenePath);
-                if (ImGui::Selectable(entry._displayName.c_str(), selected) && !selected)
+                const bool selected = (i == _selectedEntry);
+                if (ImGui::Selectable(_sceneEntries[i]._displayName.c_str(), selected))
                 {
-                    _pendingScenePath = entry._path;
+                    _selectedEntry = i;
                 }
                 if (selected)
                 {
@@ -476,24 +617,72 @@ private:
             ImGui::EndListBox();
         }
 
-        ImGui::Separator();
-        if (_sceneReady)
+        const bool hasEntry = _selectedEntry >= 0 && _selectedEntry < static_cast<int>(_sceneEntries.size());
+        // Both go through the same rebuild: addModel() must precede build(), so adding one model
+        // to a built scene means re-importing all of them.
+        if (!hasEntry)
         {
-            ImGui::Text("Loaded: %s", _currentScenePath.c_str());
-            ImGui::Text("%zu meshes, %llu vertices, %zu objects in %zu batch(es)",
-                        _meshCount,
-                        static_cast<unsigned long long>(_vertexCount),
-                        _scene.getObjects().size(),
-                        _scene.getDrawBatches().size());
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("Add"))
+        {
+            _pendingScenePaths = loadedPaths();
+            _pendingScenePaths.push_back(_sceneEntries[_selectedEntry]._path);
+            _hasPendingScenePaths = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Replace"))
+        {
+            _pendingScenePaths = {_sceneEntries[_selectedEntry]._path};
+            _hasPendingScenePaths = true;
+        }
+        if (!hasEntry)
+        {
+            ImGui::EndDisabled();
+        }
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Loaded (%zu)", _models.size());
+        if (_models.empty())
+        {
+            ImGui::TextDisabled("No scene loaded");
+        }
+        else
+        {
+            if (ImGui::BeginListBox("##loaded", ImVec2(-FLT_MIN, 4 * ImGui::GetTextLineHeightWithSpacing())))
+            {
+                for (int i = 0; i < static_cast<int>(_models.size()); ++i)
+                {
+                    char label[256];
+                    std::snprintf(label, sizeof(label), "[%d] %s", i, _models[i]._displayName.c_str());
+                    if (ImGui::Selectable(label, i == _selectedModel))
+                    {
+                        _selectedModel = i;
+                    }
+                }
+                ImGui::EndListBox();
+            }
+
+            if (ImGui::Button("Remove") && _selectedModel >= 0)
+            {
+                std::vector<std::string> paths = loadedPaths();
+                paths.erase(paths.begin() + _selectedModel);
+                _pendingScenePaths = std::move(paths);
+                _hasPendingScenePaths = true;
+            }
+            ImGui::SameLine();
             if (ImGui::Button("Reframe camera"))
             {
                 setFlyMode(false);
                 frameCameraOnBounds(_cameraController, _scene.computeWorldBounds());
             }
-        }
-        else
-        {
-            ImGui::TextDisabled("No scene loaded");
+
+            ImGui::Text("%zu meshes, %llu vertices, %zu objects in %zu batch(es)",
+                        _meshCount,
+                        static_cast<unsigned long long>(_vertexCount),
+                        _scene.getObjects().size(),
+                        _scene.getDrawBatches().size());
+            drawGizmoUi();
         }
 
         ImGui::Separator();
@@ -544,6 +733,64 @@ private:
         }
 
         ImGui::End();
+    }
+    /*
+    * @brief Mode buttons and the mouse gizmo for the selected model.
+    * @details ImGuizmo draws into the current ImGui frame and reads the mouse from it, so it
+    * belongs here rather than in render(). The whole matrix is read back, translation, rotation
+    * and scale alike, and becomes the model's transform.
+    */
+    void drawGizmoUi()
+    {
+        if (_selectedModel < 0 || _selectedModel >= static_cast<int>(_models.size()))
+        {
+            return;
+        }
+
+        ImGui::Separator();
+        int operation = static_cast<int>(_gizmoOperation);
+        ImGui::TextDisabled("Gizmo");
+        bool changedMode = ImGui::RadioButton("Translate", &operation, static_cast<int>(ImGuizmo::TRANSLATE));
+        ImGui::SameLine();
+        changedMode |= ImGui::RadioButton("Rotate", &operation, static_cast<int>(ImGuizmo::ROTATE));
+        ImGui::SameLine();
+        changedMode |= ImGui::RadioButton("Scale", &operation, static_cast<int>(ImGuizmo::SCALE));
+        if (changedMode)
+        {
+            _gizmoOperation = static_cast<ImGuizmo::OPERATION>(operation);
+        }
+
+        LoadedModel& model = _models[static_cast<size_t>(_selectedModel)];
+        if (ImGui::Button("Reset transform"))
+        {
+            model._transform = glm::mat4(1.0f);
+            applyModelTransform(static_cast<size_t>(_selectedModel));
+        }
+
+        const VkmSwapChainBase* swapChain = _engine->getMainSwapChain();
+        if (swapChain == nullptr)
+        {
+            return;
+        }
+        const glm::uvec2 extent = swapChain->getExtent();
+
+        ImGuizmo::BeginFrame();
+        ImGuizmo::SetOrthographic(false);
+        ImGuizmo::SetRect(0.0f, 0.0f, static_cast<float>(extent.x), static_cast<float>(extent.y));
+
+        const glm::mat4 view = _camera.getView();
+        const glm::mat4 projection = _camera.getProjection();
+        glm::mat4 transform = model._transform;
+        if (ImGuizmo::Manipulate(&view[0][0], &projection[0][0], _gizmoOperation, ImGuizmo::WORLD,
+                                 &transform[0][0]))
+        {
+            model._transform = transform;
+            applyModelTransform(static_cast<size_t>(_selectedModel));
+        }
+
+        // The light table bakes emissive triangles in world space at build (TODO.md), so a moved
+        // emitter lights the scene from where it was loaded until the scene is rebuilt.
+        ImGui::TextDisabled("Emissive lighting stays where the model was loaded");
     }
 #endif // VKM_ENABLE_IMGUI
 
@@ -713,10 +960,30 @@ private:
     bool _flyMode{false};
     DebugMode _debugMode{DebugMode::Lit};
     std::vector<SceneEntry> _sceneEntries;
-    std::string _currentScenePath;
-    std::string _pendingScenePath; // set by the browser, consumed at the end of update()
+    // One loaded glTF. _transform is what the gizmo edits; it composes onto the placement the
+    // asset's own nodes gave each object, which _bakedTransforms holds.
+    struct LoadedModel
+    {
+        std::string _path;
+        std::string _displayName;
+        glm::mat4 _transform{1.0f};
+    };
+    std::vector<LoadedModel> _models;
+    // 1:1 with VkmScene::getObjects(), captured right after build().
+    std::vector<glm::mat4> _bakedTransforms;
+    int _selectedModel{-1}; // which model the gizmo drives; -1 when nothing is loaded
+    int _selectedEntry{-1}; // which Available row Add/Replace act on
+#if defined(VKM_ENABLE_IMGUI)
+    ImGuizmo::OPERATION _gizmoOperation{ImGuizmo::TRANSLATE};
+#endif
+    // Set by the browser, consumed at the end of update(): loading tears down the scene the
+    // browser is still iterating over.
+    std::vector<std::string> _pendingScenePaths;
+    bool _hasPendingScenePaths{false};
     std::string _loadError;
     bool _sceneReady{false};
+    bool _accelerationStructureReady{false};
+    bool _accelerationStructureDirty{false};
     // Import-time totals kept for the browser's stats line; the CPU-side model is dropped once
     // its geometry is pooled.
     size_t _meshCount{0};

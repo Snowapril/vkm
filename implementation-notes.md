@@ -5593,6 +5593,7 @@ them:
   **Why:** a float widened to double serializes as `1.2400000095367432`. Two decimals is exactly
   what the slider displays, and keeps a file a user may hand-edit readable.
 
+
 ## 2026-08-26 — Turning streaming off restores the full chain
 
 `_enabled` was a freeze, not a switch. `VkmTextureStreamer::update()` returned on it before doing
@@ -5632,3 +5633,44 @@ The end-to-end test is the assertion that matters: the camera does not move betw
 and restoring, which is what separates "restored because the switch went off" from "the selection
 changed its mind". It re-samples the G-buffer texel afterwards, since a restore that rebuilt the
 texture but left the material naming the released slot would still report level 0.
+
+
+## 2026-08-26 — Multiple glTF scenes per sample, with a per-model gizmo
+
+- `VkmSceneObject` gains `_modelIndex`, stamped by `addModel()` from a per-scene counter and
+  reset by `destroy()`. Needed because `addModel()` ends with `buildDrawBatches()`, which
+  `stable_sort`s `_objects` -- a model's objects are not a contiguous range, so an index range
+  recorded at add time is worthless and the tag is the only way to name them afterwards.
+- Both samples take a comma-separated path list in their existing cvar and keep, per model, a
+  gizmo matrix plus a snapshot of its objects' baked world transforms taken right after
+  `build()`. A drag republishes `gizmo * baked[i]` for every object of that model, so repeated
+  drags compose onto the load-time placement instead of accumulating drift.
+- Nothing else is refreshed for rasterization: `setObjectTransform()` already rewrites the GPU
+  record and the normal transform, widens the dirty range `recordUpdate()` uploads, and flags the
+  batch bounds that `recordUpdate()` then refreshes on its own.
+- `model_viewer` gets an Available/Loaded browser; Add, Replace and Remove all route through one
+  `rebuildScene(paths)` because `addModel()` must precede `build()`. `gi` loads from the command
+  line only.
+
+### Deviations
+
+- **Planned:** one place for the comma-splitting helper.
+  **Done instead:** `splitScenePaths()` is duplicated in each sample's anonymous namespace.
+  **Why:** `src/samples` must not be referenced by the library and there is no shared sample
+  utility, so the alternative was adding a general string-split to `vkm/base` for two callers of
+  sample CLI parsing. Twelve duplicated lines is the smaller cost.
+- **Planned:** leave `gi`'s existing gizmo arbitration alone.
+  **Done instead:** added a `_modelGizmo` flag that the light and probe gizmos both yield to.
+  **Why:** the existing single `_lightGizmo` bool cannot express three states. Converting it to an
+  enum would have changed the probe gizmo's implicit always-on-unless-light behavior; the extra
+  flag leaves both existing paths byte-identical when the model gizmo is off.
+- **Planned:** leave `model_viewer`'s default scene alone.
+  **Done instead:** its `gv_model_path` default now points at the committed EmissiveSphere rather
+  than DamagedHelmet.
+  **Why:** the whole point of committing the sphere is that the sample opens something without
+  `download_scenes.py` having run. DamagedHelmet is still one Add away in the browser.
+
+### Not addressed
+
+- A moved emitter still lights from where it was loaded: the light table bakes emissive triangles
+  into world space at `build()` (TODO.md). Both samples say so next to the gizmo.

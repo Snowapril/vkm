@@ -86,6 +86,9 @@ using namespace vkm;
 // link time is the default (see this sample's CMakeLists and -DVKM_WASM_GI_SCENE).
 VKM_GLOBAL_VARIABLE(std::string, gv_gi_model_path, VKM_WASM_GI_SCENE_GLTF);
 #else
+// Comma-separated to load several scenes into one:
+//   --gv_gi_model_path=<...>/Sponza/Sponza.gltf,<...>/EmissiveSphere/EmissiveSphere.gltf
+// Each is placed where its own nodes put it; the GI panel's gizmo is how they get arranged.
 VKM_GLOBAL_VARIABLE(std::string, gv_gi_model_path,
                     std::string(RESOURCES_DIR) + "Scenes/Sponza/Sponza.gltf");
 #endif
@@ -158,6 +161,32 @@ namespace
     {
         glm::vec4 _exposureGamma{ 1.0f, 2.2f, 0.0f, 0.0f };
     };
+
+    /*
+    * @brief Splits a comma-separated cvar into individual paths, dropping empty entries.
+    * @details A global variable is a single string, so this is how one names several scenes. A
+    * value with no comma yields exactly one path, which is the single-scene case unchanged.
+    */
+    std::vector<std::string> splitScenePaths(const std::string& value)
+    {
+        std::vector<std::string> paths;
+        size_t begin = 0;
+        while (begin <= value.size())
+        {
+            const size_t comma = value.find(',', begin);
+            const size_t end = (comma == std::string::npos) ? value.size() : comma;
+            if (end > begin)
+            {
+                paths.push_back(value.substr(begin, end - begin));
+            }
+            if (comma == std::string::npos)
+            {
+                break;
+            }
+            begin = comma + 1;
+        }
+        return paths;
+    }
 
     VkmBuffer* createUniformBuffer(VkmDriverBase* driver, uint64_t size, const char* name)
     {
@@ -382,7 +411,7 @@ public:
         _gi.options()._ssgi = gv_gi_ssgi.get();
         _gi.options()._restirMisBlend = gv_gi_restir_mis.get();
 
-        loadScene(gv_gi_model_path.get());
+        loadScene(splitScenePaths(gv_gi_model_path.get()));
 
         VkmTextureStreamingSettings streaming = _scene.getTextureStreamingSettings();
         streaming._useSparseResidency = gv_gi_sparse_streaming.get();
@@ -517,6 +546,21 @@ public:
             _compositeStagingPointers[frameIndex]->writeDirect(0, &composite, sizeof(composite));
             commandBuffer->copyBuffer(_compositeStaging[frameIndex], _compositeBuffer, 0, 0, sizeof(composite));
         });
+
+        // A moved object changes only its instance transform, so the structure the gizmo
+        // invalidated is rebuilt in place rather than recreated. The traced tier reads it, so
+        // this has to precede the GI pass below.
+        if (_accelerationStructureDirty)
+        {
+            VkmRenderComputeSubGraph* rebuildSubGraph =
+                renderGraph->beginComputeSubGraph("GiSceneAccelerationStructureRebuild");
+            rebuildSubGraph->addReferencedResource(_scene.getTopLevelAccelerationStructure(),
+                                                   VkmResourceAccess::AccelerationStructureBuildWrite);
+            rebuildSubGraph->setComputeCallback([this](VkmCommandBufferBase* commandBuffer) {
+                _scene.recordAccelerationStructureUpdate(commandBuffer);
+            });
+            _accelerationStructureDirty = false;
+        }
 
         VkmRenderComputeSubGraph* cullSubGraph = renderGraph->beginComputeSubGraph("GiSceneCull");
         referenceScene(cullSubGraph, _scene, VkmScene::ReferencePhase::Cull);
@@ -723,44 +767,64 @@ private:
         }
     }
 
-    void loadScene(const std::string& path)
+    /*
+    * @brief Loads every glTF in `paths` into one scene, in order.
+    * @details A model that fails to import is skipped and reported; the rest still load. Each is
+    * placed at the transform its own nodes give it, and keeps a gizmo transform on top of that.
+    * @param paths Files to load.
+    */
+    void loadScene(const std::vector<std::string>& paths)
     {
-        std::error_code ec;
-        if (!std::filesystem::is_regular_file(path, ec))
-        {
-            VKM_DEBUG_ERROR(("No scene at '" + path + "'; pass --gv_gi_model_path=<file.gltf>").c_str());
-            return;
-        }
-
         VkmDriverBase* driver = _engine->getDriver();
-        VkmSceneModel model;
         std::string error;
-        VkmGltfImportOptions importOptions;
-        if (!importGltfModel(path, &model, &error, importOptions))
-        {
-            VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
-            return;
-        }
         // Applied to the roots, so the draw list, the light placements and the bounds all follow
         // from the hierarchy walk rather than from three separate corrections.
         const float sceneScale = glm::max(gv_gi_scene_scale.get(), 1e-3f);
-        if (sceneScale != 1.0f)
+
+        for (const std::string& path : paths)
         {
-            const glm::mat4 scaling = glm::scale(glm::mat4(1.0f), glm::vec3(sceneScale));
-            for (const uint32_t root : model._rootNodeIndices)
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(path, ec))
             {
-                model._nodes[root]._localTransform = scaling * model._nodes[root]._localTransform;
+                VKM_DEBUG_ERROR(("No scene at '" + path +
+                                 "'; pass --gv_gi_model_path=<file.gltf>[,<file.gltf>...]").c_str());
+                continue;
             }
-            // A range is a world distance and does not ride a node transform, so it is the one
-            // thing the hierarchy walk cannot carry.
-            for (VkmScenePunctualLight& light : model._lights)
+
+            VkmSceneModel model;
+            VkmGltfImportOptions importOptions;
+            if (!importGltfModel(path, &model, &error, importOptions))
             {
-                light._range *= sceneScale;
+                VKM_DEBUG_ERROR(("Failed to load '" + path + "': " + error).c_str());
+                continue;
             }
+            if (sceneScale != 1.0f)
+            {
+                const glm::mat4 scaling = glm::scale(glm::mat4(1.0f), glm::vec3(sceneScale));
+                for (const uint32_t root : model._rootNodeIndices)
+                {
+                    model._nodes[root]._localTransform = scaling * model._nodes[root]._localTransform;
+                }
+                // A range is a world distance and does not ride a node transform, so it is the one
+                // thing the hierarchy walk cannot carry.
+                for (VkmScenePunctualLight& light : model._lights)
+                {
+                    light._range *= sceneScale;
+                }
+            }
+            if (!_scene.addModel(model, &error))
+            {
+                VKM_DEBUG_ERROR(("Failed to load '" + path + "': " + error).c_str());
+                continue;
+            }
+            LoadedModel entry;
+            entry._displayName = std::filesystem::path(path).filename().string();
+            _models.push_back(std::move(entry));
         }
-        if (!_scene.addModel(model, &error))
+
+        if (_models.empty())
         {
-            VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
+            VKM_DEBUG_ERROR("No GI scene loaded");
             return;
         }
         // Stated once. The traced tier reads it from the light table's header and the deferred
@@ -770,6 +834,13 @@ private:
         {
             VKM_DEBUG_ERROR(("Failed to load the GI scene: " + error).c_str());
             return;
+        }
+
+        // The placement each object was built with. A gizmo drag composes onto this rather than
+        // onto the object's current transform, so dragging cannot accumulate drift.
+        for (const VkmSceneObject& object : _scene.getObjects())
+        {
+            _bakedTransforms.push_back(object._worldTransform);
         }
 
         std::string shadowSceneError;
@@ -1267,6 +1338,7 @@ private:
                                                             updater.getDescriptor()._budget,
                                                             updater.getDescriptor()._hysteresis, 0.1f));
 
+        drawModelPlacementUi();
         drawLightUi();
         drawProbePlacementUi(volume);
         ImGui::End();
@@ -1349,12 +1421,16 @@ private:
             // One gizmo at a time: ImGuizmo manipulates whichever transform it was handed last,
             // and two in a frame fight over the same mouse drag.
             ImGui::Checkbox("Drag the selected light", &_lightGizmo);
+            if (_modelGizmo)
+            {
+                ImGui::TextDisabled("The model gizmo has the mouse");
+            }
 
             VkmPunctualLight& light = _punctualLights[static_cast<size_t>(_selectedLight)];
             dirty |= ImGui::DragFloat3("Light position", light._positionWorld, 0.25f);
             dirty |= ImGui::DragFloat("Light range", &light._range, 0.5f, 0.0f, 100000.0f);
             dirty |= ImGui::DragFloat3("Light radiance", light._radiance, 0.5f, 0.0f, 100000.0f);
-            if (_lightGizmo)
+            if (_lightGizmo && !_modelGizmo)
             {
                 dirty |= dragSelectedLight(light);
             }
@@ -1364,6 +1440,100 @@ private:
         {
             _lightsDirty = true;
         }
+    }
+
+    /*
+    * @brief Model list and the mouse gizmo that places the selected one.
+    * @details Takes priority over the light and probe gizmos for the same reason those two
+    * exclude each other: ImGuizmo manipulates whichever transform it was handed last.
+    */
+    void drawModelPlacementUi()
+    {
+        if (_models.empty())
+        {
+            return;
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Models: %zu", _models.size());
+        _selectedModel = glm::clamp(_selectedModel, 0, static_cast<int>(_models.size()) - 1);
+        if (ImGui::BeginListBox("##models", ImVec2(-FLT_MIN, 3 * ImGui::GetTextLineHeightWithSpacing())))
+        {
+            for (int i = 0; i < static_cast<int>(_models.size()); ++i)
+            {
+                char label[256];
+                std::snprintf(label, sizeof(label), "[%d] %s", i, _models[i]._displayName.c_str());
+                if (ImGui::Selectable(label, i == _selectedModel))
+                {
+                    _selectedModel = i;
+                }
+            }
+            ImGui::EndListBox();
+        }
+        ImGui::Checkbox("Drag the selected model", &_modelGizmo);
+        if (!_modelGizmo)
+        {
+            return;
+        }
+
+        int operation = static_cast<int>(_gizmoOperation);
+        bool changedMode = ImGui::RadioButton("Translate", &operation, static_cast<int>(ImGuizmo::TRANSLATE));
+        ImGui::SameLine();
+        changedMode |= ImGui::RadioButton("Rotate", &operation, static_cast<int>(ImGuizmo::ROTATE));
+        ImGui::SameLine();
+        changedMode |= ImGui::RadioButton("Scale", &operation, static_cast<int>(ImGuizmo::SCALE));
+        if (changedMode)
+        {
+            _gizmoOperation = static_cast<ImGuizmo::OPERATION>(operation);
+        }
+
+        LoadedModel& model = _models[static_cast<size_t>(_selectedModel)];
+        if (ImGui::Button("Reset transform"))
+        {
+            model._transform = glm::mat4(1.0f);
+            applyModelTransform(static_cast<size_t>(_selectedModel));
+        }
+
+        ImGuizmo::BeginFrame();
+        ImGuizmo::SetOrthographic(false);
+        ImGuizmo::SetRect(0.0f, 0.0f, static_cast<float>(_extent.x), static_cast<float>(_extent.y));
+
+        const glm::mat4 view = _camera.getView();
+        const glm::mat4 projection = _camera.getProjection();
+        glm::mat4 transform = model._transform;
+        if (ImGuizmo::Manipulate(&view[0][0], &projection[0][0], _gizmoOperation, ImGuizmo::WORLD,
+                                 &transform[0][0]))
+        {
+            model._transform = transform;
+            applyModelTransform(static_cast<size_t>(_selectedModel));
+        }
+
+        // The light table bakes emissive triangles in world space at build (TODO.md), so the
+        // traced tier keeps lighting from where the emitter was loaded.
+        ImGui::TextDisabled("Emissive lighting stays where the model was loaded");
+    }
+
+    /*
+    * @brief Republishes every object of `modelIndex` under that model's gizmo transform.
+    * @details Batching reorders the scene's objects, so the model's objects are found by their
+    * _modelIndex rather than by a contiguous range. setObjectTransform widens the range
+    * recordUpdate() re-uploads and flags the batch bounds, so nothing else has to be refreshed
+    * here for rasterization.
+    * @param modelIndex Which loaded model moved.
+    */
+    void applyModelTransform(size_t modelIndex)
+    {
+        const glm::mat4& gizmo = _models[modelIndex]._transform;
+        const std::vector<VkmSceneObject>& objects = _scene.getObjects();
+        for (uint32_t i = 0; i < static_cast<uint32_t>(objects.size()); ++i)
+        {
+            if (objects[i]._modelIndex == static_cast<uint32_t>(modelIndex))
+            {
+                _scene.setObjectTransform(i, gizmo * _bakedTransforms[i]);
+            }
+        }
+        _accelerationStructureDirty =
+            _scene.getTopLevelAccelerationStructure() != VKM_INVALID_RESOURCE_HANDLE;
     }
 
     // Whether the gizmo moved the light this frame.
@@ -1423,7 +1593,7 @@ private:
         // ImGuizmo draws into the current ImGui frame and reads the mouse from it, so it belongs
         // here rather than in render(). It manipulates a full transform; only the translation
         // column is read back, the volume storing a displacement rather than a matrix.
-        if (_lightGizmo)
+        if (_lightGizmo || _modelGizmo)
         {
             return;
         }
@@ -1500,6 +1670,22 @@ private:
     bool _lightsDirty = false;
     int _selectedLight = 0;
     bool _lightGizmo = false;
+    // One loaded glTF. _transform is what the gizmo edits; it composes onto the placement the
+    // asset's own nodes gave each object, which _bakedTransforms holds.
+    struct LoadedModel
+    {
+        std::string _displayName;
+        glm::mat4 _transform{ 1.0f };
+    };
+    std::vector<LoadedModel> _models;
+    // 1:1 with VkmScene::getObjects(), captured right after build().
+    std::vector<glm::mat4> _bakedTransforms;
+    int _selectedModel = 0;
+    bool _modelGizmo = false;
+    bool _accelerationStructureDirty = false;
+#if defined(VKM_ENABLE_IMGUI)
+    ImGuizmo::OPERATION _gizmoOperation = ImGuizmo::TRANSLATE;
+#endif
     // How far from the eye the directional shadow reaches, in world units. Derived from the
     // scene at load rather than fixed: a constant here would be a guess about scene scale.
     // Past it nothing casts, which reads as flat lighting rather than a black band.

@@ -144,6 +144,8 @@
 - `VkmSurfaceHit::uv` is reserved and always zero: filling it needs a vertex-layout id in `VkmObjectData` (uv0 sits at a different offset and format per `VkmVertexLayoutPreset`, and PositionOnly has none), which is the second of that record's two padding words.
 - An acceleration structure is made resident by `VkmAccelerationStructureMetal::initialize` itself rather than by `onResourceInitialized`, because the driver calls that only after `initialize()` returns while the synchronous build needs it resident before then; nothing enforces that ordering for a future backend or resource type that builds inside its own initialize.
 - The light table bakes world-space triangles at scene build, so a moved or spawned emitter needs the table rebuilt; nothing rebuilds it yet.
+- `VkmScene::addModel` dedups no geometry or materials, so loading the same glTF twice costs twice the pool bytes and twice the bottom-level structures.
+- Adding or removing one model in the model_viewer re-imports every other loaded glTF, `addModel` being callable only before `build()`.
 - NEE draws one light sample per vertex with no BSDF-sampling MIS, so large emitters converge slowly; small ones are the designed case.
 - The probe tier's capture pass shades no emission, so probes stay blind to emitters and only the traced tier sees them.
 - The deferred pass's directional light casts no shadow ray while the reference's sun NEE does, so their images differ in sun shadows until a shadowing technique exists.
