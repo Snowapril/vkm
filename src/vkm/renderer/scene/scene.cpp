@@ -239,11 +239,80 @@ namespace vkm
         return true;
     }
 
+namespace
+{
+    // Interleaves the low 10 bits of `value` with two zero bits each, so three of these OR'd
+    // together give a 30-bit Morton code.
+    uint32_t vkmExpandBits10(uint32_t value)
+    {
+        value &= 0x3ffu;
+        value = (value | (value << 16)) & 0x30000ffu;
+        value = (value | (value << 8)) & 0x300f00fu;
+        value = (value | (value << 4)) & 0x30c30c3u;
+        value = (value | (value << 2)) & 0x9249249u;
+        return value;
+    }
+
+    /*
+    * @brief Morton code of a point given in unit coordinates over the scene's bounds.
+    * @details Sorting by this puts objects that are near each other in space near each other in
+    * the object array, which is what lets a contiguous run of objects also be a compact one.
+    */
+    uint32_t vkmMortonCode(const glm::vec3& unit)
+    {
+        const auto quantise = [](float v) {
+            return static_cast<uint32_t>(glm::clamp(v, 0.0f, 1.0f) * 1023.0f);
+        };
+        return (vkmExpandBits10(quantise(unit.x)) << 2) | (vkmExpandBits10(quantise(unit.y)) << 1) |
+               vkmExpandBits10(quantise(unit.z));
+    }
+} // namespace
+
     void VkmScene::buildDrawBatches()
     {
-        // Objects are ordered by (pipelineId, layout, materialIndex) so that a batch is a
-        // contiguous run and materials of a batch land near each other in the material pool.
-        std::stable_sort(_objects.begin(), _objects.end(), [this](const VkmSceneObject& lhs, const VkmSceneObject& rhs) {
+        // Where each object sits, so the sort below can order by it and the split can measure
+        // against it. Computed once: transforming a mesh's bounds is not free and the comparator
+        // would otherwise redo it on every comparison.
+        VkmSceneAABB sceneBounds;
+        std::vector<glm::vec3> centres(_objects.size(), glm::vec3(0.0f));
+        for (size_t i = 0; i < _objects.size(); ++i)
+        {
+            const VkmSceneAABB& local = _meshEntries[_objects[i]._meshEntryIndex]._bounds;
+            if (!local._valid)
+            {
+                continue;
+            }
+            const VkmSceneAABB world = local.transformed(_objects[i]._worldTransform);
+            centres[i] = world.getCenter();
+            sceneBounds.expand(world);
+        }
+
+        const glm::vec3 sceneMin = sceneBounds._valid ? sceneBounds._min : glm::vec3(0.0f);
+        const glm::vec3 sceneSpan =
+            sceneBounds._valid ? glm::max(sceneBounds.getExtent(), glm::vec3(1e-6f)) : glm::vec3(1.0f);
+        const float sceneDiagonal = glm::length(sceneSpan);
+
+        // Morton code per object, in the same index space as _objects, so the sort can carry it.
+        std::vector<uint32_t> morton(_objects.size(), 0u);
+        for (size_t i = 0; i < _objects.size(); ++i)
+        {
+            morton[i] = vkmMortonCode((centres[i] - sceneMin) / sceneSpan);
+        }
+
+        // Sorting moves objects, so the per-object keys have to move with them.
+        std::vector<uint32_t> order(_objects.size());
+        for (size_t i = 0; i < order.size(); ++i)
+        {
+            order[i] = static_cast<uint32_t>(i);
+        }
+
+        // Ordered by (pipelineId, layout, materialIndex) so that a batch is a contiguous run and
+        // materials of a batch land near each other in the material pool, then by Morton code so
+        // that a run is also spatially compact -- which is what makes the split below produce
+        // batches a viewpoint can reject whole.
+        std::stable_sort(order.begin(), order.end(), [this, &morton](uint32_t lhsIndex, uint32_t rhsIndex) {
+            const VkmSceneObject& lhs = _objects[lhsIndex];
+            const VkmSceneObject& rhs = _objects[rhsIndex];
             if (lhs._pipelineId != rhs._pipelineId)
             {
                 return lhs._pipelineId < rhs._pipelineId;
@@ -254,10 +323,27 @@ namespace vkm
             {
                 return lhsEntry._layout < rhsEntry._layout;
             }
-            return lhsEntry._materialIndex < rhsEntry._materialIndex;
+            if (lhsEntry._materialIndex != rhsEntry._materialIndex)
+            {
+                return lhsEntry._materialIndex < rhsEntry._materialIndex;
+            }
+            return morton[lhsIndex] < morton[rhsIndex];
         });
 
+        {
+            std::vector<VkmSceneObject> sorted(_objects.size());
+            std::vector<glm::vec3> sortedCentres(_objects.size());
+            for (size_t i = 0; i < order.size(); ++i)
+            {
+                sorted[i] = _objects[order[i]];
+                sortedCentres[i] = centres[order[i]];
+            }
+            _objects.swap(sorted);
+            centres.swap(sortedCentres);
+        }
+
         _drawBatches.clear();
+        VkmSceneAABB runBounds;
         for (uint32_t i = 0; i < static_cast<uint32_t>(_objects.size()); ++i)
         {
             const MeshEntry& entry = _meshEntries[_objects[i]._meshEntryIndex];
@@ -270,13 +356,26 @@ namespace vkm
             // encoded draws are unchanged on Metal and WebGPU, which already encode maxDrawCount
             // per batch. Split on every backend rather than only where it is needed, so there is
             // one code path and it can be exercised where the result can be looked at.
+            // A run also breaks once it covers too much of the scene. A batch is the unit a
+            // viewpoint accepts or rejects whole, so one that spans the model can never be
+            // rejected and its whole argument range is re-encoded for every viewpoint. Splitting
+            // trades more batches for batches that can actually be culled.
+            bool fits = false;
             if (!_drawBatches.empty() &&
                 _drawBatches.back()._pipelineId == pipelineId &&
                 _drawBatches.back()._layout == entry._layout &&
                 _drawBatches.back()._materialIndex == entry._materialIndex)
             {
-                _drawBatches.back()._objectCount++;
-                continue;
+                VkmSceneAABB grown = runBounds;
+                grown.expand(centres[i]);
+                fits = !grown._valid || sceneDiagonal <= 0.0f ||
+                       glm::length(grown.getExtent()) <= kBatchSplitFraction * sceneDiagonal;
+                if (fits)
+                {
+                    _drawBatches.back()._objectCount++;
+                    runBounds = grown;
+                    continue;
+                }
             }
 
             DrawBatch batch;
@@ -286,6 +385,8 @@ namespace vkm
             batch._firstObject = i;
             batch._objectCount = 1;
             _drawBatches.push_back(batch);
+            runBounds = VkmSceneAABB{};
+            runBounds.expand(centres[i]);
         }
 
         // World bounds per batch, in a second pass: a batch's extent is only known once its whole
