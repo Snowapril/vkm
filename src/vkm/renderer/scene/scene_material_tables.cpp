@@ -78,6 +78,9 @@ namespace vkm
         samplerInfo._addressModeU = VkmAddressMode::Repeat;
         samplerInfo._addressModeV = VkmAddressMode::Repeat;
         samplerInfo._addressModeW = VkmAddressMode::Repeat;
+        // Matching the engine's set-0 sampler again: a grazing-angle surface is blurred by an
+        // isotropic filter whichever path samples it.
+        samplerInfo._maxAnisotropy = 8.0f;
         samplerInfo._debugName = "SceneMaterialSampler";
         VkmSampler* sampler = driver->newSampler(samplerInfo);
         if (sampler == nullptr)

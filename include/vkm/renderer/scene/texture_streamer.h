@@ -239,6 +239,26 @@ namespace vkm
                                              uint32_t totalMipCount);
 
     /*
+    * @brief Settles what one texture should hold, given both what the screen reported and what its
+    * bounding sphere predicts.
+    * @details What the screen sampled beats what a sphere predicts -- the estimate cannot see UV
+    * density, grazing angles or occlusion, and the reading sees all three. But a rebuilt texture is
+    * physically only the levels it holds, so its level 0 is chain level `residentBaseMip` and
+    * `CalculateLevelOfDetail` has nothing coarser-than-zero to return: the reading alone can walk
+    * such a texture out and can never bring it back. There the estimate is kept as a floor on
+    * coarseness -- it can pull a texture back in, and can never push one past what the reading
+    * asked for. A sparse texture keeps its full extent whatever is backed, so its reading is
+    * authoritative in both directions and the estimate is not consulted.
+    * Free-standing for the same reason the rest of the selection is: testable without a driver.
+    * @param reported The reading, already made chain-absolute and biased.
+    * @param estimated The bounding-sphere estimate, or INVALID_VALUE32 when nothing visible drew
+    * this texture on the tick being settled.
+    * @param sparse Whether the texture keeps its full extent while its levels are bound and unbound.
+    * @return The level to aim at.
+    */
+    uint32_t vkmCombineStreamingBaseMip(uint32_t reported, uint32_t estimated, bool sparse);
+
+    /*
     * @brief Keeps each material texture at the mip range the camera actually needs, by rebuilding
     * the texture rather than by narrowing a view.
     *
@@ -452,7 +472,10 @@ namespace vkm
         };
 
         void stopWorker();
-        void selectTargets(const VkmTextureStreamingView& view,
+        // Takes the driver so an entry's sparse grant can be resolved: what a rebuilt texture's
+        // feedback can express differs from what a sparse one's can, and the two are combined with
+        // the bounding-sphere estimate differently because of it.
+        void selectTargets(VkmDriverBase* driver, const VkmTextureStreamingView& view,
                            const std::vector<VkmTextureStreamingObject>& objects);
         /*
         * Aims every entry at level 0, for the ticks after the switch is turned off. Undamped: the

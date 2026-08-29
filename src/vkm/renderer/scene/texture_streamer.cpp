@@ -74,9 +74,11 @@ namespace vkm
             return 0;
         }
 
-        // One level per halving of texels-per-pixel, which is what a mip chain stores.
+        // One level per halving of texels-per-pixel, which is what a mip chain stores. Floor, not
+        // round: half a level of texel density is detail the screen can still show, and rounding it
+        // away costs that on every surface at once.
         const float levels = std::log2(static_cast<float>(textureWidth) / projectedPixels);
-        const float biased = std::round(levels) + static_cast<float>(mipBias);
+        const float biased = std::floor(levels) + static_cast<float>(mipBias);
         if (biased <= 0.0f)
         {
             return 0;
@@ -94,6 +96,15 @@ namespace vkm
         const uint32_t lastLevel = (totalMipCount == 0u) ? 0u : (totalMipCount - 1u);
         const uint32_t absolute = residentBaseMip + std::min(reported, kVkmTextureFeedbackMaxLevel);
         return std::min(absolute, lastLevel);
+    }
+
+    uint32_t vkmCombineStreamingBaseMip(const uint32_t reported, const uint32_t estimated, const bool sparse)
+    {
+        if (sparse || estimated == INVALID_VALUE32)
+        {
+            return reported;
+        }
+        return std::min(reported, estimated);
     }
 
     uint32_t vkmSelectStreamingBaseMip(const VkmTextureStreamingView& view, float distance, float worldRadius,
@@ -331,7 +342,7 @@ namespace vkm
         }
     }
 
-    void VkmTextureStreamer::selectTargets(const VkmTextureStreamingView& view,
+    void VkmTextureStreamer::selectTargets(VkmDriverBase* driver, const VkmTextureStreamingView& view,
                                            const std::vector<VkmTextureStreamingObject>& objects)
     {
         /*
@@ -360,27 +371,15 @@ namespace vkm
         _desiredBaseMips.assign(_entries.size(), INVALID_VALUE32);
         for (size_t entryIndex = 0; entryIndex < _entries.size(); ++entryIndex)
         {
-            const Entry& entry = _entries[entryIndex];
+            Entry& entry = _entries[entryIndex];
             if (entry._streamingFailed)
             {
                 continue;
             }
 
-            /*
-            * What the screen actually sampled beats what a bounding sphere predicts, so where the
-            * GPU reported a level the estimate is not consulted at all. The estimate cannot see UV
-            * density, grazing angles or occlusion; the reading is the ground truth for all three.
-            */
-            if (entry._feedbackBaseMip != INVALID_VALUE32)
-            {
-                const int32_t biased =
-                    static_cast<int32_t>(entry._feedbackBaseMip) + _settings._mipBias;
-                const int32_t lastLevel = static_cast<int32_t>(entry._totalMipCount) - 1;
-                _desiredBaseMips[entryIndex] =
-                    static_cast<uint32_t>(std::clamp(biased, 0, std::max(0, lastLevel)));
-                continue;
-            }
-
+            // The bounding-sphere estimate, finest over every object naming this texture's
+            // material. Stays INVALID_VALUE32 when nothing visible drew it this tick.
+            uint32_t estimated = INVALID_VALUE32;
             for (const std::pair<uint32_t, uint32_t>& reference : entry._references)
             {
                 if (reference.first >= _materialCount)
@@ -395,9 +394,22 @@ namespace vkm
 
                 const uint32_t desired = vkmStreamingBaseMipForProjection(
                     projected, entry._baseExtent.x, entry._totalMipCount, _settings._mipBias);
-                uint32_t& best = _desiredBaseMips[entryIndex];
-                best = (best == INVALID_VALUE32) ? desired : std::min(best, desired);
+                estimated = (estimated == INVALID_VALUE32) ? desired : std::min(estimated, desired);
             }
+
+            if (entry._feedbackBaseMip == INVALID_VALUE32)
+            {
+                _desiredBaseMips[entryIndex] = estimated;
+                continue;
+            }
+
+            const int32_t biased = static_cast<int32_t>(entry._feedbackBaseMip) + _settings._mipBias;
+            const int32_t lastLevel = static_cast<int32_t>(entry._totalMipCount) - 1;
+            const uint32_t reported =
+                static_cast<uint32_t>(std::clamp(biased, 0, std::max(0, lastLevel)));
+
+            _desiredBaseMips[entryIndex] =
+                vkmCombineStreamingBaseMip(reported, estimated, isSparseEntry(driver, &entry));
         }
 
         for (size_t entryIndex = 0; entryIndex < _entries.size(); ++entryIndex)
@@ -424,6 +436,18 @@ namespace vkm
             {
                 entry._candidateBaseMip = desired;
                 entry._candidateTickCount = 0;
+            }
+
+            /*
+            * Damping exists because a rebuild re-reads and re-decodes the file, which is an
+            * argument about evicting rather than about refining. A texture the screen wants finer
+            * is being shown blurred until the change lands, and under continuous camera motion the
+            * target moves often enough that the counter never reaches the threshold at all. So a
+            * finer target is taken the tick it appears; a coarser one still has to hold.
+            */
+            if (entry._candidateBaseMip < entry._residentBaseMip)
+            {
+                entry._candidateTickCount = _settings._stableTickCount;
             }
         }
     }
@@ -807,7 +831,7 @@ namespace vkm
 
         if (_settings._enabled)
         {
-            selectTargets(view, objects);
+            selectTargets(driver, view, objects);
             // Only ever coarsens, which is the one thing restoring never asks for.
             releaseSparseLevels(driver, outUpdates);
         }

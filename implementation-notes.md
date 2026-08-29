@@ -5800,3 +5800,34 @@ probes at all. Both are already the documented answers (TODO.md). A third would 
 visibility field itself smoother -- interpolating the moments across probes before the
 Chebyshev test rather than testing per probe and blending the verdicts -- which is a change to
 what the distance atlas means, not to the lookup, and was not attempted.
+
+## 2026-08-29 - Why Sponza stayed blurry with the camera against the wall
+
+Five contributors, independent of each other, each worth about a level. Fixing any one alone would
+not have been visible, which is why they are one change.
+
+- **No anisotropy anywhere.** `VkmSamplerInfo::_maxAnisotropy` was translated correctly by all three
+  backends and left at 1.0 by every caller, and the two bindless material samplers are built as
+  native descriptors that bypassed that path entirely. Sponza is floors, walls and an arcade seen at
+  a grazing angle, which is exactly where an isotropic filter picks its level from the longer
+  derivative axis. Now 8, clamped to the device limit on Vulkan.
+- **The feedback ratchet.** A rebuilt texture is physically only the levels it holds, so its level 0
+  is chain level `_residentBaseMip` and `CalculateLevelOfDetail` has nothing coarser-than-zero to
+  return. `selectTargets` consulted the reading and skipped the bounding-sphere estimate outright, so
+  the reading alone could walk a texture out and never bring it back -- permanent on Vulkan, where
+  sparse residency is never granted. The estimate is now kept as a floor on coarseness through
+  `vkmCombineStreamingBaseMip`: it can pull a texture back in, never push one past what the reading
+  asked for. A sparse texture keeps its full extent whatever is backed, so its reading stays
+  authoritative in both directions and the estimate is not consulted there at all.
+- **The render extent, not the display one.** The `gi` sample measured against `_renderExtent`. An
+  upscaler resolves to display size, so every texture was selected a level too coarse and the
+  upscaler was handed input already blurred.
+- **`round` where `floor` belongs**, in the CPU estimate and in the shader's vote alike. Half a level
+  of texel density is detail the screen can still show.
+- **Damping applied to refining as well as evicting.** `_stableTickCount` exists because a rebuild
+  re-reads and re-decodes the file, which is an argument about eviction. Under continuous camera
+  motion the target moved often enough that the counter never reached the threshold and nothing was
+  ever applied. A finer target is now taken the tick it appears; a coarser one still has to hold.
+
+Anisotropy makes `CalculateLevelOfDetail` report finer levels, so resident texture bytes rise. That
+is the trade, and the streaming readout in the GI panel is where it shows.

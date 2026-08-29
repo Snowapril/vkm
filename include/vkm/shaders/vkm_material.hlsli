@@ -272,7 +272,7 @@ float3 vkmStreamingMipHeatColor(float2 streamingMip)
                               .CalculateLevelOfDetail(g_VkmMaterialSampler, uv);                    \
         uint previous;                                                                              \
         InterlockedMin(feedbackBuffer[slot],                                                        \
-                       (uint)clamp(round(lod), 0.0, (float)VKM_TEXTURE_FEEDBACK_MAX_LEVEL),         \
+                       (uint)clamp(floor(lod), 0.0, (float)VKM_TEXTURE_FEEDBACK_MAX_LEVEL),         \
                        previous);                                                                   \
     }
 

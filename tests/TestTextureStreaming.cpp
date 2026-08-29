@@ -297,3 +297,47 @@ TEST_CASE("vkmStreamingBaseMipFromFeedback clamps to the chain rather than runni
         CHECK(vkm::vkmStreamingBaseMipFromFeedback(7, 0, 0) == 0);
     }
 }
+
+TEST_CASE("vkmStreamingBaseMipForProjection floors the level rather than rounding it")
+{
+    // A projection landing between two levels: half a level of texel density is detail the screen
+    // can still show, so it is kept rather than rounded away.
+    // width 1024, projected 181 -> log2(1024/181) = 2.50; projected 145 -> 2.82.
+    CHECK(vkm::vkmStreamingBaseMipForProjection(181.0f, 1024u, kMipCount, 0) == 2);
+    CHECK(vkm::vkmStreamingBaseMipForProjection(145.0f, 1024u, kMipCount, 0) == 2);
+    // An exact level is unaffected by the change: 1024/128 is exactly three halvings.
+    CHECK(vkm::vkmStreamingBaseMipForProjection(128.0f, 1024u, kMipCount, 0) == 3);
+}
+
+TEST_CASE("vkmCombineStreamingBaseMip lets the estimate recover a rebuilt texture the reading cannot")
+{
+    // The ratchet: a texture rebuilt down to level 4 reports 4 as the finest thing it can name,
+    // because its own level 0 is chain level 4. Left to the reading alone it would stay there
+    // however close the camera came.
+    SUBCASE("a rebuilt texture takes the finer of the two")
+    {
+        CHECK(vkm::vkmCombineStreamingBaseMip(4, 0, /*sparse=*/false) == 0);
+        CHECK(vkm::vkmCombineStreamingBaseMip(4, 2, /*sparse=*/false) == 2);
+    }
+
+    SUBCASE("the estimate can never make a rebuilt texture coarser than the reading asked for")
+    {
+        // This is the direction the reading is trusted in: it sees UV density, grazing angles and
+        // occlusion, and the sphere does not.
+        CHECK(vkm::vkmCombineStreamingBaseMip(2, 6, /*sparse=*/false) == 2);
+    }
+
+    SUBCASE("a sparse texture's reading is authoritative in both directions")
+    {
+        // It keeps its full extent whatever is backed, so it can always ask for level 0 again and
+        // the estimate has nothing to add.
+        CHECK(vkm::vkmCombineStreamingBaseMip(4, 0, /*sparse=*/true) == 4);
+        CHECK(vkm::vkmCombineStreamingBaseMip(2, 6, /*sparse=*/true) == 2);
+    }
+
+    SUBCASE("nothing visible drew it, so there is no estimate to combine")
+    {
+        CHECK(vkm::vkmCombineStreamingBaseMip(3, vkm::INVALID_VALUE32, /*sparse=*/false) == 3);
+        CHECK(vkm::vkmCombineStreamingBaseMip(3, vkm::INVALID_VALUE32, /*sparse=*/true) == 3);
+    }
+}

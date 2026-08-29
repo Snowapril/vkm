@@ -477,11 +477,13 @@ public:
             _camera.setJitterPixels(glm::vec2(0.0f));
         }
         // Before the frame records anything: the streamer creates textures and uploads through the
-        // driver directly, which a recording command buffer cannot be open across. The render
-        // extent, not the display one, is what the G-buffer is rasterized at.
+        // driver directly, which a recording command buffer cannot be open across. The display
+        // extent, not the render one: an upscaler resolves to display size, so texel density has to
+        // be matched against the pixels that are actually shown or every texture is selected a
+        // level too coarse and the upscaler is handed input already blurred.
         VkmTextureStreamingView streamingView;
         streamingView._cameraPosition = _camera.getPosition();
-        streamingView._viewportHeight = _renderExtent.y;
+        streamingView._viewportHeight = _extent.y;
         streamingView._fovYRadians = _camera.getFovYRadians();
         _scene.updateTextureStreaming(_engine->getDriver(), streamingView);
 

@@ -79,6 +79,11 @@ namespace vkm
         samplerDesc.sAddressMode = MTLSamplerAddressModeRepeat;
         samplerDesc.tAddressMode = MTLSamplerAddressModeRepeat;
         samplerDesc.rAddressMode = MTLSamplerAddressModeRepeat;
+        // Anisotropy, because this sampler mostly serves material textures and the surfaces that
+        // dominate a scene like Sponza -- floors, walls, the arcade -- are seen at a grazing angle,
+        // where an isotropic filter picks its level from the longer derivative axis and blurs along
+        // the shorter one. 8 is the ceiling worth paying for.
+        samplerDesc.maxAnisotropy = 8;
         samplerDesc.supportArgumentBuffers = YES;
         samplerDesc.label = @"VkmBindlessDefaultSampler";
         _defaultSampler = [device newSamplerStateWithDescriptor:samplerDesc];
