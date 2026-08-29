@@ -94,6 +94,27 @@ namespace vkm
                   "VkmPunctualLight must match VkmPunctualLight in shaders/vkm_punctual_lights.hlsli");
 
     /*
+    * @brief One emissive triangle as the raster tier's area-light shading reads it.
+    * @details A VkmLightTableTriangle stripped to what a polygon integral needs -- the corners
+    * and the radiance. The sampling fields (area, cdf) are absent on purpose: those exist to
+    * importance-sample a light by power, which is a traced-tier question. The raster tier
+    * integrates the polygon analytically instead, so it never picks one.
+    *
+    * Each corner is padded to a float4 rather than packed tightly: this rides a uniform buffer,
+    * where a float3 array carries a std140-style stride rule that is invisible in the C++ type
+    * and silently disagrees with HLSL.
+    */
+    struct VkmAreaLight
+    {
+        float _p0[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        float _p1[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        float _p2[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        float _radiance[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    };
+    static_assert(sizeof(VkmAreaLight) == 64,
+                  "VkmAreaLight must match VkmAreaLight in shaders/vkm_area_lights.hlsli");
+
+    /*
     * @brief Appends one triangle record per triangle of `mesh`, in object space.
     * @details Positions are read through the mesh's own vertex layout; `_area` and `_cdf` are
     * left zero — they are meaningless before the world transform is applied, which is

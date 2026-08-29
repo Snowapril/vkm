@@ -17,6 +17,14 @@ namespace vkm
     constexpr uint32_t kVkmMaxPunctualLights = 16;
 
     /*
+    * @brief Emissive triangles the deferred pass shades as area lights.
+    * @details Matches VKM_MAX_AREA_LIGHTS in shaders/vkm_area_lights.hlsli. A separate, larger
+    * cap than the punctual one because emitters arrive as triangles: a single quad emitter is
+    * already two entries, so a cap of 16 would hold eight quads.
+    */
+    constexpr uint32_t kVkmMaxAreaLights = 32;
+
+    /*
     * @brief The deferred lighting pass's per-pass constants: every light it shades.
     * @details Mirrors LightConstants in shaders/deferred_lighting.hlsl byte for byte.
     *
@@ -34,9 +42,14 @@ namespace vkm
         // texels. The atlas geometry rides here rather than in its own buffer because the lookup
         // needs both together and a second uniform binding would buy nothing.
         glm::uvec4 _lightCount{ 0u, 0u, 0u, 0u };
+        // x = valid entries in _areaLights; yzw unused. Its own vector rather than a fourth
+        // component of _lightCount, which is full.
+        glm::uvec4 _areaLightCount{ 0u, 0u, 0u, 0u };
         VkmPunctualLight _lights[kVkmMaxPunctualLights]{};
+        VkmAreaLight _areaLights[kVkmMaxAreaLights]{};
     };
-    static_assert(sizeof(VkmDeferredLightConstants) == 16 + 64 * kVkmMaxPunctualLights,
+    static_assert(sizeof(VkmDeferredLightConstants) ==
+                      32 + 64 * kVkmMaxPunctualLights + 64 * kVkmMaxAreaLights,
                   "VkmDeferredLightConstants must match LightConstants in deferred_lighting.hlsl");
 
     /*
@@ -62,4 +75,18 @@ namespace vkm
     void vkmBuildDeferredLightConstants(const std::vector<VkmPunctualLight>& lights,
                                         uint32_t tilesPerRow, uint32_t tileSize,
                                         VkmDeferredLightConstants* outConstants);
+
+    /*
+    * @brief Fills the area-light half of the constants from a built scene's emissive triangles.
+    * @details Separate from the two builders above because the atlas-aware one takes a light list
+    * rather than a scene, and both of them wipe the struct first -- so this must run after
+    * whichever one the caller used, and cannot simply be folded into one of them.
+    *
+    * Triangles past kVkmMaxAreaLights are dropped and the count clamped. They arrive in the light
+    * table's own order, which vkmFinalizeLightTable left sorted by nothing in particular: a scene
+    * past the cap therefore keeps an arbitrary subset, not the brightest one.
+    * @param scene Source of the emissive triangles. Must have been built.
+    * @param outConstants Receives the area lights; the punctual half is left untouched.
+    */
+    void vkmFillDeferredAreaLights(const VkmScene& scene, VkmDeferredLightConstants* outConstants);
 } // namespace vkm

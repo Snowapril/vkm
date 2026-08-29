@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Snowapril
 //
-// Fullscreen deferred lighting: samples the G-buffer and shades it with every punctual light.
+// Fullscreen deferred lighting: samples the G-buffer and shades it with every punctual light,
+// plus every emissive triangle as an analytic area light.
 //
 // This is the first pass in the engine that reads the G-buffer, and it is deliberately built the
 // way the GI passes will be:
@@ -18,6 +19,7 @@
 #include "vkm_frame_constants.hlsli"
 #include "vkm_fullscreen.hlsli"
 #include "vkm_gbuffer.hlsli"
+#include "vkm_area_lights.hlsli"
 #include "vkm_punctual_lights.hlsli"
 #include "vkm_shadow.hlsli"
 
@@ -33,7 +35,10 @@ struct LightConstants
 {
     // x = valid entries in `lights`, y = shadow tiles per atlas row, z = tile size in texels
     uint4 lightCount;
+    // x = valid entries in `areaLights`; yzw unused.
+    uint4 areaLightCount;
     VkmPunctualLight lights[VKM_MAX_PUNCTUAL_LIGHTS];
+    VkmAreaLight areaLights[VKM_MAX_AREA_LIGHTS];
 };
 
 
@@ -152,6 +157,31 @@ float4 PSMain(VSOutput input) : SV_TARGET0
         const float3 diffuse = (1.0 - fresnel) * diffuseColor / 3.14159265;
 
         shaded += (diffuse + specular) * lightSample.radiance * nDotL * shadow;
+    }
+
+    /*
+    * Emissive triangles, integrated analytically rather than sampled. The traced tier reaches
+    * these through NEE against the light table; the raster tier cannot read that table at all, so
+    * the same polygons arrive here in the uniform buffer and are integrated in closed form.
+    *
+    * Diffuse only. This is the identity case of linearly transformed cosines -- the specular lobe
+    * needs the LTC matrix tables, which do not exist yet, so a rough surface under an emitter is
+    * right and a mirror under one is missing its highlight (TODO.md).
+    *
+    * No shadow term: a polygon integral measures how much hemisphere the emitter covers, not what
+    * stands between. An occluded area light still lights this surface here, which is exactly the
+    * discrepancy against the traced tier that TODO.md records.
+    */
+    for (uint areaIndex = 0; areaIndex < g_Light.areaLightCount.x; ++areaIndex)
+    {
+        const VkmAreaLight areaLight = g_Light.areaLights[areaIndex];
+        const float formFactor =
+            vkmAreaLightFormFactor(areaLight, worldPosition, shadingNormal);
+        if (formFactor <= 0.0)
+        {
+            continue;
+        }
+        shaded += areaLight.radiance.rgb * diffuseColor * (1.0 / 3.14159265) * formFactor;
     }
 
     // Emission is what the surface adds on its own, on top of what the lights reflect off it --

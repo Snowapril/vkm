@@ -1302,6 +1302,9 @@ private:
         VkmDeferredLightConstants lightConstants{};
         vkmBuildDeferredLightConstants(_shadowLights, _shadowAtlas.getTilesPerRow(),
                                        _shadowAtlas.getDescriptor()._tileSize, &lightConstants);
+        // After the builder, which wipes the struct: the emissive triangles are the scene's, not
+        // the atlas's light list.
+        vkmFillDeferredAreaLights(_scene, &lightConstants);
         driver->uploadToBuffer(_lightBuffer, &lightConstants, sizeof(lightConstants));
     }
 

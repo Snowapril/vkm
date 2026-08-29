@@ -204,7 +204,10 @@
 - ImGui renders nothing in either sample, including panels this work did not touch, so the texture-streaming controls and readout have been asserted by tests but never looked at.
 - The traced tier's NEE loops every punctual light exhaustively, one shadow ray each per bounce, with no cap or importance sampling.
 - The raster tier caps punctual lights at kVkmMaxPunctualLights (16) while the traced tier reads the whole table, so a scene past the cap lights differently in the two tiers.
-- Area lights are shadowed only in the traced tier; the raster tier neither shades nor shadows emissive triangles.
+- Area lights are shadowed only in the traced tier; the raster tier shades them analytically but applies no visibility term, so an occluded emitter still lights a surface there.
+- The raster tier's area lights are diffuse only: the LTC matrix tables the specular lobe needs do not exist, so a smooth surface under an emitter is missing its highlight.
+- The area-light gate's fixture puts every emitter above the receiver plane, so the form factor's horizon clip is never exercised -- disabling the clip leaves the gate passing.
+- Emissive triangles reaching the raster tier are capped at kVkmMaxAreaLights (32) and dropped in light-table order, so a scene past the cap keeps an arbitrary subset rather than the brightest.
 - Shadow-casting lights are capped by kVkmMaxShadowTiles (16 tiles: one per cascade for a directional light, six per point light, one per spot); past that a light shades unshadowed.
 - The shadow atlas culls every light against one union box, so a caster outside a given light's frustum is still submitted to that light's tile and clipped there.
 - Point-light shadow taps clamp at a cube-face edge rather than continuing into the adjacent face, so a receiver straddling a seam samples one face twice.

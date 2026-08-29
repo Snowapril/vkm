@@ -1145,6 +1145,7 @@ namespace
             }
         }
         _lightTriangleCount = static_cast<uint32_t>(vkmFinalizeLightTable(&triangles));
+        _lightTriangles = triangles;
 
         /*
         * Always created, even header-only: an unconditionally valid _lightPoolSlot means no
@@ -1435,6 +1436,7 @@ namespace
         _lightPoolSlot = INVALID_VALUE32;
         _lightTriangleCount = 0;
         _punctualLights.clear();
+        _lightTriangles.clear();
         _cullPipeline = nullptr;
         _emitPipeline = nullptr;
 

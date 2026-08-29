@@ -416,6 +416,19 @@ namespace vkm
         inline uint32_t getLightTriangleCount() const { return _lightTriangleCount; }
 
         /*
+        * @brief The same triangles, in world space, as build() finalized them.
+        * @details Retained rather than dropped after the upload because the raster tier cannot
+        * read the light table at all: that blob lives in the bindless buffer array, and the
+        * deferred pass is deliberately scene-free -- its set-2 storage-buffer type is
+        * compute-visible only. So the polygons reach it by being copied into its uniform buffer,
+        * which needs them on the CPU. Empty until build().
+        */
+        inline const std::vector<VkmLightTableTriangle>& getLightTriangles() const
+        {
+            return _lightTriangles;
+        }
+
+        /*
         * @brief Every punctual light the scene's models placed, in world space.
         * @details Filled by addModel from each model's node hierarchy, so it is valid before
         * build(). The scene's own directional light is NOT in here -- it is not a model's light;
@@ -567,6 +580,7 @@ namespace vkm
         VkmResourceHandle _lightBuffer{ VKM_INVALID_RESOURCE_HANDLE };
         uint32_t _lightPoolSlot = INVALID_VALUE32;
         uint32_t _lightTriangleCount = 0;
+        std::vector<VkmLightTableTriangle> _lightTriangles;
         glm::vec3 _directionalRadiance{ 0.0f };
         glm::vec3 _directionalDirection{ 0.0f, 1.0f, 0.0f };
         std::vector<VkmPunctualLight> _punctualLights;
