@@ -5831,3 +5831,40 @@ not have been visible, which is why they are one change.
 
 Anisotropy makes `CalculateLevelOfDetail` report finer levels, so resident texture bytes rise. That
 is the trade, and the streaming readout in the GI panel is where it shows.
+
+## 2026-08-29 - A scene browser for the gi sample
+
+The gi sample loaded exactly what `gv_gi_model_path` named, and that default is Sponza alone -- so a
+glTF dropped into `resources/Scenes` was unreachable without editing the command line, and its
+Models list never mentioned it. `model_viewer` already had the answer; this ports it.
+
+`loadScene` splits into `importScenes` (no scene mutation) and `rebuildScene` (teardown, add, build,
+prepare), which is what lets a failed import leave the running scene standing rather than emptying
+it. `addModel` has to precede `build()`, so Add, Replace and Remove all route through one rebuild.
+
+The teardown drains the graphics queue first. That is not belt-and-braces: the old scene's buffers
+are still referenced by frames in flight, its bindless slots are handed straight back out by the
+build that follows, and `VkmScene::destroy()` releases material textures the reclaimer has no
+recorded usage to wait on (TODO.md).
+
+### Deviations
+
+- **Planned:** re-frame the camera on every rebuild, as `model_viewer` does.
+  **Done instead:** only when the scene was empty beforehand.
+  **Why:** in `model_viewer` a rebuild is normally a Replace, so re-framing is what the user wants.
+  In gi the common case is adding an emitter to a scene already being looked at, and throwing the
+  viewpoint away there loses the thing being inspected.
+- **Planned:** duplicate the browser helpers per sample, as `splitScenePaths` already was.
+  **Done instead:** `src/samples/common/sample_scene_browser.h`, holding `splitScenePaths`,
+  `SceneEntry` and `scanSceneDirectory`; both samples now include it and their copies are gone.
+  **Why:** the earlier decision (2026-08-26) weighed twelve duplicated lines against adding a
+  general string-split to `vkm/base`. Neither half of that holds here: the shared surface is about
+  sixty lines, and a sample-only header under `src/samples` does not put anything in the library.
+  The layering rule is that the library must not reference `src/samples`, which this respects.
+
+### Not addressed
+
+- Removing the last model is disabled rather than supported: `update()` early-returns until a scene
+  is ready, so an empty scene would take the panel with it and leave no way back.
+- A rebuild that fails at `build()` leaves `_sceneReady` false and the panel gone, exactly as a
+  failed load at startup always has. Surviving that needs the UI drawn outside the readiness gate.

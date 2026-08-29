@@ -44,6 +44,8 @@ target_include_directories(${target}
     PRIVATE
     ${ROOT_DIR}/dependencies/src/cxxopts/include
     ${ROOT_DIR}/include
+    # Sample-only shared headers (src/samples/common). The library never sees these.
+    ${ROOT_DIR}/src/samples
 )
 
 # Compile options
