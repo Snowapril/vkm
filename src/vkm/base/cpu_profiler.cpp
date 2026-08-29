@@ -66,14 +66,6 @@ namespace vkm
             return *instance;
         }
 
-        uint64_t nowNs()
-        {
-            // Epoch taken on first use so timestamps stay small and comfortably fit a uint64.
-            static const std::chrono::steady_clock::time_point epoch = std::chrono::steady_clock::now();
-            return static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - epoch).count());
-        }
-
         ThreadState* createThreadState()
         {
             ProfilerState& state = profilerState();
@@ -130,6 +122,14 @@ namespace vkm
         _capturing.store(capturing, std::memory_order_relaxed);
     }
 
+    uint64_t VkmCpuProfiler::nowNs()
+    {
+        // Epoch taken on first use so timestamps stay small and comfortably fit a uint64.
+        static const std::chrono::steady_clock::time_point epoch = std::chrono::steady_clock::now();
+        return static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - epoch).count());
+    }
+
     void VkmCpuProfiler::pushZone(const char* name)
     {
         ThreadState& thread = threadState();
@@ -137,7 +137,7 @@ namespace vkm
         VkmProfileZone zone;
         zone._name = name;
         zone._depth = static_cast<uint16_t>(std::min<size_t>(thread._openStack.size(), UINT16_MAX));
-        zone._beginNs = nowNs();
+        zone._beginNs = VkmCpuProfiler::nowNs();
         thread._openStack.push_back(zone);
     }
 
@@ -153,7 +153,7 @@ namespace vkm
 
         VkmProfileZone zone = thread._openStack.back();
         thread._openStack.pop_back();
-        zone._endNs = nowNs();
+        zone._endNs = VkmCpuProfiler::nowNs();
 
         if (zone._depth >= kMaxZoneDepth)
         {
@@ -185,12 +185,17 @@ namespace vkm
 
     void VkmCpuProfiler::beginFrame()
     {
+        ProfilerState& state = profilerState();
+
         if (!isCapturing())
         {
+            // The counter still advances, so it keeps counting frame-loop iterations rather than
+            // captured frames. VkmGpuProfiler::collect() numbers submissions the same way, and a
+            // frame number is what pairs one side's frame with the other's.
+            std::lock_guard<std::mutex> frameLock(state._frameMutex);
+            ++state._nextFrameNumber;
             return;
         }
-
-        ProfilerState& state = profilerState();
 
         VkmProfileFrame frame;
         uint64_t minBeginNs = UINT64_MAX;
@@ -238,7 +243,7 @@ namespace vkm
         {
             // Nothing ran through an instrumented scope this frame; still record the frame so
             // the history strip stays one bar per frame.
-            minBeginNs = maxEndNs = nowNs();
+            minBeginNs = maxEndNs = VkmCpuProfiler::nowNs();
         }
         frame._beginNs = minBeginNs;
         frame._endNs = std::max(maxEndNs, minBeginNs);
@@ -290,9 +295,6 @@ namespace vkm
         ProfilerState& state = profilerState();
         std::lock_guard<std::mutex> lock(state._frameMutex);
         state._frames.clear();
-        // Restart numbering so each capture's first frame reads as #0 in the UI rather than
-        // continuing a count from a capture the user already discarded.
-        state._nextFrameNumber = 0;
     }
 
     std::vector<VkmProfileScopeTotal> vkmAggregateProfileRange(const VkmProfileFrame& frame,

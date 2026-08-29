@@ -407,6 +407,39 @@ namespace vkm
         return true;
     }
 
+    bool VkmDriverVulkan::sampleGpuClockCalibration(uint64_t& outGpuTicks)
+    {
+        if (!_calibratedTimestampsEnabled || vkGetCalibratedTimestampsEXT == nullptr)
+        {
+            return false;
+        }
+
+        // Only the device domain is asked for. The host domains the extension also offers would
+        // have to be mapped onto whatever clock std::chrono::steady_clock is built on, which
+        // differs per standard library -- Apple's libc++ uses CLOCK_UPTIME_RAW, which is not the
+        // CLOCK_MONOTONIC the extension reports. The caller brackets this call with
+        // VkmCpuProfiler::nowNs() instead, which needs no such assumption.
+        const VkCalibratedTimestampInfoEXT timestampInfo{
+            .sType      = VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_EXT,
+            .timeDomain = VK_TIME_DOMAIN_DEVICE_EXT,
+        };
+
+        uint64_t timestamp = 0;
+        uint64_t maxDeviation = 0;
+        const VkResult vkResult =
+            vkGetCalibratedTimestampsEXT(_device, 1, &timestampInfo, &timestamp, &maxDeviation);
+        if (!VKM_VK_CHECK_RESULT_MSG(vkResult, "Failed to sample a calibrated GPU timestamp"))
+        {
+            return false;
+        }
+
+        // The same mask resolveGpuTimestamps() applies. Without it a device that reports fewer
+        // than 64 valid bits returns a full-width value here and a truncated one there, and the
+        // difference between them is meaningless.
+        outGpuTicks = timestamp & _timestampValidMask;
+        return true;
+    }
+
     uint32_t VkmDriverVulkan::getQueueFamilyIndex(VkmCommandQueueType queueType) const
     {
         switch (queueType)
@@ -622,6 +655,15 @@ namespace vkm
         {
             pNextChainPushFront(&_features11, &_swapchainFeatures);
             deviceExtensions.push_back(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+        }
+        // Reads the device's timestamp counter from the host, which is what puts a GPU zone on the
+        // same axis as the CPU scope that submitted it. The extension has no feature struct to
+        // chain. Without it the GPU profiler places work by its submit time instead.
+        _calibratedTimestampsEnabled =
+            isExtensionSupported(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME, availableDeviceExtensions);
+        if (_calibratedTimestampsEnabled)
+        {
+            deviceExtensions.push_back(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
         }
         // Lets the CPU write an OPTIMAL-tiled image directly (vkCopyMemoryToImage), which a plain
         // memcpy cannot do because the layout is swizzled. Without it, host-visible texture memory

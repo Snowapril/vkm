@@ -46,10 +46,10 @@ namespace vkm
         inline WGPUQueue getWGPUQueue() const { return _wgpuQueue; }
 
     public:
-        virtual VkmGpuEventTimelineObject submit(const CommandSubmitInfo& submitInfos) override final;
         virtual void setDebugName(const char* name) override final;
 
     protected:
+        virtual VkmGpuEventTimelineObject submitInner(const CommandSubmitInfo& submitInfos) override final;
         virtual bool initializeInner() override final;
 
     private:

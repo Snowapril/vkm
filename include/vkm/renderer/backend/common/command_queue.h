@@ -131,9 +131,19 @@ namespace vkm
         inline VkmGpuEventTimelineBase* getGpuEventTimeline() const { return _gpuEventTimeline.get(); }
         
     public:
-        virtual VkmGpuEventTimelineObject submit(const CommandSubmitInfo& submitInfos) = 0;
+        /*
+        * @brief Submits recorded command buffers to this queue.
+        * @details Brackets the submission with a CPU timestamp and hands it to VkmGpuProfiler,
+        * which is what places the GPU work on the same timeline as the CPU scope that submitted
+        * it. Must be called from the thread driving the frame loop, because the profiler it
+        * records into is unlocked.
+        * @param submitInfos Command buffers to submit, and the swapchain this submit presents to.
+        * @return The timeline point the submission signals.
+        */
+        VkmGpuEventTimelineObject submit(const CommandSubmitInfo& submitInfos);
 
     protected:
+        virtual VkmGpuEventTimelineObject submitInner(const CommandSubmitInfo& submitInfos) = 0;
         virtual bool initializeInner() = 0;
 
     protected:

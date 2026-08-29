@@ -21,10 +21,44 @@ namespace vkm
     class VkmDriverBase;
 
     /*
+    * @brief How a frame's GPU timestamps were placed on the CPU clock.
+    */
+    enum class VkmGpuClockCorrelation : uint8_t
+    {
+        None,       // Nothing placed them; timestamps are raw GPU-domain offsets.
+        Estimated,  // Anchored to the CPU timestamp of the submit that produced them.
+        Calibrated, // Anchored to a GPU/CPU clock pair sampled from the driver.
+    };
+
+    /*
+    * @brief One sampled pair of the CPU clock and the GPU timestamp counter.
+    * @details `_cpuNs` is on VkmCpuProfiler::nowNs()'s clock; `_gpuTicks` is in
+    * VkmDriverBase::getGpuTimestampPeriodNs() units, i.e. the units resolveGpuTimestamps()
+    * reports. The two together are what map one clock onto the other.
+    */
+    struct VkmGpuClockCalibration
+    {
+        bool _valid = false;
+        uint64_t _cpuNs = 0;
+        uint64_t _gpuTicks = 0;
+        double _timestampPeriodNs = 1.0;
+    };
+
+    /*
+    * @brief Places a raw GPU timestamp on the CPU clock.
+    * @details Clamps at 0 rather than wrapping: VkmCpuProfiler's epoch is taken on first use, so a
+    * GPU timestamp from before it maps to a negative value.
+    * @param calibration Pair anchoring the two clocks.
+    * @param gpuTicks Raw GPU timestamp, in getGpuTimestampPeriodNs() units.
+    * @return Nanoseconds on VkmCpuProfiler::nowNs()'s clock, or 0 when `calibration` is invalid.
+    */
+    uint64_t vkmGpuTicksToCpuNs(const VkmGpuClockCalibration& calibration, uint64_t gpuTicks);
+
+    /*
     * @brief One GPU-timed span that executed on one command queue.
-    * @details Timestamps are nanoseconds in the GPU's own clock domain, not correlated to the CPU
-    * clock VkmProfileZone uses, so a GPU and a CPU trace cannot be overlaid on one timeline. The
-    * viewer only ever shows offsets from the frame's own start.
+    * @details Timestamps are nanoseconds on VkmCpuProfiler::nowNs()'s clock -- the same one
+    * VkmProfileZone uses -- so a GPU zone and the CPU scope that submitted it sit on one timeline.
+    * How they got there is per frame: see VkmGpuProfileFrame::_correlation.
     */
     struct VkmGpuProfileZone
     {
@@ -40,6 +74,23 @@ namespace vkm
         inline uint64_t getDurationNs() const { return (_endNs > _beginNs) ? (_endNs - _beginNs) : 0; }
     };
 
+    /*
+    * @brief One submit() call, on the CPU clock VkmProfileZone timestamps use.
+    * @details `_beginNs`/`_endNs` bracket the call itself, so a submit that stalled reads as a
+    * wide marker rather than an instant. `_gpuBeginNs` is filled in when the submission it
+    * produced is resolved, and the gap from `_endNs` to it is how long the work waited on the
+    * queue. A submit the profiler did not time -- a driver upload, an acceleration structure
+    * build, or one made while no timestamp slot bucket was free -- reports _hasGpuWork == false
+    * and has no such gap.
+    */
+    struct VkmGpuSubmitMarker
+    {
+        uint64_t _beginNs = 0;
+        uint64_t _endNs = 0;
+        bool _hasGpuWork = false;
+        uint64_t _gpuBeginNs = 0;
+    };
+
     // One command queue's zones within a single collected frame, sorted by begin time
     // (parent first), which is the order the chart walks.
     struct VkmGpuQueueTimeline
@@ -48,6 +99,9 @@ namespace vkm
         uint32_t _queueIndex = 0;
         std::string _queueName; // VkmCommandQueueBase::getQueueName(), e.g. "MainGraphics"
         std::vector<VkmGpuProfileZone> _zones;
+        // Every submit() made to this queue during the frame, in submit order. Includes those
+        // that recorded no zones, which is the only trace an upload or a build leaves.
+        std::vector<VkmGpuSubmitMarker> _submits;
         // True when a submission asked to time more zones than kMaxZonesPerSubmission, or when
         // no slot bucket was free; the UI surfaces it rather than showing a silently short frame.
         bool _overflowed = false;
@@ -64,6 +118,9 @@ namespace vkm
         uint64_t _beginNs = 0;
         uint64_t _endNs = 0;
         std::vector<VkmGpuQueueTimeline> _queues;
+        // Weakest correlation any submission in this frame was placed with, so a frame is only
+        // reported as calibrated when every part of it is.
+        VkmGpuClockCorrelation _correlation = VkmGpuClockCorrelation::None;
 
         inline uint64_t getDurationNs() const { return (_endNs > _beginNs) ? (_endNs - _beginNs) : 0; }
     };
@@ -98,6 +155,16 @@ namespace vkm
     */
     std::vector<VkmGpuProfileZoneTotal> vkmAggregateGpuProfileRange(const VkmGpuProfileFrame& frame,
                                                                    uint64_t beginNs, uint64_t endNs);
+
+    /*
+    * @brief Shifts one submission's zones so its earliest one begins where its submit returned.
+    * @details The fallback for a backend with no clock calibration. Durations, gaps and ordering
+    * within the submission are preserved exactly; its position relative to other submissions and
+    * other queues is not measured, so the queue latency it implies is always zero.
+    * @param zones Zones of one submission, in raw GPU-domain nanoseconds. Shifted in place.
+    * @param submitCpuNs CPU timestamp the submission was handed to the queue at.
+    */
+    void vkmAnchorGpuZonesToSubmit(std::vector<VkmGpuProfileZone>& zones, uint64_t submitCpuNs);
 
     /*
     * @brief Sliding-window mean GPU duration per render graph subgraph.
@@ -242,6 +309,29 @@ namespace vkm
         void endSubmission(uint32_t submission, const VkmGpuEventTimelineObject& timeline);
 
         /*
+        * @brief Records that the CPU handed a submission to a queue. Called by
+        * VkmCommandQueueBase::submit() for every submit, timed or not.
+        * @details What places GPU work against the CPU timeline it was submitted from. Unlike
+        * beginSubmission(), this sees the driver's uploads and acceleration structure builds too,
+        * which record no zones and would otherwise leave no trace. No-op while not capturing.
+        * @param queue Queue the work was submitted to.
+        * @param beginNs CPU timestamp taken before the submit, from VkmCpuProfiler::nowNs().
+        * @param endNs CPU timestamp taken after it.
+        * @param timeline Timeline the submission signals, which is what pairs this marker with
+        * the zones the same submission recorded.
+        */
+        void recordSubmit(VkmCommandQueueBase* queue, uint64_t beginNs, uint64_t endNs,
+                          const VkmGpuEventTimelineObject& timeline);
+
+        /*
+        * @brief How the most recently resolved frames' GPU timestamps were placed on the CPU clock.
+        * @details Backs the profile window's calibrated/estimated badge. Reports Estimated on a
+        * backend with no calibration API, and also after a sampled pair was found to disagree with
+        * the submissions it was meant to explain.
+        */
+        VkmGpuClockCorrelation getClockCorrelation() const;
+
+        /*
         * @brief Resolves every submission the GPU has finished and advances the frame number new
         * submissions are stamped with. Call once per frame from the frame loop.
         * @details Resolved frames are appended to the ring only while capturing. Never blocks: a
@@ -273,10 +363,21 @@ namespace vkm
         bool copyFrame(size_t index, VkmGpuProfileFrame& outFrame) const;
 
         /*
+        * @brief Deep copy of the collected frame carrying `frameNumber`.
+        * @details How the profile window pairs a CPU frame with its GPU counterpart: both
+        * profilers number the same frame-loop iteration alike. Returns false for a frame the GPU
+        * has not finished yet, which is the normal case for the newest few.
+        * @param frameNumber Frame number to look for.
+        * @param outFrame Receives the frame.
+        * @return False when no collected frame carries that number.
+        */
+        bool copyFrameByNumber(uint32_t frameNumber, VkmGpuProfileFrame& outFrame) const;
+
+        /*
         * @brief Drops every collected frame.
-        * @details Unlike VkmCpuProfiler::clear(), frame numbering is NOT restarted: submissions
-        * recorded before the clear are still in flight and already carry their numbers, and
-        * reusing those numbers would merge them into unrelated frames.
+        * @details Frame numbering is not restarted, the same as VkmCpuProfiler::clear():
+        * submissions recorded before the clear are still in flight and already carry their
+        * numbers, and reusing those numbers would merge them into unrelated frames.
         */
         void clear();
 
@@ -342,9 +443,32 @@ namespace vkm
             bool _submitted = false;
         };
 
+        // One submit() waiting for the GPU to finish it, so its marker can be told where the work
+        // actually started. Kept apart from _pending because most submits never open a submission
+        // at all -- uploads and acceleration structure builds record no zones.
+        struct PendingMarker
+        {
+            VkmGpuEventTimelineObject _timeline;
+            uint32_t _frameNumber = 0;
+            VkmCommandQueueType _queueType = VkmCommandQueueType::Graphics;
+            uint32_t _queueIndex = 0;
+            std::string _queueName;
+            VkmGpuSubmitMarker _marker;
+        };
+
         // Stack entry for a zone that was opened past kMaxZonesPerSubmission and therefore has no
         // slots. It is still pushed so that open/close stay paired.
         static constexpr uint32_t kSuppressedZone = INVALID_VALUE32;
+
+        // Markers waiting on the GPU. Bounded so a caller that never calls collect() cannot grow
+        // it without limit; the cap is generous against the handful of submits a frame makes.
+        static constexpr size_t kMaxPendingMarkers = 64;
+
+        // A submission cannot start before the CPU handed it over, and cannot sit on a queue for a
+        // second. Either says the sampled clock pair does not describe the counter the zones came
+        // from, which is the one thing the calibration cannot verify up front.
+        static constexpr uint64_t kClockSanitySlackNs = 1'000'000;
+        static constexpr uint64_t kClockSanityHorizonNs = 1'000'000'000;
 
         // Moves one finished submission's resolved zones into the ring (or drops them when not
         // capturing), and always latches getLastFrameGpuTimeMs().
@@ -352,6 +476,18 @@ namespace vkm
         // Ring entry for `frameNumber`, appending a new one when the back entry is a different
         // frame. Frame numbers arrive monotonically, so no lookup by key is needed.
         VkmGpuProfileFrame& frameForNumber(uint32_t frameNumber);
+        // Queue row within a frame, appended when the frame has not seen that queue yet. Two
+        // windows submitting to one queue in a frame share a row.
+        VkmGpuQueueTimeline& queueForSubmission(VkmGpuProfileFrame& frame, VkmCommandQueueType queueType,
+                                                uint32_t queueIndex, const std::string& queueName);
+        // Re-anchors the CPU/GPU clock pair. No-op on a backend with no calibration API.
+        void sampleClockCalibration();
+        // Pops the pending marker belonging to `timeline`, or null when the submission was made
+        // before capture began. Markers retire in submit order, so it is at or near the front.
+        PendingMarker* findPendingMarker(const VkmGpuEventTimelineObject& timeline);
+        // Moves every marker the GPU has finished into the ring. Runs after the submission loop,
+        // which is what has already filled in where the work started.
+        void drainPendingMarkers();
 
         VkmDriverBase* _driver;
         bool _supported = false;
@@ -369,5 +505,13 @@ namespace vkm
 
         uint32_t _recordFrameNumber = 0;
         std::deque<VkmGpuProfileFrame> _frames;
+
+        VkmGpuClockCalibration _calibration;
+        // Cleared for the rest of the process once a mapped submission lands somewhere the CPU
+        // says it cannot have; every frame from then on is anchored to its submit instead.
+        bool _calibrationTrusted = true;
+        bool _calibrationMismatchLogged = false;
+        std::deque<PendingMarker> _pendingMarkers;
+        bool _markerExhaustionLogged = false;
     };
 } // namespace vkm

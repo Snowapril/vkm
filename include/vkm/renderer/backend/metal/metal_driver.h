@@ -79,6 +79,7 @@ namespace vkm
         virtual void resetGpuTimestampSlots(VkmCommandBufferBase* commandBuffer, uint32_t firstSlot,
                                             uint32_t count) override final;
         virtual bool resolveGpuTimestamps(uint32_t firstSlot, uint32_t count, uint64_t* outTicks) override final;
+        virtual bool sampleGpuClockCalibration(uint64_t& outGpuTicks) override final;
 
         inline id<MTL4CounterHeap> getGpuTimestampCounterHeap() const { return _timestampCounterHeap; }
 

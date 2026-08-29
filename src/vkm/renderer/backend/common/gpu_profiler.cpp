@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/backend/common/gpu_profiler.h>
+#include <vkm/base/cpu_profiler.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/command_queue.h>
 #include <vkm/renderer/backend/common/driver.h>
@@ -36,6 +37,45 @@ namespace vkm
         }
     } // namespace
 
+    uint64_t vkmGpuTicksToCpuNs(const VkmGpuClockCalibration& calibration, const uint64_t gpuTicks)
+    {
+        if (!calibration._valid)
+        {
+            return 0;
+        }
+
+        // Signed, because a timestamp from either side of the anchor is legitimate.
+        const int64_t deltaNs = static_cast<int64_t>(
+            (static_cast<double>(gpuTicks) - static_cast<double>(calibration._gpuTicks)) *
+            calibration._timestampPeriodNs);
+        const int64_t cpuNs = static_cast<int64_t>(calibration._cpuNs) + deltaNs;
+        return (cpuNs > 0) ? static_cast<uint64_t>(cpuNs) : 0;
+    }
+
+    void vkmAnchorGpuZonesToSubmit(std::vector<VkmGpuProfileZone>& zones, const uint64_t submitCpuNs)
+    {
+        if (zones.empty())
+        {
+            return;
+        }
+
+        uint64_t earliestNs = UINT64_MAX;
+        for (const VkmGpuProfileZone& zone : zones)
+        {
+            earliestNs = std::min(earliestNs, zone._beginNs);
+        }
+
+        // Signed, since the raw GPU clock can read either side of the CPU one.
+        const int64_t shiftNs = static_cast<int64_t>(submitCpuNs) - static_cast<int64_t>(earliestNs);
+        for (VkmGpuProfileZone& zone : zones)
+        {
+            zone._beginNs = static_cast<uint64_t>(std::max<int64_t>(
+                static_cast<int64_t>(zone._beginNs) + shiftNs, 0));
+            zone._endNs = static_cast<uint64_t>(std::max<int64_t>(
+                static_cast<int64_t>(zone._endNs) + shiftNs, 0));
+        }
+    }
+
     VkmGpuProfiler::VkmGpuProfiler(VkmDriverBase* driver)
         : _driver(driver)
     {
@@ -51,12 +91,49 @@ namespace vkm
         if (_supported)
         {
             _timestampPeriodNs = _driver->getGpuTimestampPeriodNs();
+            // Up front, so an offset exists before the first capture arms.
+            sampleClockCalibration();
+            VKM_DEBUG_INFO(_calibration._valid
+                               ? "GPU timestamps are correlated to the CPU clock"
+                               : "GPU timestamps have no CPU-clock calibration on this backend; GPU work "
+                                 "will be placed by its submit time");
         }
         else
         {
             VKM_DEBUG_INFO("GPU timestamps are not available on this backend; GPU profiling is disabled");
         }
         return true;
+    }
+
+    void VkmGpuProfiler::sampleClockCalibration()
+    {
+        if (!_supported)
+        {
+            return;
+        }
+
+        // Best of a few: the pair is only as good as the window it was taken in, and the driver
+        // call's cost varies by more than the clocks do.
+        static constexpr uint32_t kCalibrationSamples = 4;
+        uint64_t bestWindowNs = UINT64_MAX;
+        for (uint32_t sample = 0; sample < kCalibrationSamples; ++sample)
+        {
+            const uint64_t beforeNs = VkmCpuProfiler::nowNs();
+            uint64_t gpuTicks = 0;
+            if (!_driver->sampleGpuClockCalibration(gpuTicks))
+            {
+                return;
+            }
+            const uint64_t afterNs = VkmCpuProfiler::nowNs();
+
+            const uint64_t windowNs = afterNs - beforeNs;
+            if (windowNs < bestWindowNs)
+            {
+                bestWindowNs = windowNs;
+                _calibration = VkmGpuClockCalibration{ true, beforeNs + windowNs / 2, gpuTicks,
+                                                       _timestampPeriodNs };
+            }
+        }
     }
 
     void VkmGpuProfiler::destroy()
@@ -190,8 +267,87 @@ namespace vkm
         submission._submitted = true;
     }
 
+    void VkmGpuProfiler::recordSubmit(VkmCommandQueueBase* queue, const uint64_t beginNs, const uint64_t endNs,
+                                      const VkmGpuEventTimelineObject& timeline)
+    {
+        if (!_capturing || queue == nullptr)
+        {
+            return;
+        }
+
+        if (_pendingMarkers.size() >= kMaxPendingMarkers)
+        {
+            // Once, not per submit: a caller submitting without ever calling collect() would
+            // otherwise warn forever.
+            if (!_markerExhaustionLogged)
+            {
+                _markerExhaustionLogged = true;
+                VKM_DEBUG_WARN("GPU profiler is holding too many unretired submit markers; some "
+                               "submits will not appear on the timeline (logged once)");
+            }
+            return;
+        }
+
+        PendingMarker pending;
+        pending._timeline = timeline;
+        pending._frameNumber = _recordFrameNumber;
+        pending._queueType = queue->getQueueType();
+        pending._queueIndex = queue->getQueueIndex();
+        pending._queueName = (queue->getQueueName() != nullptr) ? queue->getQueueName() : "";
+        pending._marker._beginNs = beginNs;
+        pending._marker._endNs = endNs;
+        _pendingMarkers.push_back(std::move(pending));
+    }
+
+    VkmGpuProfiler::PendingMarker* VkmGpuProfiler::findPendingMarker(const VkmGpuEventTimelineObject& timeline)
+    {
+        for (PendingMarker& pending : _pendingMarkers)
+        {
+            if (pending._timeline._gpuEventTimeline == timeline._gpuEventTimeline &&
+                pending._timeline._timelineValue == timeline._timelineValue)
+            {
+                return &pending;
+            }
+        }
+        return nullptr;
+    }
+
+    void VkmGpuProfiler::drainPendingMarkers()
+    {
+        while (!_pendingMarkers.empty())
+        {
+            PendingMarker& pending = _pendingMarkers.front();
+
+            VkmGpuEventTimelineBase* timeline = pending._timeline._gpuEventTimeline;
+            if (timeline != nullptr &&
+                timeline->queryLastCompletedTimeline() < pending._timeline._timelineValue)
+            {
+                // Markers retire in submit order, so nothing behind this one is ready either.
+                break;
+            }
+
+            if (_capturing)
+            {
+                VkmGpuProfileFrame& frame = frameForNumber(pending._frameNumber);
+                VkmGpuQueueTimeline& queue = queueForSubmission(frame, pending._queueType,
+                                                                pending._queueIndex, pending._queueName);
+                queue._submits.push_back(pending._marker);
+            }
+            _pendingMarkers.pop_front();
+        }
+    }
+
     void VkmGpuProfiler::collect()
     {
+        // Re-anchored every frame while capturing rather than once at init: the two clocks drift,
+        // and a whole capture mapped through one stale pair skews by more than a frame's zones are
+        // long. Not while idle -- collect() runs with the window shut to keep the overlay's stat
+        // live, and sampling is not free on every backend.
+        if (_capturing)
+        {
+            sampleClockCalibration();
+        }
+
         while (_supported && _pendingCount > 0)
         {
             PendingSubmission& submission = _pending[_oldestBucket];
@@ -256,6 +412,9 @@ namespace vkm
             --_pendingCount;
         }
 
+        // After the submission loop, which is what filled in where each marker's work started.
+        drainPendingMarkers();
+
         // Stamped onto submissions recorded from here on, so one ring entry corresponds to one
         // frame-loop iteration the same way a VkmProfileFrame does.
         ++_recordFrameNumber;
@@ -263,6 +422,67 @@ namespace vkm
 
     void VkmGpuProfiler::retireSubmission(PendingSubmission& submission, std::vector<VkmGpuProfileZone>&& zones)
     {
+        // The marker is found before the zones are mapped, because the estimated path needs the
+        // CPU submit time to anchor them, and filled in afterwards, because the calibrated path
+        // needs the mapped begin. Null for a submission made before capture armed.
+        PendingMarker* marker = findPendingMarker(submission._timeline);
+
+        VkmGpuClockCorrelation correlation = VkmGpuClockCorrelation::None;
+        if (!zones.empty())
+        {
+            const bool calibrated = _calibration._valid && _calibrationTrusted;
+            if (calibrated)
+            {
+                for (VkmGpuProfileZone& zone : zones)
+                {
+                    zone._beginNs = vkmGpuTicksToCpuNs(
+                        _calibration, static_cast<uint64_t>(static_cast<double>(zone._beginNs) / _timestampPeriodNs));
+                    zone._endNs = vkmGpuTicksToCpuNs(
+                        _calibration, static_cast<uint64_t>(static_cast<double>(zone._endNs) / _timestampPeriodNs));
+                }
+                correlation = VkmGpuClockCorrelation::Calibrated;
+            }
+
+            uint64_t earliestNs = UINT64_MAX;
+            for (const VkmGpuProfileZone& zone : zones)
+            {
+                earliestNs = std::min(earliestNs, zone._beginNs);
+            }
+
+            // The one thing the calibration cannot verify up front: that the pair describes the
+            // same counter the zones came from. A submission that starts before the CPU handed it
+            // over, or a second after, says it does not.
+            if (calibrated && marker != nullptr &&
+                (earliestNs + kClockSanitySlackNs < marker->_marker._endNs ||
+                 earliestNs > marker->_marker._endNs + kClockSanityHorizonNs))
+            {
+                if (!_calibrationMismatchLogged)
+                {
+                    _calibrationMismatchLogged = true;
+                    VKM_DEBUG_WARN("Sampled GPU clock does not agree with the submissions it timed; "
+                                   "GPU work will be placed by its submit time from here on");
+                }
+                _calibrationTrusted = false;
+                correlation = VkmGpuClockCorrelation::None;
+            }
+
+            if (correlation != VkmGpuClockCorrelation::Calibrated && marker != nullptr)
+            {
+                vkmAnchorGpuZonesToSubmit(zones, marker->_marker._endNs);
+                correlation = VkmGpuClockCorrelation::Estimated;
+            }
+
+            if (marker != nullptr)
+            {
+                marker->_marker._hasGpuWork = true;
+                marker->_marker._gpuBeginNs = UINT64_MAX;
+                for (const VkmGpuProfileZone& zone : zones)
+                {
+                    marker->_marker._gpuBeginNs = std::min(marker->_marker._gpuBeginNs, zone._beginNs);
+                }
+            }
+        }
+
         if (!zones.empty())
         {
             // The submission's whole span rather than its depth-0 zone: WebGPU cannot time a
@@ -290,26 +510,17 @@ namespace vkm
 
         VkmGpuProfileFrame& frame = frameForNumber(submission._frameNumber);
 
-        // Two windows submitting to the same queue in one frame produce two submissions; they
-        // belong on one row, not two.
-        auto queueIt = std::find_if(frame._queues.begin(), frame._queues.end(),
-                                    [&submission](const VkmGpuQueueTimeline& timeline) {
-                                        return timeline._queueType == submission._queueType &&
-                                               timeline._queueIndex == submission._queueIndex;
-                                    });
-        if (queueIt == frame._queues.end())
+        // A frame is only as correlated as its least correlated submission.
+        if (frame._queues.empty() || correlation < frame._correlation)
         {
-            VkmGpuQueueTimeline timeline;
-            timeline._queueType = submission._queueType;
-            timeline._queueIndex = submission._queueIndex;
-            timeline._queueName = submission._queueName;
-            frame._queues.push_back(std::move(timeline));
-            queueIt = std::prev(frame._queues.end());
+            frame._correlation = correlation;
         }
 
-        queueIt->_overflowed = queueIt->_overflowed || submission._overflowed;
-        queueIt->_zones.insert(queueIt->_zones.end(), zones.begin(), zones.end());
-        sortZones(queueIt->_zones);
+        VkmGpuQueueTimeline& queue = queueForSubmission(frame, submission._queueType,
+                                                        submission._queueIndex, submission._queueName);
+        queue._overflowed = queue._overflowed || submission._overflowed;
+        queue._zones.insert(queue._zones.end(), zones.begin(), zones.end());
+        sortZones(queue._zones);
 
         // Recomputed rather than accumulated so the span always describes exactly what the frame
         // currently holds, however many submissions have landed in it so far.
@@ -329,6 +540,41 @@ namespace vkm
         }
         frame._beginNs = minBeginNs;
         frame._endNs = std::max(maxEndNs, minBeginNs);
+    }
+
+    VkmGpuQueueTimeline& VkmGpuProfiler::queueForSubmission(VkmGpuProfileFrame& frame,
+                                                            const VkmCommandQueueType queueType,
+                                                            const uint32_t queueIndex,
+                                                            const std::string& queueName)
+    {
+        // Two windows submitting to the same queue in one frame produce two submissions; they
+        // belong on one row, not two.
+        auto queueIt = std::find_if(frame._queues.begin(), frame._queues.end(),
+                                    [queueType, queueIndex](const VkmGpuQueueTimeline& timeline) {
+                                        return timeline._queueType == queueType &&
+                                               timeline._queueIndex == queueIndex;
+                                    });
+        if (queueIt != frame._queues.end())
+        {
+            return *queueIt;
+        }
+
+        VkmGpuQueueTimeline timeline;
+        timeline._queueType = queueType;
+        timeline._queueIndex = queueIndex;
+        timeline._queueName = queueName;
+        frame._queues.push_back(std::move(timeline));
+        return frame._queues.back();
+    }
+
+    VkmGpuClockCorrelation VkmGpuProfiler::getClockCorrelation() const
+    {
+        if (!_supported)
+        {
+            return VkmGpuClockCorrelation::None;
+        }
+        return (_calibration._valid && _calibrationTrusted) ? VkmGpuClockCorrelation::Calibrated
+                                                            : VkmGpuClockCorrelation::Estimated;
     }
 
     VkmGpuProfileFrame& VkmGpuProfiler::frameForNumber(const uint32_t frameNumber)
@@ -390,9 +636,24 @@ namespace vkm
         return true;
     }
 
+    bool VkmGpuProfiler::copyFrameByNumber(const uint32_t frameNumber, VkmGpuProfileFrame& outFrame) const
+    {
+        for (const VkmGpuProfileFrame& frame : _frames)
+        {
+            if (frame._frameNumber == frameNumber)
+            {
+                outFrame = frame;
+                return true;
+            }
+        }
+        return false;
+    }
+
     void VkmGpuProfiler::clear()
     {
         _frames.clear();
+        // Markers still in flight belong to frames that no longer exist.
+        _pendingMarkers.clear();
     }
 
     void VkmGpuSubGraphAverages::addZones(const std::vector<VkmGpuProfileZone>& zones)

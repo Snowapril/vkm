@@ -538,6 +538,18 @@ namespace vkm
             (void)firstSlot; (void)count; (void)outTicks; return false;
         }
 
+        /*
+        * @brief Samples the GPU's timestamp counter, for anchoring GPU ticks to the CPU clock.
+        * @details The caller takes its own CPU timestamp immediately either side of this call and
+        * uses the midpoint, so a backend only has to sample as fast as it can rather than report a
+        * host timestamp of its own. `outGpuTicks` is in the units resolveGpuTimestamps() reports
+        * and must be masked the same way, or the two cannot be differenced.
+        * @param outGpuTicks Receives the GPU counter's current value.
+        * @return False on a backend or device with no calibration API, leaving `outGpuTicks`
+        * untouched; the profiler then places GPU work by its submit time instead.
+        */
+        virtual bool sampleGpuClockCalibration(uint64_t& outGpuTicks) { (void)outGpuTicks; return false; }
+
     protected:
         VkmCommandQueueBase* newCommandQueue(const VkmCommandQueueType queueType, const uint32_t commandQueueIndex, const char* name);
 

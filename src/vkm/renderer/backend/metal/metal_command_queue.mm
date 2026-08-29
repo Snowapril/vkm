@@ -91,7 +91,7 @@ namespace vkm
 
     }
 
-    VkmGpuEventTimelineObject VkmCommandQueueMetal::submit(const CommandSubmitInfo& submitInfos)
+    VkmGpuEventTimelineObject VkmCommandQueueMetal::submitInner(const CommandSubmitInfo& submitInfos)
     {
         VkmGpuEventTimelineMetal* gpuEventTimelineMetal = static_cast<VkmGpuEventTimelineMetal*>(_gpuEventTimeline.get());
         id<MTLSharedEvent> mtlSharedEvent = gpuEventTimelineMetal->getMTLSharedEvent();
