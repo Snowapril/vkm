@@ -1622,10 +1622,12 @@ private:
             applyModelTransform(static_cast<size_t>(_selectedModel));
         }
 
-        ImGuizmo::BeginFrame();
-        ImGuizmo::SetOrthographic(false);
-        ImGuizmo::SetRect(0.0f, 0.0f, static_cast<float>(_extent.x), static_cast<float>(_extent.y));
-
+        // Opened by the engine against the scene window, so the manipulator is drawn and dragged
+        // over the scene rather than over this panel's own window.
+        if (!_engine->beginGizmoOverlay())
+        {
+            return;
+        }
         const glm::mat4 view = _camera.getView();
         const glm::mat4 projection = _camera.getProjection();
         glm::mat4 transform = model._transform;
@@ -1635,6 +1637,7 @@ private:
             model._transform = transform;
             applyModelTransform(static_cast<size_t>(_selectedModel));
         }
+        _engine->endGizmoOverlay();
 
         // The light table bakes emissive triangles in world space at build (TODO.md), so the
         // traced tier keeps lighting from where the emitter was loaded.
@@ -1667,17 +1670,20 @@ private:
     // Whether the gizmo moved the light this frame.
     bool dragSelectedLight(VkmPunctualLight& light)
     {
-        ImGuizmo::BeginFrame();
-        ImGuizmo::SetOrthographic(false);
-        ImGuizmo::SetRect(0.0f, 0.0f, static_cast<float>(_extent.x), static_cast<float>(_extent.y));
+        if (!_engine->beginGizmoOverlay())
+        {
+            return false;
+        }
 
         const glm::mat4 view = _camera.getView();
         const glm::mat4 projection = _camera.getProjection();
         const glm::vec3 position(light._positionWorld[0], light._positionWorld[1],
                                  light._positionWorld[2]);
         glm::mat4 transform = glm::translate(glm::mat4(1.0f), position);
-        if (!ImGuizmo::Manipulate(&view[0][0], &projection[0][0], ImGuizmo::TRANSLATE,
-                                  ImGuizmo::WORLD, &transform[0][0]))
+        const bool moved = ImGuizmo::Manipulate(&view[0][0], &projection[0][0], ImGuizmo::TRANSLATE,
+                                                ImGuizmo::WORLD, &transform[0][0]);
+        _engine->endGizmoOverlay();
+        if (!moved)
         {
             return false;
         }
@@ -1718,16 +1724,17 @@ private:
             _gi.clearProbeOffsets();
         }
 
-        // ImGuizmo draws into the current ImGui frame and reads the mouse from it, so it belongs
-        // here rather than in render(). It manipulates a full transform; only the translation
-        // column is read back, the volume storing a displacement rather than a matrix.
+        // Driven from here rather than from render(): the manipulator reads the mouse out of an
+        // ImGui frame, which only exists during update(). It manipulates a full transform; only the
+        // translation column is read back, the volume storing a displacement rather than a matrix.
         if (_lightGizmo || _modelGizmo)
         {
             return;
         }
-        ImGuizmo::BeginFrame();
-        ImGuizmo::SetOrthographic(false);
-        ImGuizmo::SetRect(0.0f, 0.0f, static_cast<float>(_extent.x), static_cast<float>(_extent.y));
+        if (!_engine->beginGizmoOverlay())
+        {
+            return;
+        }
 
         const glm::mat4 view = _camera.getView();
         const glm::mat4 projection = _camera.getProjection();
@@ -1737,6 +1744,7 @@ private:
         {
             _gi.setProbeOffset(probeIndex, glm::vec3(transform[3]) - volume.getProbeGridPosition(probeIndex));
         }
+        _engine->endGizmoOverlay();
     }
 #endif
 

@@ -216,3 +216,6 @@
 - The Vulkan GPU profiler masks every timestamp with the graphics queue family's `timestampValidBits` whatever queue wrote it, so a family reporting fewer bits leaves undefined high bits in place.
 - Metal's `invalidateCounterRange` requires the whole counter heap to be idle on the GPU, which `resetGpuTimestampSlots` cannot guarantee: it runs during CPU recording while earlier frames are still executing.
 - `VkmGpuProfiler::collect` routes a 64-bit tick through `double` before converting to nanoseconds, so a tick past 2^53 loses precision and an out-of-range result is undefined.
+- The gizmo overlay gives the scene window a second ImGui context, so a second font atlas and font texture are uploaded per sample even where no gizmo is ever shown.
+- `VkmEngine::wantsCaptureMouseForWindow` reads an ImGui context's `WantCaptureMouse` from the platform's event thread while the render thread runs `NewFrame` on it, one frame stale and unsynchronized.
+- ImGuizmo keeps one manipulator's state in a file-static context rather than one per ImGui context, so only one gizmo can be live per frame however many contexts exist.

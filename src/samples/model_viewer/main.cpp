@@ -668,9 +668,9 @@ private:
     }
     /*
     * @brief Mode buttons and the mouse gizmo for the selected model.
-    * @details ImGuizmo draws into the current ImGui frame and reads the mouse from it, so it
-    * belongs here rather than in render(). The whole matrix is read back, translation, rotation
-    * and scale alike, and becomes the model's transform.
+    * @details The mode buttons stay in this panel; the manipulator itself is drawn on the scene
+    * window through the engine's gizmo overlay. The whole matrix is read back, translation,
+    * rotation and scale alike, and becomes the model's transform.
     */
     void drawGizmoUi()
     {
@@ -699,17 +699,12 @@ private:
             applyModelTransform(static_cast<size_t>(_selectedModel));
         }
 
-        const VkmSwapChainBase* swapChain = _engine->getMainSwapChain();
-        if (swapChain == nullptr)
+        // Opened by the engine against the scene window, so the manipulator is drawn and dragged
+        // over the scene rather than over this panel's own window.
+        if (!_engine->beginGizmoOverlay())
         {
             return;
         }
-        const glm::uvec2 extent = swapChain->getExtent();
-
-        ImGuizmo::BeginFrame();
-        ImGuizmo::SetOrthographic(false);
-        ImGuizmo::SetRect(0.0f, 0.0f, static_cast<float>(extent.x), static_cast<float>(extent.y));
-
         const glm::mat4 view = _camera.getView();
         const glm::mat4 projection = _camera.getProjection();
         glm::mat4 transform = model._transform;
@@ -719,6 +714,7 @@ private:
             model._transform = transform;
             applyModelTransform(static_cast<size_t>(_selectedModel));
         }
+        _engine->endGizmoOverlay();
 
         // The light table bakes emissive triangles in world space at build (TODO.md), so a moved
         // emitter lights the scene from where it was loaded until the scene is rebuilt.

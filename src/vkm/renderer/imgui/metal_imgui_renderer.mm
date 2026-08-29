@@ -13,6 +13,11 @@
 
 #include <imgui.h>
 
+// Defined in imgui.cpp but not declared in imgui.h. Reached by extern declaration exactly as Dear
+// ImGui's own GLFW backend does, because a callback firing on another thread cannot rely on which
+// context happens to be current.
+namespace ImGui { extern ImGuiIO& GetIO(ImGuiContext*); }
+
 #include <cfloat>
 
 #import <Metal/Metal.h>
@@ -448,10 +453,22 @@ namespace vkm
         }
         [_impl->argumentTable setSamplerState:_impl->sampler.gpuResourceID atIndex:0];
 
+        // Skipped where this context is not meant to take platform input at all -- a gizmo overlay
+        // wants the mouse newFrameInner() polls and nothing else, and a second monitor swallowing
+        // keys would take them from the context that does want them.
+        if (!getOptions()._installPlatformInput)
+        {
+            return true;
+        }
+
+        // Bound to this renderer's own context rather than read through ImGui::GetIO(): AppKit
+        // dispatches these on the main thread while the render thread is free to have made another
+        // context current, and a bare GetIO() would then write this window's keys into that one.
+        ImGuiContext* const context = ImGui::GetCurrentContext();
         const NSEventMask keyEventMask = NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskFlagsChanged |
                                          NSEventMaskScrollWheel | NSEventMaskMagnify;
         _impl->keyEventMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:keyEventMask handler:^NSEvent* _Nullable(NSEvent* event) {
-            ImGuiIO& imguiIO = ImGui::GetIO();
+            ImGuiIO& imguiIO = ImGui::GetIO(context);
             switch (event.type)
             {
                 case NSEventTypeKeyDown:

@@ -453,7 +453,7 @@ namespace
 
 - (void)forwardMouseButtonEvent:(NSEvent *)event action:(vkm::VkmKeyAction)action
 {
-    if (_engine == nullptr || _engine->wantsCaptureMouse())
+    if (_engine == nullptr || _engine->wantsCaptureMouseForWindow(kSceneWindowIndex))
     {
         return;
     }
@@ -468,7 +468,7 @@ namespace
 
 - (void)forwardCursorMoveEvent:(NSEvent *)event
 {
-    if (_engine == nullptr || _engine->wantsCaptureMouse())
+    if (_engine == nullptr || _engine->wantsCaptureMouseForWindow(kSceneWindowIndex))
     {
         return;
     }

@@ -38,7 +38,10 @@ namespace vkm
         VkmDriverVulkan* driverVulkan = static_cast<VkmDriverVulkan*>(_driver);
         GLFWwindow* glfwWindow = reinterpret_cast<GLFWwindow*>(windowHandle);
 
-        ImGui_ImplGlfw_InitForVulkan(glfwWindow, true);
+        // Per-window in Dear ImGui 1.92: the backend keeps a GLFWwindow* -> ImGuiContext* map and
+        // every callback resolves its own backend data through it, so installing here does not
+        // disturb another window's context.
+        ImGui_ImplGlfw_InitForVulkan(glfwWindow, getOptions()._installPlatformInput);
 
         VkmCommandQueueVulkan* graphicsQueue = static_cast<VkmCommandQueueVulkan*>(_driver->getCommandQueue(VkmCommandQueueType::Graphics, 0));
         const VkFormat colorFormat = toVkFormat(backBufferFormat);
