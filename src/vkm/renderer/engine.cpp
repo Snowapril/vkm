@@ -157,10 +157,15 @@ namespace vkm
 
         _pipelineStateManager = std::make_unique<VkmPipelineStateManager>(_driver);
         std::string psoError;
+        // The shader root is named because the engine keeps its PSO json in Pipelines/Engine/ and
+        // its HLSL in Shaders/; this is the same SHADER_ROOT vkm_engine_shaders compiles with, and
+        // a runtime recompile that disagreed with it would look for the shaders in the json's
+        // directory.
         if (!_pipelineStateManager->loadPipelineStatesFromDirectory(
                 std::string(RESOURCES_DIR) + "Pipelines/Engine/",
                 std::string(RESOURCES_DIR) + "Shaders/ShaderCache/",
-                VkmPipelineStateOrigin::Engine, &psoError))
+                VkmPipelineStateOrigin::Engine, &psoError,
+                std::string(RESOURCES_DIR) + "Shaders/"))
         {
             VKM_DEBUG_ERROR(fmt::format("Failed to load engine pipeline states: {}", psoError).c_str());
             return VkmInitResult{VkmInitResultCode::Failed, psoError};
