@@ -5963,3 +5963,85 @@ snapshot for the life of the process.
 
 Result: the `captureMemorySnapshot` unit test went from the 9.3 s recorded in TODO.md to
 **0.021 s**. Its `doctest::timeout(120.0)` hang-detector budget and the TODO entry are gone.
+
+### gi startup: instrument first, then batch
+
+Startup had no `VKM_PROFILE_SCOPE` at all -- all 22 uses were inside the frame loop -- so the
+first change was scopes on the init path (`Driver::initialize`, `PipelineStates::loadEngine`,
+`App::postDriverReady`, `Driver::newPipelineState`, `Gltf::import`, `Scene::build`,
+`Scene::decodeImage`, `Scene::buildMipChain`, `Scene::uploadTextureLevels`,
+`Scene::buildAccelerationStructures`) plus `--gv_profile_export_frame=N`, which writes the trace
+from `loopInner` once frame N is collected. Without that flag the startup work, which all drains
+into frame 0, is evicted from the 240-frame ring before anyone can press the export button.
+
+The measurement contradicted the plan's ranking, which is the whole reason it went first.
+
+| scope | Debug -O0 | Release, cold | Release, warm |
+|---|---|---|---|
+| `Engine::initializeBackendDriver` | 7931 ms | 1866 ms | 1205 ms |
+| `Scene::buildMipChain` | 3572 ms | 200 ms | 199 ms |
+| `Scene::decodeImage` | 2636 ms | 705 ms | 683 ms |
+| `Scene::uploadTextureLevels` | 279 ms | 212 ms | 214 ms |
+| `Driver::newPipelineState` | 53 ms | 644 ms | 10 ms |
+| `Scene::buildAccelerationStructures` | 63 ms | 53 ms | 49 ms |
+
+Two things fell out of that. PSO creation is a cold-cache cost only -- 644 ms on the first run
+of a given configuration, 10 ms once macOS's own shader cache is warm -- so there is nothing to
+fix there. And the ~760 per-mip submits plus ~104 per-BLAS submits, which the plan treated as the
+headline, are 4% of a Debug startup and 22% of a warm Release one. The Debug figure the original
+complaint describes is dominated by CPU image work that `-O0` inflates roughly 15x.
+
+#### The setup batch (kept)
+
+`uploadToBuffer`, `uploadToTexture` and both backends' acceleration-structure `initialize()` ended
+in the same eight lines: end, submit, `waitIdle`, release, release staging. That tail now lives
+once, in `VkmDriverBase`, behind `acquireSetupCommandBuffer()` / `submitSetupCommandBuffer()`.
+With no batch open it behaves exactly as before. Between `beginSetupBatch()` and
+`endSetupBatch()` the work accumulates into one command buffer, flushed when it crosses 64 MiB of
+recorded bytes -- which bounds the staging and scratch memory a batch holds live, so it is not a
+memory regression -- and again at `endSetupBatch()`. `VkmScene` opens one around the material
+texture loop and one around the BLAS loop.
+
+Two lifetime rules make it safe, both of which the unbatched code got for free:
+- Staging buffers are released by the flush, after its `waitIdle`, not by the call that recorded
+  the copy. Releasing at the old point would destroy a buffer a pending copy still reads
+  (`vkDestroyBuffer-buffer-00922`, the VUID family already in TODO.md).
+- Freeing a static structure's scratch moved out of `initialize()` into a new
+  `VkmAccelerationStructure::onSetupBuildCompleted()` that the flush calls. Metal's debug layer
+  aborts the process on a nil scratch buffer, so a deferred build reaching a freed scratch is not
+  a warning.
+- The BLAS batch is closed before the TLAS build rather than ordered with a barrier: ending it is
+  a full `waitIdle`, which is the strongest ordering available and needs no new synchronization on
+  either backend.
+
+Measured headlessly (69 textures x 10 mip levels, Metal, validation on), because the gi sample's
+render thread is `CAMetalDisplayLink`-driven and produces no frames while its window is not being
+composited: **163 ms -> 40 ms, 4.1x**, for the same 690 uploads.
+
+#### Tabulating the sRGB encode (tried, measured, reverted)
+
+The plan proposed replacing `linearToSrgb8`'s `std::pow` with a table, on the strength of the
+Debug profile showing `Scene::buildMipChain` at 3.6 s. A 255-entry boundary table, each boundary
+found by bisecting the float bit space against the closed form, reproduces it *exactly* -- checked
+against all 1,065,353,217 representable floats in [0, 1], zero disagreements.
+
+It is also slower, in both builds, benchmarked on a 69-image 1024x1024 mip build:
+
+| | closed-form `pow` | bisected table |
+|---|---|---|
+| `-O0` | 5079 ms | 14981 ms |
+| `-O2` | 485 ms | 662 ms |
+
+`std::pow` on Apple Silicon beats eight unpredictable branches and eight scattered loads. Reverted
+in full. The Debug profile's 3.6 s is `-O0` overhead across the whole filter, not `pow`.
+
+### Not addressed
+
+- `Scene::decodeImage` is 683 ms of a 1205 ms warm Release startup, the single largest item.
+  Parallelizing it needs a thread pool the repo does not have, which the plan explicitly scoped
+  out.
+- `VkmScene::uploadMaterialTextures` uploads every mip level of every texture and then lets the
+  streamer immediately unmap the finer ones (`scene.cpp`'s "the first streaming ticks are what
+  take the finer levels back off"). Uploading only the levels the streamer will keep would skip
+  most of this work rather than making it faster.
+- Startup still runs entirely before `NSApplicationMain`, so it is all black-screen time.

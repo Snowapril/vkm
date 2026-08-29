@@ -323,37 +323,20 @@ namespace vkm
 
         /*
         * Recorded into a command buffer from the engine's own pool and submitted through the
-        * engine's queue, with only the build call itself reaching for the raw handle. Duplicating
-        * a command pool, a fence and a submit here to stay "pure" would be more Vulkan code, not
-        * less. The shape matches VkmDriverBase::uploadToBuffer: allocate, record, submit, wait.
+        * driver's setup path, with only the build call itself reaching for the raw handle.
+        * Duplicating a command pool, a fence and a submit here to stay "pure" would be more Vulkan
+        * code, not less. The shape matches VkmDriverBase::uploadToBuffer, and a scene builds one
+        * structure per mesh, so the submission is the driver's to batch.
         */
-        VkmCommandQueueBase* commandQueue = _driverVulkan->getCommandQueue(VkmCommandQueueType::Graphics, 0);
-        VkmCommandBufferBase* commandBuffer = commandQueue->getCommandBufferPool()->allocate();
-        commandBuffer->beginCommandBuffer();
+        VkmCommandBufferBase* commandBuffer = _driverVulkan->acquireSetupCommandBuffer();
+        if (commandBuffer == nullptr)
+        {
+            return false;
+        }
         // Through the common entry point, like every other caller: it is what checks the recording
         // rules and records the usages the deferred reclaimer waits on. Reaching for the raw
         // VkCommandBuffer here skipped both.
         commandBuffer->buildAccelerationStructure(handle);
-        commandBuffer->endCommandBuffer();
-
-        CommandSubmitInfo submitInfo;
-        submitInfo.commandBuffers[0] = commandBuffer;
-        submitInfo.commandBufferCount = 1;
-        const VkmGpuEventTimelineObject submitResult = commandQueue->submit(submitInfo);
-        if (submitResult._gpuEventTimeline != nullptr)
-        {
-            submitResult._gpuEventTimeline->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
-        }
-        commandQueue->getCommandBufferPool()->release(commandBuffer);
-        if (!_allowUpdate)
-        {
-            // A structure that will never be rebuilt has no further use for its scratch, and it is
-            // the largest allocation here on a big scene.
-            vmaDestroyBuffer(_driverVulkan->getVmaAllocator(), _scratchBuffer, _scratchAllocation);
-            _scratchBuffer = VK_NULL_HANDLE;
-            _scratchAllocation = nullptr;
-            _scratchAddress = 0;
-        }
 
         const VkAccelerationStructureDeviceAddressInfoKHR deviceAddressInfo{
             .sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR,
@@ -361,7 +344,24 @@ namespace vkm
         };
         _deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(_driverVulkan->getDevice(), &deviceAddressInfo);
         _structureSize = sizes.accelerationStructureSize;
-        return true;
+
+        // The scratch is what a batch has to budget: it stays live until the build retires.
+        _driverVulkan->retireAfterSetupSubmit(this);
+        return _driverVulkan->submitSetupCommandBuffer(sizes.buildScratchSize);
+    }
+
+    void VkmAccelerationStructureVulkan::onSetupBuildCompleted()
+    {
+        if (!_allowUpdate)
+        {
+            // A structure that will never be rebuilt has no further use for its scratch, and it is
+            // the largest allocation here on a big scene. Freed only now: the build reads it, so
+            // it has to outlive the submission that carries the build.
+            vmaDestroyBuffer(_driverVulkan->getVmaAllocator(), _scratchBuffer, _scratchAllocation);
+            _scratchBuffer = VK_NULL_HANDLE;
+            _scratchAllocation = nullptr;
+            _scratchAddress = 0;
+        }
     }
 
     bool VkmAccelerationStructureVulkan::updateInstances(

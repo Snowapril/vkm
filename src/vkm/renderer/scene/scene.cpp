@@ -3,6 +3,7 @@
 #include <vkm/renderer/scene/scene.h>
 
 #include <vkm/base/common.h>
+#include <vkm/base/cpu_profiler.h>
 #include <vkm/renderer/backend/common/acceleration_structure.h>
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/buffer.h>
@@ -534,6 +535,7 @@ namespace
 
     bool VkmScene::uploadMaterialTextures(VkmDriverBase* driver, std::string* outError)
     {
+        VKM_PROFILE_SCOPE("Scene::uploadMaterialTextures");
         if ((driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::TextureUpload) == 0u)
         {
             return true;
@@ -544,6 +546,10 @@ namespace
         {
             return true;
         }
+
+        // Every level of every material texture is its own staged copy, which unbatched is one
+        // submit and one full GPU wait each -- Sponza alone is around 760 of them.
+        driver->beginSetupBatch();
 
         // Two separate capabilities. WebGPU can upload pixels but has no set-0 texture array to
         // index them from, so there the textures are created and kept -- getMaterialTexture()
@@ -587,7 +593,12 @@ namespace
 
             VkmImageData image;
             std::string imageError;
-            if (!loadImageFromFile(path, &image, &imageError))
+            bool decoded = false;
+            {
+                VKM_PROFILE_SCOPE("Scene::decodeImage");
+                decoded = loadImageFromFile(path, &image, &imageError);
+            }
+            if (!decoded)
             {
                 VKM_DEBUG_WARN(("Material texture '" + path + "' could not be decoded (" + imageError +
                                 "); the material falls back to its factor").c_str());
@@ -605,7 +616,10 @@ namespace
             // obvious case. The levels are built on the CPU and uploaded like any other level,
             // which needs no new GPU path: uploadToTexture has always taken a mip index.
             std::vector<VkmImageData> mipLevels;
-            vkmBuildMipChain(image, srgb, &mipLevels);
+            {
+                VKM_PROFILE_SCOPE("Scene::buildMipChain");
+                vkmBuildMipChain(image, srgb, &mipLevels);
+            }
 
             info._extent = glm::uvec3(image._width, image._height, 1);
             info._numMipLevels = 1u + static_cast<uint32_t>(mipLevels.size());
@@ -620,6 +634,7 @@ namespace
             const std::string debugName = vkmMaterialTextureDebugName(path, srgb);
             info._debugName = debugName.c_str();
 
+            VKM_PROFILE_SCOPE("Scene::uploadTextureLevels");
             VkmTexture* texture = driver->newTexture(info);
             bool uploadedAllLevels = texture != nullptr;
             if (uploadedAllLevels && texture->isSparse())
@@ -740,6 +755,10 @@ namespace
         _materialDirtyFirst = 0;
         _materialDirtyEnd = 0;
 
+        // Before the failure check below: the batch holds staging buffers the GPU is still reading,
+        // and this function must not return with one open either way.
+        driver->endSetupBatch();
+
         if (slotsExhausted)
         {
             return fail(outError, "The bindless texture array is exhausted while uploading material textures");
@@ -749,6 +768,7 @@ namespace
 
     bool VkmScene::build(VkmDriverBase* driver, VkmPipelineStateManager* pipelineStateManager, std::string* outError)
     {
+        VKM_PROFILE_SCOPE("Scene::build");
         VKM_ASSERT(driver != nullptr, "VkmScene::build requires a driver");
         VKM_ASSERT(pipelineStateManager != nullptr, "VkmScene::build requires a pipeline state manager");
 
@@ -1078,6 +1098,7 @@ namespace
 
     bool VkmScene::buildAccelerationStructures(VkmDriverBase* driver, std::string* outError)
     {
+        VKM_PROFILE_SCOPE("Scene::buildAccelerationStructures");
         VKM_ASSERT(driver != nullptr, "VkmScene::buildAccelerationStructures requires a driver");
 
         if ((driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::RayTracing) == 0)
@@ -1094,6 +1115,10 @@ namespace
         }
 
         _meshStructures.assign(_meshEntries.size(), VKM_INVALID_RESOURCE_HANDLE);
+        // One structure per mesh, each of which is otherwise its own submit and its own full GPU
+        // wait. Closed before the top-level build below, which reads every one of them: ending the
+        // batch waits for the whole GPU, which is the ordering the top level needs.
+        driver->beginSetupBatch();
         for (size_t entry = 0; entry < _meshEntries.size(); ++entry)
         {
             const MeshEntry& meshEntry = _meshEntries[entry];
@@ -1118,6 +1143,7 @@ namespace
                 indexViewName.c_str());
             if (vertexView == VKM_INVALID_RESOURCE_HANDLE || indexView == VKM_INVALID_RESOURCE_HANDLE)
             {
+                driver->endSetupBatch();
                 releaseAccelerationStructures(driver);
                 return fail(outError, "Failed to view the geometry pool for " + debugName);
             }
@@ -1143,11 +1169,13 @@ namespace
             VkmAccelerationStructure* blas = driver->newAccelerationStructure(blasInfo);
             if (blas == nullptr)
             {
+                driver->endSetupBatch();
                 releaseAccelerationStructures(driver);
                 return fail(outError, "Failed to build " + debugName);
             }
             _meshStructures[entry] = blas->getHandle();
         }
+        driver->endSetupBatch();
 
         VkmAccelerationStructureInfo tlasInfo{};
         tlasInfo._type = VkmAccelerationStructureType::TopLevel;

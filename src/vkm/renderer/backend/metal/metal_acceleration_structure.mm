@@ -243,34 +243,32 @@ namespace vkm
 
         /*
         * Recorded through the ordinary command-buffer entry point rather than by reaching for the
-        * encoder here, and submitted through the engine's queue -- the shape
+        * encoder here, and submitted through the driver's setup path -- the shape
         * VkmDriverBase::uploadToBuffer uses. `buildAccelerationStructure` rather than a hand-rolled
         * encoder block, so the initial build and the per-frame rebuild are literally the same path.
+        * A scene builds one structure per mesh, so the submission is the driver's to batch.
         */
-        VkmCommandQueueBase* commandQueue = _driverMetal->getCommandQueue(VkmCommandQueueType::Graphics, 0);
-        VkmCommandBufferBase* commandBuffer = commandQueue->getCommandBufferPool()->allocate();
-        commandBuffer->beginCommandBuffer();
-        commandBuffer->buildAccelerationStructure(handle);
-        commandBuffer->endCommandBuffer();
-
-        CommandSubmitInfo submitInfo;
-        submitInfo.commandBuffers[0] = commandBuffer;
-        submitInfo.commandBufferCount = 1;
-        const VkmGpuEventTimelineObject submitResult = commandQueue->submit(submitInfo);
-        if (submitResult._gpuEventTimeline != nullptr)
+        VkmCommandBufferBase* commandBuffer = _driverMetal->acquireSetupCommandBuffer();
+        if (commandBuffer == nullptr)
         {
-            submitResult._gpuEventTimeline->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
+            return false;
         }
-        commandQueue->getCommandBufferPool()->release(commandBuffer);
+        commandBuffer->buildAccelerationStructure(handle);
+        // The scratch is what a batch has to budget: it stays live until the build retires.
+        _driverMetal->retireAfterSetupSubmit(this);
+        return _driverMetal->submitSetupCommandBuffer(sizes.buildScratchBufferSize);
+    }
 
+    void VkmAccelerationStructureMetal::onSetupBuildCompleted()
+    {
         if (!_allowUpdate)
         {
             // A structure that will never be rebuilt has no further use for its scratch, and it is
-            // the largest allocation here on a big scene.
+            // the largest allocation here on a big scene. Freed only now: the build reads it, and
+            // Metal's debug layer aborts the process on a nil scratch buffer.
             [_scratchBuffer release];
             _scratchBuffer = nil;
         }
-        return true;
     }
 
     bool VkmAccelerationStructureMetal::updateInstances(

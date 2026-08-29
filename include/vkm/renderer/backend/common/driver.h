@@ -189,6 +189,49 @@ namespace vkm
         VkmTextureReadbackResult readbackTexture(VkmResourceHandle textureHandle, uint32_t arrayLayer = 0);
 
         /*
+        * @brief Groups every setup upload and acceleration-structure build until endSetupBatch()
+        * into as few submissions as the byte budget allows.
+        * @details Each of uploadToBuffer, uploadToTexture and newAccelerationStructure otherwise
+        * submits its own command buffer and blocks on the GPU until it retires. That is the right
+        * shape for the one-off call, and disastrous for a scene load: Sponza's mip chains alone are
+        * ~760 of them. Inside a batch the work accumulates into one command buffer, which is
+        * flushed when it crosses the byte budget and again at endSetupBatch().
+        *
+        * Only the submission changes; each call still copies its source bytes before returning, so
+        * a caller may free them as before, and staging buffers are still released -- but after the
+        * flush that waits on them, rather than inside the call that recorded them. Batches do not
+        * nest, and one must not be left open: a runtime caller such as the texture streamer would
+        * otherwise have its upload deferred to nobody knows when.
+        */
+        void beginSetupBatch();
+
+        // Flushes whatever the batch accumulated and closes it. Safe with no batch open.
+        void endSetupBatch();
+
+        /*
+        * @brief The open setup command buffer, beginning one if none is open.
+        * @details Together with submitSetupCommandBuffer() this is the shared tail of every
+        * synchronous setup path, so a backend's acceleration-structure build records into the same
+        * command buffer an upload does and rides the same batching.
+        * @return A command buffer already in its recording state, or null when none can be had.
+        */
+        VkmCommandBufferBase* acquireSetupCommandBuffer();
+
+        /*
+        * @brief Hands the setup command buffer back, submitting it unless a batch is collecting.
+        * @param recordedBytes What the caller just recorded, which is what the batch budgets.
+        * @return False if the submission failed.
+        */
+        bool submitSetupCommandBuffer(uint64_t recordedBytes);
+
+        // Releases `handle` after the submission that consumes it has retired, rather than now.
+        void retireAfterSetupSubmit(VkmResourceHandle handle);
+
+        // Calls onSetupBuildCompleted() on `structure` once its build has retired.
+        void retireAfterSetupSubmit(VkmAccelerationStructure* structure);
+
+
+        /*
          * @brief Synchronously uploads bytes into a buffer.
          * @details The staging path blocks until the GPU copy completes, so this is for setup-time
          * uploads (e.g. postDriverReady), not per-frame streaming. It uses a transient staging
@@ -622,6 +665,23 @@ namespace vkm
         std::unique_ptr<VkmDeferredResourceReclaimer> _deferredReclaimer;
         std::unique_ptr<VkmGpuCrashHandler> _gpuCrashHandler;
         std::unique_ptr<VkmGpuProfiler> _gpuProfiler;
+        // Flushes the setup command buffer, waits for it, then releases everything the flush was
+        // waiting on. Called by submitSetupCommandBuffer and endSetupBatch.
+        bool flushSetupCommandBuffer();
+
+        // How much recorded work a batch accumulates before flushing anyway. This bounds the
+        // staging memory and the build scratch a batch holds live at once, which would otherwise
+        // grow with the scene: a batch is a latency optimization, not a licence to allocate.
+        static constexpr uint64_t kSetupBatchFlushBytes = 64ull * 1024ull * 1024ull;
+
+        // Setup-batch state. _setupCommandBuffer is non-null only between an
+        // acquireSetupCommandBuffer() and the flush that submits it.
+        VkmCommandBufferBase* _setupCommandBuffer{nullptr};
+        std::vector<VkmResourceHandle> _setupStagingBuffers;
+        std::vector<VkmAccelerationStructure*> _setupBuiltStructures;
+        uint64_t _setupPendingBytes{0};
+        bool _setupBatchOpen{false};
+
         VkmEngineLaunchOptions _launchOptions{};
         bool _debugNamingEnabled{false};
         VkmFormat _swapChainColorFormat{VkmFormat::Undefined};
