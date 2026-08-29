@@ -5922,3 +5922,44 @@ mouse and the camera controller does not orbit underneath it.
 - `wantsCaptureMouse` is read from the AppKit main thread while the render thread runs `NewFrame` on
   the same context. That race predates this and is why the Metal NSEvent monitor was bound to its
   context with `GetIO(ctx)` rather than by making it current.
+
+## 2026-08-29 — Two Metal profiling fixes: memory inspector cost and gi startup time
+
+Two complaints, profiled to root cause. Both turned out to be the same shape: a per-item
+blocking round trip where one batched round trip would do.
+
+### `MemoryInspector::update` cost 10 ms+, twice a second, forever
+
+`resolveMemoryTagCallSites` spawned a child `atos` process per loaded module per capture and
+blocked the render thread on `waitpid`. Measured on this machine: 40-50 ms per spawn against
+the `gi` executable, ~70 ms against a system framework.
+
+The cost was permanent rather than the one-time warm-up the old comment assumed. `dladdr`
+reports `dli_fname` paths like `/usr/lib/libobjc.A.dylib` and `/usr/lib/libsystem_malloc.dylib`,
+which no longer exist on disk -- they live only in the dyld shared cache. `atos -o` on one of
+those fails with empty stdout, `resolveModuleBatch` did `if (output.empty()) continue;`, and it
+cached only non-empty names. So those addresses were never cached and were re-spawned on every
+snapshot for the life of the process.
+
+- Symbolization is now in-process: `dladdr` for the symbol, `abi::__cxa_demangle` for the name,
+  then the existing signature trimmer (renamed `condenseSymbolName`, and its source-location
+  branch dropped -- `dladdr` never yields one). `__cxa_demangle` allocates through `malloc`, not
+  the replaced global `operator new`, so it cannot recurse into `MemoryTracker::allocate`.
+  `captureCommandOutput`, `ModuleBatch` and `resolveModuleBatch` are gone with it.
+- Failures cache as an empty string. `formatMemoryTagName` reads that as "no name to show" and
+  falls back to the raw address, so every address costs at most one resolution.
+- `captureMemorySnapshot` gained `bool includeTagTable = true`. Without it the sample skips the
+  tag-table copy, the sort and symbolization entirely and reads three counters instead;
+  `VkmMemoryInspector::update` passes `_visible`, so the always-on debug overlay (which only
+  needs the totals and the GPU figures) no longer pays for a table nothing is displaying.
+- `MemoryTracker` maintains those three totals incrementally under the mutex it already holds in
+  `allocate`/`deallocate`, exposed as `getTaggedTotals()`. Equal to summing the tag table: a
+  fully-freed tag carries zero bytes.
+- `VkmRenderResourcePool::getAllCategoryMemoryUsage()` replaces 9 separate acquisitions of the
+  renderer's hottest lock with one.
+- Vulkan's `getGpuMemoryStats` dropped `vmaCalculateStatistics`, which walks every TLSF block.
+  `VmaBudget` already embeds the `blockBytes`/`allocationBytes` it was called for, and
+  `vmaGetHeapBudgets` two lines above already had them.
+
+Result: the `captureMemorySnapshot` unit test went from the 9.3 s recorded in TODO.md to
+**0.021 s**. Its `doctest::timeout(120.0)` hang-detector budget and the TODO entry are gone.

@@ -9,26 +9,22 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
-#include <map>
 #include <mutex>
 #include <new>
 #include <unordered_map>
 
-// Symbolization is a host-tooling job: it needs to know which module an address belongs to
-// and read that module's debug info. This implementation is POSIX-only -- dladdr for the
-// module, then atos/addr2line in a child process for the name. Emscripten has none of it, and
-// neither does Windows (which would need DbgHelp and a different resolver entirely). Both keep
-// the raw addresses and everything below compiles out.
+// Symbolization runs in-process: dladdr names the symbol an address falls inside, and
+// __cxa_demangle turns that mangled name into a readable one. Both are POSIX/Itanium-ABI, which
+// Emscripten does not have and Windows does not either (it would need DbgHelp and a different
+// resolver entirely). Both keep the raw addresses and everything below compiles out.
 #if !defined(VKM_PLATFORM_WASM) && !defined(VKM_PLATFORM_WINDOWS)
 #define VKM_MEMORY_REPORT_SYMBOLIZE
 #endif
 
 #if defined(VKM_MEMORY_REPORT_SYMBOLIZE)
+#include <cxxabi.h>
 #include <dlfcn.h>
-#include <spawn.h>
-#include <sys/wait.h>
-#include <unistd.h>
-extern char** environ;
+#include <cstdlib>
 #endif
 
 namespace vkm
@@ -84,86 +80,13 @@ namespace vkm
         }
 
 #if defined(VKM_MEMORY_REPORT_SYMBOLIZE)
-        // Runs `argv` and returns its stdout. posix_spawn rather than popen: this process is
-        // multithreaded and replaces global operator new, and fork() in that situation can
-        // deadlock in the child if anything between fork and exec touches the allocator.
-        // posix_spawn has no such window.
-        std::string captureCommandOutput(char* const argv[])
-        {
-            int pipeFds[2] = { -1, -1 };
-            if (::pipe(pipeFds) != 0)
-            {
-                return std::string();
-            }
-
-            posix_spawn_file_actions_t actions;
-            posix_spawn_file_actions_init(&actions);
-            posix_spawn_file_actions_adddup2(&actions, pipeFds[1], STDOUT_FILENO);
-            posix_spawn_file_actions_addclose(&actions, pipeFds[0]);
-            posix_spawn_file_actions_addclose(&actions, pipeFds[1]);
-
-            pid_t pid = -1;
-            const int spawnResult = ::posix_spawnp(&pid, argv[0], &actions, nullptr, argv, environ);
-            posix_spawn_file_actions_destroy(&actions);
-            ::close(pipeFds[1]);
-
-            if (spawnResult != 0)
-            {
-                ::close(pipeFds[0]);
-                return std::string();
-            }
-
-            std::string output;
-            char buffer[4096];
-            ssize_t readBytes = 0;
-            while ((readBytes = ::read(pipeFds[0], buffer, sizeof(buffer))) > 0)
-            {
-                output.append(buffer, static_cast<size_t>(readBytes));
-            }
-            ::close(pipeFds[0]);
-
-            int status = 0;
-            ::waitpid(pid, &status, 0);
-            return output;
-        }
-
-        // One module's worth of addresses to symbolize, in the order their results come back.
-        struct ModuleBatch
-        {
-            const char* _path = nullptr;
-            const void* _loadAddress = nullptr;
-            std::vector<const void*> _addresses;
-        };
-
         /*
-        * Trims one symbolizer output line down to what a table cell can show.
-        *
-        * atos prints "func(args) (in module) (file.cpp:123)" and addr2line -f -C prints the
-        * function and the "file.cpp:123" on separate lines, already joined by the caller. In
-        * both cases the argument list dwarfs everything useful, so the signature is cut at its
-        * first '(' while the trailing source location -- the last parenthesised group -- is
-        * kept. A line with no source info degrades to just the function name.
+        * Trims one demangled symbol down to what a table cell can show: the argument list dwarfs
+        * everything useful about a call site, so the signature is cut at its first '('.
         */
-        std::string condenseSymbolLine(const std::string& line)
+        std::string condenseSymbolName(const std::string& symbol)
         {
-            if (line.empty())
-            {
-                return std::string();
-            }
-
-            std::string source;
-            const size_t sourceOpen = line.find_last_of('(');
-            if (sourceOpen != std::string::npos && line.back() == ')')
-            {
-                const std::string candidate = line.substr(sourceOpen + 1, line.size() - sourceOpen - 2);
-                // "(in module)" is atos naming the binary, not a source location.
-                if (candidate.rfind("in ", 0) != 0 && candidate.find(':') != std::string::npos)
-                {
-                    source = candidate;
-                }
-            }
-
-            std::string function = line.substr(0, std::min(line.find('('), line.size()));
+            std::string function = symbol.substr(0, std::min(symbol.find('('), symbol.size()));
             // libc++ decorates its symbols with an ABI tag ("[abi:de200100]") that says nothing
             // about where the allocation came from and costs a third of the column width.
             for (size_t tagStart = function.find("[abi:"); tagStart != std::string::npos;
@@ -180,91 +103,7 @@ namespace vkm
             {
                 function.pop_back();
             }
-            if (function.empty())
-            {
-                return source;
-            }
-            return source.empty() ? function : (function + " (" + source + ")");
-        }
-
-        // Symbolizes one module's addresses and writes whatever it recovers into the cache.
-        void resolveModuleBatch(const ModuleBatch& batch)
-        {
-            // Bounded so the argument list cannot approach ARG_MAX on a snapshot with
-            // thousands of distinct call sites.
-            constexpr size_t kAddressesPerInvocation = 128;
-
-            for (size_t first = 0; first < batch._addresses.size(); first += kAddressesPerInvocation)
-            {
-                const size_t last = std::min(first + kAddressesPerInvocation, batch._addresses.size());
-
-                std::vector<std::string> storage;
-                std::vector<char*> argv;
-#if defined(VKM_PLATFORM_APPLE)
-                // atos is the only thing on macOS that reads the linker's debug map, which is
-                // where a non-dSYM Debug build keeps its line tables.
-                char loadAddress[32];
-                std::snprintf(loadAddress, sizeof(loadAddress), "0x%llx",
-                              static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(batch._loadAddress)));
-                storage = { "atos", "-o", batch._path, "-l", loadAddress };
-#else
-                storage = { "addr2line", "-f", "-C", "-e", batch._path };
-#endif
-                for (size_t i = first; i < last; ++i)
-                {
-                    // addr2line wants module-relative addresses; atos wants absolute ones and
-                    // is told the load address separately.
-#if defined(VKM_PLATFORM_APPLE)
-                    storage.push_back(formatAddress(batch._addresses[i]));
-#else
-                    const uintptr_t offset = reinterpret_cast<uintptr_t>(batch._addresses[i]) -
-                                             reinterpret_cast<uintptr_t>(batch._loadAddress);
-                    storage.push_back(formatAddress(reinterpret_cast<const void*>(offset)));
-#endif
-                }
-
-                argv.reserve(storage.size() + 1);
-                for (std::string& argument : storage)
-                {
-                    argv.push_back(argument.data());
-                }
-                argv.push_back(nullptr);
-
-                const std::string output = captureCommandOutput(argv.data());
-                if (output.empty())
-                {
-                    continue;
-                }
-
-                // One result line per address on Apple; addr2line -f emits two (function, then
-                // source), so they are folded back into one before parsing.
-                std::vector<std::string> lines;
-                for (size_t begin = 0; begin < output.size();)
-                {
-                    const size_t end = std::min(output.find('\n', begin), output.size());
-                    lines.push_back(output.substr(begin, end - begin));
-                    begin = end + 1;
-                }
-#if !defined(VKM_PLATFORM_APPLE)
-                std::vector<std::string> folded;
-                for (size_t i = 0; i + 1 < lines.size(); i += 2)
-                {
-                    folded.push_back(lines[i] + " (" + lines[i + 1] + ")");
-                }
-                lines.swap(folded);
-#endif
-
-                CallSiteCache& cache = callSiteCache();
-                std::lock_guard<std::mutex> lock(cache._mutex);
-                for (size_t i = first; i < last && (i - first) < lines.size(); ++i)
-                {
-                    std::string name = condenseSymbolLine(lines[i - first]);
-                    if (!name.empty())
-                    {
-                        cache._names[batch._addresses[i]] = std::move(name);
-                    }
-                }
-            }
+            return function;
         }
 #endif // VKM_MEMORY_REPORT_SYMBOLIZE
     } // namespace
@@ -300,9 +139,6 @@ namespace vkm
 #if !defined(VKM_MEMORY_REPORT_SYMBOLIZE)
         (void)tags;
 #else
-        // Grouped by module: each one costs a child process, and every address in a shared
-        // library has to be symbolized against that library rather than the executable.
-        std::map<const void*, ModuleBatch> batches;
         for (const TaggedAllocationSummary& tag : tags)
         {
             if (tag.callSite == nullptr || findCachedCallSite(tag.callSite) != nullptr)
@@ -310,22 +146,25 @@ namespace vkm
                 continue;
             }
 
+            std::string name;
             Dl_info info{};
-            if (::dladdr(tag.callSite, &info) == 0 || info.dli_fname == nullptr || info.dli_fbase == nullptr)
+            if (::dladdr(tag.callSite, &info) != 0 && info.dli_sname != nullptr)
             {
-                continue;
+                int status = 0;
+                // __cxa_demangle allocates through malloc rather than the replaced global
+                // operator new, so resolving cannot recurse back into MemoryTracker::allocate.
+                char* demangled = abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, &status);
+                name = condenseSymbolName((status == 0 && demangled != nullptr) ? demangled
+                                                                                : info.dli_sname);
+                std::free(demangled);
             }
 
-            ModuleBatch& batch = batches[info.dli_fbase];
-            batch._path = info.dli_fname;
-            batch._loadAddress = info.dli_fbase;
-            batch._addresses.push_back(tag.callSite);
-        }
-
-        for (const auto& [loadAddress, batch] : batches)
-        {
-            (void)loadAddress;
-            resolveModuleBatch(batch);
+            // Cached either way. An address dladdr cannot name -- a static or hidden-visibility
+            // function is absent from the dynamic symbol table -- caches empty, so it is
+            // attempted exactly once rather than on every snapshot for the life of the process.
+            CallSiteCache& cache = callSiteCache();
+            std::lock_guard<std::mutex> lock(cache._mutex);
+            cache._names.emplace(tag.callSite, std::move(name));
         }
 #endif
     }
@@ -339,7 +178,9 @@ namespace vkm
         if (tag.callSite != nullptr)
         {
             const std::string* resolved = findCachedCallSite(tag.callSite);
-            return (resolved != nullptr) ? *resolved : formatAddress(tag.callSite);
+            // An empty entry is the negative cache: this address has no name to show.
+            return (resolved != nullptr && !resolved->empty()) ? *resolved
+                                                               : formatAddress(tag.callSite);
         }
         if (tag.file == nullptr)
         {
@@ -354,37 +195,49 @@ namespace vkm
         return fileName + ":" + std::to_string(tag.line);
     }
 
-    VkmMemorySnapshot captureMemorySnapshot(VkmDriverBase* driver)
+    VkmMemorySnapshot captureMemorySnapshot(VkmDriverBase* driver, bool includeTagTable)
     {
         VkmMemorySnapshot snapshot;
 
         snapshot._process = getProcessMemoryStats();
         snapshot._mimalloc = MemoryTracker::singleton().getMimallocStats();
 
-        std::vector<TaggedAllocationSummary> tags = MemoryTracker::singleton().getTaggedAllocations();
-        snapshot._cpuTags.reserve(tags.size());
-        for (const TaggedAllocationSummary& tag : tags)
+        if (includeTagTable)
         {
-            // The tracker keeps a tag forever once seen; a fully-freed one is noise here.
-            if (tag.liveCount == 0)
+            std::vector<TaggedAllocationSummary> tags = MemoryTracker::singleton().getTaggedAllocations();
+            snapshot._cpuTags.reserve(tags.size());
+            for (const TaggedAllocationSummary& tag : tags)
             {
-                continue;
+                // The tracker keeps a tag forever once seen; a fully-freed one is noise here.
+                if (tag.liveCount == 0)
+                {
+                    continue;
+                }
+                snapshot._cpuTrackedRequestedBytes += tag.requestedBytes;
+                snapshot._cpuTrackedUsableBytes += tag.usableBytes;
+                snapshot._cpuTrackedLiveCount += tag.liveCount;
+                snapshot._cpuTags.push_back(tag);
             }
-            snapshot._cpuTrackedRequestedBytes += tag.requestedBytes;
-            snapshot._cpuTrackedUsableBytes += tag.usableBytes;
-            snapshot._cpuTrackedLiveCount += tag.liveCount;
-            snapshot._cpuTags.push_back(tag);
-        }
-        std::sort(snapshot._cpuTags.begin(), snapshot._cpuTags.end(),
-                  [](const TaggedAllocationSummary& lhs, const TaggedAllocationSummary& rhs) {
-                      return lhs.usableBytes > rhs.usableBytes;
-                  });
+            std::sort(snapshot._cpuTags.begin(), snapshot._cpuTags.end(),
+                      [](const TaggedAllocationSummary& lhs, const TaggedAllocationSummary& rhs) {
+                          return lhs.usableBytes > rhs.usableBytes;
+                      });
 
-        // Done here rather than at format time so a snapshot is self-describing for every
-        // consumer -- inspector, shutdown dump, tests -- and so the cost lands on the sampling
-        // path that is already documented as low-rate. Only call sites seen for the first time
-        // cost anything.
-        resolveMemoryTagCallSites(snapshot._cpuTags);
+            // Done here rather than at format time so a snapshot is self-describing for every
+            // consumer -- inspector, shutdown dump, tests. Only call sites seen for the first
+            // time cost anything.
+            resolveMemoryTagCallSites(snapshot._cpuTags);
+        }
+        else
+        {
+            // The same three numbers the loop above sums, read straight off the tracker's
+            // counters: a fully-freed tag carries zero bytes, so dropping those rows changes
+            // nothing about the totals.
+            const TrackedTotals totals = MemoryTracker::singleton().getTaggedTotals();
+            snapshot._cpuTrackedRequestedBytes = totals.requestedBytes;
+            snapshot._cpuTrackedUsableBytes = totals.usableBytes;
+            snapshot._cpuTrackedLiveCount = totals.liveCount;
+        }
 
         if (driver != nullptr)
         {
@@ -392,11 +245,7 @@ namespace vkm
 
             if (VkmRenderResourcePool* pool = driver->getRenderResourcePool())
             {
-                snapshot._gpuTotal = pool->getTotalMemoryUsage();
-                for (uint8_t type = 0; type < static_cast<uint8_t>(VkmResourceType::Count); ++type)
-                {
-                    snapshot._gpuByCategory[type] = pool->getCategoryMemoryUsage(static_cast<VkmResourceType>(type));
-                }
+                snapshot._gpuTotal = pool->getAllCategoryMemoryUsage(&snapshot._gpuByCategory);
             }
         }
 

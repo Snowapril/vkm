@@ -54,6 +54,16 @@ namespace vkm
     };
 
     /*
+    * @brief Live totals across every tag the tracker holds.
+    */
+    struct TrackedTotals
+    {
+        size_t liveCount = 0;
+        size_t requestedBytes = 0;
+        size_t usableBytes = 0;
+    };
+
+    /*
     * @brief Central mimalloc-backed allocation tracker.
     * @details Every operator new/delete in the process routes through this singleton
     * (see the global operator new/delete overrides in src/vkm/base/memory.cpp).
@@ -97,6 +107,14 @@ namespace vkm
         */
         std::vector<TaggedAllocationSummary> getTaggedAllocations() const;
 
+        /*
+        * @brief Query the process-wide totals alone, without walking the tag table.
+        * @details Equal to summing getTaggedAllocations(), but maintained incrementally, so a
+        * caller that only needs the totals does not hold the global mutex across a copy of every
+        * tag. This is what the always-on debug overlay reads.
+        */
+        TrackedTotals getTaggedTotals() const;
+
     private:
         MemoryTracker();
 
@@ -138,6 +156,8 @@ namespace vkm
         };
 
         mutable std::mutex _mutex;
+        // Maintained under _mutex alongside _tagStats, so the totals never disagree with it.
+        TrackedTotals _totals;
         // mutable: do_allocate/do_deallocate don't mutate observable state (they just
         // forward to mi_malloc/mi_free), but getTaggedAllocations() const needs a
         // non-const memory_resource* to build its scratch pmr::vector.

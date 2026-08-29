@@ -294,6 +294,15 @@ namespace vkm
         vmaGetHeapBudgets(_vmaAllocator, budgets.data());
         for (uint32_t heapIndex = 0; heapIndex < memoryProperties.memoryHeapCount; ++heapIndex)
         {
+            // blockBytes = what VMA reserved in VkDeviceMemory blocks, allocationBytes = what it
+            // handed out of them; the difference is suballocator slack. Summed across every heap,
+            // device-local or not, so the pool figures describe the whole allocator.
+            // Aliasing blocks are already inside VMA's totals (they are VmaAllocations), so they
+            // are not added again here -- the per-texture tags report zero instead, which is what
+            // keeps the tracked side from double-counting shared bytes.
+            stats._poolReservedBytes += budgets[heapIndex].statistics.blockBytes;
+            stats._poolUsedBytes += budgets[heapIndex].statistics.allocationBytes;
+
             // Only device-local heaps are "VRAM" in the sense the UI reports; host-visible
             // system-memory heaps would otherwise double-count against process RSS.
             if ((memoryProperties.memoryHeaps[heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) == 0)
@@ -304,16 +313,6 @@ namespace vkm
             stats._deviceBudgetBytes += budgets[heapIndex].budget;
         }
         stats._hasDeviceStats = true;
-
-        // blockBytes = what VMA reserved in VkDeviceMemory blocks, allocationBytes = what it
-        // handed out of them; the difference is suballocator slack.
-        VmaTotalStatistics totalStatistics{};
-        vmaCalculateStatistics(_vmaAllocator, &totalStatistics);
-        stats._poolReservedBytes = totalStatistics.total.statistics.blockBytes;
-        // Aliasing blocks are already inside VMA's totals (they are VmaAllocations), so they are
-        // not added again here -- the per-texture tags report zero instead, which is what keeps
-        // the tracked side from double-counting shared bytes.
-        stats._poolUsedBytes = totalStatistics.total.statistics.allocationBytes;
         stats._hasPoolStats = true;
 
         return stats;

@@ -82,6 +82,18 @@ namespace vkm
         VkmResourceCategoryUsage getTotalMemoryUsage() const;
 
         /*
+        * @brief Every category's totals and their sum, from one walk under one lock.
+        * @details The same numbers getCategoryMemoryUsage() and getTotalMemoryUsage() return, for
+        * a caller that wants all of them at once: this lock is the one every getResource<T>() and
+        * every deferred release also takes, so asking category by category puts one acquisition
+        * per category on the renderer's hottest lock.
+        * @param outByCategory Receives one entry per VkmResourceType.
+        * @return The sum across every category.
+        */
+        VkmResourceCategoryUsage getAllCategoryMemoryUsage(
+            std::array<VkmResourceCategoryUsage, static_cast<size_t>(VkmResourceType::Count)>* outByCategory) const;
+
+        /*
         * @brief Snapshot of every currently-live (tagged, not-yet-released) resource's tag.
         */
         std::vector<VkmResourceMemoryTag> getAllMemoryTags() const;

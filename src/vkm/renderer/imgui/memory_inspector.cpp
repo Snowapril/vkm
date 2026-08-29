@@ -224,7 +224,11 @@ namespace vkm
             return;
         }
 
-        _snapshot = captureMemorySnapshot(driver);
+        // The tag table is what costs: it copies the tracker's whole table under the global
+        // allocator mutex, sorts it and symbolizes it. The always-on debug overlay reads only the
+        // totals and the GPU figures, which the cheap tier fills, so the table is sampled only
+        // while the window that shows it is open.
+        _snapshot = captureMemorySnapshot(driver, /*includeTagTable=*/_visible);
         _secondsSinceCapture = 0.0;
         _refreshRequested = false;
     }

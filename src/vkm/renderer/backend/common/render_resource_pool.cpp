@@ -122,6 +122,32 @@ namespace vkm
         return total;
     }
 
+    VkmResourceCategoryUsage VkmRenderResourcePool::getAllCategoryMemoryUsage(
+        std::array<VkmResourceCategoryUsage, static_cast<size_t>(VkmResourceType::Count)>* outByCategory) const
+    {
+        VKM_ASSERT(outByCategory != nullptr, "getAllCategoryMemoryUsage requires a destination array");
+
+        outByCategory->fill(VkmResourceCategoryUsage{});
+        VkmResourceCategoryUsage total{};
+
+        std::lock_guard<std::mutex> lock(_mutex);
+        for (const VkmDriverResourceSubPool& subPool : _subPools)
+        {
+            for (size_t type = 0; type < subPool._categoryTotals.size(); ++type)
+            {
+                const VkmResourceCategoryUsage& usage = subPool._categoryTotals[type];
+                VkmResourceCategoryUsage& category = (*outByCategory)[type];
+                category.totalRequestedBytes += usage.totalRequestedBytes;
+                category.totalAllocatedBytes += usage.totalAllocatedBytes;
+                category.liveCount += usage.liveCount;
+                total.totalRequestedBytes += usage.totalRequestedBytes;
+                total.totalAllocatedBytes += usage.totalAllocatedBytes;
+                total.liveCount += usage.liveCount;
+            }
+        }
+        return total;
+    }
+
     std::vector<VkmResourceMemoryTag> VkmRenderResourcePool::getAllMemoryTags() const
     {
         std::lock_guard<std::mutex> lock(_mutex);
