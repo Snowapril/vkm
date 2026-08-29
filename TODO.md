@@ -213,3 +213,6 @@
 - The probe budget and the shadow tile count are each sized against a hand-picked share of the push-constant ring, so a scene with more draw batches than Sponza silently clamps them again.
 - The probe capture's scene-fitted shadow tile is one tile for the whole scene, so its shadows are far coarser than the cascades the camera pass reads.
 - kBatchSplitFraction is one global constant, so a scene whose objects are much finer or coarser than Sponza's gets a batch count picked for Sponza.
+- The Vulkan GPU profiler masks every timestamp with the graphics queue family's `timestampValidBits` whatever queue wrote it, so a family reporting fewer bits leaves undefined high bits in place.
+- Metal's `invalidateCounterRange` requires the whole counter heap to be idle on the GPU, which `resetGpuTimestampSlots` cannot guarantee: it runs during CPU recording while earlier frames are still executing.
+- `VkmGpuProfiler::collect` routes a 64-bit tick through `double` before converting to nanoseconds, so a tick past 2^53 loses precision and an out-of-range result is undefined.
