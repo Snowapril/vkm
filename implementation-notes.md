@@ -6014,9 +6014,20 @@ Two lifetime rules make it safe, both of which the unbatched code got for free:
   a full `waitIdle`, which is the strongest ordering available and needs no new synchronization on
   either backend.
 
-Measured headlessly (69 textures x 10 mip levels, Metal, validation on), because the gi sample's
-render thread is `CAMetalDisplayLink`-driven and produces no frames while its window is not being
-composited: **163 ms -> 40 ms, 4.1x**, for the same 690 uploads.
+Measured headlessly (69 textures x 10 mip levels, Metal, validation on): **163 ms -> 40 ms,
+4.1x** for the same 690 uploads. End to end on the gi sample, warm Release:
+
+| scope | before | after |
+|---|---|---|
+| `Engine::initializeBackendDriver` | 1205 ms | 1046 ms |
+| `Scene::uploadTextureLevels` | 214 ms | 59 ms |
+| `Scene::buildAccelerationStructures` | 49 ms | 22 ms |
+| `Scene::decodeImage` | 683 ms | 702 ms |
+| `Scene::buildMipChain` | 199 ms | 198 ms |
+
+The two batched items go 263 ms -> 81 ms; the rest is unchanged, as it should be. Note that the
+sample's render thread is `CAMetalDisplayLink`-driven, so it collects no frames at all -- and
+therefore exports no trace -- while its window is not being composited.
 
 #### Tabulating the sRGB encode (tried, measured, reverted)
 
