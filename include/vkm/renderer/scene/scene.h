@@ -621,7 +621,11 @@ namespace vkm
         * immediately, long before either GPU copy runs, so sharing one region would leave the
         * first cull reading the second view's frustum.
         */
-        std::array<VkmResourceHandle, FRAME_BUFFER_COUNT> _stagingBuffers{};
+        // Named explicitly rather than left to `{}`, which value-initializes each entry to id 0 --
+        // a handle destroy() would hand to the reclaimer, releasing whatever really owns slot 0.
+        std::array<VkmResourceHandle, FRAME_BUFFER_COUNT> _stagingBuffers{
+            VKM_INVALID_RESOURCE_HANDLE, VKM_INVALID_RESOURCE_HANDLE, VKM_INVALID_RESOURCE_HANDLE };
+        static_assert(FRAME_BUFFER_COUNT == 3, "_stagingBuffers' initializer names one handle per slot");
         // Resolved once in build(): the staging buffers live as long as the scene does, and
         // VkmCommandBufferBase exposes no driver, so recordUpdate() cannot look them up per frame.
         std::array<VkmStagingBuffer*, FRAME_BUFFER_COUNT> _stagingPointers{};
@@ -654,7 +658,11 @@ namespace vkm
         VkmResourceHandle _feedbackBuffer{ VKM_INVALID_RESOURCE_HANDLE };
         // Zero-filled source for the per-frame reset, the same trick _countClearBuffer uses.
         VkmResourceHandle _feedbackClearBuffer{ VKM_INVALID_RESOURCE_HANDLE };
-        std::array<VkmResourceHandle, kFeedbackRingSize> _feedbackStaging{};
+        // Explicit for the same reason _stagingBuffers is.
+        std::array<VkmResourceHandle, kFeedbackRingSize> _feedbackStaging{
+            VKM_INVALID_RESOURCE_HANDLE, VKM_INVALID_RESOURCE_HANDLE, VKM_INVALID_RESOURCE_HANDLE,
+            VKM_INVALID_RESOURCE_HANDLE };
+        static_assert(kFeedbackRingSize == 4, "_feedbackStaging's initializer names one handle per ring slot");
         std::array<VkmStagingBuffer*, kFeedbackRingSize> _feedbackStagingPointers{};
         // Monotonic, incremented once per updateTextureStreaming, which indexes the ring.
         uint64_t _feedbackFrameCounter = 0;
