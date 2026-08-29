@@ -1,8 +1,10 @@
 // Copyright (c) 2026 Snowapril
 
 #include <vkm/renderer/backend/common/command_queue.h>
+#include <vkm/base/cpu_profiler.h>
 #include <vkm/renderer/backend/common/command_buffer.h>
 #include <vkm/renderer/backend/common/driver.h>
+#include <vkm/renderer/backend/common/gpu_profiler.h>
 
 namespace vkm
 {
@@ -69,6 +71,25 @@ namespace vkm
         }
 
         return true;
+    }
+
+    VkmGpuEventTimelineObject VkmCommandQueueBase::submit(const CommandSubmitInfo& submitInfos)
+    {
+        // Null until VkmDriverBase::initialize() builds it, and the upload and acceleration
+        // structure paths can already submit by then.
+        VkmGpuProfiler* gpuProfiler = _driver->getGpuProfiler();
+        const bool recordMarker = (gpuProfiler != nullptr) && gpuProfiler->isCapturing();
+        const uint64_t beginNs = recordMarker ? VkmCpuProfiler::nowNs() : 0;
+
+        const VkmGpuEventTimelineObject timelineObject = submitInner(submitInfos);
+
+        if (recordMarker)
+        {
+            // Two timestamps rather than one, so a submit that stalled inside the backend reads
+            // as a wide marker instead of an instant.
+            gpuProfiler->recordSubmit(this, beginNs, VkmCpuProfiler::nowNs(), timelineObject);
+        }
+        return timelineObject;
     }
 
     void VkmCommandQueueBase::waitIdle( const uint64_t timeoutMs )

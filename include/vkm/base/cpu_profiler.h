@@ -113,10 +113,13 @@ namespace vkm
 
         /*
         * @brief Closes the frame that was being collected and starts a new one. Call once per
-        * frame from the thread driving the frame loop. No-op while not capturing.
+        * frame from the thread driving the frame loop.
         * @details Drains every registered thread's closed-zone buffer into a new
         * VkmProfileFrame appended to the ring (oldest dropped past kMaxFrameHistory). Zones
         * still open at this moment stay on their thread's stack and land in the next frame.
+        * While not capturing nothing is collected, but the frame number still advances, so it
+        * counts frame-loop iterations rather than captured frames -- which is what keeps it
+        * paired with the number VkmGpuProfiler stamps the same iteration's submissions with.
         */
         void beginFrame();
 
@@ -130,8 +133,9 @@ namespace vkm
         // `index` is out of range.
         bool copyFrame(size_t index, VkmProfileFrame& outFrame) const;
 
-        // Drops every collected frame and restarts frame numbering at 0. Scopes open on other
-        // threads are left alone and will close into the next frame.
+        // Drops every collected frame. Frame numbering is not restarted, so a number keeps
+        // identifying the same frame-loop iteration the GPU profiler's ring numbered it.
+        // Scopes open on other threads are left alone and will close into the next frame.
         void clear();
 
         /*
@@ -143,6 +147,17 @@ namespace vkm
         * be written, and unconditionally when the CHROME_TRACING CMake option is off.
         */
         bool exportChromeTrace(const std::string& path) const;
+
+        /*
+        * @brief Nanoseconds since the profiler's process-wide epoch, on the same steady clock
+        * VkmProfileZone timestamps use.
+        * @details The epoch is taken on first use, so a value is only comparable with another
+        * taken in the same process. This is the clock every part of the engine anchors a
+        * timestamp to when it needs to sit on the profile timeline -- notably
+        * VkmGpuProfiler's CPU/GPU clock calibration.
+        * @return Nanoseconds since the epoch.
+        */
+        static uint64_t nowNs();
 
         /*
         * @brief Names the calling thread for the profile UI. Threads that never call this show

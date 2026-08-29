@@ -74,6 +74,7 @@ namespace vkm
         virtual void resetGpuTimestampSlots(VkmCommandBufferBase* commandBuffer, uint32_t firstSlot,
                                             uint32_t count) override final;
         virtual bool resolveGpuTimestamps(uint32_t firstSlot, uint32_t count, uint64_t* outTicks) override final;
+        virtual bool sampleGpuClockCalibration(uint64_t& outGpuTicks) override final;
 
         inline VkQueryPool getGpuTimestampQueryPool() const { return _timestampQueryPool; }
 
@@ -149,6 +150,7 @@ namespace vkm
         // Timestamps are only valid in this many low bits on the graphics queue family; the rest
         // are undefined and must be masked off before the value means anything.
         uint64_t _timestampValidMask{UINT64_MAX};
+        bool _calibratedTimestampsEnabled{false};
 
         uint32_t _graphicsQueueFamilyIndex{UINT32_MAX};
         uint32_t _computeQueueFamilyIndex{UINT32_MAX};

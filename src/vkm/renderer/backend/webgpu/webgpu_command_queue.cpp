@@ -119,7 +119,7 @@ namespace vkm
         return true;
     }
 
-    VkmGpuEventTimelineObject VkmCommandQueueWebGPU::submit(const CommandSubmitInfo& submitInfos)
+    VkmGpuEventTimelineObject VkmCommandQueueWebGPU::submitInner(const CommandSubmitInfo& submitInfos)
     {
         VkmGpuEventTimelineObject timelineObject = _gpuEventTimeline->allocateGpuEventTimelineObject();
         VkmGpuEventTimelineWebGPU* timeline = static_cast<VkmGpuEventTimelineWebGPU*>(_gpuEventTimeline.get());

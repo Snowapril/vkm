@@ -530,9 +530,9 @@ Two independent gates apply:
 void recordSubmission(VkmCommandQueueBase* queue, const CommandSubmitInfo& submitInfo, VkmGpuEventTimelineObject timelineObject);
 void reportCrash(const char* backendName, const std::string& errorCode, const std::string& reason);
 ```
-`recordSubmission()` is called from each backend's `VkmCommandQueueBase::submit()` override,
-right after determining the timeline object for that submission and before the native submit
-call. It is a no-op unless `isGpuCrashDumpEnabled()`; otherwise it appends a bounded breadcrumb
+`recordSubmission()` is called from each backend's `VkmCommandQueueBase::submitInner()`
+override, right after determining the timeline object for that submission and before the native
+submit call. It is a no-op unless `isGpuCrashDumpEnabled()`; otherwise it appends a bounded breadcrumb
 (oldest evicted past `MAX_BREADCRUMB_ENTRIES`) recording the queue name and each submitted
 command buffer's `VkmCommandBufferBase::getDebugName()` (an in-engine-only bookkeeping name,
 distinct from `VkmDriverResourceBase::setDebugName()` -- never pushed to a native driver API;
@@ -617,7 +617,24 @@ command queue they ran on. Unlike the completion markers above, this is **not** 
 compile-time flag: recording is always on wherever the device supports timestamp queries,
 because the debug overlay's always-visible "GPU: x.xx ms" stat reads the same collector.
 `isCapturing()` only decides whether resolved frames are kept in the 240-frame history ring that
-`VkmGpuProfilerInspector` (F6) draws.
+`VkmProfileInspector` (F6) draws.
+
+**Clock domain.** Resolved zones are placed on `VkmCpuProfiler::nowNs()`'s clock, so a GPU zone
+and the CPU scope that submitted it sit on one timeline. `VkmDriverBase::sampleGpuClockCalibration()`
+supplies the anchor -- `VK_EXT_calibrated_timestamps` on Vulkan, `sampleTimestamps:gpuTimestamp:`
+on Metal -- resampled every `collect()` while capturing, since the two clocks drift. It must
+return ticks in the same units and mask as `resolveGpuTimestamps()`: Metal's two GPU clocks are
+one counter reported in two units, so that path divides by the tick period. A backend without a
+calibration API (WebGPU) returns false and each submission is anchored to its own submit time
+instead, which makes queue latency read as zero; `VkmGpuProfileFrame::_correlation` records which
+of the two placed a frame. A plausibility guard demotes a calibrated frame to the anchored path
+for the rest of the process if a mapped submission lands somewhere its submit says it cannot have.
+
+**Submit markers.** `VkmCommandQueueBase::submit()` is a non-virtual wrapper over each backend's
+`submitInner()`, and records a `VkmGpuSubmitMarker` for *every* submit -- including the driver's
+uploads and the acceleration structure builds, which open no submission and so record no zones.
+Markers pair with the zones they produced through the `VkmGpuEventTimelineObject` both paths
+already carry.
 
 **Slot model.** The driver is asked for one flat pool of `kTimestampSlotCount` timestamp slots.
 The profiler partitions it into `kMaxPendingSubmissions` fixed buckets of
@@ -723,9 +740,12 @@ enum class VkmCommandQueueType : uint8_t { Graphics=0, Compute=1, Transfer=2, Co
 4. Derive `VkmPipelineState<Name>` from `VkmPipelineStateBase`, override both pure virtuals (`createInner`/`destroyInner`), and return it from `VkmDriver<Name>::newPipelineStateInner()`.
 5. Add CMake flag `VKM_USE_<NAME>_API` and guard source inclusion in `src/vkm/CMakeLists.txt`.
 6. Do not modify any existing method signatures in this directory.
-7. Wire a device-lost/GPU-error detection path that calls `reportCrash()` (always compiled),
+7. Override `VkmCommandQueueBase::submitInner()`, not `submit()` -- the base's non-virtual
+   `submit()` wraps it to record the profiler's submit marker, and a backend that overrode
+   `submit()` would drop every marker on its queues.
+8. Wire a device-lost/GPU-error detection path that calls `reportCrash()` (always compiled),
    and call `VkmGpuCrashHandler::recordSubmission()` in the new
-   `VkmCommandQueueBase::submit()` override inside `#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)`
+   `VkmCommandQueueBase::submitInner()` override inside `#if defined(VKM_ENABLE_GPU_BREAD_CRUMBS)`
    (see "GPU Crash Handler" above).
 
 ## Code Review Checklist for Common Interface Changes

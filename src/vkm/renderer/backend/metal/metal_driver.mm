@@ -695,6 +695,32 @@ namespace vkm
         return true;
     }
 
+    bool VkmDriverMetal::sampleGpuClockCalibration(uint64_t& outGpuTicks)
+    {
+        if (_mtlDevice == nil)
+        {
+            return false;
+        }
+
+        // The CPU half is discarded: the caller brackets this call with VkmCpuProfiler::nowNs()
+        // and uses the midpoint, which avoids depending on what domain Metal reports its own CPU
+        // timestamp in.
+        MTLTimestamp cpuTimestamp = 0;
+        MTLTimestamp gpuTimestamp = 0;
+        [_mtlDevice sampleTimestamps:&cpuTimestamp gpuTimestamp:&gpuTimestamp];
+
+        // Both halves read the same GPU counter, but not in the same units: sampleTimestamps
+        // reports nanoseconds, while an MTL4CounterHeap entry is a queryTimestampFrequency tick
+        // (24 MHz on Apple silicon, so 41.67 ns apart). Callers difference this against
+        // resolveGpuTimestamps() values, so it has to be converted into that tick space.
+        if (_timestampPeriodNs <= 0.0)
+        {
+            return false;
+        }
+        outGpuTicks = static_cast<uint64_t>(static_cast<double>(gpuTimestamp) / _timestampPeriodNs);
+        return true;
+    }
+
     VkmPipelineStateBase* VkmDriverMetal::newPipelineStateInner()
     {
         return new VkmPipelineStateMetal(this);

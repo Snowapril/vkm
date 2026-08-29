@@ -212,7 +212,7 @@ namespace vkm
         return true;
     }
 
-    VkmGpuEventTimelineObject VkmCommandQueueVulkan::submit(const CommandSubmitInfo& submitInfos)
+    VkmGpuEventTimelineObject VkmCommandQueueVulkan::submitInner(const CommandSubmitInfo& submitInfos)
     {
         VkmGpuEventTimelineObject timelineObject = _gpuEventTimeline->allocateGpuEventTimelineObject();
         VkmGpuEventTimelineVulkan* timeline = static_cast<VkmGpuEventTimelineVulkan*>(_gpuEventTimeline.get());

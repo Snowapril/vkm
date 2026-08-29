@@ -184,10 +184,11 @@ TEST_CASE("the frame ring drops the oldest frames past its capacity")
 
     const std::vector<VkmProfileFrameSummary> summaries = VkmCpuProfiler::singleton().copyFrameSummaries();
     REQUIRE(summaries.size() == VkmCpuProfiler::kMaxFrameHistory);
-    // Numbering restarts at 0 on clear() and keeps counting up as frames are dropped, so the
-    // surviving window is the last kMaxFrameHistory of them, contiguous.
-    CHECK(summaries.front()._frameNumber == extraFrames);
-    CHECK(summaries.back()._frameNumber == VkmCpuProfiler::kMaxFrameHistory + extraFrames - 1);
+    // Numbering counts frame-loop iterations for the life of the process, so the absolute values
+    // depend on what ran before; what this asserts is that the surviving window is the last
+    // kMaxFrameHistory of them, contiguous, with the `extraFrames` oldest dropped.
+    CHECK(summaries.back()._frameNumber - summaries.front()._frameNumber ==
+          VkmCpuProfiler::kMaxFrameHistory - 1);
     for (size_t i = 1; i < summaries.size(); ++i)
     {
         CHECK(summaries[i]._frameNumber == summaries[i - 1]._frameNumber + 1);
@@ -216,6 +217,41 @@ TEST_CASE("clear empties the ring and starting a capture discards the previous o
     VkmCpuProfiler::singleton().setCapturing(false);
     VkmCpuProfiler::singleton().setCapturing(true);
     CHECK(VkmCpuProfiler::singleton().getFrameCount() == 0);
+
+    resetProfiler();
+}
+
+/*
+* Frame numbers count frame-loop iterations, not captured frames -- which is what lets a CPU
+* frame be paired with the GPU frame VkmGpuProfiler stamped the same iteration with. Neither
+* toggling capture nor clear() may restart or stall the counter.
+*/
+TEST_CASE("frame numbering counts loop iterations across capture toggles")
+{
+    resetProfiler();
+
+    VkmCpuProfiler::singleton().setCapturing(true);
+    VkmCpuProfiler::singleton().beginFrame();
+
+    std::vector<VkmProfileFrameSummary> summaries = VkmCpuProfiler::singleton().copyFrameSummaries();
+    REQUIRE(summaries.size() == 1);
+    const uint32_t firstFrameNumber = summaries.front()._frameNumber;
+
+    // Frames the profiler does not collect still advance the counter.
+    constexpr uint32_t kIdleFrames = 7;
+    VkmCpuProfiler::singleton().setCapturing(false);
+    for (uint32_t i = 0; i < kIdleFrames; ++i)
+    {
+        VkmCpuProfiler::singleton().beginFrame();
+    }
+
+    // setCapturing(true) clears the ring, which must not renumber.
+    VkmCpuProfiler::singleton().setCapturing(true);
+    VkmCpuProfiler::singleton().beginFrame();
+
+    summaries = VkmCpuProfiler::singleton().copyFrameSummaries();
+    REQUIRE(summaries.size() == 1);
+    CHECK(summaries.front()._frameNumber == firstFrameNumber + kIdleFrames + 1);
 
     resetProfiler();
 }

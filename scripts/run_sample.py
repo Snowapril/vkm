@@ -404,7 +404,7 @@ def main() -> None:
     parser.add_argument(
         "engine_args", nargs="*", metavar="-- ENGINE_ARG...",
         help="Arguments after -- are handed to the sample itself rather than parsed here, "
-             "e.g. -- --enable-hdr --gv_cpu_profile=1",
+             "e.g. -- --enable-hdr --gv_profile=1",
     )
     args = parser.parse_args()
 

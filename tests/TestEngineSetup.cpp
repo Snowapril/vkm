@@ -223,8 +223,8 @@ class FakeCommandQueue : public vkm::VkmCommandQueueBase {
 public:
     FakeCommandQueue(vkm::VkmDriverBase* driver) : vkm::VkmCommandQueueBase(driver) {}
     void setDebugName(const char*) override {}
-    vkm::VkmGpuEventTimelineObject submit(const vkm::CommandSubmitInfo&) override { return {}; }
 protected:
+    vkm::VkmGpuEventTimelineObject submitInner(const vkm::CommandSubmitInfo&) override { return {}; }
     bool initializeInner() override { return true; }
 };
 

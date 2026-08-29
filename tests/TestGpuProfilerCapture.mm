@@ -8,6 +8,7 @@
 #import <Metal/Metal.h>
 #include <vkm/renderer/backend/metal/metal_driver.h>
 #include <vkm/renderer/backend/common/driver.h>
+#include <vkm/base/cpu_profiler.h>
 #include <vkm/renderer/backend/common/gpu_profiler.h>
 #include <vkm/renderer/backend/common/render_graph.h>
 #include <vkm/renderer/backend/common/render_pass.h>
@@ -148,6 +149,105 @@ TEST_CASE("GPU profiler times each render graph subgraph on the queue that ran i
     vkm::VkmGpuProfileFrame outOfRange;
     CHECK_FALSE(profiler->copyFrame(0, outOfRange));
 
+    profiler->setCapturing(false);
+}
+
+
+/*
+* The whole combined timeline rests on one unverifiable assumption: that the GPU clock
+* [MTLDevice sampleTimestamps:gpuTimestamp:] reports is the same counter MTL4CounterHeap
+* timestamps come from. Nothing in Metal's documentation says so. This is what checks it:
+* a calibrated zone that disagrees with the submit that produced it trips VkmGpuProfiler's
+* plausibility guard, which drops the frame's correlation to Estimated.
+*/
+TEST_CASE("GPU zones land on the CPU clock, after the submit that produced them") {
+    GpuProfilerFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+    vkm::VkmDriverBase* driver = f.driver;
+
+    vkm::VkmGpuProfiler* profiler = driver->getGpuProfiler();
+    REQUIRE(profiler != nullptr);
+    if (!profiler->isSupported()) {
+        MESSAGE("GPU timestamp queries unavailable on this device; skipping");
+        return;
+    }
+
+    uint64_t sampledTicks = 0;
+    REQUIRE(driver->sampleGpuClockCalibration(sampledTicks));
+    CHECK(sampledTicks > 0);
+    REQUIRE(profiler->getClockCorrelation() == vkm::VkmGpuClockCorrelation::Calibrated);
+
+    vkm::VkmTextureInfo texInfo{};
+    texInfo._flags          = vkm::VkmResourceCreateInfo::AllowColorAttachment;
+    texInfo._extent         = glm::uvec3(kWidth, kHeight, 1);
+    texInfo._format         = vkm::VkmFormat::R8G8B8A8_UNORM;
+    texInfo._numMipLevels   = 1;
+    texInfo._numArrayLayers = 1;
+    texInfo._debugName      = "GpuClockTestOffscreen";
+    vkm::VkmTexture* offscreen = driver->newTexture(texInfo);
+    REQUIRE(offscreen != nullptr);
+
+    vkm::VkmFrameBufferDescriptor fbDesc{};
+    fbDesc._width  = static_cast<uint32_t>(kWidth);
+    fbDesc._height = static_cast<uint32_t>(kHeight);
+    fbDesc._renderPass._colorAttachmentCount              = 1;
+    fbDesc._renderPass._colorAttachments[0]._attachmentId = 0;
+    fbDesc._renderPass._colorAttachments[0]._loadAction   = vkm::VkmLoadAction::Clear;
+    fbDesc._renderPass._colorAttachments[0]._storeAction  = vkm::VkmStoreAction::Store;
+    fbDesc._colorAttachments[0] = offscreen->getHandle();
+
+    const uint64_t beforeNs = vkm::VkmCpuProfiler::nowNs();
+
+    profiler->setCapturing(true);
+    constexpr int kFrameCount = 4;
+    for (int frameIndex = 0; frameIndex < kFrameCount; ++frameIndex) {
+        profiler->collect();
+        vkm::VkmRenderGraph renderGraph(driver, /*frameIndex=*/0);
+        renderGraph.beginGraphicsSubGraph(fbDesc, "GpuClockTestPass");
+        renderGraph.compile();
+        renderGraph.execute();
+        renderGraph.ensureCompleted();
+    }
+    profiler->collect();
+
+    const uint64_t afterNs = vkm::VkmCpuProfiler::nowNs();
+
+    REQUIRE(profiler->getFrameCount() > 0);
+    vkm::VkmGpuProfileFrame frame;
+    REQUIRE(profiler->copyFrame(profiler->getFrameCount() - 1, frame));
+    REQUIRE(frame._queues.size() == 1);
+    const vkm::VkmGpuQueueTimeline& timeline = frame._queues[0];
+    REQUIRE(timeline._zones.size() > 0);
+
+    // Had the two Metal clocks disagreed, the guard would have demoted this to Estimated.
+    CHECK(frame._correlation == vkm::VkmGpuClockCorrelation::Calibrated);
+    CHECK(profiler->getClockCorrelation() == vkm::VkmGpuClockCorrelation::Calibrated);
+
+    // Every zone sits inside the wall-clock window the work was actually driven in.
+    for (const vkm::VkmGpuProfileZone& zone : timeline._zones) {
+        CHECK(zone._beginNs >= beforeNs);
+        CHECK(zone._endNs <= afterNs);
+    }
+
+    // The render graph's submit was recorded, and its GPU work started no earlier than the
+    // submit that handed it over -- the queue latency the profile window draws.
+    REQUIRE(timeline._submits.size() > 0);
+    bool sawTimedSubmit = false;
+    for (const vkm::VkmGpuSubmitMarker& marker : timeline._submits) {
+        CHECK(marker._endNs >= marker._beginNs);
+        CHECK(marker._beginNs >= beforeNs);
+        if (marker._hasGpuWork) {
+            sawTimedSubmit = true;
+            // A millisecond of slack, which is what absorbs the calibration sample's own
+            // width and the GPU counter's granularity.
+            constexpr uint64_t kSlackNs = 1'000'000;
+            CHECK(marker._gpuBeginNs + kSlackNs >= marker._endNs);
+            CHECK(marker._gpuBeginNs <= afterNs);
+        }
+    }
+    CHECK(sawTimedSubmit);
+
+    profiler->clear();
     profiler->setCapturing(false);
 }
 
