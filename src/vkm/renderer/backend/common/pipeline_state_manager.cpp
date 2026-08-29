@@ -28,7 +28,7 @@ namespace vkm
 
     bool VkmPipelineStateManager::loadPipelineState(const VkmPipelineStateDescriptor& desc,
         const std::string& shaderCacheDir, VkmPipelineStateOrigin origin, std::string* outError,
-        const std::string& jsonPath)
+        const std::string& jsonPath, const std::string& shaderRoot)
     {
         std::optional<std::vector<VkmPipelineStateDescriptor>> variants =
             expandPipelineStateOptions(desc, vkmActiveShaderCacheBackend(), outError);
@@ -91,6 +91,7 @@ namespace vkm
         VkmPipelineStateSource source;
         source.jsonPath = jsonPath;
         source.shaderCacheDir = shaderCacheDir;
+        source.shaderRoot = shaderRoot;
         source.origin = origin;
         for (const VkmPipelineStateDescriptor& variant : *variants)
         {
@@ -103,7 +104,8 @@ namespace vkm
     }
 
     bool VkmPipelineStateManager::loadPipelineStatesFromDirectory(const std::string& directory,
-        const std::string& shaderCacheDir, VkmPipelineStateOrigin origin, std::string* outError)
+        const std::string& shaderCacheDir, VkmPipelineStateOrigin origin, std::string* outError,
+        const std::string& shaderRoot)
     {
         std::error_code ec;
         if (!std::filesystem::exists(directory, ec) || !std::filesystem::is_directory(directory, ec))
@@ -134,7 +136,7 @@ namespace vkm
             }
 
             std::string loadError;
-            if (!loadPipelineState(*desc, shaderCacheDir, origin, &loadError, filepath))
+            if (!loadPipelineState(*desc, shaderCacheDir, origin, &loadError, filepath, shaderRoot))
             {
                 const std::string message = "Failed to load pipeline state file '" + filepath + "': " + loadError;
                 if (outError != nullptr)
@@ -214,15 +216,21 @@ namespace vkm
     {
 #if defined(VKM_COMPILER_EXECUTABLE)
         // Exactly the arguments ShaderCompile.cmake passes, so the .vfcache files this
-        // produces are the ones the build would have produced. --shader-root is deliberately
-        // omitted: vkm-compiler defaults it to the PSO json's own directory, and the build
-        // does not pass it either.
+        // produces are the ones the build would have produced -- including --shader-root, which
+        // the build passes for any directory whose json and HLSL live apart. Omitting it here
+        // leaves vkm-compiler defaulting to the json's own directory, where an engine shader is
+        // not.
         std::vector<std::string> args = {
             "--pso", source.jsonPath,
             "--output-dir", source.shaderCacheDir,
             "--backend", vkmShaderCacheBackendName(vkmActiveShaderCacheBackend()),
             "--include-dir", VKM_SHADER_INCLUDE_DIR,
         };
+        if (!source.shaderRoot.empty())
+        {
+            args.push_back("--shader-root");
+            args.push_back(source.shaderRoot);
+        }
 #if defined(VKM_COMPILER_EMIT_MSL)
         args.push_back("--emit-msl");
 #endif
@@ -260,9 +268,13 @@ namespace vkm
         std::vector<std::string> paths;
         paths.push_back(source.jsonPath);
 
-        // Shader filepaths are relative to the json's own directory (vkm-compiler's
-        // --shader-root default).
-        const std::filesystem::path shaderRoot = std::filesystem::path(source.jsonPath).parent_path();
+        // Shader filepaths resolve against the source's own shader root, falling back to the
+        // json's own directory -- vkm-compiler's --shader-root default. Resolving against the
+        // wrong one yields a path last_write_time() fails on, and the shader silently never
+        // enters watchedFiles, so nothing ever notices an edit to it.
+        const std::filesystem::path shaderRoot =
+            source.shaderRoot.empty() ? std::filesystem::path(source.jsonPath).parent_path()
+                                      : std::filesystem::path(source.shaderRoot);
         for (const VkmPipelineStateDescriptor& variant : variants)
         {
             for (const std::optional<VkmShaderStageDescriptor>* stage :

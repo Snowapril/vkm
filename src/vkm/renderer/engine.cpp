@@ -32,6 +32,7 @@
 
 #if defined(VKM_ENABLE_IMGUI)
 #include <vkm/renderer/imgui/imgui_renderer.h>
+#include <vkm/renderer/imgui/gizmo_overlay.h>
 #include <vkm/renderer/imgui/imgui_settings.h>
 #if defined(VKM_USE_VULKAN_API)
 #include <vkm/renderer/imgui/vulkan_imgui_renderer.h>
@@ -48,6 +49,7 @@
 #include <vkm/renderer/imgui/acceleration_structure_inspector.h>
 #include <vkm/renderer/acceleration_structure_debug_renderer.h>
 #include <imgui.h>
+#include <ImGuizmo.h>
 #endif
 
 namespace vkm
@@ -157,10 +159,15 @@ namespace vkm
 
         _pipelineStateManager = std::make_unique<VkmPipelineStateManager>(_driver);
         std::string psoError;
+        // The shader root is named because the engine keeps its PSO json in Pipelines/Engine/ and
+        // its HLSL in Shaders/; this is the same SHADER_ROOT vkm_engine_shaders compiles with, and
+        // a runtime recompile that disagreed with it would look for the shaders in the json's
+        // directory.
         if (!_pipelineStateManager->loadPipelineStatesFromDirectory(
                 std::string(RESOURCES_DIR) + "Pipelines/Engine/",
                 std::string(RESOURCES_DIR) + "Shaders/ShaderCache/",
-                VkmPipelineStateOrigin::Engine, &psoError))
+                VkmPipelineStateOrigin::Engine, &psoError,
+                std::string(RESOURCES_DIR) + "Shaders/"))
         {
             VKM_DEBUG_ERROR(fmt::format("Failed to load engine pipeline states: {}", psoError).c_str());
             return VkmInitResult{VkmInitResultCode::Failed, psoError};
@@ -264,6 +271,12 @@ namespace vkm
             // one being typed into; the engine is the only place that knows.
             const bool imGuiWindowFocused = (_imGuiWindowIndex != INVALID_VALUE32) &&
                                             (_inputHandler.getFocusedWindowIndex() == _imGuiWindowIndex);
+            // Before the panel's, so the panel context is the one left current for update(): every
+            // existing ImGui:: call in an app's update() expects to land on the panels.
+            if (_gizmoOverlay)
+            {
+                _gizmoOverlay->newFrame(_inputHandler.getFocusedWindowIndex() == _gizmoWindowIndex);
+            }
             _imGuiRenderer->newFrame(imGuiWindowFocused);
         }
 #endif
@@ -391,14 +404,12 @@ namespace vkm
     bool VkmEngine::wantsCaptureKeyboard() const
     {
 #if defined(VKM_ENABLE_IMGUI)
-        // Platform callbacks can fire before addSwapChain() has created the ImGui context,
-        // and ImGui::GetIO() asserts when no context exists.
-        if (ImGui::GetCurrentContext() == nullptr)
-        {
-            return false;
-        }
-
-        return ImGui::GetIO().WantCaptureKeyboard;
+        // The panel context explicitly, not whichever happens to be current: with the gizmo overlay
+        // alive there are two, and platform callbacks fire on a thread that has made neither
+        // current. Null before addSwapChain() has created either.
+        // Only the panels ever claim the keyboard -- the gizmo overlay has no focusable widget and
+        // installs no key hooks -- so it is not consulted here.
+        return _imGuiRenderer && _imGuiRenderer->wantsCaptureKeyboard();
 #else
         return false;
 #endif
@@ -407,16 +418,68 @@ namespace vkm
     bool VkmEngine::wantsCaptureMouse() const
     {
 #if defined(VKM_ENABLE_IMGUI)
-        if (ImGui::GetCurrentContext() == nullptr)
-        {
-            return false;
-        }
-
-        return ImGui::GetIO().WantCaptureMouse;
+        return _imGuiRenderer && _imGuiRenderer->wantsCaptureMouse();
 #else
         return false;
 #endif
     }
+
+    bool VkmEngine::wantsCaptureMouseForWindow(const uint32_t windowIndex) const
+    {
+#if defined(VKM_ENABLE_IMGUI)
+        if (wantsCaptureMouse())
+        {
+            return true;
+        }
+        // A gizmo handle under the cursor takes the scene window's mouse, which is what keeps a
+        // drag on it from also orbiting the camera.
+        return _gizmoOverlay && windowIndex == _gizmoWindowIndex &&
+               _gizmoOverlay->getRenderer()->wantsCaptureMouse();
+#else
+        (void)windowIndex;
+        return false;
+#endif
+    }
+
+#if defined(VKM_ENABLE_IMGUI)
+    bool VkmEngine::beginGizmoOverlay()
+    {
+        if (_gizmoOverlay)
+        {
+            return _gizmoOverlay->begin();
+        }
+
+        // No second window, so the context already current is the scene window's. Same call, minus
+        // the switch -- and the rect still comes from the display size rather than the swapchain
+        // extent, those differing by the backing scale on a HiDPI display.
+        if (ImGui::GetCurrentContext() == nullptr)
+        {
+            return false;
+        }
+        ImGuizmo::BeginFrame();
+        ImGuizmo::SetOrthographic(false);
+        const ImGuiIO& io = ImGui::GetIO();
+        ImGuizmo::SetRect(0.0f, 0.0f, io.DisplaySize.x, io.DisplaySize.y);
+        return true;
+    }
+
+    void VkmEngine::endGizmoOverlay()
+    {
+        if (_gizmoOverlay)
+        {
+            _gizmoOverlay->end();
+        }
+    }
+
+    bool VkmEngine::isGizmoActive() const
+    {
+        return _gizmoOverlay && _gizmoOverlay->isUsing();
+    }
+#else
+    bool VkmEngine::beginGizmoOverlay() { return false; }
+    void VkmEngine::endGizmoOverlay() {}
+    bool VkmEngine::isGizmoActive() const { return false; }
+#endif
 
     void VkmEngine::destroy()
     {
@@ -440,6 +503,12 @@ namespace vkm
         }
 #endif
 #if defined(VKM_ENABLE_IMGUI)
+        if (_gizmoOverlay)
+        {
+            _gizmoOverlay->shutdown();
+            _gizmoOverlay.reset();
+            _gizmoWindowIndex = INVALID_VALUE32;
+        }
         if (_imGuiRenderer)
         {
             _imGuiRenderer->shutdown();
@@ -500,9 +569,32 @@ namespace vkm
             const bool imGuiInitialized = _imGuiRenderer->initialize(windowInfo._windowHandle, backBufferFormat);
             VKM_ASSERT(imGuiInitialized, "Failed to initialize ImGui renderer");
             // The context exists and no frame has opened yet, which is what the font atlas and
-            // style the cached settings touch require.
+            // style the cached settings touch require. Selected explicitly: initialize() leaves
+            // whatever was current before it alone, there now being more than one context.
+            ImGuiContext* const previousContext = ImGui::GetCurrentContext();
+            ImGui::SetCurrentContext(static_cast<ImGuiContext*>(_imGuiRenderer->getImGuiContext()));
             vkmLoadImGuiSettings();
+            ImGui::SetCurrentContext(previousContext);
             _imGuiWindowIndex = windowIndex;
+        }
+        else if (windowIndex == 0)
+        {
+            /*
+            * The scene window gets its own context, carrying the gizmo alone, so a manipulator is
+            * drawn and dragged over the scene rather than over the panel window's background.
+            * Created here rather than lazily because the GLFW backends install their callbacks at
+            * this point, before the platform layer installs vkm's own over them -- that ordering is
+            * what lets this context keep seeing the mouse once the capture gate closes.
+            *
+            * Never reached in single-window mode: there the sole window is the ImGui one, whose
+            * context already belongs to the scene.
+            */
+            auto overlay = std::make_unique<VkmGizmoOverlay>();
+            if (overlay->initialize(_driver, windowInfo._windowHandle, backBufferFormat))
+            {
+                _gizmoOverlay = std::move(overlay);
+                _gizmoWindowIndex = windowIndex;
+            }
         }
 #else
         (void)isImGuiWindow;
@@ -861,6 +953,31 @@ namespace vkm
                 _asDebugRenderer->record(renderGraph, currentBackBuffer, windowExtent, _currentFrameIndex);
             }
 
+            // The gizmo, over the scene and over the boxes above. Its own context and its own
+            // pass, on the scene window's back buffer, so the panels stay in their own window.
+            // Skipped when it drew nothing, which is every frame no gizmo is up.
+            if (windowIndex == _gizmoWindowIndex && appRendersHere && _gizmoOverlay &&
+                _gizmoOverlay->hasContent())
+            {
+                VKM_PROFILE_SCOPE("GizmoOverlay::record");
+                VkmFrameBufferDescriptor gizmoFrameBufferDesc;
+                gizmoFrameBufferDesc._renderPass._colorAttachmentCount = 1;
+                gizmoFrameBufferDesc._renderPass._colorAttachments[0]._attachmentId = 0;
+                gizmoFrameBufferDesc._renderPass._colorAttachments[0]._loadAction = VkmLoadAction::Load;
+                gizmoFrameBufferDesc._renderPass._colorAttachments[0]._storeAction = VkmStoreAction::Store;
+                gizmoFrameBufferDesc._width = windowExtent.x;
+                gizmoFrameBufferDesc._height = windowExtent.y;
+                gizmoFrameBufferDesc._colorAttachments[0] = currentBackBuffer;
+
+                VkmRenderGraphicsSubGraph* gizmoSubGraph =
+                    renderGraph->beginGraphicsSubGraph(gizmoFrameBufferDesc, "EngineGizmoOverlay");
+                VkmImGuiRendererBase* gizmoRenderer = _gizmoOverlay->getRenderer();
+                gizmoSubGraph->setRenderCallback([gizmoRenderer](VkmCommandBufferBase* commandBuffer) {
+                    VKM_PROFILE_SCOPE("GizmoOverlay::renderDrawData");
+                    gizmoRenderer->renderDrawData(commandBuffer);
+                });
+            }
+
             if (windowContext._isImGuiWindow && _imGuiRenderer)
             {
                 // If the app already recorded into this back buffer (single-window mode), load it;
@@ -949,6 +1066,11 @@ namespace vkm
         if (_imGuiRenderer)
         {
             _imGuiRenderer->discardFrame();
+        }
+        // The same for the gizmo's own frame, which loopInner() opened on the same terms.
+        if (_gizmoOverlay)
+        {
+            _gizmoOverlay->discardFrame();
         }
 #endif
     }

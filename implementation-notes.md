@@ -5800,3 +5800,125 @@ probes at all. Both are already the documented answers (TODO.md). A third would 
 visibility field itself smoother -- interpolating the moments across probes before the
 Chebyshev test rather than testing per probe and blending the verdicts -- which is a change to
 what the distance atlas means, not to the lookup, and was not attempted.
+
+## 2026-08-29 - Why Sponza stayed blurry with the camera against the wall
+
+Five contributors, independent of each other, each worth about a level. Fixing any one alone would
+not have been visible, which is why they are one change.
+
+- **No anisotropy anywhere.** `VkmSamplerInfo::_maxAnisotropy` was translated correctly by all three
+  backends and left at 1.0 by every caller, and the two bindless material samplers are built as
+  native descriptors that bypassed that path entirely. Sponza is floors, walls and an arcade seen at
+  a grazing angle, which is exactly where an isotropic filter picks its level from the longer
+  derivative axis. Now 8, clamped to the device limit on Vulkan.
+- **The feedback ratchet.** A rebuilt texture is physically only the levels it holds, so its level 0
+  is chain level `_residentBaseMip` and `CalculateLevelOfDetail` has nothing coarser-than-zero to
+  return. `selectTargets` consulted the reading and skipped the bounding-sphere estimate outright, so
+  the reading alone could walk a texture out and never bring it back -- permanent on Vulkan, where
+  sparse residency is never granted. The estimate is now kept as a floor on coarseness through
+  `vkmCombineStreamingBaseMip`: it can pull a texture back in, never push one past what the reading
+  asked for. A sparse texture keeps its full extent whatever is backed, so its reading stays
+  authoritative in both directions and the estimate is not consulted there at all.
+- **The render extent, not the display one.** The `gi` sample measured against `_renderExtent`. An
+  upscaler resolves to display size, so every texture was selected a level too coarse and the
+  upscaler was handed input already blurred.
+- **`round` where `floor` belongs**, in the CPU estimate and in the shader's vote alike. Half a level
+  of texel density is detail the screen can still show.
+- **Damping applied to refining as well as evicting.** `_stableTickCount` exists because a rebuild
+  re-reads and re-decodes the file, which is an argument about eviction. Under continuous camera
+  motion the target moved often enough that the counter never reached the threshold and nothing was
+  ever applied. A finer target is now taken the tick it appears; a coarser one still has to hold.
+
+Anisotropy makes `CalculateLevelOfDetail` report finer levels, so resident texture bytes rise. That
+is the trade, and the streaming readout in the GI panel is where it shows.
+
+## 2026-08-29 - A scene browser for the gi sample
+
+The gi sample loaded exactly what `gv_gi_model_path` named, and that default is Sponza alone -- so a
+glTF dropped into `resources/Scenes` was unreachable without editing the command line, and its
+Models list never mentioned it. `model_viewer` already had the answer; this ports it.
+
+`loadScene` splits into `importScenes` (no scene mutation) and `rebuildScene` (teardown, add, build,
+prepare), which is what lets a failed import leave the running scene standing rather than emptying
+it. `addModel` has to precede `build()`, so Add, Replace and Remove all route through one rebuild.
+
+The teardown drains the graphics queue first. That is not belt-and-braces: the old scene's buffers
+are still referenced by frames in flight, its bindless slots are handed straight back out by the
+build that follows, and `VkmScene::destroy()` releases material textures the reclaimer has no
+recorded usage to wait on (TODO.md).
+
+### Deviations
+
+- **Planned:** re-frame the camera on every rebuild, as `model_viewer` does.
+  **Done instead:** only when the scene was empty beforehand.
+  **Why:** in `model_viewer` a rebuild is normally a Replace, so re-framing is what the user wants.
+  In gi the common case is adding an emitter to a scene already being looked at, and throwing the
+  viewpoint away there loses the thing being inspected.
+- **Planned:** duplicate the browser helpers per sample, as `splitScenePaths` already was.
+  **Done instead:** `src/samples/common/sample_scene_browser.h`, holding `splitScenePaths`,
+  `SceneEntry` and `scanSceneDirectory`; both samples now include it and their copies are gone.
+  **Why:** the earlier decision (2026-08-26) weighed twelve duplicated lines against adding a
+  general string-split to `vkm/base`. Neither half of that holds here: the shared surface is about
+  sixty lines, and a sample-only header under `src/samples` does not put anything in the library.
+  The layering rule is that the library must not reference `src/samples`, which this respects.
+
+### Not addressed
+
+- Removing the last model is disabled rather than supported: `update()` early-returns until a scene
+  is ready, so an empty scene would take the panel with it and leave no way back.
+- A rebuild that fails at `build()` leaves `_sceneReady` false and the panel gone, exactly as a
+  failed load at startup always has. Surviving that needs the UI drawn outside the readiness gate.
+
+## 2026-08-29 - The gizmo belongs on the scene window, not on the panel window
+
+On desktop the debug panels live in their own OS window, so ImGuizmo was drawing a manipulator over
+a grey background in one window while the model it moved was in another -- and sizing its rect from
+the *scene* swapchain while doing it. The samples now keep their mode buttons in the panel and hand
+the manipulator itself to a second ImGui context bound to the scene window.
+
+`VkmImGuiRendererBase` already created one ImGui context per instance; it simply never stored or
+re-selected it, so every method acted on whichever context was last current. It now keeps its own
+and brackets each entry point with it, which is a correctness fix in its own right. `newFrame` is
+the deliberate exception: it leaves its context current, because that is what lets every plain
+`ImGui::` call in engine and app code land on the panels without knowing there are two. The engine
+opens the gizmo's frame first and the panel's second, so the panel is what settles.
+
+`VkmGizmoOverlay` owns the second context and the `ImGuizmo::BeginFrame`/`SetRect` pair.
+`VkmEngine::beginGizmoOverlay()` selects it, or falls through to the current context where there is
+no second window -- which is wasm, where the sole context is the scene window's anyway.
+
+Three things the implementation turned on that were not obvious:
+
+- **ImGuizmo's state is one file-static `gContext`, not one per ImGui context.** So all of its calls
+  had to move to the overlay -- none could stay behind -- and only one gizmo can be live per frame.
+  `IsOver()` in particular hit-tests through the current context, so `end()` caches it before
+  restoring. The samples' existing three-way arbitration is still required.
+- **The rect was in the wrong units.** All four call sites passed the swapchain extent, in
+  framebuffer pixels, while `BeginFrame` lays its window out in `io.DisplaySize`, which the GLFW
+  backend reports in points. On a HiDPI display those differ by the backing scale. The rect now
+  comes from the context's own display size.
+- **Dear ImGui 1.92's GLFW backend is already multi-context aware** -- it keeps a
+  `GLFWwindow* -> ImGuiContext*` map and resolves every callback through it -- so a second `Init`
+  needs no callback juggling. The overlay installs no platform input hooks at all: it needs only the
+  mouse, which Metal polls per instance and GLFW forwards through vkm's own callbacks, and it must
+  never claim the keyboard.
+
+`wantsCaptureMouse` becomes per-window, so a drag on a gizmo handle suppresses the scene window's
+mouse and the camera controller does not orbit underneath it.
+
+### Deviations
+
+- **Planned:** `install_callbacks=false` on the Vulkan overlay, plus making `g_previousCallbacks`
+  per-window first.
+  **Done instead:** neither. `install_callbacks` is threaded through as an option and the overlay
+  passes false, but for a different reason -- it wants no hooks at all, not a conflict-avoidance
+  one. `g_previousCallbacks` is untouched.
+  **Why:** the plan assumed `installGlfwInputCallbacks` ran per window. It runs once, on the scene
+  window only, so there was never a clobber to fix.
+
+### Not addressed
+
+- Two contexts mean two font atlases and a second font texture upload.
+- `wantsCaptureMouse` is read from the AppKit main thread while the render thread runs `NewFrame` on
+  the same context. That race predates this and is why the Metal NSEvent monitor was bound to its
+  context with `GetIO(ctx)` rather than by making it current.

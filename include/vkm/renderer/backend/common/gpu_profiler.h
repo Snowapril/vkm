@@ -92,6 +92,26 @@ namespace vkm
         uint64_t _gpuBeginNs = 0;
     };
 
+    /*
+    * @brief Converts one zone's raw begin/end GPU ticks into nanoseconds, rejecting a pair that
+    * cannot be a measurement.
+    * @details Free-standing so the rejection rules can be tested without a driver or a GPU. A tick
+    * of zero is not a timestamp: every backend's counter is uptime-based and long past zero by the
+    * time anything is recorded, and Metal resolves an invalidated counter-heap entry as zero -- so
+    * a slot the GPU never wrote reads as zero while its partner holds a real absolute clock value.
+    * The difference is then the machine's uptime rather than a frame, and placing such a zone on
+    * the CPU clock would put it before the process began. An end before its begin is impossible
+    * for the same reason it always was.
+    * @param beginTicks Raw tick the zone opened at.
+    * @param endTicks Raw tick the zone closed at.
+    * @param timestampPeriodNs Nanoseconds per tick, from the driver.
+    * @param outBeginNs Receives the begin time in nanoseconds. Untouched when the pair is rejected.
+    * @param outEndNs Receives the end time in nanoseconds. Untouched when the pair is rejected.
+    * @return False when the pair is not a measurement and the zone must be dropped.
+    */
+    bool vkmDecodeGpuZoneTicks(uint64_t beginTicks, uint64_t endTicks, double timestampPeriodNs,
+                               uint64_t* outBeginNs, uint64_t* outEndNs);
+
     // One command queue's zones within a single collected frame, sorted by begin time
     // (parent first), which is the order the chart walks.
     struct VkmGpuQueueTimeline

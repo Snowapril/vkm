@@ -232,7 +232,9 @@ namespace vkm
             }
 
             VkmEngine* engine = getEngine(window);
-            if (engine == nullptr || engine->wantsCaptureMouse())
+            // Per window: the scene window carries its own ImGui context for the gizmo, and a
+            // handle under the cursor there has to take the mouse from the camera controller.
+            if (engine == nullptr || engine->wantsCaptureMouseForWindow(engine->findWindowIndex(window)))
             {
                 return;
             }
@@ -256,7 +258,9 @@ namespace vkm
             }
 
             VkmEngine* engine = getEngine(window);
-            if (engine == nullptr || engine->wantsCaptureMouse())
+            // Per window: the scene window carries its own ImGui context for the gizmo, and a
+            // handle under the cursor there has to take the mouse from the camera controller.
+            if (engine == nullptr || engine->wantsCaptureMouseForWindow(engine->findWindowIndex(window)))
             {
                 return;
             }
@@ -287,7 +291,9 @@ namespace vkm
             }
 
             VkmEngine* engine = getEngine(window);
-            if (engine == nullptr || engine->wantsCaptureMouse())
+            // Per window: the scene window carries its own ImGui context for the gizmo, and a
+            // handle under the cursor there has to take the mouse from the camera controller.
+            if (engine == nullptr || engine->wantsCaptureMouseForWindow(engine->findWindowIndex(window)))
             {
                 return;
             }

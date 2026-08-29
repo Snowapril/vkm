@@ -696,4 +696,75 @@ TEST_CASE("VkmPipelineStateManager - reloading with recompile runs vkm-compiler 
     fs::remove_all(tempDir, ec);
 }
 
+TEST_CASE("VkmPipelineStateManager - a named shader root resolves shaders outside the json's directory")
+{
+    VulkanDriverFixture f;
+    VKM_REQUIRE_DEVICE(f.initResult);
+
+    if (!vkm::VkmPipelineStateManager::isShaderRecompilationAvailable())
+    {
+        MESSAGE("Skipping: this build has no vkm-compiler path baked in");
+        return;
+    }
+
+    // The engine's layout rather than a sample's: PSO json in one directory, HLSL in another.
+    const fs::path tempDir = fs::temp_directory_path() / "vkm_test_pso_shader_root";
+    const fs::path psoDir = tempDir / "Pipelines";
+    const fs::path shaderDir = tempDir / "Shaders";
+    std::error_code ec;
+    fs::remove_all(tempDir, ec);
+    fs::create_directories(psoDir, ec);
+    REQUIRE_FALSE(ec);
+    fs::create_directories(shaderDir, ec);
+    REQUIRE_FALSE(ec);
+
+    fs::copy_file(fs::path(TEST_TRIANGLE_SAMPLE_DIR) / "triangle.hlsl",
+        shaderDir / "triangle.hlsl", fs::copy_options::overwrite_existing, ec);
+    REQUIRE_FALSE(ec);
+
+    writeTextFile(psoDir / "shader_root.json",
+        "{\n"
+        "    \"name\": \"shader_root_pso\",\n"
+        "    \"color_attachments\": [ { \"format\": \"bgra8_unorm\" } ],\n"
+        "    \"shaders\": {\n"
+        "        \"vertex\":   { \"filepath\": \"triangle.hlsl\", \"entry_point\": \"VSMain\" },\n"
+        "        \"fragment\": { \"filepath\": \"triangle.hlsl\", \"entry_point\": \"PSMain\" }\n"
+        "    }\n"
+        "}\n");
+
+    writeStageCacheFiles(psoDir, "triangle", "");
+    const fs::path vertCache = psoDir / vkm::buildShaderCacheFilename(
+        "triangle", "", vkm::VkmShaderCacheStage::Vertex, vkm::VkmShaderCacheBackend::Vulkan);
+    const uintmax_t placeholderSize = fs::file_size(vertCache, ec);
+    REQUIRE_FALSE(ec);
+
+    vkm::VkmPipelineStateManager manager(f.driver.get());
+    std::string outError;
+    REQUIRE_MESSAGE(manager.loadPipelineStatesFromDirectory(
+        psoDir.string(), psoDir.string(), vkm::VkmPipelineStateOrigin::User, &outError,
+        shaderDir.string()), outError);
+    vkm::VkmPipelineStateBase* pso = manager.getPipelineState("shader_root_pso", vkm::VkmPipelineStateOrigin::User);
+    REQUIRE(pso != nullptr);
+
+    // The shader is watched at its real location, which is what lets an edit to it mark the
+    // source stale. Resolved against the json's directory it would not exist and would be dropped.
+    const fs::path watchedShader = shaderDir / "triangle.hlsl";
+    const std::vector<vkm::VkmPipelineStateSource>& sources = manager.getSources();
+    REQUIRE(sources.size() == 1);
+    bool watchesTheShader = false;
+    for (const std::pair<std::string, fs::file_time_type>& watched : sources[0].watchedFiles)
+    {
+        watchesTheShader = watchesTheShader || fs::path(watched.first) == watchedShader;
+    }
+    CHECK(watchesTheShader);
+
+    // And the recompile finds it, which is the whole point of naming the root.
+    std::string reloadError;
+    REQUIRE_MESSAGE(manager.reloadSource(0, /*recompileShaders=*/true, &reloadError), reloadError);
+    CHECK(fs::file_size(vertCache, ec) != placeholderSize);
+    CHECK(manager.getPipelineState("shader_root_pso", vkm::VkmPipelineStateOrigin::User) == pso);
+
+    fs::remove_all(tempDir, ec);
+}
+
 #endif // VKM_USE_VULKAN_API

@@ -9,6 +9,7 @@
 #include <vkm/renderer/backend/common/render_resource_pool.h>
 #include <vkm/renderer/backend/common/render_resource_pool.hpp>
 
+#include <algorithm>
 #include <array>
 
 namespace vkm
@@ -29,6 +30,18 @@ namespace vkm
         // Created here rather than through VkmDriverBase::newSampler(): the bindless manager
         // is initialized from initializeInner(), which runs before the render resource pool
         // is initialized, so no pooled resource can be created yet.
+        // Anisotropy, because this sampler mostly serves material textures and the surfaces that
+        // dominate a scene like Sponza -- floors, walls, the arcade -- are seen at a grazing angle,
+        // where an isotropic filter picks its level from the longer derivative axis and blurs along
+        // the shorter one. 8 is the ceiling worth paying for; the device's own limit clamps it.
+        VkPhysicalDeviceFeatures deviceFeatures{};
+        vkGetPhysicalDeviceFeatures(_driver->getPhysicalDevice(), &deviceFeatures);
+        VkPhysicalDeviceProperties deviceProperties{};
+        vkGetPhysicalDeviceProperties(_driver->getPhysicalDevice(), &deviceProperties);
+        const bool anisotropySupported = deviceFeatures.samplerAnisotropy == VK_TRUE;
+        const float maxAnisotropy =
+            anisotropySupported ? std::min(8.0f, deviceProperties.limits.maxSamplerAnisotropy) : 1.0f;
+
         const VkSamplerCreateInfo samplerCreateInfo{
             .sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
             .magFilter    = VK_FILTER_LINEAR,
@@ -42,6 +55,8 @@ namespace vkm
             .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
             .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
             .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .anisotropyEnable = anisotropySupported ? VK_TRUE : VK_FALSE,
+            .maxAnisotropy    = maxAnisotropy,
             .maxLod       = VK_LOD_CLAMP_NONE,
         };
         VkResult vkResult = vkCreateSampler(device, &samplerCreateInfo, nullptr, &_defaultSampler);

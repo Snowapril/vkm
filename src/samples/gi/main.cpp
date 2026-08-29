@@ -31,6 +31,8 @@
 #include <ImGuizmo.h>
 #endif
 
+#include <common/sample_scene_browser.h>
+
 #include <vkm/base/common.h>
 #include <vkm/base/global_variable.h>
 #include <vkm/platform/common/app_delegate.h>
@@ -76,6 +78,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -162,31 +165,6 @@ namespace
         glm::vec4 _exposureGamma{ 1.0f, 2.2f, 0.0f, 0.0f };
     };
 
-    /*
-    * @brief Splits a comma-separated cvar into individual paths, dropping empty entries.
-    * @details A global variable is a single string, so this is how one names several scenes. A
-    * value with no comma yields exactly one path, which is the single-scene case unchanged.
-    */
-    std::vector<std::string> splitScenePaths(const std::string& value)
-    {
-        std::vector<std::string> paths;
-        size_t begin = 0;
-        while (begin <= value.size())
-        {
-            const size_t comma = value.find(',', begin);
-            const size_t end = (comma == std::string::npos) ? value.size() : comma;
-            if (end > begin)
-            {
-                paths.push_back(value.substr(begin, end - begin));
-            }
-            if (comma == std::string::npos)
-            {
-                break;
-            }
-            begin = comma + 1;
-        }
-        return paths;
-    }
 
     VkmBuffer* createUniformBuffer(VkmDriverBase* driver, uint64_t size, const char* name)
     {
@@ -411,7 +389,10 @@ public:
         _gi.options()._ssgi = gv_gi_ssgi.get();
         _gi.options()._restirMisBlend = gv_gi_restir_mis.get();
 
-        loadScene(splitScenePaths(gv_gi_model_path.get()));
+#if defined(VKM_ENABLE_IMGUI)
+        _sceneEntries = vkmsample::scanSceneDirectory(std::filesystem::path(RESOURCES_DIR) / "Scenes");
+#endif
+        rebuildScene(vkmsample::splitScenePaths(gv_gi_model_path.get()));
 
         VkmTextureStreamingSettings streaming = _scene.getTextureStreamingSettings();
         streaming._useSparseResidency = gv_gi_sparse_streaming.get();
@@ -477,16 +458,27 @@ public:
             _camera.setJitterPixels(glm::vec2(0.0f));
         }
         // Before the frame records anything: the streamer creates textures and uploads through the
-        // driver directly, which a recording command buffer cannot be open across. The render
-        // extent, not the display one, is what the G-buffer is rasterized at.
+        // driver directly, which a recording command buffer cannot be open across. The display
+        // extent, not the render one: an upscaler resolves to display size, so texel density has to
+        // be matched against the pixels that are actually shown or every texture is selected a
+        // level too coarse and the upscaler is handed input already blurred.
         VkmTextureStreamingView streamingView;
         streamingView._cameraPosition = _camera.getPosition();
-        streamingView._viewportHeight = _renderExtent.y;
+        streamingView._viewportHeight = _extent.y;
         streamingView._fovYRadians = _camera.getFovYRadians();
         _scene.updateTextureStreaming(_engine->getDriver(), streamingView);
 
         takePendingScreenshot();
         drawUi();
+
+        // Deferred to here so the swap never happens while the browser is still iterating the
+        // lists a rebuild tears down.
+        if (_pendingScenePaths.has_value())
+        {
+            const std::vector<std::string> paths = std::move(*_pendingScenePaths);
+            _pendingScenePaths.reset();
+            rebuildScene(paths);
+        }
     }
 
     virtual void render(uint32_t windowIndex, VkmRenderGraph* renderGraph, VkmResourceHandle backBuffer) override final
@@ -768,18 +760,20 @@ private:
     }
 
     /*
-    * @brief Loads every glTF in `paths` into one scene, in order.
-    * @details A model that fails to import is skipped and reported; the rest still load. Each is
-    * placed at the transform its own nodes give it, and keeps a gizmo transform on top of that.
-    * @param paths Files to load.
+    * @brief Imports every glTF in `paths`, applying the scene scale, without touching the scene.
+    * @details Separate from the scene mutation below so a rebuild that cannot import anything
+    * leaves the running scene standing rather than emptying it.
+    * @param paths Files to import.
+    * @param outModels Receives one imported model per path that loaded.
+    * @param outPaths Receives the path each of those came from, 1:1 with outModels.
     */
-    void loadScene(const std::vector<std::string>& paths)
+    void importScenes(const std::vector<std::string>& paths, std::vector<VkmSceneModel>* outModels,
+                      std::vector<std::string>* outPaths) const
     {
-        VkmDriverBase* driver = _engine->getDriver();
-        std::string error;
         // Applied to the roots, so the draw list, the light placements and the bounds all follow
         // from the hierarchy walk rather than from three separate corrections.
         const float sceneScale = glm::max(gv_gi_scene_scale.get(), 1e-3f);
+        std::string error;
 
         for (const std::string& path : paths)
         {
@@ -812,13 +806,64 @@ private:
                     light._range *= sceneScale;
                 }
             }
-            if (!_scene.addModel(model, &error))
+            outModels->push_back(std::move(model));
+            outPaths->push_back(path);
+        }
+    }
+
+    /*
+    * @brief Replaces whatever is loaded with the glTFs at `paths`, in order.
+    * @details Synchronous and stalling by nature -- the driver's uploads already block -- so the
+    * frame that triggers a load takes as long as the load does. A model that fails to import is
+    * skipped and reported; the rest still load. Each is placed at the transform its own nodes give
+    * it, and keeps a gizmo transform on top of that, reset here because a rebuild re-imports from
+    * scratch. The camera is only re-framed when the scene was empty, so adding a model while
+    * looking at something does not throw the view away.
+    * @param paths Files to load. An empty list leaves the sample with no scene.
+    */
+    void rebuildScene(const std::vector<std::string>& paths)
+    {
+        VkmDriverBase* driver = _engine->getDriver();
+        std::string error;
+
+        std::vector<VkmSceneModel> models;
+        std::vector<std::string> loadedPaths;
+        importScenes(paths, &models, &loadedPaths);
+        if (models.empty() && !paths.empty())
+        {
+            VKM_DEBUG_ERROR("No GI scene loaded; the scene already up is left standing");
+            return;
+        }
+
+        const bool frameCamera = _models.empty();
+
+        // The old scene's buffers are still referenced by frames in flight, and its bindless slots
+        // would be handed straight back out by the build below. VkmScene::destroy() also releases
+        // material textures the reclaimer has no recorded usage for (TODO.md), so draining is what
+        // makes both safe -- and this path is already a stall.
+        driver->getCommandQueue(VkmCommandQueueType::Graphics, 0)->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
+        _sceneReady = false;
+        for (VkmSceneMaterialTables& tables : _gbufferMaterialTables)
+        {
+            tables.destroy(driver);
+        }
+        _scene.destroy(driver);
+        _models.clear();
+        _bakedTransforms.clear();
+        _punctualLights.clear();
+        _selectedModel = 0;
+        _selectedLight = 0;
+
+        for (size_t i = 0; i < models.size(); ++i)
+        {
+            if (!_scene.addModel(models[i], &error))
             {
-                VKM_DEBUG_ERROR(("Failed to load '" + path + "': " + error).c_str());
+                VKM_DEBUG_ERROR(("Failed to load '" + loadedPaths[i] + "': " + error).c_str());
                 continue;
             }
             LoadedModel entry;
-            entry._displayName = std::filesystem::path(path).filename().string();
+            entry._path = loadedPaths[i];
+            entry._displayName = std::filesystem::path(loadedPaths[i]).filename().string();
             _models.push_back(std::move(entry));
         }
 
@@ -877,13 +922,18 @@ private:
             }
         }
 
-        // The GI system fits its probe grid to these bounds; the sample only frames the camera.
-        const VkmSceneAABB bounds = _scene.computeWorldBounds();
-        const glm::vec3 center = bounds._valid ? bounds.getCenter() : glm::vec3(0.0f);
-        const glm::vec3 extent = bounds._valid ? bounds.getExtent() : glm::vec3(8.0f);
-        _cameraController.frame(center, glm::length(extent) * 0.5f * gv_gi_camera_distance.get());
-        _cameraController.setOrientation(glm::radians(gv_gi_camera_yaw.get()),
-                                         glm::radians(gv_gi_camera_pitch.get()));
+        // The GI system fits its probe grid to these bounds; the sample only frames the camera, and
+        // only when there was nothing loaded before -- adding a model to a scene being looked at
+        // must not throw the viewpoint away.
+        if (frameCamera)
+        {
+            const VkmSceneAABB bounds = _scene.computeWorldBounds();
+            const glm::vec3 center = bounds._valid ? bounds.getCenter() : glm::vec3(0.0f);
+            const glm::vec3 extent = bounds._valid ? bounds.getExtent() : glm::vec3(8.0f);
+            _cameraController.frame(center, glm::length(extent) * 0.5f * gv_gi_camera_distance.get());
+            _cameraController.setOrientation(glm::radians(gv_gi_camera_yaw.get()),
+                                             glm::radians(gv_gi_camera_pitch.get()));
+        }
 
         if (!_gi.prepareScene(&_scene, &error))
         {
@@ -1338,6 +1388,7 @@ private:
                                                             updater.getDescriptor()._budget,
                                                             updater.getDescriptor()._hysteresis, 0.1f));
 
+        drawSceneBrowserUi();
         drawModelPlacementUi();
         drawLightUi();
         drawProbePlacementUi(volume);
@@ -1443,6 +1494,83 @@ private:
     }
 
     /*
+    * @brief Everything loadable under resources/Scenes, and the buttons that load it.
+    * @details Available is what is on disk and says nothing about what is in the scene -- that is
+    * the Models list below. Add, Replace and Remove all route through one rebuildScene(), because
+    * VkmScene::addModel has to precede build(); none of them acts here, they set the pending path
+    * list update() consumes once the UI is finished with these vectors.
+    */
+    void drawSceneBrowserUi()
+    {
+        ImGui::Separator();
+        if (ImGui::Button("Rescan"))
+        {
+            _sceneEntries = vkmsample::scanSceneDirectory(std::filesystem::path(RESOURCES_DIR) / "Scenes");
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("%zu scene(s) under resources/Scenes", _sceneEntries.size());
+
+        if (_sceneEntries.empty())
+        {
+            ImGui::TextDisabled("Nothing found. Run scripts/download_scenes.py, or drop a glTF in.");
+            return;
+        }
+
+        if (ImGui::BeginListBox("##available", ImVec2(-FLT_MIN, 4 * ImGui::GetTextLineHeightWithSpacing())))
+        {
+            for (int i = 0; i < static_cast<int>(_sceneEntries.size()); ++i)
+            {
+                if (ImGui::Selectable(_sceneEntries[i]._displayName.c_str(), i == _selectedEntry))
+                {
+                    _selectedEntry = i;
+                }
+            }
+            ImGui::EndListBox();
+        }
+
+        const bool hasEntry = _selectedEntry >= 0 && _selectedEntry < static_cast<int>(_sceneEntries.size());
+        ImGui::BeginDisabled(!hasEntry);
+        if (ImGui::Button("Add") && hasEntry)
+        {
+            std::vector<std::string> paths = loadedScenePaths();
+            paths.push_back(_sceneEntries[_selectedEntry]._path);
+            _pendingScenePaths = std::move(paths);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Replace") && hasEntry)
+        {
+            _pendingScenePaths = std::vector<std::string>{ _sceneEntries[_selectedEntry]._path };
+        }
+        ImGui::EndDisabled();
+
+        // Never down to nothing: update() early-returns until a scene is ready, so an empty one
+        // would take this panel with it and leave no way back.
+        const bool canRemove = _models.size() > 1 && _selectedModel >= 0 &&
+                               _selectedModel < static_cast<int>(_models.size());
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!canRemove);
+        if (ImGui::Button("Remove selected") && canRemove)
+        {
+            std::vector<std::string> paths = loadedScenePaths();
+            paths.erase(paths.begin() + static_cast<ptrdiff_t>(_selectedModel));
+            _pendingScenePaths = std::move(paths);
+        }
+        ImGui::EndDisabled();
+    }
+
+    // The paths currently loaded, in load order, which is what a rebuild starts from.
+    std::vector<std::string> loadedScenePaths() const
+    {
+        std::vector<std::string> paths;
+        paths.reserve(_models.size());
+        for (const LoadedModel& model : _models)
+        {
+            paths.push_back(model._path);
+        }
+        return paths;
+    }
+
+    /*
     * @brief Model list and the mouse gizmo that places the selected one.
     * @details Takes priority over the light and probe gizmos for the same reason those two
     * exclude each other: ImGuizmo manipulates whichever transform it was handed last.
@@ -1494,10 +1622,12 @@ private:
             applyModelTransform(static_cast<size_t>(_selectedModel));
         }
 
-        ImGuizmo::BeginFrame();
-        ImGuizmo::SetOrthographic(false);
-        ImGuizmo::SetRect(0.0f, 0.0f, static_cast<float>(_extent.x), static_cast<float>(_extent.y));
-
+        // Opened by the engine against the scene window, so the manipulator is drawn and dragged
+        // over the scene rather than over this panel's own window.
+        if (!_engine->beginGizmoOverlay())
+        {
+            return;
+        }
         const glm::mat4 view = _camera.getView();
         const glm::mat4 projection = _camera.getProjection();
         glm::mat4 transform = model._transform;
@@ -1507,6 +1637,7 @@ private:
             model._transform = transform;
             applyModelTransform(static_cast<size_t>(_selectedModel));
         }
+        _engine->endGizmoOverlay();
 
         // The light table bakes emissive triangles in world space at build (TODO.md), so the
         // traced tier keeps lighting from where the emitter was loaded.
@@ -1539,17 +1670,20 @@ private:
     // Whether the gizmo moved the light this frame.
     bool dragSelectedLight(VkmPunctualLight& light)
     {
-        ImGuizmo::BeginFrame();
-        ImGuizmo::SetOrthographic(false);
-        ImGuizmo::SetRect(0.0f, 0.0f, static_cast<float>(_extent.x), static_cast<float>(_extent.y));
+        if (!_engine->beginGizmoOverlay())
+        {
+            return false;
+        }
 
         const glm::mat4 view = _camera.getView();
         const glm::mat4 projection = _camera.getProjection();
         const glm::vec3 position(light._positionWorld[0], light._positionWorld[1],
                                  light._positionWorld[2]);
         glm::mat4 transform = glm::translate(glm::mat4(1.0f), position);
-        if (!ImGuizmo::Manipulate(&view[0][0], &projection[0][0], ImGuizmo::TRANSLATE,
-                                  ImGuizmo::WORLD, &transform[0][0]))
+        const bool moved = ImGuizmo::Manipulate(&view[0][0], &projection[0][0], ImGuizmo::TRANSLATE,
+                                                ImGuizmo::WORLD, &transform[0][0]);
+        _engine->endGizmoOverlay();
+        if (!moved)
         {
             return false;
         }
@@ -1590,16 +1724,17 @@ private:
             _gi.clearProbeOffsets();
         }
 
-        // ImGuizmo draws into the current ImGui frame and reads the mouse from it, so it belongs
-        // here rather than in render(). It manipulates a full transform; only the translation
-        // column is read back, the volume storing a displacement rather than a matrix.
+        // Driven from here rather than from render(): the manipulator reads the mouse out of an
+        // ImGui frame, which only exists during update(). It manipulates a full transform; only the
+        // translation column is read back, the volume storing a displacement rather than a matrix.
         if (_lightGizmo || _modelGizmo)
         {
             return;
         }
-        ImGuizmo::BeginFrame();
-        ImGuizmo::SetOrthographic(false);
-        ImGuizmo::SetRect(0.0f, 0.0f, static_cast<float>(_extent.x), static_cast<float>(_extent.y));
+        if (!_engine->beginGizmoOverlay())
+        {
+            return;
+        }
 
         const glm::mat4 view = _camera.getView();
         const glm::mat4 projection = _camera.getProjection();
@@ -1609,6 +1744,7 @@ private:
         {
             _gi.setProbeOffset(probeIndex, glm::vec3(transform[3]) - volume.getProbeGridPosition(probeIndex));
         }
+        _engine->endGizmoOverlay();
     }
 #endif
 
@@ -1674,10 +1810,17 @@ private:
     // asset's own nodes gave each object, which _bakedTransforms holds.
     struct LoadedModel
     {
+        std::string _path;
         std::string _displayName;
         glm::mat4 _transform{ 1.0f };
     };
     std::vector<LoadedModel> _models;
+    // What is on disk under resources/Scenes, for the browser's Available list. Refreshed on
+    // demand rather than per frame: it is a recursive directory walk.
+    std::vector<vkmsample::SceneEntry> _sceneEntries;
+    int _selectedEntry = -1; // which Available row Add and Replace act on
+    // Set by the browser, consumed at the end of update(); see there for why.
+    std::optional<std::vector<std::string>> _pendingScenePaths;
     // 1:1 with VkmScene::getObjects(), captured right after build().
     std::vector<glm::mat4> _bakedTransforms;
     int _selectedModel = 0;

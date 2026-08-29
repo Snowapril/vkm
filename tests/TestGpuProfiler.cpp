@@ -72,6 +72,55 @@ namespace
     }
 } // namespace
 
+/*
+* The tick decode is where a slot the GPU never wrote gets rejected, and it is reachable without a
+* device, so these are exact rather than a device test's "no bar looks absurd".
+*/
+TEST_CASE("vkmDecodeGpuZoneTicks converts a real pair and rejects one that is not a measurement")
+{
+    // 24 MHz, the order of magnitude an Apple GPU reports.
+    constexpr double kPeriodNs = 1000000000.0 / 24000000.0;
+    uint64_t beginNs = 0;
+    uint64_t endNs = 0;
+
+    SUBCASE("a real pair converts")
+    {
+        CHECK(vkm::vkmDecodeGpuZoneTicks(24000, 48000, kPeriodNs, &beginNs, &endNs));
+        CHECK(beginNs == 1000000);
+        CHECK(endNs == 2000000);
+    }
+
+    SUBCASE("an unwritten begin slot is rejected")
+    {
+        // The reported failure: begin resolves as 0 while end holds an absolute GPU clock, so the
+        // span would read as the machine's uptime rather than as a frame.
+        CHECK_FALSE(vkm::vkmDecodeGpuZoneTicks(0, 7300000000000ull, kPeriodNs, &beginNs, &endNs));
+        CHECK(beginNs == 0);
+        CHECK(endNs == 0);
+    }
+
+    SUBCASE("an unwritten end slot is rejected")
+    {
+        CHECK_FALSE(vkm::vkmDecodeGpuZoneTicks(24000, 0, kPeriodNs, &beginNs, &endNs));
+    }
+
+    SUBCASE("both slots unwritten is rejected rather than reported as a zero-length zone")
+    {
+        CHECK_FALSE(vkm::vkmDecodeGpuZoneTicks(0, 0, kPeriodNs, &beginNs, &endNs));
+    }
+
+    SUBCASE("an end before its begin is rejected")
+    {
+        CHECK_FALSE(vkm::vkmDecodeGpuZoneTicks(48000, 24000, kPeriodNs, &beginNs, &endNs));
+    }
+
+    SUBCASE("a pair one tick apart is a measurement, however short")
+    {
+        CHECK(vkm::vkmDecodeGpuZoneTicks(24000, 24001, kPeriodNs, &beginNs, &endNs));
+        CHECK(endNs >= beginNs);
+    }
+}
+
 TEST_CASE("GPU range aggregation clips zones to the range instead of counting them whole")
 {
     const vkm::VkmGpuQueueTimeline timeline = makeTimeline(

@@ -37,10 +37,13 @@ namespace vkm
                    "vkmLoadRayTracingPipelineStates requires a pipeline state manager");
 
         std::string psoError;
+        // Shaders/ rather than the json's own directory, matching the SHADER_ROOT
+        // vkm_ray_tracing_shaders compiles with -- see VkmEngine's engine-directory load.
         if (!pipelineStateManager->loadPipelineStatesFromDirectory(
                 std::string(RESOURCES_DIR) + "Pipelines/RayTracing/",
                 std::string(RESOURCES_DIR) + "Shaders/ShaderCache/",
-                VkmPipelineStateOrigin::Engine, &psoError))
+                VkmPipelineStateOrigin::Engine, &psoError,
+                std::string(RESOURCES_DIR) + "Shaders/"))
         {
             return fail(outError, "Failed to load the ray-tracing pipeline states: " + psoError);
         }

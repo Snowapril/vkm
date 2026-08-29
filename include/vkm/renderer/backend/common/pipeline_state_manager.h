@@ -33,6 +33,10 @@ namespace vkm
     {
         std::string jsonPath; // empty for descriptors registered directly via loadPipelineState()
         std::string shaderCacheDir;
+        // Directory a shader stage's relative filepath resolves against. Empty means the json's own
+        // directory, which is vkm-compiler's default and what the samples rely on; the engine and
+        // ray-tracing directories keep their json and their HLSL apart and so name it explicitly.
+        std::string shaderRoot;
         VkmPipelineStateOrigin origin = VkmPipelineStateOrigin::User;
         std::vector<std::string> variantNames; // expanded, e.g. "triangle_pso[wireframe]"
         // json + every distinct shader source it references + the shared *.hlsli headers,
@@ -62,10 +66,14 @@ namespace vkm
         * @param shaderCacheDir Directory holding the variants' .vfcache files.
         * @param origin Which map to register the results under.
         * @param outError Receives the failing file and reason. May be null.
+        * @param shaderRoot Directory a stage's relative filepath resolves against. Empty resolves
+        * against each json's own directory. Must match the SHADER_ROOT the build compiled these
+        * shaders with, or a runtime recompile looks for them somewhere they are not.
         * @return False on the first file that could not be loaded.
         */
         bool loadPipelineStatesFromDirectory(const std::string& directory, const std::string& shaderCacheDir,
-            VkmPipelineStateOrigin origin, std::string* outError = nullptr);
+            VkmPipelineStateOrigin origin, std::string* outError = nullptr,
+            const std::string& shaderRoot = std::string());
 
         /*
         * @brief Registers one already-parsed descriptor directly. Mainly for unit tests.
@@ -75,10 +83,13 @@ namespace vkm
         * @param outError Receives the failure reason. May be null.
         * @param jsonPath File it was parsed from. Leaving it empty registers a source that
         * reloadSource() refuses, there being nothing to re-read.
+        * @param shaderRoot Directory a stage's relative filepath resolves against. Empty resolves
+        * against the json's own directory.
         * @return False if the pipeline could not be created.
         */
         bool loadPipelineState(const VkmPipelineStateDescriptor& desc, const std::string& shaderCacheDir,
-            VkmPipelineStateOrigin origin, std::string* outError = nullptr, const std::string& jsonPath = std::string());
+            VkmPipelineStateOrigin origin, std::string* outError = nullptr, const std::string& jsonPath = std::string(),
+            const std::string& shaderRoot = std::string());
 
         /*
         * @brief Looks up a loaded pipeline by name.

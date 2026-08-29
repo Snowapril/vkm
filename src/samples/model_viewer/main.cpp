@@ -9,6 +9,8 @@
 #include <ImGuizmo.h>
 #endif
 
+#include <common/sample_scene_browser.h>
+
 #include <vkm/base/common.h>
 #include <vkm/base/global_variable.h>
 #include <vkm/platform/common/app_delegate.h>
@@ -88,76 +90,6 @@ namespace
         VkmKeyCode::Num0, VkmKeyCode::Num1, VkmKeyCode::Num2, VkmKeyCode::Num3, VkmKeyCode::Num4,
         VkmKeyCode::Num5,
     };
-
-    // One loadable file found under resources/Scenes/.
-    struct SceneEntry
-    {
-        std::string _displayName; // path relative to the scenes directory
-        std::string _path;
-    };
-
-    /*
-    * @brief Splits a comma-separated cvar into individual paths, dropping empty entries.
-    * @details A global variable is a single string, so this is how one names several scenes. A
-    * value with no comma yields exactly one path, which is the single-scene case unchanged.
-    */
-    std::vector<std::string> splitScenePaths(const std::string& value)
-    {
-        std::vector<std::string> paths;
-        size_t begin = 0;
-        while (begin <= value.size())
-        {
-            const size_t comma = value.find(',', begin);
-            const size_t end = (comma == std::string::npos) ? value.size() : comma;
-            if (end > begin)
-            {
-                paths.push_back(value.substr(begin, end - begin));
-            }
-            if (comma == std::string::npos)
-            {
-                break;
-            }
-            begin = comma + 1;
-        }
-        return paths;
-    }
-
-    // Walks resources/Scenes/ for glTF files. Scenes are one directory per asset (that is
-    // how scripts/download_scenes.py lays them out), so the search has to be recursive.
-    std::vector<SceneEntry> scanSceneDirectory()
-    {
-        const std::filesystem::path scenesDirectory = std::filesystem::path(RESOURCES_DIR) / "Scenes";
-
-        std::vector<SceneEntry> entries;
-        std::error_code ec;
-        if (!std::filesystem::is_directory(scenesDirectory, ec))
-        {
-            return entries;
-        }
-
-        for (const std::filesystem::directory_entry& entry :
-             std::filesystem::recursive_directory_iterator(scenesDirectory, ec))
-        {
-            if (!entry.is_regular_file())
-            {
-                continue;
-            }
-            const std::filesystem::path extension = entry.path().extension();
-            if (extension != ".gltf" && extension != ".glb")
-            {
-                continue;
-            }
-            entries.push_back(SceneEntry{
-                std::filesystem::relative(entry.path(), scenesDirectory, ec).generic_string(),
-                entry.path().string(),
-            });
-        }
-
-        std::sort(entries.begin(), entries.end(), [](const SceneEntry& lhs, const SceneEntry& rhs) {
-            return lhs._displayName < rhs._displayName;
-        });
-        return entries;
-    }
 
     // Points the orbit controller at a scene's bounds; an empty/invalid AABB falls back to a
     // unit sphere at the origin so the camera still ends up somewhere sensible.
@@ -260,11 +192,11 @@ public:
             VKM_ASSERT(_layoutPipelines[i] != nullptr, ("Failed to create " + psoName).c_str());
         }
 
-        _sceneEntries = scanSceneDirectory();
+        _sceneEntries = vkmsample::scanSceneDirectory(std::filesystem::path(RESOURCES_DIR) / "Scenes");
 
         std::vector<std::string> startupPaths;
         std::error_code ec;
-        for (const std::string& path : splitScenePaths(gv_model_path.get()))
+        for (const std::string& path : vkmsample::splitScenePaths(gv_model_path.get()))
         {
             if (std::filesystem::is_regular_file(path, ec))
             {
@@ -586,7 +518,7 @@ private:
 
         if (ImGui::Button("Rescan"))
         {
-            _sceneEntries = scanSceneDirectory();
+            _sceneEntries = vkmsample::scanSceneDirectory(std::filesystem::path(RESOURCES_DIR) / "Scenes");
         }
         ImGui::SameLine();
         ImGui::TextDisabled("%zu scene(s) under resources/Scenes", _sceneEntries.size());
@@ -736,9 +668,9 @@ private:
     }
     /*
     * @brief Mode buttons and the mouse gizmo for the selected model.
-    * @details ImGuizmo draws into the current ImGui frame and reads the mouse from it, so it
-    * belongs here rather than in render(). The whole matrix is read back, translation, rotation
-    * and scale alike, and becomes the model's transform.
+    * @details The mode buttons stay in this panel; the manipulator itself is drawn on the scene
+    * window through the engine's gizmo overlay. The whole matrix is read back, translation,
+    * rotation and scale alike, and becomes the model's transform.
     */
     void drawGizmoUi()
     {
@@ -767,17 +699,12 @@ private:
             applyModelTransform(static_cast<size_t>(_selectedModel));
         }
 
-        const VkmSwapChainBase* swapChain = _engine->getMainSwapChain();
-        if (swapChain == nullptr)
+        // Opened by the engine against the scene window, so the manipulator is drawn and dragged
+        // over the scene rather than over this panel's own window.
+        if (!_engine->beginGizmoOverlay())
         {
             return;
         }
-        const glm::uvec2 extent = swapChain->getExtent();
-
-        ImGuizmo::BeginFrame();
-        ImGuizmo::SetOrthographic(false);
-        ImGuizmo::SetRect(0.0f, 0.0f, static_cast<float>(extent.x), static_cast<float>(extent.y));
-
         const glm::mat4 view = _camera.getView();
         const glm::mat4 projection = _camera.getProjection();
         glm::mat4 transform = model._transform;
@@ -787,6 +714,7 @@ private:
             model._transform = transform;
             applyModelTransform(static_cast<size_t>(_selectedModel));
         }
+        _engine->endGizmoOverlay();
 
         // The light table bakes emissive triangles in world space at build (TODO.md), so a moved
         // emitter lights the scene from where it was loaded until the scene is rebuilt.
@@ -959,7 +887,7 @@ private:
     VkmFlyCameraController _flyController{&_camera};
     bool _flyMode{false};
     DebugMode _debugMode{DebugMode::Lit};
-    std::vector<SceneEntry> _sceneEntries;
+    std::vector<vkmsample::SceneEntry> _sceneEntries;
     // One loaded glTF. _transform is what the gizmo edits; it composes onto the placement the
     // asset's own nodes gave each object, which _bakedTransforms holds.
     struct LoadedModel

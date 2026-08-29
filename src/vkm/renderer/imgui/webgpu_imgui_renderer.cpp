@@ -29,7 +29,7 @@ namespace vkm
 
         // WebGPU has no dedicated ImGui_ImplGlfw_InitForXXX entry point; InitForOther is
         // upstream's documented choice for renderer backends other than OpenGL/Vulkan.
-        ImGui_ImplGlfw_InitForOther(glfwWindow, true);
+        ImGui_ImplGlfw_InitForOther(glfwWindow, getOptions()._installPlatformInput);
 
         ImGui_ImplWGPU_InitInfo initInfo;
         initInfo.Device = driverWebGPU->getDevice();

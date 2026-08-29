@@ -76,6 +76,28 @@ namespace vkm
         }
     }
 
+    bool vkmDecodeGpuZoneTicks(const uint64_t beginTicks, const uint64_t endTicks,
+                               const double timestampPeriodNs, uint64_t* outBeginNs, uint64_t* outEndNs)
+    {
+        VKM_ASSERT(outBeginNs != nullptr && outEndNs != nullptr,
+                   "vkmDecodeGpuZoneTicks requires both outputs");
+        if (beginTicks == 0 || endTicks == 0)
+        {
+            return false;
+        }
+
+        const uint64_t beginNs = static_cast<uint64_t>(static_cast<double>(beginTicks) * timestampPeriodNs);
+        const uint64_t endNs = static_cast<uint64_t>(static_cast<double>(endTicks) * timestampPeriodNs);
+        if (endNs < beginNs)
+        {
+            return false;
+        }
+
+        *outBeginNs = beginNs;
+        *outEndNs = endNs;
+        return true;
+    }
+
     VkmGpuProfiler::VkmGpuProfiler(VkmDriverBase* driver)
         : _driver(driver)
     {
@@ -368,7 +390,12 @@ namespace vkm
             }
 
             std::vector<VkmGpuProfileZone> zones;
-            const uint32_t zoneCount = static_cast<uint32_t>(submission._zones.size());
+            // Without a timeline there is no way to know the GPU has written these slots, and
+            // reading them anyway is how a stale or unwritten value reaches the chart. Retired
+            // with no zones rather than waited on: nothing will ever complete this submission,
+            // so breaking here would stall the ring for the rest of the run.
+            const uint32_t zoneCount =
+                (timeline != nullptr) ? static_cast<uint32_t>(submission._zones.size()) : 0u;
             if (zoneCount > 0)
             {
                 std::array<uint64_t, 2 * kMaxZonesPerSubmission> ticks{};
@@ -385,28 +412,15 @@ namespace vkm
                             continue;
                         }
 
-                        const uint64_t beginTicks = ticks[zoneIndex * 2];
-                        const uint64_t endTicks = ticks[zoneIndex * 2 + 1];
-                        if (beginTicks == 0 || endTicks == 0)
-                        {
-                            // The slot was reset but the GPU never wrote it. Every backend's
-                            // counter is uptime-based and long past zero by the time anything is
-                            // recorded, so zero means absent rather than "the start of time" --
-                            // and placing such a zone on the CPU clock would put it before the
-                            // process began.
-                            continue;
-                        }
-
                         VkmGpuProfileZone zone;
                         zone._name = pending._name;
                         zone._subGraphId = pending._subGraphId;
                         zone._depth = pending._depth;
-                        zone._beginNs = static_cast<uint64_t>(static_cast<double>(beginTicks) * _timestampPeriodNs);
-                        zone._endNs = static_cast<uint64_t>(static_cast<double>(endTicks) * _timestampPeriodNs);
-                        if (zone._endNs < zone._beginNs)
+                        // Dropped rather than shown: one zone with an unwritten slot would
+                        // otherwise set the whole frame's span, which is a min over zone begins.
+                        if (!vkmDecodeGpuZoneTicks(ticks[zoneIndex * 2], ticks[zoneIndex * 2 + 1],
+                                                   _timestampPeriodNs, &zone._beginNs, &zone._endNs))
                         {
-                            // Nothing legitimate produces this; drop it rather than show a zone
-                            // that ended before it started.
                             continue;
                         }
                         zones.push_back(zone);

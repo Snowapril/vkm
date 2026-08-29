@@ -25,6 +25,7 @@ namespace vkm
     class VkmCamera;
 #if defined(VKM_ENABLE_IMGUI)
     class VkmImGuiRendererBase;
+    class VkmGizmoOverlay;
     class VkmRenderGraphInspector;
     class VkmMemoryInspector;
     class VkmProfileInspector;
@@ -323,6 +324,35 @@ namespace vkm
         bool wantsCaptureMouse() const;
 
         /*
+        * @brief The same question for one window, which is what a per-window platform callback has
+        * to ask once the gizmo overlay exists.
+        * @details The scene window carries its own ImGui context for the gizmo, so a drag on a
+        * handle must suppress the scene's mouse there without the panel window having to be
+        * involved. Any other window index sees the panel context's answer alone.
+        * @param windowIndex Window the event arrived on, as returned by addSwapChain.
+        * @return True when some ImGui context owns the mouse for that window.
+        */
+        bool wantsCaptureMouseForWindow(uint32_t windowIndex) const;
+
+        /*
+        * @brief Opens the transform gizmo against the scene window, for one manipulator.
+        * @details Where a dedicated ImGui window exists the panels live there, so a gizmo drawn in
+        * that context floats over a grey background while the scene it moves is elsewhere. This
+        * selects a second context bound to the scene window and opens ImGuizmo against it; where
+        * there is no such second window, it opens ImGuizmo against the sole context, which is the
+        * scene window's anyway. Either way the caller may then call ImGuizmo directly.
+        *
+        * ImGuizmo holds one manipulator's worth of state process-wide, so this refuses a second
+        * gizmo in the same frame and a caller owning several must still choose between them.
+        * @return False when no gizmo may be drawn; the caller must then not call ImGuizmo at all.
+        */
+        bool beginGizmoOverlay();
+        // Closes what beginGizmoOverlay() opened. Only call it where that returned true.
+        void endGizmoOverlay();
+        // Whether the gizmo is hovered or being dragged, as of the frame just drawn.
+        bool isGizmoActive() const;
+
+        /*
         * @brief returns the engine-owned render graph capture (see render_graph_capture.h).
         * Armed via the F10 hotkey, --capture-render-graph, or arm() directly.
         */
@@ -358,6 +388,11 @@ namespace vkm
 
 #if defined(VKM_ENABLE_IMGUI)
         std::unique_ptr<VkmImGuiRendererBase> _imGuiRenderer;
+        // The scene window's own context, carrying the gizmo and nothing else. Null in
+        // single-window mode, where the sole context already belongs to the scene window, and null
+        // where it could not be created -- both fall back to drawing the gizmo in place.
+        std::unique_ptr<VkmGizmoOverlay> _gizmoOverlay;
+        uint32_t _gizmoWindowIndex {INVALID_VALUE32};
 #endif
 
     private:
