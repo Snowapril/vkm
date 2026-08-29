@@ -2,9 +2,9 @@
 
 #pragma once
 
-// Drawing helpers shared by the CPU and GPU profiler inspectors. Internal to
-// src/vkm/renderer/imgui -- there is nothing here an engine user would call, and the
-// two windows only share it so that a zone looks identical in both.
+// Drawing helpers for the profile inspector's chart. Internal to src/vkm/renderer/imgui --
+// there is nothing here an engine user would call. Kept apart from the window itself so the
+// geometry and the zone palette are stated once, for CPU and GPU rows alike.
 
 #include <imgui.h>
 
@@ -21,6 +21,12 @@ namespace vkm
         constexpr float kRulerHeight = 18.0f;
         constexpr float kZoneRowHeight = 18.0f;
         constexpr float kZoneRowGap = 1.0f;
+        // The lane above a queue's zone rows holding its submit markers and the latency bars
+        // that run from each marker to the work it produced.
+        constexpr float kSubmitLaneHeight = 10.0f;
+        // A submit marker, and the bar from it to the moment the queue picked the work up.
+        constexpr ImU32 kSubmitMarkerColor = IM_COL32(236, 200, 96, 255);
+        constexpr ImU32 kQueueLatencyColor = IM_COL32(150, 128, 72, 190);
         // A zone narrower than this gets no label; narrower than one pixel is still drawn one
         // pixel wide so that a burst of tiny scopes reads as a solid band rather than vanishing.
         constexpr float kMinLabelWidth = 24.0f;

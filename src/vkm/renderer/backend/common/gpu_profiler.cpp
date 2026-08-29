@@ -387,6 +387,15 @@ namespace vkm
 
                         const uint64_t beginTicks = ticks[zoneIndex * 2];
                         const uint64_t endTicks = ticks[zoneIndex * 2 + 1];
+                        if (beginTicks == 0 || endTicks == 0)
+                        {
+                            // The slot was reset but the GPU never wrote it. Every backend's
+                            // counter is uptime-based and long past zero by the time anything is
+                            // recorded, so zero means absent rather than "the start of time" --
+                            // and placing such a zone on the CPU clock would put it before the
+                            // process began.
+                            continue;
+                        }
 
                         VkmGpuProfileZone zone;
                         zone._name = pending._name;
@@ -459,8 +468,13 @@ namespace vkm
                 if (!_calibrationMismatchLogged)
                 {
                     _calibrationMismatchLogged = true;
-                    VKM_DEBUG_WARN("Sampled GPU clock does not agree with the submissions it timed; "
-                                   "GPU work will be placed by its submit time from here on");
+                    VKM_DEBUG_WARN(fmt::format(
+                        "Sampled GPU clock does not agree with the submissions it timed (submit ended "
+                        "at {} ns, its GPU work maps to {} ns, {:.3f} ms apart); GPU work will be "
+                        "placed by its submit time from here on",
+                        marker->_marker._endNs, earliestNs,
+                        (static_cast<double>(earliestNs) - static_cast<double>(marker->_marker._endNs)) * 1e-6)
+                        .c_str());
                 }
                 _calibrationTrusted = false;
                 correlation = VkmGpuClockCorrelation::None;

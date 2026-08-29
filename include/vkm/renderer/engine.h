@@ -27,8 +27,7 @@ namespace vkm
     class VkmImGuiRendererBase;
     class VkmRenderGraphInspector;
     class VkmMemoryInspector;
-    class VkmCpuProfilerInspector;
-    class VkmGpuProfilerInspector;
+    class VkmProfileInspector;
     class VkmAccelerationStructureInspector;
     class VkmAccelerationStructureDebugRenderer;
 #endif
@@ -392,16 +391,14 @@ namespace vkm
         double _fpsSmoothed {0.0}; // exponential moving average, used by renderDebugOverlay()
         std::unique_ptr<VkmRenderGraphInspector> _renderGraphInspector;
         std::unique_ptr<VkmMemoryInspector> _memoryInspector;
-        std::unique_ptr<VkmCpuProfilerInspector> _cpuProfilerInspector;
-        std::unique_ptr<VkmGpuProfilerInspector> _gpuProfilerInspector;
+        std::unique_ptr<VkmProfileInspector> _profileInspector;
         std::unique_ptr<VkmAccelerationStructureInspector> _accelerationStructureInspector;
         // The inspector's 3D view. Null on a backend without ray tracing, where no structure
         // can exist for it to outline.
         std::unique_ptr<VkmAccelerationStructureDebugRenderer> _asDebugRenderer;
-        // Previous frame's profiler window visibility, so update() can start/stop capture on
+        // Previous frame's profile window visibility, so update() can start/stop capture on
         // the edge instead of overriding the inspector's own Start/Stop button every frame.
-        bool _cpuProfilerWasVisible {false};
-        bool _gpuProfilerWasVisible {false};
+        bool _profileWasVisible {false};
 #endif
     };
 }

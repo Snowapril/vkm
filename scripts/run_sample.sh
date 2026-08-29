@@ -8,7 +8,7 @@
 #   --build-dir <path>               cmake binary root for native backends (default: <project_root>/build)
 #   --jobs <n>                       parallel build jobs (default: cpu count)
 #   -- <engine args>                 everything after -- is passed to the sample itself,
-#                                    e.g. -- --enable-hdr --gv_cpu_profile=1
+#                                    e.g. -- --enable-hdr --gv_profile=1
 #
 # The webgpu backend is delegated to scripts/run_sample.py, which builds via emcmake into
 # build-wasm/ and opens the sample in your default browser.

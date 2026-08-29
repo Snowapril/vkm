@@ -44,8 +44,7 @@
 #include <vkm/platform/common/process_stats.h>
 #include <vkm/renderer/imgui/render_graph_inspector.h>
 #include <vkm/renderer/imgui/memory_inspector.h>
-#include <vkm/renderer/imgui/cpu_profiler_inspector.h>
-#include <vkm/renderer/imgui/gpu_profiler_inspector.h>
+#include <vkm/renderer/imgui/profile_inspector.h>
 #include <vkm/renderer/imgui/acceleration_structure_inspector.h>
 #include <vkm/renderer/acceleration_structure_debug_renderer.h>
 #include <imgui.h>
@@ -53,13 +52,9 @@
 
 namespace vkm
 {
-    // Opens the CPU profiler window (and starts capturing) from frame 0, for profiling a
-    // startup path that is over before a hotkey could be pressed: ./triangle --gv_cpu_profile=1
-    VKM_GLOBAL_VARIABLE(bool, gv_cpu_profile, false);
-
-    // Same idea for the GPU side: ./triangle --gv_gpu_profile=1 opens the GPU profiler window
-    // (and starts keeping frame history) from frame 0.
-    VKM_GLOBAL_VARIABLE(bool, gv_gpu_profile, false);
+    // Opens the profile window (and starts capturing both halves) from frame 0, for profiling a
+    // startup path that is over before a hotkey could be pressed: ./triangle --gv_profile=1
+    VKM_GLOBAL_VARIABLE(bool, gv_profile, false);
 
     // The upscale preset the engine starts in, as a VkmUpscaleMode: 0 off, 1 native AA, 2 quality,
     // 3 balanced, 4 performance. F2 cycles it at run time, so this only seeds the value --
@@ -122,19 +117,16 @@ namespace vkm
 #if defined(VKM_ENABLE_IMGUI)
         _renderGraphInspector = std::make_unique<VkmRenderGraphInspector>();
         _memoryInspector = std::make_unique<VkmMemoryInspector>();
-        _cpuProfilerInspector = std::make_unique<VkmCpuProfilerInspector>();
-        if (gv_cpu_profile.get())
+        _profileInspector = std::make_unique<VkmProfileInspector>();
+        if (gv_profile.get())
         {
-            _cpuProfilerInspector->setVisible(true);
+            _profileInspector->setVisible(true);
+            // Only the CPU half can be armed here: the driver is not initialized yet, so there is
+            // no VkmGpuProfiler to start (unlike this process-wide singleton). None is needed --
+            // update()'s visibility-edge check below sees the window open on the first frame and
+            // starts the GPU half then, which is soon enough to share a frame number with it.
             VkmCpuProfiler::singleton().setCapturing(true);
         }
-
-        _gpuProfilerInspector = std::make_unique<VkmGpuProfilerInspector>();
-        // Visibility only: the driver is not initialized yet, so there is no VkmGpuProfiler to
-        // start here (unlike the CPU profiler's process-wide singleton above). None is needed --
-        // update()'s visibility-edge check below sees the window open on the first frame and
-        // starts capture then.
-        _gpuProfilerInspector->setVisible(gv_gpu_profile.get());
         _accelerationStructureInspector = std::make_unique<VkmAccelerationStructureInspector>();
 #endif
 
@@ -555,11 +547,7 @@ namespace vkm
             }
             if (ImGui::IsKeyPressed(ImGuiKey_F6, false))
             {
-                _gpuProfilerInspector->toggleVisible();
-            }
-            if (ImGui::IsKeyPressed(ImGuiKey_F7, false))
-            {
-                _cpuProfilerInspector->toggleVisible();
+                _profileInspector->toggleVisible();
             }
             if (ImGui::IsKeyPressed(ImGuiKey_F8, false))
             {
@@ -584,8 +572,7 @@ namespace vkm
                 _renderGraphInspector->draw(*_renderGraphCapture, _driver, _imGuiRenderer.get(),
                                             _pipelineStateManager.get(), _driver->getGpuProfiler());
                 _memoryInspector->draw();
-                _cpuProfilerInspector->draw();
-                _gpuProfilerInspector->draw(_driver->getGpuProfiler());
+                _profileInspector->draw(_driver->getGpuProfiler());
                 _accelerationStructureInspector->draw(_driver);
             }
 
@@ -597,23 +584,20 @@ namespace vkm
                 _asDebugRenderer->setSelected(_accelerationStructureInspector->getSelected());
             }
 
-            // Collection follows the window: closing it (with F7 or the title bar's close
+            // Collection follows the window: closing it (with F6 or the title bar's close
             // button) stops recording, so nothing is measured while nothing is looking. The
             // inspector's own Start/Stop button can decouple the two within a session, which is
             // why this only acts on a change of visibility rather than asserting every frame.
-            if (_cpuProfilerInspector->isVisible() != _cpuProfilerWasVisible)
+            // Both halves are armed together, which is what makes their frame numbers describe
+            // the same frame-loop iterations and so joinable in the window.
+            // For the GPU half this gates the frame *history* only: it keeps recording timestamps
+            // either way, because the overlay's GPU stat below reads the same collector whether or
+            // not this window is open.
+            if (_profileInspector->isVisible() != _profileWasVisible)
             {
-                _cpuProfilerWasVisible = _cpuProfilerInspector->isVisible();
-                VkmCpuProfiler::singleton().setCapturing(_cpuProfilerWasVisible);
-            }
-
-            // Same follows-the-window rule, but it only gates the frame *history*: the GPU
-            // profiler keeps recording timestamps either way, because the overlay's GPU stat
-            // below reads the same collector whether or not this window is open.
-            if (_gpuProfilerInspector->isVisible() != _gpuProfilerWasVisible)
-            {
-                _gpuProfilerWasVisible = _gpuProfilerInspector->isVisible();
-                _driver->getGpuProfiler()->setCapturing(_gpuProfilerWasVisible);
+                _profileWasVisible = _profileInspector->isVisible();
+                VkmCpuProfiler::singleton().setCapturing(_profileWasVisible);
+                _driver->getGpuProfiler()->setCapturing(_profileWasVisible);
             }
         }
 #endif
@@ -675,8 +659,7 @@ namespace vkm
 #endif
         ImGui::Text("F4: acceleration structures");
         ImGui::Text("F5: render graph inspector");
-        ImGui::Text("F6: GPU profiler");
-        ImGui::Text("F7: CPU profiler");
+        ImGui::Text("F6: profile (CPU + GPU)");
         ImGui::Text("F8: memory inspector");
         ImGui::Text("F10: capture render graph");
 #if defined(VKM_USE_METAL_API) && defined(VKM_GPU_CAPTURE)

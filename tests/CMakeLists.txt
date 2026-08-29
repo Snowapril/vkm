@@ -41,6 +41,7 @@ set(SRCS
     ${SRC_DIR}/TestPunctualLights.cpp
     ${SRC_DIR}/TestCpuProfiler.cpp
     ${SRC_DIR}/TestGpuProfiler.cpp
+    ${SRC_DIR}/TestProfileCorrelation.cpp
     ${SRC_DIR}/TestImageLoader.cpp
     ${SRC_DIR}/TestMipChain.cpp
     ${SRC_DIR}/TestTextureStreaming.cpp
