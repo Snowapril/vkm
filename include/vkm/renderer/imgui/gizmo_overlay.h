@@ -63,6 +63,10 @@ namespace vkm
 
         VkmImGuiRendererBase* getRenderer() const { return _renderer.get(); }
         bool isAvailable() const { return _renderer != nullptr; }
+        // Whether a gizmo was opened this frame, i.e. whether there is anything to draw. False
+        // every frame no manipulator is up, which is most of them -- and a pass recorded then
+        // would load and store the whole back buffer for nothing.
+        bool hasContent() const { return _begunThisFrame; }
         // Whether the gizmo took the mouse on the frame just drawn, so a drag on a handle does not
         // also reach the camera controller.
         bool isUsing() const { return _using; }

@@ -956,7 +956,8 @@ namespace vkm
             // The gizmo, over the scene and over the boxes above. Its own context and its own
             // pass, on the scene window's back buffer, so the panels stay in their own window.
             // Skipped when it drew nothing, which is every frame no gizmo is up.
-            if (windowIndex == _gizmoWindowIndex && appRendersHere && _gizmoOverlay)
+            if (windowIndex == _gizmoWindowIndex && appRendersHere && _gizmoOverlay &&
+                _gizmoOverlay->hasContent())
             {
                 VKM_PROFILE_SCOPE("GizmoOverlay::record");
                 VkmFrameBufferDescriptor gizmoFrameBufferDesc;
