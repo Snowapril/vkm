@@ -766,6 +766,151 @@ namespace vkm
         return vkmWriteGpuChromeTrace(std::vector<VkmGpuProfileFrame>(_frames.begin(), _frames.end()), path);
     }
 
+    bool VkmGpuProfiler::exportProfileChromeTrace(const std::string& path) const
+    {
+        std::vector<VkmProfileFrame> cpuFrames;
+        const size_t cpuFrameCount = VkmCpuProfiler::singleton().getFrameCount();
+        cpuFrames.reserve(cpuFrameCount);
+        for (size_t frameIndex = 0; frameIndex < cpuFrameCount; ++frameIndex)
+        {
+            VkmProfileFrame frame;
+            if (VkmCpuProfiler::singleton().copyFrame(frameIndex, frame))
+            {
+                cpuFrames.push_back(std::move(frame));
+            }
+        }
+
+        return vkmWriteProfileChromeTrace(
+            cpuFrames, std::vector<VkmGpuProfileFrame>(_frames.begin(), _frames.end()), path);
+    }
+
+    bool vkmWriteProfileChromeTrace(const std::vector<VkmProfileFrame>& cpuFrames,
+                                    const std::vector<VkmGpuProfileFrame>& gpuFrames,
+                                    const std::string& path)
+    {
+#if defined(ENABLE_CHROME_TRACING)
+        // Two process groups on one timeline, which is what the shared clock buys: the viewer
+        // stacks them and a GPU zone lines up under the CPU scope that submitted it.
+        constexpr int kCpuProcessId = 1;
+        constexpr int kGpuProcessId = 2;
+
+        nlohmann::json events = nlohmann::json::array();
+
+        // _threadId is a 64-bit hash of std::thread::id, which the viewer's JavaScript cannot
+        // represent exactly. Hand out small sequential ids in first-seen order instead.
+        std::unordered_map<uint64_t, int> threadRowIds;
+        for (const VkmProfileFrame& frame : cpuFrames)
+        {
+            for (const VkmProfileThreadTimeline& timeline : frame._threads)
+            {
+                auto [row, inserted] =
+                    threadRowIds.emplace(timeline._threadId, static_cast<int>(threadRowIds.size()));
+                if (inserted)
+                {
+                    events.push_back({{"ph", "M"},
+                                      {"name", "thread_name"},
+                                      {"pid", kCpuProcessId},
+                                      {"tid", row->second},
+                                      {"args", {{"name", timeline._threadName}}}});
+                }
+
+                for (const VkmProfileZone& zone : timeline._zones)
+                {
+                    // Complete events nest by containment on a row, and the zones are already
+                    // sorted by (begin, depth), so no explicit nesting is needed.
+                    events.push_back({{"ph", "X"},
+                                      {"cat", "cpu"},
+                                      {"name", zone._name != nullptr ? zone._name : ""},
+                                      {"pid", kCpuProcessId},
+                                      {"tid", row->second},
+                                      {"ts", static_cast<double>(zone._beginNs) / 1000.0},
+                                      {"dur", static_cast<double>(zone._endNs - zone._beginNs) / 1000.0}});
+                }
+            }
+        }
+
+        std::unordered_map<uint64_t, int> queueRowIds;
+        uint64_t flowId = 0;
+        for (const VkmGpuProfileFrame& frame : gpuFrames)
+        {
+            for (const VkmGpuQueueTimeline& timeline : frame._queues)
+            {
+                const uint64_t queueKey =
+                    (static_cast<uint64_t>(timeline._queueType) << 32) | timeline._queueIndex;
+                auto [row, inserted] = queueRowIds.emplace(queueKey, static_cast<int>(queueRowIds.size()));
+                if (inserted)
+                {
+                    events.push_back({{"ph", "M"},
+                                      {"name", "thread_name"},
+                                      {"pid", kGpuProcessId},
+                                      {"tid", row->second},
+                                      {"args", {{"name", timeline._queueName}}}});
+                }
+
+                for (const VkmGpuProfileZone& zone : timeline._zones)
+                {
+                    events.push_back({{"ph", "X"},
+                                      {"cat", "gpu"},
+                                      {"name", zone._name != nullptr ? zone._name : ""},
+                                      {"pid", kGpuProcessId},
+                                      {"tid", row->second},
+                                      {"ts", static_cast<double>(zone._beginNs) / 1000.0},
+                                      {"dur", static_cast<double>(zone.getDurationNs()) / 1000.0}});
+                }
+
+                for (const VkmGpuSubmitMarker& marker : timeline._submits)
+                {
+                    // The submit itself, on the queue's row, so a stalling submit is visible.
+                    events.push_back({{"ph", "X"},
+                                      {"cat", "submit"},
+                                      {"name", "submit"},
+                                      {"pid", kGpuProcessId},
+                                      {"tid", row->second},
+                                      {"ts", static_cast<double>(marker._beginNs) / 1000.0},
+                                      {"dur", static_cast<double>(marker._endNs - marker._beginNs) / 1000.0}});
+
+                    if (!marker._hasGpuWork)
+                    {
+                        continue;
+                    }
+
+                    // A flow event pair, which the viewer draws as an arrow from the submit to the
+                    // work it produced -- the queue latency, rendered by the tool.
+                    ++flowId;
+                    events.push_back({{"ph", "s"},
+                                      {"cat", "submit"},
+                                      {"name", "queued"},
+                                      {"id", flowId},
+                                      {"pid", kGpuProcessId},
+                                      {"tid", row->second},
+                                      {"ts", static_cast<double>(marker._endNs) / 1000.0}});
+                    events.push_back({{"ph", "f"},
+                                      {"bp", "e"},
+                                      {"cat", "submit"},
+                                      {"name", "queued"},
+                                      {"id", flowId},
+                                      {"pid", kGpuProcessId},
+                                      {"tid", row->second},
+                                      {"ts", static_cast<double>(marker._gpuBeginNs) / 1000.0}});
+                }
+            }
+        }
+
+        std::ofstream out(path, std::ios::trunc);
+        if (!out)
+        {
+            return false;
+        }
+        out << nlohmann::json{{"traceEvents", std::move(events)}}.dump();
+        return out.good();
+#else
+        (void)cpuFrames;
+        (void)gpuFrames;
+        (void)path;
+        return false;
+#endif // ENABLE_CHROME_TRACING
+    }
+
     bool vkmWriteGpuChromeTrace(const std::vector<VkmGpuProfileFrame>& frames, const std::string& path)
     {
 #if defined(ENABLE_CHROME_TRACING)

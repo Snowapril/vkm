@@ -104,6 +104,26 @@ namespace vkm
             _hasPinnedFrame = false;
         }
 
+#if defined(ENABLE_CHROME_TRACING)
+        ImGui::SameLine();
+        if (ImGui::Button("Export trace"))
+        {
+            static constexpr const char* kTracePath = "vkm_profile_trace.json";
+            if (gpuProfiler.exportProfileChromeTrace(kTracePath))
+            {
+                VKM_DEBUG_LOG("Wrote the profile to vkm_profile_trace.json");
+            }
+            else
+            {
+                VKM_DEBUG_ERROR("Failed to write vkm_profile_trace.json");
+            }
+        }
+        ImGui::SetItemTooltip("Write the collected frames to vkm_profile_trace.json in the working "
+                              "directory; open it in chrome://tracing or ui.perfetto.dev. CPU and "
+                              "GPU rows share the timeline, and each timed submit draws an arrow to "
+                              "the work it produced.");
+#endif // ENABLE_CHROME_TRACING
+
         ImGui::SameLine();
         if (_hasPinnedFrame)
         {

@@ -3,6 +3,7 @@
 #pragma once
 
 #include <vkm/base/common.h>
+#include <vkm/base/cpu_profiler.h>
 #include <vkm/renderer/backend/common/command_queue.h>
 #include <vkm/renderer/backend/common/renderer_common.h>
 
@@ -220,15 +221,35 @@ namespace vkm
     * ui.perfetto.dev.
     * @details One complete event ("ph":"X") per zone plus one "thread_name" metadata event
     * ("ph":"M") per command queue. Timestamps are emitted in MICROSECONDS as the format requires,
-    * converted from the nanoseconds VkmGpuProfileZone stores. Uses a different pid than the CPU
-    * export so both files can be loaded into one viewer without their rows colliding. A free
-    * function so the format is exercisable from frames built by hand.
+    * converted from the nanoseconds VkmGpuProfileZone stores. Writes the GPU half alone; use
+    * vkmWriteProfileChromeTrace for a file carrying both halves and the submits linking them. A
+    * free function so the format is exercisable from frames built by hand.
     * @param frames Frames to write.
     * @param path Destination file.
     * @return False if the file cannot be written, and unconditionally when the CHROME_TRACING
     * CMake option is off.
     */
     bool vkmWriteGpuChromeTrace(const std::vector<VkmGpuProfileFrame>& frames, const std::string& path);
+
+    /*
+    * @brief Writes CPU and GPU frames to one Chrome Trace Event Format file, loadable in
+    * chrome://tracing or ui.perfetto.dev.
+    * @details CPU threads land on pid 1 and command queues on pid 2, so the two halves read as
+    * separate process groups sharing one timeline -- which they can, because both sides'
+    * timestamps are on VkmCpuProfiler::nowNs()'s clock. Each timed submit also emits a flow event
+    * pair, which the viewer draws as an arrow from the submit to the GPU work it produced.
+    * Timestamps are emitted in MICROSECONDS as the format requires. A frame whose _correlation is
+    * not Calibrated is written with its own timestamps and will not line up with the CPU rows any
+    * better than its anchoring allowed.
+    * @param cpuFrames CPU frames to write.
+    * @param gpuFrames GPU frames to write.
+    * @param path Destination file.
+    * @return False if the file cannot be written, and unconditionally when the CHROME_TRACING
+    * CMake option is off.
+    */
+    bool vkmWriteProfileChromeTrace(const std::vector<VkmProfileFrame>& cpuFrames,
+                                    const std::vector<VkmGpuProfileFrame>& gpuFrames,
+                                    const std::string& path);
 
     /*
     * @brief Collects per-subgraph GPU execution times, grouped by the command queue they ran on,
@@ -403,6 +424,15 @@ namespace vkm
         * @return False if the file cannot be written.
         */
         bool exportChromeTrace(const std::string& path) const;
+
+        /*
+        * @brief Writes the collected CPU and GPU frames to one correlated trace file.
+        * @details Reads VkmCpuProfiler's ring as well as this one, so a single file carries both
+        * halves on one timeline -- which viewers need, since they open one file at a time.
+        * @param path Destination file.
+        * @return False if the file cannot be written.
+        */
+        bool exportProfileChromeTrace(const std::string& path) const;
 
         // ~4 seconds of history at 60 fps, matching VkmCpuProfiler::kMaxFrameHistory.
         static constexpr size_t kMaxFrameHistory = 240;

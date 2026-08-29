@@ -4,7 +4,13 @@
 
 #include <vkm/renderer/backend/common/gpu_profiler.h>
 
+#include <filesystem>
+#include <fstream>
 #include <vector>
+
+#if defined(ENABLE_CHROME_TRACING)
+#include <nlohmann/json.hpp>
+#endif
 
 using namespace vkm;
 
@@ -128,3 +134,138 @@ TEST_CASE("a frame reports no correlation until something places its timestamps"
     CHECK(VkmGpuClockCorrelation::None < VkmGpuClockCorrelation::Estimated);
     CHECK(VkmGpuClockCorrelation::Estimated < VkmGpuClockCorrelation::Calibrated);
 }
+
+#if defined(ENABLE_CHROME_TRACING)
+/*
+* The combined trace is the only artifact that carries both halves at once, since a viewer opens
+* one file at a time. What matters is that the two land on separate process rows sharing one time
+* axis, and that each timed submit links to the work it produced.
+*/
+TEST_CASE("the combined trace carries both halves and links each submit to its GPU work")
+{
+    VkmProfileThreadTimeline thread;
+    thread._threadId = 77;
+    thread._threadName = "MainThread";
+    VkmProfileZone cpuZone;
+    cpuZone._name = "RenderGraph::execute";
+    cpuZone._beginNs = 1'000'000;
+    cpuZone._endNs = 3'000'000;
+    thread._zones.push_back(cpuZone);
+
+    VkmProfileFrame cpuFrame;
+    cpuFrame._frameNumber = 12;
+    cpuFrame._beginNs = 1'000'000;
+    cpuFrame._endNs = 3'000'000;
+    cpuFrame._threads.push_back(thread);
+
+    VkmGpuQueueTimeline queue;
+    queue._queueType = VkmCommandQueueType::Graphics;
+    queue._queueIndex = 0;
+    queue._queueName = "MainGraphics";
+    queue._zones.push_back(makeZone("Frame", 4'000'000, 6'000'000, 0));
+
+    VkmGpuSubmitMarker marker;
+    marker._beginNs = 2'900'000;
+    marker._endNs = 3'000'000;
+    marker._hasGpuWork = true;
+    marker._gpuBeginNs = 4'000'000;
+    queue._submits.push_back(marker);
+
+    VkmGpuSubmitMarker untimed;  // an upload: a marker, but no zones to link to
+    untimed._beginNs = 3'100'000;
+    untimed._endNs = 3'150'000;
+    queue._submits.push_back(untimed);
+
+    VkmGpuProfileFrame gpuFrame;
+    gpuFrame._frameNumber = 12;
+    gpuFrame._beginNs = 4'000'000;
+    gpuFrame._endNs = 6'000'000;
+    gpuFrame._correlation = VkmGpuClockCorrelation::Calibrated;
+    gpuFrame._queues.push_back(queue);
+
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "vkm_test_profile_trace.json";
+    std::filesystem::remove(path);
+    REQUIRE(vkmWriteProfileChromeTrace({ cpuFrame }, { gpuFrame }, path.string()));
+
+    std::ifstream in(path);
+    REQUIRE(in.is_open());
+    const nlohmann::json trace = nlohmann::json::parse(in);
+    in.close();
+    const nlohmann::json& events = trace.at("traceEvents");
+
+    int cpuZones = 0;
+    int gpuZones = 0;
+    int submits = 0;
+    int flowStarts = 0;
+    int flowEnds = 0;
+    double cpuZoneTs = 0.0;
+    double gpuZoneTs = 0.0;
+    double flowStartTs = 0.0;
+    double flowEndTs = 0.0;
+    bool sawCpuThreadName = false;
+    bool sawQueueName = false;
+
+    for (const nlohmann::json& event : events)
+    {
+        const std::string phase = event.at("ph").get<std::string>();
+        if (phase == "M")
+        {
+            const std::string name = event.at("args").at("name").get<std::string>();
+            sawCpuThreadName = sawCpuThreadName || (name == "MainThread");
+            sawQueueName = sawQueueName || (name == "MainGraphics");
+        }
+        else if (phase == "X")
+        {
+            const std::string category = event.at("cat").get<std::string>();
+            if (category == "cpu")
+            {
+                ++cpuZones;
+                cpuZoneTs = event.at("ts").get<double>();
+                CHECK(event.at("pid").get<int>() == 1);
+            }
+            else if (category == "gpu")
+            {
+                ++gpuZones;
+                gpuZoneTs = event.at("ts").get<double>();
+                CHECK(event.at("pid").get<int>() == 2);
+            }
+            else if (category == "submit")
+            {
+                ++submits;
+                CHECK(event.at("pid").get<int>() == 2);
+            }
+        }
+        else if (phase == "s")
+        {
+            ++flowStarts;
+            flowStartTs = event.at("ts").get<double>();
+        }
+        else if (phase == "f")
+        {
+            ++flowEnds;
+            flowEndTs = event.at("ts").get<double>();
+        }
+    }
+
+    CHECK(sawCpuThreadName);
+    CHECK(sawQueueName);
+    CHECK(cpuZones == 1);
+    CHECK(gpuZones == 1);
+    // Both submits are drawn, including the one with no GPU work behind it.
+    CHECK(submits == 2);
+    // Only the timed one gets an arrow.
+    CHECK(flowStarts == 1);
+    CHECK(flowEnds == 1);
+
+    // Microseconds, as the format requires, and the correlation is visible in the file: the GPU
+    // work starts after the CPU scope that submitted it, and the arrow spans exactly the wait.
+    CHECK(cpuZoneTs == doctest::Approx(1000.0));
+    CHECK(gpuZoneTs == doctest::Approx(4000.0));
+    CHECK(gpuZoneTs > cpuZoneTs);
+    CHECK(flowStartTs == doctest::Approx(3000.0));
+    CHECK(flowEndTs == doctest::Approx(4000.0));
+
+    std::filesystem::remove(path);
+}
+#endif // ENABLE_CHROME_TRACING

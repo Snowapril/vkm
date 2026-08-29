@@ -864,6 +864,57 @@ it, so it runs on every backend.
 push constant, which on that backend is a set-0 uniform buffer rather than a real push constant,
 i.e. a genuinely different code path.
 
+## 2026-08-29 — One profile timeline: CPU scopes, GPU zones, and the submits between them
+
+The "CPU Profiler" (F7) and "GPU Profiler" (F6) windows were near-copies that could not be read
+together: GPU zones were timestamped in the GPU's own clock domain, and nothing recorded which
+queue the CPU handed work to. Merged into one "Profile" window (F6, `--gv_profile=1`).
+
+- New `VkmDriverBase::sampleGpuClockCalibration()`. Vulkan opts into
+  `VK_EXT_calibrated_timestamps` and asks only for `VK_TIME_DOMAIN_DEVICE_EXT`; Metal uses
+  `sampleTimestamps:gpuTimestamp:`. The host time domains are deliberately not used — mapping one
+  onto `std::chrono::steady_clock` depends on standard-library internals, and Apple's libc++ uses
+  `CLOCK_UPTIME_RAW` rather than the `CLOCK_MONOTONIC` the Vulkan extension reports. The caller
+  brackets the driver call with `VkmCpuProfiler::nowNs()` (promoted from a file-local helper) and
+  takes the midpoint of the best of four samples, which needs no such assumption.
+- `vkmGpuTicksToCpuNs()` / `vkmAnchorGpuZonesToSubmit()` are free functions, so the arithmetic and
+  the fallback are testable without a device — the pattern `vkmAggregateGpuProfileRange` set.
+  Resampled every `collect()` while capturing: at 200 ppm the clocks drift ~3 µs across a frame
+  but ~800 µs across a 4-second capture.
+- `VkmCommandQueueBase::submit()` became a non-virtual wrapper over a new `submitInner()`, so one
+  place records a `VkmGpuSubmitMarker` for every submit. This is what makes the driver's uploads
+  and the acceleration structure builds visible: they open no submission and record no zones, so
+  previously they left no trace at all. Markers pair with their zones through the
+  `VkmGpuEventTimelineObject` both paths already carried — no new identifier was needed.
+- Frame numbers now count frame-loop iterations rather than captured frames. `beginFrame()` used
+  to early-return while idle and `clear()` restarted numbering at 0, while the GPU side did
+  neither, so the two counters diverged the moment a capture started and could not join the rings.
+- Single `vkm_profile_trace.json` replacing the two exports, with flow events so a viewer draws
+  the arrow from each submit to the work it produced. Two files never helped: viewers open one at
+  a time, which is why the old pid 1 / pid 2 split let nothing actually be overlaid.
+
+**Two findings worth keeping.**
+
+*Metal's two GPU clocks are one counter in two units.* `sampleTimestamps:gpuTimestamp:` reports
+nanoseconds while an `MTL4CounterHeap` entry is a `queryTimestampFrequency` tick — 24 MHz, so
+41.67 ns apart, on the machine this was built on. Differencing them directly put GPU work 4.57 ms
+off. The Metal path divides into tick space. Nothing in Metal's documentation states the relation
+either way, which is why the calibration carries a plausibility guard: a mapped submission landing
+somewhere its own submit says it cannot have demotes the process to submit-anchored placement.
+That guard is what caught this.
+
+*Unwritten timestamp slots read as zero.* A slot that was reset but never written comes back 0,
+and the existing `_endNs < _beginNs` check passes a 0/0 pair. Harmless while zones were only ever
+shown relative to their own frame; once mapped onto the CPU clock such a zone lands before the
+process began, which tripped the plausibility guard on a real frame of the triangle sample. Zones
+with a zero begin or end tick are now dropped — every backend's counter is uptime-based and long
+past zero by the time anything is recorded, so zero means absent.
+
+**Left unverified:** WebGPU. It has no clock-correlation API at all, so it takes the anchored path
+by construction, and its timestamps are already quantized to 100 µs in Chrome. The Vulkan path was
+exercised through MoltenVK (which does expose `VK_EXT_calibrated_timestamps`), not against a
+native Vulkan driver.
+
 ## Deviations
 
 Log entries here when an edge case forces a deviation from an agreed plan. Format:
