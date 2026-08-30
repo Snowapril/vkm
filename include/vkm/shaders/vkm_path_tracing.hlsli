@@ -171,6 +171,31 @@ float3 vkmOffsetRayOrigin(float3 position, float3 normal, float rayT)
         return query.CommittedStatus() != COMMITTED_TRIANGLE_HIT;                                    \
     }                                                                                                \
                                                                                                      \
+    /* Whether a punctual light at `lightPosition` is reachable from `surface`. Distinct from  */    \
+    /* the segment version because a delta light sits on no surface: there is no target normal */    \
+    /* to lift the far endpoint off, so the ray stops just short of the light itself. Distance */    \
+    /* is measured from the OFFSET origin, for the reason the segment version records.         */    \
+    bool vkmShadowPointVisible(VkmSurfacePoint surface, float rayT, float3 lightPosition)            \
+    {                                                                                                \
+        const float3 origin = vkmOffsetRayOrigin(surface.position, surface.geometricNormal, rayT);   \
+        const float3 toLight = lightPosition - origin;                                               \
+        const float distanceToLight = length(toLight);                                               \
+        if (distanceToLight <= 0.0)                                                                  \
+        {                                                                                            \
+            return false;                                                                            \
+        }                                                                                            \
+        RayDesc rayDesc;                                                                             \
+        rayDesc.Origin = origin;                                                                     \
+        rayDesc.Direction = toLight / distanceToLight;                                               \
+        rayDesc.TMin = 0.0;                                                                          \
+        rayDesc.TMax = distanceToLight * 0.999;                                                      \
+        RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;                                    \
+        query.TraceRayInline(g_Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, rayDesc);      \
+        query.Proceed();                                                                             \
+        return query.CommittedStatus() != COMMITTED_TRIANGLE_HIT;                                    \
+    }                                                                                                \
+                                                                                                     \
+                                                                                                     \
     /* Whether `direction` escapes the scene from `surface` -- the shadow ray for a directional  */  \
     /* light, which has no far endpoint to shorten towards.                                      */  \
     bool vkmShadowRayVisible(VkmSurfacePoint surface, float rayT, float3 direction)                  \
@@ -188,8 +213,9 @@ float3 vkmOffsetRayOrigin(float3 position, float3 normal, float rayT)
                                                                                                      \
     /* The seam restir.md section 12 named, now carrying what it was reserved for: next-event    */  \
     /* estimation. What a vertex contributes is the light REACHING it from the scene's light     */  \
-    /* table -- one deterministic directional sample plus one area sample drawn proportionally   */  \
-    /* to emitted power -- times the Lambertian BRDF; its own emission belongs to the path's     */  \
+    /* table -- one deterministic directional sample, one area sample drawn proportionally      */  \
+    /* to emitted power, and every model-placed punctual light in closed form --                */  \
+    /* times the Lambertian BRDF; its own emission belongs to the path's                        */  \
     /* first vertex only (see the loop), or it would be counted once by NEE from the previous    */  \
     /* vertex and again on arrival.                                                              */  \
     /*                                                                                           */  \
@@ -238,8 +264,42 @@ float3 vkmOffsetRayOrigin(float3 position, float3 normal, float rayT)
                 }                                                                                    \
             }                                                                                        \
         }                                                                                            \
+                                                                                                     \
+        /* Model-placed punctual lights. Delta lights, so this is closed form: no pdf, no       */   \
+        /* randoms, and the loop is exhaustive rather than a single importance-sampled pick --  */   \
+        /* one sample of a delta light already has zero variance, so picking one of N would buy */   \
+        /* only a cost saving and pay for it in noise. The cost is one shadow ray per light per */   \
+        /* bounce; TODO.md records the cap that will eventually need.                           */   \
+        const uint punctualCount = vkmLoadPunctualCount(lightPoolSlot);                              \
+        for (uint punctualIndex = 0; punctualIndex < punctualCount; ++punctualIndex)                 \
+        {                                                                                            \
+            const VkmPunctualLight light =                                                           \
+                vkmLoadPunctualLight(lightPoolSlot, lightCount, punctualIndex);                      \
+            const VkmPunctualSample lightSample =                                                    \
+                vkmSamplePunctualLight(light, surface.position);                                     \
+            /* Zero radiance is how a spot reports "outside the cone" and a ranged point light */    \
+            /* reports "past the range", so this skips the ray rather than tracing for a zero. */    \
+            if (!any(lightSample.radiance > 0.0))                                                    \
+            {                                                                                        \
+                continue;                                                                            \
+            }                                                                                        \
+            const float cosSurface = dot(surface.geometricNormal, lightSample.direction);            \
+            if (cosSurface <= 0.0)                                                                   \
+            {                                                                                        \
+                continue;                                                                            \
+            }                                                                                        \
+            const bool visible =                                                                     \
+                light.type == VKM_LIGHT_TYPE_DIRECTIONAL                                             \
+                    ? vkmShadowRayVisible(surface, rayT, lightSample.direction)                      \
+                    : vkmShadowPointVisible(surface, rayT, light.positionWorld);                     \
+            if (visible)                                                                             \
+            {                                                                                        \
+                nee += lightSample.radiance * albedoOverPi * cosSurface;                             \
+            }                                                                                        \
+        }                                                                                            \
         return nee;                                                                                  \
     }                                                                                                \
+                                                                                                     \
                                                                                                      \
     /*                                                                                            */ \
     /* Radiance arriving back along a ray, by continuing it for at most `maxBounces` scatters.    */ \

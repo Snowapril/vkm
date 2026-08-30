@@ -7,6 +7,7 @@
 
 #include <vkm/renderer/backend/metal/metal_driver.h>
 
+#include "TestAreaLightShared.hpp"
 #include "TestShadowAtlasShared.hpp"
 #include "TestShadowedLightingShared.hpp"
 
@@ -61,6 +62,20 @@ TEST_CASE("Metal shadowed deferred lighting - an occluder darkens only what it c
     MetalShadowAtlasFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
     vkmtest::runShadowedLightingTest(fixture.driver.get());
+}
+
+TEST_CASE("Metal area lights - the polygon integral matches the analytic form factor"
+          * doctest::timeout(60.0)) {
+    MetalShadowAtlasFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runAreaLightTest(fixture.driver.get());
+}
+
+TEST_CASE("Metal area lights - an emitter crossing the horizon is clipped"
+          * doctest::timeout(60.0)) {
+    MetalShadowAtlasFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runAreaLightHorizonClipTest(fixture.driver.get());
 }
 
 TEST_CASE("Metal shadowed probe capture - a probe under an occluder records shadowed floor") {

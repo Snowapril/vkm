@@ -1,6 +1,13 @@
 // Copyright (c) 2026 Snowapril
 //
-// Fullscreen deferred lighting: samples the G-buffer and shades it with every punctual light.
+// Fullscreen deferred lighting: samples the G-buffer and shades it with every punctual light, and
+// -- in the `area` variant only -- every emissive triangle as an analytic area light.
+//
+// Two variants rather than one shader with a runtime-zero loop, because the area path is not free
+// to merely COMPILE: carrying it crashed lavapipe's shader compiler outright (SIGSEGV in the
+// deferred lighting test, consistently on Mesa 25.x, while Metal and MoltenVK ran it clean). A
+// caller that wants area lights asks for deferred_lighting_pso[area]; everything else gets
+// [punctual], whose generated code is what this pass had before area lights existed.
 //
 // This is the first pass in the engine that reads the G-buffer, and it is deliberately built the
 // way the GI passes will be:
@@ -18,6 +25,9 @@
 #include "vkm_frame_constants.hlsli"
 #include "vkm_fullscreen.hlsli"
 #include "vkm_gbuffer.hlsli"
+#if VKM_DEFERRED_AREA_LIGHTS
+#include "vkm_area_lights.hlsli"
+#endif
 #include "vkm_punctual_lights.hlsli"
 #include "vkm_shadow.hlsli"
 
@@ -33,7 +43,15 @@ struct LightConstants
 {
     // x = valid entries in `lights`, y = shadow tiles per atlas row, z = tile size in texels
     uint4 lightCount;
+    // x = valid entries in `areaLights`; yzw unused.
+    uint4 areaLightCount;
     VkmPunctualLight lights[VKM_MAX_PUNCTUAL_LIGHTS];
+#if VKM_DEFERRED_AREA_LIGHTS
+    // Declared only in the area variant. The buffer C++ binds is always the full
+    // VkmDeferredLightConstants, so the punctual variant simply reads a prefix of it -- which is
+    // why this member sits last and nothing before it moves.
+    VkmAreaLight areaLights[VKM_MAX_AREA_LIGHTS];
+#endif
 };
 
 
@@ -122,7 +140,7 @@ float4 PSMain(VSOutput input) : SV_TARGET0
     float3 shaded = float3(0.0, 0.0, 0.0);
     for (uint lightIndex = 0; lightIndex < g_Light.lightCount.x; ++lightIndex)
     {
-        const VkmLightSample lightSample =
+        const VkmPunctualSample lightSample =
             vkmSamplePunctualLight(g_Light.lights[lightIndex], worldPosition);
 
         const float nDotL = saturate(dot(shadingNormal, lightSample.direction));
@@ -153,6 +171,44 @@ float4 PSMain(VSOutput input) : SV_TARGET0
 
         shaded += (diffuse + specular) * lightSample.radiance * nDotL * shadow;
     }
+
+#if VKM_DEFERRED_AREA_LIGHTS
+    /*
+    * Emissive triangles. The traced tier reaches these through NEE against the light table; the
+    * raster tier cannot read that table at all, so the same polygons arrive here in the uniform
+    * buffer and are shaded without sampling anything.
+    *
+    * The two lobes are not equally trustworthy, and the difference is deliberate:
+    *
+    *   diffuse   exact. The polygon's projected solid angle in closed form, which is the identity
+    *             case of linearly transformed cosines.
+    *   specular  approximate. Karis's representative point -- the emitter stands in as the single
+    *             point its mirror direction reaches, with the lobe widened by the angle it
+    *             subtends. LTC would warp the polygon by a fitted M^-1 instead; those tables are
+    *             data this tree does not have.
+    *
+    * The form factor carries the integral of the incoming cosine over the emitter, so it takes
+    * the place a punctual light's nDotL would have: radiance * BRDF * formFactor is the same
+    * shape as radiance * BRDF * nDotL, with the polygon's extent folded into the one term.
+    *
+    * No shadow term on either: a polygon integral measures how much hemisphere the emitter covers,
+    * not what stands between. An occluded area light still lights this surface here, which is
+    * exactly the discrepancy against the traced tier that TODO.md records.
+    */
+    for (uint areaIndex = 0; areaIndex < g_Light.areaLightCount.x; ++areaIndex)
+    {
+        const VkmAreaLight areaLight = g_Light.areaLights[areaIndex];
+        const float formFactor =
+            vkmAreaLightFormFactor(areaLight, worldPosition, shadingNormal);
+        if (formFactor <= 0.0)
+        {
+            continue;
+        }
+        shaded += areaLight.radiance.rgb * diffuseColor * (1.0 / 3.14159265) * formFactor;
+
+    }
+
+#endif
 
     // Emission is what the surface adds on its own, on top of what the lights reflect off it --
     // the term that makes a camera-visible emitter glow instead of rendering black.

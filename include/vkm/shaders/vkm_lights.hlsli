@@ -12,6 +12,10 @@
 #ifndef VKM_LIGHTS_HLSLI
 #define VKM_LIGHTS_HLSLI
 
+// The table carries punctual records past its triangles, so the loader below returns the
+// same VkmPunctualLight the raster tier reads out of its uniform buffer.
+#include "vkm_punctual_lights.hlsli"
+
 // Mirrors sizeof(VkmLightTableHeader) / 4 and sizeof(VkmLightTableTriangle) / 4.
 #define VKM_LIGHT_HEADER_WORDS 4
 #define VKM_LIGHT_WORD_STRIDE 16
@@ -40,6 +44,39 @@ struct VkmLightSample
         return float3(asfloat(VKM_LOAD_VERTEX(lightPoolSlot, 0)),                                   \
                       asfloat(VKM_LOAD_VERTEX(lightPoolSlot, 1)),                                   \
                       asfloat(VKM_LOAD_VERTEX(lightPoolSlot, 2)));                                  \
+    }                                                                                               \
+                                                                                                    \
+    /* Model-placed punctual lights only. The scene's own directional light is the sun above,  */   \
+    /* so a caller that shades both must not expect to find it here as well.                   */   \
+    uint vkmLoadPunctualCount(uint lightPoolSlot)                                                   \
+    {                                                                                               \
+        return VKM_LOAD_VERTEX(lightPoolSlot, 3);                                                   \
+    }                                                                                               \
+                                                                                                    \
+    /* The punctual records follow the triangles at the same stride, so the base is one       */    \
+    /* multiply past them -- see VkmLightTableHeader for the blob layout.                     */    \
+    VkmPunctualLight vkmLoadPunctualLight(uint lightPoolSlot, uint triangleCount, uint index)       \
+    {                                                                                               \
+        const uint base =                                                                           \
+            VKM_LIGHT_HEADER_WORDS + (triangleCount + index) * VKM_LIGHT_WORD_STRIDE;               \
+        VkmPunctualLight light;                                                                     \
+        light.positionWorld = float3(asfloat(VKM_LOAD_VERTEX(lightPoolSlot, base + 0)),              \
+                                     asfloat(VKM_LOAD_VERTEX(lightPoolSlot, base + 1)),              \
+                                     asfloat(VKM_LOAD_VERTEX(lightPoolSlot, base + 2)));             \
+        light.range = asfloat(VKM_LOAD_VERTEX(lightPoolSlot, base + 3));                            \
+        light.directionWorld = float3(asfloat(VKM_LOAD_VERTEX(lightPoolSlot, base + 4)),             \
+                                      asfloat(VKM_LOAD_VERTEX(lightPoolSlot, base + 5)),             \
+                                      asfloat(VKM_LOAD_VERTEX(lightPoolSlot, base + 6)));            \
+        light.cosOuter = asfloat(VKM_LOAD_VERTEX(lightPoolSlot, base + 7));                         \
+        light.radiance = float3(asfloat(VKM_LOAD_VERTEX(lightPoolSlot, base + 8)),                   \
+                                asfloat(VKM_LOAD_VERTEX(lightPoolSlot, base + 9)),                   \
+                                asfloat(VKM_LOAD_VERTEX(lightPoolSlot, base + 10)));                 \
+        light.cosInner = asfloat(VKM_LOAD_VERTEX(lightPoolSlot, base + 11));                        \
+        light.type = VKM_LOAD_VERTEX(lightPoolSlot, base + 12);                                     \
+        light.shadowTile = asint(VKM_LOAD_VERTEX(lightPoolSlot, base + 13));                        \
+        light.shadowTileCount = VKM_LOAD_VERTEX(lightPoolSlot, base + 14);                          \
+        light.pad = 0.0;                                                                            \
+        return light;                                                                               \
     }                                                                                               \
                                                                                                     \
     VkmLightTriangle vkmLoadLightTriangle(uint lightPoolSlot, uint index)                           \

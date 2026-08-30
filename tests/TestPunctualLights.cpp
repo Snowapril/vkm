@@ -96,10 +96,14 @@ TEST_CASE("VkmDeferredLightConstants - layout matches the shader's mirror") {
     // The shader reads this as a uniform block, so a size drift is a silent miscompare rather
     // than an error.
     CHECK(sizeof(vkm::VkmPunctualLight) == 64);
-    CHECK(sizeof(vkm::VkmDeferredLightConstants) == 16 + 64 * vkm::kVkmMaxPunctualLights);
+    CHECK(sizeof(vkm::VkmAreaLight) == 64);
+    // Two count vectors, then the two arrays.
+    CHECK(sizeof(vkm::VkmDeferredLightConstants) ==
+          32 + 64 * vkm::kVkmMaxPunctualLights + 64 * vkm::kVkmMaxAreaLights);
 
     const vkm::VkmDeferredLightConstants constants{};
     CHECK(constants._lightCount.x == 0u);
+    CHECK(constants._areaLightCount.x == 0u);
     // A non-spot must be inside its own cone from every direction, or a point light would shade
     // as a zero-width spot.
     CHECK(constants._lights[0]._cosOuter == doctest::Approx(-1.0f));

@@ -49,6 +49,7 @@ namespace vkm
         }
 
         outConstants->_lightCount = glm::uvec4(count, 0u, 0u, 0u);
+        vkmFillDeferredAreaLights(scene, outConstants);
     }
 
     void vkmBuildDeferredLightConstants(const std::vector<VkmPunctualLight>& lights,
@@ -64,5 +65,26 @@ namespace vkm
             outConstants->_lights[i] = lights[i];
         }
         outConstants->_lightCount = glm::uvec4(count, tilesPerRow, tileSize, 0u);
+    }
+
+    void vkmFillDeferredAreaLights(const VkmScene& scene, VkmDeferredLightConstants* outConstants)
+    {
+        VKM_ASSERT(outConstants != nullptr, "vkmFillDeferredAreaLights needs an output");
+
+        const std::vector<VkmLightTableTriangle>& triangles = scene.getLightTriangles();
+        const uint32_t count = std::min(static_cast<uint32_t>(triangles.size()), kVkmMaxAreaLights);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            const VkmLightTableTriangle& source = triangles[i];
+            VkmAreaLight& light = outConstants->_areaLights[i];
+            for (uint32_t axis = 0; axis < 3; ++axis)
+            {
+                light._p0[axis] = source._p0[axis];
+                light._p1[axis] = source._p1[axis];
+                light._p2[axis] = source._p2[axis];
+                light._radiance[axis] = source._radiance[axis];
+            }
+        }
+        outConstants->_areaLightCount = glm::uvec4(count, 0u, 0u, 0u);
     }
 } // namespace vkm

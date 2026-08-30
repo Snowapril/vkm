@@ -84,6 +84,13 @@ TEST_CASE("NEE - the area estimator matches the analytic plane on Metal" * docte
     vkmtest::runNeeAnalyticPlaneTest(fixture.driver.get());
 }
 
+TEST_CASE("NEE - a punctual light reaches the traced tier, shadowed, on Metal" * doctest::timeout(400.0))
+{
+    MetalAccelerationStructureFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runNeePunctualLightTest(fixture.driver.get());
+}
+
 TEST_CASE("NEE - the emissive Cornell converges deferred against reference on Metal" * doctest::timeout(400.0))
 {
     MetalAccelerationStructureFixture fixture;
