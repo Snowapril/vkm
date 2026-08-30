@@ -19,17 +19,22 @@
 #include <vkm/renderer/backend/common/texture.h>
 #include <vkm/renderer/scene/image_loader.h>
 
-#include <taskflow/taskflow.hpp>
-
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/geometric.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <future>
 #include <map>
 #include <set>
+
+// The wasm build links no pthreads, and libc++ configured without thread support rejects these
+// two headers outright rather than degrading. Material textures decode serially there; see
+// uploadMaterialTextures.
+#if !defined(VKM_PLATFORM_WASM)
+#include <future>
+#include <thread>
+#endif
 
 namespace vkm
 {
@@ -743,28 +748,39 @@ namespace
         };
 
         /*
-        * Decoding runs ahead of the uploads on a sliding window rather than in lockstep waves.
-        * Two things shape it. A decoded image plus its mip chain is ~5.3 MB for one of Sponza's
-        * 1024x1024 textures, so decoding all 69 up front would trade half a second of CPU for
-        * ~370 MB of peak footprint, and a 4K scene would be far worse -- hence a window at all.
-        * And the images are not equally expensive, so decoding a fixed batch and waiting for all
-        * of it stalls every worker on the slowest member of each batch; a window lets a worker
-        * that finishes early start the next image instead. The window is refilled from this
-        * thread as each image is consumed, so no task ever blocks inside the executor.
+        * Decoding runs ahead of the uploads on a sliding window. Two things shape it. A decoded
+        * image plus its mip chain is ~5.3 MB for one of Sponza's 1024x1024 textures, so decoding
+        * all 69 up front would trade half a second of CPU for ~370 MB of peak footprint, and a 4K
+        * scene would be far worse -- hence a window at all. And the images are not equally
+        * expensive, so decoding a fixed batch and waiting for all of it stalls every worker on the
+        * slowest member of that batch; a window lets whichever thread finishes first start the next
+        * image. The window is refilled from this thread as each image is consumed, which is also
+        * what keeps a decode from ever waiting on the consumer.
         *
         * Everything that reaches the driver stays on this thread. The setup batch holds one
-        * command buffer, and bindless slots have to be handed out in a fixed order, so uploads
-        * run here in `pending` order while the workers decode ahead of them.
+        * command buffer, and bindless slots have to be handed out in a fixed order, so uploads run
+        * here in `pending` order while the decodes run ahead of them.
         */
+#if defined(VKM_PLATFORM_WASM)
+        // No pthreads in this build, so there is nothing to decode on but this thread.
+        for (size_t i = 0; i < pending.size(); ++i)
         {
-            tf::Executor executor;
+            decodeOne(pending[i]);
+            uploadOne(pending[i]);
+            pending[i]._image = VkmImageData{};
+            pending[i]._mipLevels.clear();
+            pending[i]._mipLevels.shrink_to_fit();
+        }
+#else
+        {
             std::vector<std::future<void>> decoding(pending.size());
-            // Enough to keep every worker fed with a little slack, and no more: this is the
-            // number of decoded images held in memory at once.
-            const size_t windowSize = std::min(pending.size(), executor.num_workers() + 2u);
+            // Enough concurrent decodes to keep every core fed with a little slack, and no more:
+            // this count is also how many decoded images are held in memory at once.
+            const size_t hardwareThreads = std::max(1u, std::thread::hardware_concurrency());
+            const size_t windowSize = std::min(pending.size(), hardwareThreads + 2u);
 
             const auto startDecode = [&](size_t index) {
-                decoding[index] = executor.async([&decodeOne, &pending, index] {
+                decoding[index] = std::async(std::launch::async, [&decodeOne, &pending, index] {
                     decodeOne(pending[index]);
                 });
             };
@@ -793,6 +809,7 @@ namespace
                 }
             }
         }
+#endif // VKM_PLATFORM_WASM
 
         const auto slotFor = [&](const std::string& path, bool srgb) -> uint32_t {
             const auto existing = uploaded.find(std::make_pair(path, srgb));
