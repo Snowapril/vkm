@@ -83,18 +83,24 @@ float vkmAreaLightFormFactor(VkmAreaLight light, float3 worldPosition, float3 no
     const float3 tangent = normalize(cross(up, normal));
     const float3 bitangent = cross(normal, tangent);
 
-    float3 polygon[4];
+    float3 polygon[3];
     const float3 corners[3] = { light.p0.xyz, light.p1.xyz, light.p2.xyz };
     for (uint corner = 0; corner < 3; ++corner)
     {
         const float3 relative = corners[corner] - worldPosition;
         polygon[corner] = float3(dot(relative, tangent), dot(relative, bitangent), dot(relative, normal));
     }
-    polygon[3] = polygon[2];
 
-    // Clip against z >= 0, walking the three edges and emitting the crossing points. Written as a
-    // straight-line Sutherland-Hodgman step rather than a loop with a dynamic output index, which
-    // dxc unrolls badly and WGSL cannot express with a runtime-indexed local array.
+    /*
+    * Clip against z >= 0, one Sutherland-Hodgman pass over the three edges: keep a vertex that is
+    * above, and emit the crossing point wherever an edge changes side.
+    *
+    * The output holds FOUR vertices, not three. A triangle with exactly one corner below the plane
+    * loses that corner and gains two crossings, so the result is a quad -- capping the count at
+    * three silently drops one of its vertices, which is a wrong form factor rather than a visible
+    * failure. The horizon-clip gate exists because that is invisible in any scene whose emitters
+    * float clear of their receivers.
+    */
     float3 clipped[4];
     uint clippedCount = 0;
     for (uint edge = 0; edge < 3; ++edge)
@@ -103,16 +109,16 @@ float vkmAreaLightFormFactor(VkmAreaLight light, float3 worldPosition, float3 no
         const float3 next = polygon[(edge + 1) % 3];
         const bool currentAbove = current.z >= 0.0;
         const bool nextAbove = next.z >= 0.0;
-        if (currentAbove)
+        if (currentAbove && clippedCount < 4)
         {
             clipped[clippedCount] = current;
-            clippedCount = min(clippedCount + 1, 3u);
+            ++clippedCount;
         }
-        if (currentAbove != nextAbove)
+        if (currentAbove != nextAbove && clippedCount < 4)
         {
             const float t = current.z / (current.z - next.z);
             clipped[clippedCount] = lerp(current, next, t);
-            clippedCount = min(clippedCount + 1, 3u);
+            ++clippedCount;
         }
     }
     if (clippedCount < 3)

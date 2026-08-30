@@ -70,6 +70,12 @@ TEST_CASE("Metal area lights - the polygon integral matches the analytic form fa
     vkmtest::runAreaLightTest(fixture.driver.get());
 }
 
+TEST_CASE("Metal area lights - an emitter crossing the horizon is clipped") {
+    MetalShadowAtlasFixture fixture;
+    VKM_REQUIRE_DEVICE(fixture.initResult);
+    vkmtest::runAreaLightHorizonClipTest(fixture.driver.get());
+}
+
 TEST_CASE("Metal shadowed probe capture - a probe under an occluder records shadowed floor") {
     MetalShadowAtlasFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
