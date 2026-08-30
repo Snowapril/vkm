@@ -168,7 +168,7 @@ namespace vkmtest
             manager.getPipelineState(gbufferPsoName, vkm::VkmPipelineStateOrigin::Engine);
         REQUIRE(gbufferPso != nullptr);
         vkm::VkmPipelineStateBase* lightingPso =
-            manager.getPipelineState("deferred_lighting_pso", vkm::VkmPipelineStateOrigin::Engine);
+            manager.getPipelineState("deferred_lighting_pso[area]", vkm::VkmPipelineStateOrigin::Engine);
         REQUIRE(lightingPso != nullptr);
 
         vkm::VkmFrameBufferDescriptor lightingFb{};

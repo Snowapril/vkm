@@ -303,7 +303,7 @@ public:
                                      vkmVertexLayoutPresetName(static_cast<VkmVertexLayoutPreset>(i)) + "]";
             _gbufferPipelines[i] = manager->getPipelineState(name, VkmPipelineStateOrigin::Engine);
         }
-        _lightingPipeline = manager->getPipelineState("deferred_lighting_pso", VkmPipelineStateOrigin::Engine);
+        _lightingPipeline = manager->getPipelineState("deferred_lighting_pso[area]", VkmPipelineStateOrigin::Engine);
         _compositePipeline = manager->getPipelineState("gi_composite_pso", VkmPipelineStateOrigin::Engine);
         _tonemapPipeline = manager->getPipelineState("tonemap_pso", VkmPipelineStateOrigin::Engine);
         _probeDebugPipeline = manager->getPipelineState("probe_debug_pso", VkmPipelineStateOrigin::Engine);

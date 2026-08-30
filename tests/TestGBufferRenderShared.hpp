@@ -599,7 +599,7 @@ namespace vkmtest
         fillGBuffer(driver, manager, scene, gbuffer);
 
         vkm::VkmPipelineStateBase* lightingPso =
-            manager.getPipelineState("deferred_lighting_pso", vkm::VkmPipelineStateOrigin::Engine);
+            manager.getPipelineState("deferred_lighting_pso[punctual]", vkm::VkmPipelineStateOrigin::Engine);
         REQUIRE(lightingPso != nullptr);
 
         vkm::VkmSamplerInfo samplerInfo{};

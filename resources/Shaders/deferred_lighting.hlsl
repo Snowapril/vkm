@@ -1,7 +1,13 @@
 // Copyright (c) 2026 Snowapril
 //
-// Fullscreen deferred lighting: samples the G-buffer and shades it with every punctual light,
-// plus every emissive triangle as an analytic area light (diffuse only).
+// Fullscreen deferred lighting: samples the G-buffer and shades it with every punctual light, and
+// -- in the `area` variant only -- every emissive triangle as an analytic area light.
+//
+// Two variants rather than one shader with a runtime-zero loop, because the area path is not free
+// to merely COMPILE: carrying it crashed lavapipe's shader compiler outright (SIGSEGV in the
+// deferred lighting test, consistently on Mesa 25.x, while Metal and MoltenVK ran it clean). A
+// caller that wants area lights asks for deferred_lighting_pso[area]; everything else gets
+// [punctual], whose generated code is what this pass had before area lights existed.
 //
 // This is the first pass in the engine that reads the G-buffer, and it is deliberately built the
 // way the GI passes will be:
@@ -19,7 +25,9 @@
 #include "vkm_frame_constants.hlsli"
 #include "vkm_fullscreen.hlsli"
 #include "vkm_gbuffer.hlsli"
+#if VKM_DEFERRED_AREA_LIGHTS
 #include "vkm_area_lights.hlsli"
+#endif
 #include "vkm_punctual_lights.hlsli"
 #include "vkm_shadow.hlsli"
 
@@ -38,7 +46,12 @@ struct LightConstants
     // x = valid entries in `areaLights`; yzw unused.
     uint4 areaLightCount;
     VkmPunctualLight lights[VKM_MAX_PUNCTUAL_LIGHTS];
+#if VKM_DEFERRED_AREA_LIGHTS
+    // Declared only in the area variant. The buffer C++ binds is always the full
+    // VkmDeferredLightConstants, so the punctual variant simply reads a prefix of it -- which is
+    // why this member sits last and nothing before it moves.
     VkmAreaLight areaLights[VKM_MAX_AREA_LIGHTS];
+#endif
 };
 
 
@@ -159,6 +172,7 @@ float4 PSMain(VSOutput input) : SV_TARGET0
         shaded += (diffuse + specular) * lightSample.radiance * nDotL * shadow;
     }
 
+#if VKM_DEFERRED_AREA_LIGHTS
     /*
     * Emissive triangles. The traced tier reaches these through NEE against the light table; the
     * raster tier cannot read that table at all, so the same polygons arrive here in the uniform
@@ -193,6 +207,8 @@ float4 PSMain(VSOutput input) : SV_TARGET0
         shaded += areaLight.radiance.rgb * diffuseColor * (1.0 / 3.14159265) * formFactor;
 
     }
+
+#endif
 
     // Emission is what the surface adds on its own, on top of what the lights reflect off it --
     // the term that makes a camera-visible emitter glow instead of rendering black.

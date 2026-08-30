@@ -59,5 +59,13 @@
             "filepath": "deferred_lighting.hlsl",
             "entry_point": "PSMain"
         }
+    },
+    "options": {
+        "punctual": {},
+        "area": {
+            "definitions": {
+                "VKM_DEFERRED_AREA_LIGHTS": true
+            }
+        }
     }
 }
