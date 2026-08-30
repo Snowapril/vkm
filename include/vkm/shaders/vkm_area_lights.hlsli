@@ -67,12 +67,32 @@ float vkmAreaLightEdge(float3 a, float3 b)
 }
 
 /*
+* @brief Where a segment crossing the horizon meets it.
+* @details Only called for a pair straddling z = 0, so the denominator cannot vanish: one endpoint
+* is at or above the plane and the other strictly below it.
+*/
+float3 vkmAreaLightHorizonCross(float3 above, float3 below)
+{
+    return lerp(above, below, above.z / (above.z - below.z));
+}
+
+/*
 * @brief Projected solid angle of an emissive triangle at a shading point.
 * @details The triangle is moved into the shading frame (surface at the origin, normal on +z) and
 * clipped to the upper hemisphere before the edge sum, because an edge that dips below the horizon
 * contributes to Lambert's formula with the wrong sign -- an unclipped sum on a polygon that
-* straddles the surface plane can even go negative. Clipping a triangle against one plane yields
-* three or four vertices, which is why the loop below runs over a four-entry buffer.
+* straddles the surface plane can even go negative.
+*
+* The clip is a switch over the eight ways three vertices can fall either side of the plane,
+* rather than a loop appending to an array. That is not a style preference: a loop writes at a
+* runtime index, which forces the polygon into indexable memory, and that shape crashed lavapipe's
+* shader compiler outright (four Vulkan CI jobs, SIGSEGV, while Metal and MoltenVK ran it fine).
+* Every index here is a literal.
+*
+* Clipping a triangle against one plane yields three or four vertices -- a corner below the plane
+* is replaced by two crossings. The four-vertex cases are why `d` exists; the three-vertex cases
+* set it equal to `a`, which makes the last edge a zero-length one that contributes nothing, so
+* the sum below needs no branch.
 *
 * Two-sided, matching the traced tier: vkmShadeSecondaryHit takes abs() on the light-side cosine
 * because the path loop flips normals, so an emitter lights both of its faces. Taking the
@@ -91,59 +111,59 @@ float vkmAreaLightFormFactor(VkmAreaLight light, float3 worldPosition, float3 no
     const float3 tangent = normalize(cross(up, normal));
     const float3 bitangent = cross(normal, tangent);
 
-    float3 polygon[3];
-    const float3 corners[3] = { light.p0.xyz, light.p1.xyz, light.p2.xyz };
-    for (uint corner = 0; corner < 3; ++corner)
-    {
-        const float3 relative = corners[corner] - worldPosition;
-        polygon[corner] = float3(dot(relative, tangent), dot(relative, bitangent), dot(relative, normal));
-    }
+    const float3 r0 = light.p0.xyz - worldPosition;
+    const float3 r1 = light.p1.xyz - worldPosition;
+    const float3 r2 = light.p2.xyz - worldPosition;
+    const float3 p0 = float3(dot(r0, tangent), dot(r0, bitangent), dot(r0, normal));
+    const float3 p1 = float3(dot(r1, tangent), dot(r1, bitangent), dot(r1, normal));
+    const float3 p2 = float3(dot(r2, tangent), dot(r2, bitangent), dot(r2, normal));
 
-    /*
-    * Clip against z >= 0, one Sutherland-Hodgman pass over the three edges: keep a vertex that is
-    * above, and emit the crossing point wherever an edge changes side.
-    *
-    * The output holds FOUR vertices, not three. A triangle with exactly one corner below the plane
-    * loses that corner and gains two crossings, so the result is a quad -- capping the count at
-    * three silently drops one of its vertices, which is a wrong form factor rather than a visible
-    * failure. The horizon-clip gate exists because that is invisible in any scene whose emitters
-    * float clear of their receivers.
-    */
-    float3 clipped[4];
-    uint clippedCount = 0;
-    for (uint edge = 0; edge < 3; ++edge)
-    {
-        const float3 current = polygon[edge];
-        const float3 next = polygon[(edge + 1) % 3];
-        const bool currentAbove = current.z >= 0.0;
-        const bool nextAbove = next.z >= 0.0;
-        if (currentAbove && clippedCount < 4)
-        {
-            clipped[clippedCount] = current;
-            ++clippedCount;
-        }
-        if (currentAbove != nextAbove && clippedCount < 4)
-        {
-            const float t = current.z / (current.z - next.z);
-            clipped[clippedCount] = lerp(current, next, t);
-            ++clippedCount;
-        }
-    }
-    if (clippedCount < 3)
+    const uint config = (p0.z >= 0.0 ? 1u : 0u) | (p1.z >= 0.0 ? 2u : 0u) | (p2.z >= 0.0 ? 4u : 0u);
+    if (config == 0u)
     {
         return 0.0; // entirely below the horizon
     }
 
-    float sum = 0.0;
-    for (uint i = 0; i < clippedCount; ++i)
+    float3 a = p0;
+    float3 b = p1;
+    float3 c = p2;
+    float3 d = p0;
+    if (config == 1u)        // p0 only
     {
-        const float3 a = normalize(clipped[i]);
-        const float3 b = normalize(clipped[(i + 1) % clippedCount]);
-        sum += vkmAreaLightEdge(a, b);
+        a = p0; b = vkmAreaLightHorizonCross(p0, p1); c = vkmAreaLightHorizonCross(p0, p2); d = a;
     }
+    else if (config == 2u)   // p1 only
+    {
+        a = vkmAreaLightHorizonCross(p1, p0); b = p1; c = vkmAreaLightHorizonCross(p1, p2); d = a;
+    }
+    else if (config == 3u)   // p0, p1
+    {
+        a = p0; b = p1; c = vkmAreaLightHorizonCross(p1, p2); d = vkmAreaLightHorizonCross(p0, p2);
+    }
+    else if (config == 4u)   // p2 only
+    {
+        a = vkmAreaLightHorizonCross(p2, p0); b = vkmAreaLightHorizonCross(p2, p1); c = p2; d = a;
+    }
+    else if (config == 5u)   // p0, p2
+    {
+        a = p0; b = vkmAreaLightHorizonCross(p0, p1); c = vkmAreaLightHorizonCross(p2, p1); d = p2;
+    }
+    else if (config == 6u)   // p1, p2
+    {
+        a = vkmAreaLightHorizonCross(p1, p0); b = p1; c = p2; d = vkmAreaLightHorizonCross(p2, p0);
+    }
+    // config == 7: the whole triangle is above, and a/b/c already hold it with d == a.
+
+    const float3 na = normalize(a);
+    const float3 nb = normalize(b);
+    const float3 nc = normalize(c);
+    const float3 nd = normalize(d);
+    // Four edges always. Where the clip produced three vertices d == a, so the last two terms are
+    // edge(c, a) and edge(a, a) -- and a zero-length edge subtends no angle, so it adds nothing.
+    const float sum = vkmAreaLightEdge(na, nb) + vkmAreaLightEdge(nb, nc) +
+                      vkmAreaLightEdge(nc, nd) + vkmAreaLightEdge(nd, na);
     return abs(sum) * 0.5;
 }
-
 
 /*
 * @brief Closest point to `target` inside a triangle. Named `target` because `point` is an
