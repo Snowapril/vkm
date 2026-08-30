@@ -6046,6 +6046,27 @@ It is also slower, in both builds, benchmarked on a 69-image 1024x1024 mip build
 `std::pow` on Apple Silicon beats eight unpredictable branches and eight scattered loads. Reverted
 in full. The Debug profile's 3.6 s is `-O0` overhead across the whole filter, not `pow`.
 
+### Deviations
+
+- **Planned:** batching the ~760 per-mip and ~104 per-BLAS submissions would remove most of the
+  8-14 s the gi sample takes to reach its first frame.
+  **Done instead:** the batching landed as agreed, but it is 4% of a Debug startup and 22% of a
+  warm Release one, not "most" of it. The instrumentation step went first precisely so this
+  premise would be checked, and it did not hold.
+  **Why:** the 8-14 s figure comes from the default Debug `-O0` build, where the dominant cost is
+  CPU image work (`Scene::decodeImage` + `Scene::buildMipChain` = 78%) that `-O0` inflates ~15x.
+  Nothing was rescoped in response: the batching is a real 3.2x on the work it covers and removes
+  an indefensible per-item GPU round trip, and the remaining items are recorded below.
+
+- **Planned:** replace `linearToSrgb8`'s `std::pow` with a table, per the plan's measured
+  micro-fixes.
+  **Done instead:** implemented, verified exact against every representable float in [0, 1], then
+  reverted in full.
+  **Why:** it is slower in both builds (`-O2`: 485 ms -> 662 ms; `-O0`: 5079 ms -> 14981 ms).
+  `std::pow` on Apple Silicon beats eight unpredictable branches and eight scattered loads. The
+  plan gated this on the trace justifying it; the trace justified attempting it, and the benchmark
+  refused it.
+
 ### Not addressed
 
 - `Scene::decodeImage` is 683 ms of a 1205 ms warm Release startup, the single largest item.
