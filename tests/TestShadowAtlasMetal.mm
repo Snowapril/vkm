@@ -64,13 +64,15 @@ TEST_CASE("Metal shadowed deferred lighting - an occluder darkens only what it c
     vkmtest::runShadowedLightingTest(fixture.driver.get());
 }
 
-TEST_CASE("Metal area lights - the polygon integral matches the analytic form factor") {
+TEST_CASE("Metal area lights - the polygon integral matches the analytic form factor"
+          * doctest::timeout(60.0)) {
     MetalShadowAtlasFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
     vkmtest::runAreaLightTest(fixture.driver.get());
 }
 
-TEST_CASE("Metal area lights - an emitter crossing the horizon is clipped") {
+TEST_CASE("Metal area lights - an emitter crossing the horizon is clipped"
+          * doctest::timeout(60.0)) {
     MetalShadowAtlasFixture fixture;
     VKM_REQUIRE_DEVICE(fixture.initResult);
     vkmtest::runAreaLightHorizonClipTest(fixture.driver.get());

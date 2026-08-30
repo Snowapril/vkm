@@ -205,7 +205,9 @@
 - The traced tier's NEE loops every punctual light exhaustively, one shadow ray each per bounce, with no cap or importance sampling.
 - The raster tier caps punctual lights at kVkmMaxPunctualLights (16) while the traced tier reads the whole table, so a scene past the cap lights differently in the two tiers.
 - Area lights are shadowed only in the traced tier; the raster tier shades them analytically but applies no visibility term, so an occluded emitter still lights a surface there.
-- The raster tier's area lights are diffuse only: the LTC matrix tables the specular lobe needs do not exist, so a smooth surface under an emitter is missing its highlight.
+- The raster tier's area-light specular is Karis's representative point, not LTC: fitting the LTC M^-1 tables needs an offline optimiser this tree does not have, and no published table is vendored.
+- That approximation degrades badly for a large emitter close to a smoother receiver, which is outside the small-source regime it targets: measured 38.7% worst-texel error against exact integration on a roughness-0.4 floor beside a 3x3 panel two units away, against 0.9% on a fully rough one.
+- Neither area-light gate discriminates the specular lobe strongly: on the fully rough floors both fixtures use, dropping the term entirely moves the worst texel only 0.9% -> 3.2% and 3.5% -> 6.5%, so both gates catch it by a thin margin rather than decisively.
 - Emissive triangles reaching the raster tier are capped at kVkmMaxAreaLights (32) and dropped in light-table order, so a scene past the cap keeps an arbitrary subset rather than the brightest.
 - Shadow-casting lights are capped by kVkmMaxShadowTiles (16 tiles: one per cascade for a directional light, six per point light, one per spot); past that a light shades unshadowed.
 - The shadow atlas culls every light against one union box, so a caster outside a given light's frustum is still submitted to that light's tile and clipped there.
