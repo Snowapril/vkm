@@ -6088,8 +6088,10 @@ plus a CPU mip chain (expensive, touches nothing shared) and texture creation pl
 
 - The unique `(path, sRGB)` images are collected first, in the order the material loop asks for
   them, so bindless slots are still handed out in exactly the order a serial decode produced.
-- `decodeOne` runs on Taskflow workers. `uploadOne` runs on the calling thread and nowhere else:
-  the setup batch holds one command buffer, and Vulkan command pools want a single thread.
+- `decodeOne` runs on `std::async` threads. `uploadOne` runs on the calling thread and nowhere
+  else: the setup batch holds one command buffer, and Vulkan command pools want a single thread.
+  The wasm build links no pthreads, so it decodes serially -- and `<thread>`/`<future>` are guarded
+  out there too, since libc++ without thread support rejects those headers rather than degrading.
 - `slotFor` is now a map lookup, so the per-material loop is unchanged in shape.
 
 ### The window, and why it is not a batch
@@ -6100,15 +6102,15 @@ the win left on the table: 39, 31, 45, 53, **127, 162**, 71 ms. Every worker wai
 image in its wave, and this machine has 5 P-cores and 6 E-cores, so "slowest" is routine rather
 than exceptional.
 
-Replaced with a sliding window: `windowSize = num_workers + 2` decodes are in flight, and the
+Replaced with a sliding window: `hardware_concurrency() + 2` decodes are in flight, and the
 upload loop starts one more each time it consumes one. A worker that finishes early takes the next
 image instead of idling, and the uploads overlap the decoding instead of following it.
 
 The window is refilled from the calling thread, deliberately. A bounded producer/consumer that
-blocks *inside* a task -- on a semaphore or a condition variable -- can deadlock here: every worker
-can end up holding a task that is waiting for the window to advance, leaving no worker to run the
-task the consumer is waiting for. Handing work out from the consumer side cannot get into that
-state, and it needs no synchronization primitive of its own.
+blocks *inside* a task -- on a semaphore or a condition variable -- can deadlock against a fixed
+worker pool: every worker can end up holding a task waiting for the window to advance, leaving
+nobody to run the task the consumer is waiting for. Handing work out from the consumer side cannot
+get into that state, and it needs no synchronization primitive of its own.
 
 The window is also the memory bound. A decoded 1024x1024 image plus its mip chain is ~5.3 MB, so
 decoding Sponza's 69 images up front would cost ~370 MB of peak footprint (and a 4K scene far
@@ -6117,9 +6119,9 @@ before, i.e. unchanged.
 
 ### Result
 
-`Engine::initializeBackendDriver`, warm Release, six runs: 390, 399, 473, 504, 506, 620 ms --
-median ~490 ms, against **1046 ms** before this change and **1205 ms** before any of this session's
-work. `Scene::uploadMaterialTextures` goes 959 ms -> ~260-380 ms.
+`Engine::initializeBackendDriver`, warm Release, three runs: **272, 274, 288 ms**, against
+**1046 ms** before this change and **1205 ms** before any of this session's work.
+`Scene::uploadMaterialTextures` goes 959 ms -> ~182 ms.
 
 Correctness rests on the shape of the change rather than on a screenshot compare. `decodeOne` runs
 the same `loadImageFromFile` and `vkmBuildMipChain` on the same file, per image, with nothing shared
