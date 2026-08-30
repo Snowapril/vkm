@@ -5922,3 +5922,221 @@ mouse and the camera controller does not orbit underneath it.
 - `wantsCaptureMouse` is read from the AppKit main thread while the render thread runs `NewFrame` on
   the same context. That race predates this and is why the Metal NSEvent monitor was bound to its
   context with `GetIO(ctx)` rather than by making it current.
+
+## 2026-08-29 — Two Metal profiling fixes: memory inspector cost and gi startup time
+
+Two complaints, profiled to root cause. Both turned out to be the same shape: a per-item
+blocking round trip where one batched round trip would do.
+
+### `MemoryInspector::update` cost 10 ms+, twice a second, forever
+
+`resolveMemoryTagCallSites` spawned a child `atos` process per loaded module per capture and
+blocked the render thread on `waitpid`. Measured on this machine: 40-50 ms per spawn against
+the `gi` executable, ~70 ms against a system framework.
+
+The cost was permanent rather than the one-time warm-up the old comment assumed. `dladdr`
+reports `dli_fname` paths like `/usr/lib/libobjc.A.dylib` and `/usr/lib/libsystem_malloc.dylib`,
+which no longer exist on disk -- they live only in the dyld shared cache. `atos -o` on one of
+those fails with empty stdout, `resolveModuleBatch` did `if (output.empty()) continue;`, and it
+cached only non-empty names. So those addresses were never cached and were re-spawned on every
+snapshot for the life of the process.
+
+- Symbolization is now in-process: `dladdr` for the symbol, `abi::__cxa_demangle` for the name,
+  then the existing signature trimmer (renamed `condenseSymbolName`, and its source-location
+  branch dropped -- `dladdr` never yields one). `__cxa_demangle` allocates through `malloc`, not
+  the replaced global `operator new`, so it cannot recurse into `MemoryTracker::allocate`.
+  `captureCommandOutput`, `ModuleBatch` and `resolveModuleBatch` are gone with it.
+- Failures cache as an empty string. `formatMemoryTagName` reads that as "no name to show" and
+  falls back to the raw address, so every address costs at most one resolution.
+- `captureMemorySnapshot` gained `bool includeTagTable = true`. Without it the sample skips the
+  tag-table copy, the sort and symbolization entirely and reads three counters instead;
+  `VkmMemoryInspector::update` passes `_visible`, so the always-on debug overlay (which only
+  needs the totals and the GPU figures) no longer pays for a table nothing is displaying.
+- `MemoryTracker` maintains those three totals incrementally under the mutex it already holds in
+  `allocate`/`deallocate`, exposed as `getTaggedTotals()`. Equal to summing the tag table: a
+  fully-freed tag carries zero bytes.
+- `VkmRenderResourcePool::getAllCategoryMemoryUsage()` replaces 9 separate acquisitions of the
+  renderer's hottest lock with one.
+- Vulkan's `getGpuMemoryStats` dropped `vmaCalculateStatistics`, which walks every TLSF block.
+  `VmaBudget` already embeds the `blockBytes`/`allocationBytes` it was called for, and
+  `vmaGetHeapBudgets` two lines above already had them.
+
+Result: the `captureMemorySnapshot` unit test went from the 9.3 s recorded in TODO.md to
+**0.021 s**. Its `doctest::timeout(120.0)` hang-detector budget and the TODO entry are gone.
+
+### gi startup: instrument first, then batch
+
+Startup had no `VKM_PROFILE_SCOPE` at all -- all 22 uses were inside the frame loop -- so the
+first change was scopes on the init path (`Driver::initialize`, `PipelineStates::loadEngine`,
+`App::postDriverReady`, `Driver::newPipelineState`, `Gltf::import`, `Scene::build`,
+`Scene::decodeImage`, `Scene::buildMipChain`, `Scene::uploadTextureLevels`,
+`Scene::buildAccelerationStructures`) plus `--gv_profile_export_frame=N`, which writes the trace
+from `loopInner` once frame N is collected. Without that flag the startup work, which all drains
+into frame 0, is evicted from the 240-frame ring before anyone can press the export button.
+
+The measurement contradicted the plan's ranking, which is the whole reason it went first.
+
+| scope | Debug -O0 | Release, cold | Release, warm |
+|---|---|---|---|
+| `Engine::initializeBackendDriver` | 7931 ms | 1866 ms | 1205 ms |
+| `Scene::buildMipChain` | 3572 ms | 200 ms | 199 ms |
+| `Scene::decodeImage` | 2636 ms | 705 ms | 683 ms |
+| `Scene::uploadTextureLevels` | 279 ms | 212 ms | 214 ms |
+| `Driver::newPipelineState` | 53 ms | 644 ms | 10 ms |
+| `Scene::buildAccelerationStructures` | 63 ms | 53 ms | 49 ms |
+
+Two things fell out of that. PSO creation is a cold-cache cost only -- 644 ms on the first run
+of a given configuration, 10 ms once macOS's own shader cache is warm -- so there is nothing to
+fix there. And the ~760 per-mip submits plus ~104 per-BLAS submits, which the plan treated as the
+headline, are 4% of a Debug startup and 22% of a warm Release one. The Debug figure the original
+complaint describes is dominated by CPU image work that `-O0` inflates roughly 15x.
+
+#### The setup batch (kept)
+
+`uploadToBuffer`, `uploadToTexture` and both backends' acceleration-structure `initialize()` ended
+in the same eight lines: end, submit, `waitIdle`, release, release staging. That tail now lives
+once, in `VkmDriverBase`, behind `acquireSetupCommandBuffer()` / `submitSetupCommandBuffer()`.
+With no batch open it behaves exactly as before. Between `beginSetupBatch()` and
+`endSetupBatch()` the work accumulates into one command buffer, flushed when it crosses 64 MiB of
+recorded bytes -- which bounds the staging and scratch memory a batch holds live, so it is not a
+memory regression -- and again at `endSetupBatch()`. `VkmScene` opens one around the material
+texture loop and one around the BLAS loop.
+
+Two lifetime rules make it safe, both of which the unbatched code got for free:
+- Staging buffers are released by the flush, after its `waitIdle`, not by the call that recorded
+  the copy. Releasing at the old point would destroy a buffer a pending copy still reads
+  (`vkDestroyBuffer-buffer-00922`, the VUID family already in TODO.md).
+- Freeing a static structure's scratch moved out of `initialize()` into a new
+  `VkmAccelerationStructure::onSetupBuildCompleted()` that the flush calls. Metal's debug layer
+  aborts the process on a nil scratch buffer, so a deferred build reaching a freed scratch is not
+  a warning.
+- The BLAS batch is closed before the TLAS build rather than ordered with a barrier: ending it is
+  a full `waitIdle`, which is the strongest ordering available and needs no new synchronization on
+  either backend.
+
+Measured headlessly (69 textures x 10 mip levels, Metal, validation on): **163 ms -> 40 ms,
+4.1x** for the same 690 uploads. End to end on the gi sample, warm Release:
+
+| scope | before | after |
+|---|---|---|
+| `Engine::initializeBackendDriver` | 1205 ms | 1046 ms |
+| `Scene::uploadTextureLevels` | 214 ms | 59 ms |
+| `Scene::buildAccelerationStructures` | 49 ms | 22 ms |
+| `Scene::decodeImage` | 683 ms | 702 ms |
+| `Scene::buildMipChain` | 199 ms | 198 ms |
+
+The two batched items go 263 ms -> 81 ms; the rest is unchanged, as it should be. Note that the
+sample's render thread is `CAMetalDisplayLink`-driven, so it collects no frames at all -- and
+therefore exports no trace -- while its window is not being composited.
+
+#### Tabulating the sRGB encode (tried, measured, reverted)
+
+The plan proposed replacing `linearToSrgb8`'s `std::pow` with a table, on the strength of the
+Debug profile showing `Scene::buildMipChain` at 3.6 s. A 255-entry boundary table, each boundary
+found by bisecting the float bit space against the closed form, reproduces it *exactly* -- checked
+against all 1,065,353,217 representable floats in [0, 1], zero disagreements.
+
+It is also slower, in both builds, benchmarked on a 69-image 1024x1024 mip build:
+
+| | closed-form `pow` | bisected table |
+|---|---|---|
+| `-O0` | 5079 ms | 14981 ms |
+| `-O2` | 485 ms | 662 ms |
+
+`std::pow` on Apple Silicon beats eight unpredictable branches and eight scattered loads. Reverted
+in full. The Debug profile's 3.6 s is `-O0` overhead across the whole filter, not `pow`.
+
+### Deviations
+
+- **Planned:** batching the ~760 per-mip and ~104 per-BLAS submissions would remove most of the
+  8-14 s the gi sample takes to reach its first frame.
+  **Done instead:** the batching landed as agreed, but it is 4% of a Debug startup and 22% of a
+  warm Release one, not "most" of it. The instrumentation step went first precisely so this
+  premise would be checked, and it did not hold.
+  **Why:** the 8-14 s figure comes from the default Debug `-O0` build, where the dominant cost is
+  CPU image work (`Scene::decodeImage` + `Scene::buildMipChain` = 78%) that `-O0` inflates ~15x.
+  Nothing was rescoped in response: the batching is a real 3.2x on the work it covers and removes
+  an indefensible per-item GPU round trip, and the remaining items are recorded below.
+
+- **Planned:** replace `linearToSrgb8`'s `std::pow` with a table, per the plan's measured
+  micro-fixes.
+  **Done instead:** implemented, verified exact against every representable float in [0, 1], then
+  reverted in full.
+  **Why:** it is slower in both builds (`-O2`: 485 ms -> 662 ms; `-O0`: 5079 ms -> 14981 ms).
+  `std::pow` on Apple Silicon beats eight unpredictable branches and eight scattered loads. The
+  plan gated this on the trace justifying it; the trace justified attempting it, and the benchmark
+  refused it.
+
+### Not addressed
+
+- `VkmScene::uploadMaterialTextures` uploads every mip level of every texture and then lets the
+  streamer immediately unmap the finer ones (`scene.cpp`'s "the first streaming ticks are what
+  take the finer levels back off"). Uploading only the levels the streamer will keep would skip
+  most of this work rather than making it faster.
+- Startup still runs entirely before `NSApplicationMain`, so it is all black-screen time.
+
+## 2026-08-30 — Parallel material-texture decode
+
+`Scene::decodeImage` was 683 ms of a 1046 ms warm Release gi startup once the setup batch landed,
+and the note above recorded it as blocked on "a thread pool the repo does not have". That was
+wrong: Taskflow 4.1.0 is vendored at `dependencies/src/taskflow` and `CMakeLists.txt:270` already
+puts it on the include path. Nothing used it.
+
+`VkmScene::uploadMaterialTextures` interleaved two unrelated halves in one lambda: a JPEG decode
+plus a CPU mip chain (expensive, touches nothing shared) and texture creation plus uploads
+(cheap, all driver state). Splitting them is what makes the first half parallelizable.
+
+- The unique `(path, sRGB)` images are collected first, in the order the material loop asks for
+  them, so bindless slots are still handed out in exactly the order a serial decode produced.
+- `decodeOne` runs on `std::async` threads. `uploadOne` runs on the calling thread and nowhere
+  else: the setup batch holds one command buffer, and Vulkan command pools want a single thread.
+  The wasm build links no pthreads, so it decodes serially -- and `<thread>`/`<future>` are guarded
+  out there too, since libc++ without thread support rejects those headers rather than degrading.
+- `slotFor` is now a map lookup, so the per-material loop is unchanged in shape.
+
+### The window, and why it is not a batch
+
+The first attempt decoded a fixed wave of `num_workers` images, waited for all of them, uploaded
+them, and repeated. It gave 1046 -> 829 ms, but the per-wave timings showed why that was most of
+the win left on the table: 39, 31, 45, 53, **127, 162**, 71 ms. Every worker waits on the slowest
+image in its wave, and this machine has 5 P-cores and 6 E-cores, so "slowest" is routine rather
+than exceptional.
+
+Replaced with a sliding window: `hardware_concurrency() + 2` decodes are in flight, and the
+upload loop starts one more each time it consumes one. A worker that finishes early takes the next
+image instead of idling, and the uploads overlap the decoding instead of following it.
+
+The window is refilled from the calling thread, deliberately. A bounded producer/consumer that
+blocks *inside* a task -- on a semaphore or a condition variable -- can deadlock against a fixed
+worker pool: every worker can end up holding a task waiting for the window to advance, leaving
+nobody to run the task the consumer is waiting for. Handing work out from the consumer side cannot
+get into that state, and it needs no synchronization primitive of its own.
+
+The window is also the memory bound. A decoded 1024x1024 image plus its mip chain is ~5.3 MB, so
+decoding Sponza's 69 images up front would cost ~370 MB of peak footprint (and a 4K scene far
+more). At 13 in flight it is ~69 MB; measured peak resident is 2.00 GiB against 1.86-2.16 GiB
+before, i.e. unchanged.
+
+### Result
+
+`Engine::initializeBackendDriver`, warm Release, three runs: **272, 274, 288 ms**, against
+**1046 ms** before this change and **1205 ms** before any of this session's work.
+`Scene::uploadMaterialTextures` goes 959 ms -> ~182 ms.
+
+Correctness rests on the shape of the change rather than on a screenshot compare. `decodeOne` runs
+the same `loadImageFromFile` and `vkmBuildMipChain` on the same file, per image, with nothing shared
+between images, so the decoded bytes are identical by construction; and `pending` is built in the
+order the material loop first asks for each image, so bindless slots and streamer entries are handed
+out in the order the serial path produced. Metal 354/354 (validation on) and Vulkan 338/338 pass.
+
+The gi sample's screenshot cannot serve as the oracle here, which is worth recording: **two runs of
+the same unmodified binary produce different PNGs**, at frame 6 and at frame 300 alike. Texture
+streaming residency follows wall-clock frame pacing, so what is resident when the capture happens
+varies run to run. An early compare that appeared byte-identical was coincidence -- two runs landing
+on the same streaming state -- not evidence.
+
+One thing the trace shows that is worth not misreading: summed `Scene::decodeImage` duration goes
+*up* under parallelism (683 ms -> ~2800 ms across 69 zones). Profile zones are wall-clock, so a
+zone on an E-core reports several times what the same work reports on a P-core, and eleven threads
+contending for memory bandwidth inflate all of them. Wall-clock time through the section is the
+number that fell.

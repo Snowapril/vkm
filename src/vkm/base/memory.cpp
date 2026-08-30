@@ -207,6 +207,9 @@ namespace vkm
             stats.liveCount += 1;
             stats.requestedBytes += size;
             stats.usableBytes += usable;
+            _totals.liveCount += 1;
+            _totals.requestedBytes += size;
+            _totals.usableBytes += usable;
         }
 
         return static_cast<char*>(raw) + sizeof(AllocationHeader);
@@ -232,6 +235,9 @@ namespace vkm
                 it->second.liveCount -= 1;
                 it->second.requestedBytes -= header->requestedSize;
                 it->second.usableBytes -= header->usableSize;
+                _totals.liveCount -= 1;
+                _totals.requestedBytes -= header->requestedSize;
+                _totals.usableBytes -= header->usableSize;
             }
         }
 
@@ -241,6 +247,12 @@ namespace vkm
     MemoryStats MemoryTracker::getMimallocStats() const
     {
         return rawProcessStats();
+    }
+
+    TrackedTotals MemoryTracker::getTaggedTotals() const
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        return _totals;
     }
 
     std::vector<TaggedAllocationSummary> MemoryTracker::getTaggedAllocations() const

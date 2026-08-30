@@ -13,10 +13,10 @@ namespace vkm
     * what the OS and the graphics driver actually report. Toggled with F8; drawn from
     * VkmEngine::update(), before the frame's first ImGui::Render() call.
     *
-    * Sampling is throttled (default twice a second) because captureMemorySnapshot() takes
-    * MemoryTracker's global mutex, which every allocation in the process contends on. The
-    * debug overlay reads the same cached snapshot through getSnapshot() so one sample serves
-    * both.
+    * Sampling is throttled (default twice a second), and the tag table -- the half that takes
+    * MemoryTracker's global mutex, which every allocation in the process contends on -- is
+    * sampled only while this window is open. The debug overlay reads the same cached snapshot
+    * through getSnapshot() so one sample serves both.
     */
     class VkmMemoryInspector
     {
@@ -29,7 +29,13 @@ namespace vkm
 
         inline const VkmMemorySnapshot& getSnapshot() const { return _snapshot; }
         inline bool isVisible() const { return _visible; }
-        inline void toggleVisible() { _visible = !_visible; }
+        // Requests a refresh as well: the tag table is only sampled while the window is open, so
+        // opening it would otherwise show an empty table until the next interval elapses.
+        inline void toggleVisible()
+        {
+            _visible = !_visible;
+            _refreshRequested = true;
+        }
 
     private:
         VkmMemorySnapshot _snapshot;

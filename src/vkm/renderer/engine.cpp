@@ -58,6 +58,12 @@ namespace vkm
     // startup path that is over before a hotkey could be pressed: ./triangle --gv_profile=1
     VKM_GLOBAL_VARIABLE(bool, gv_profile, false);
 
+    // Writes vkm_profile_trace.json once the given frame has been collected, then stops. 0 means
+    // never. The profiler keeps only kMaxFrameHistory frames, so the startup work -- which all
+    // drains into frame 0 -- is evicted a few seconds in and cannot be exported by hand:
+    // ./gi --gv_profile=1 --gv_profile_export_frame=1 is how a startup trace gets written.
+    VKM_GLOBAL_VARIABLE(uint32_t, gv_profile_export_frame, 0u);
+
     // The upscale preset the engine starts in, as a VkmUpscaleMode: 0 off, 1 native AA, 2 quality,
     // 3 balanced, 4 performance. F2 cycles it at run time, so this only seeds the value --
     // ./gi --gv_upscale_mode=0 is how a run gets no temporal anti-aliasing at all.
@@ -137,7 +143,12 @@ namespace vkm
     
     VkmInitResult VkmEngine::initializeBackendDriver()
     {
-        VkmInitResult result = _driver->initialize(&_engineOptions);
+        VKM_PROFILE_SCOPE("Engine::initializeBackendDriver");
+        VkmInitResult result;
+        {
+            VKM_PROFILE_SCOPE("Driver::initialize");
+            result = _driver->initialize(&_engineOptions);
+        }
         if (result.code != VkmInitResultCode::Success)
         {
             VKM_DEBUG_ERROR(fmt::format("Failed to initialize renderer backend driver: {}", result.reason).c_str());
@@ -163,11 +174,16 @@ namespace vkm
         // its HLSL in Shaders/; this is the same SHADER_ROOT vkm_engine_shaders compiles with, and
         // a runtime recompile that disagreed with it would look for the shaders in the json's
         // directory.
-        if (!_pipelineStateManager->loadPipelineStatesFromDirectory(
+        bool enginePipelineStatesLoaded = false;
+        {
+            VKM_PROFILE_SCOPE("PipelineStates::loadEngine");
+            enginePipelineStatesLoaded = _pipelineStateManager->loadPipelineStatesFromDirectory(
                 std::string(RESOURCES_DIR) + "Pipelines/Engine/",
                 std::string(RESOURCES_DIR) + "Shaders/ShaderCache/",
                 VkmPipelineStateOrigin::Engine, &psoError,
-                std::string(RESOURCES_DIR) + "Shaders/"))
+                std::string(RESOURCES_DIR) + "Shaders/");
+        }
+        if (!enginePipelineStatesLoaded)
         {
             VKM_DEBUG_ERROR(fmt::format("Failed to load engine pipeline states: {}", psoError).c_str());
             return VkmInitResult{VkmInitResultCode::Failed, psoError};
@@ -203,7 +219,10 @@ namespace vkm
         }
 #endif // VKM_GPU_CAPTURE
 
-        _appDelegate->postDriverReady(this);
+        {
+            VKM_PROFILE_SCOPE("App::postDriverReady");
+            _appDelegate->postDriverReady(this);
+        }
 
         return result;
     }
@@ -292,6 +311,21 @@ namespace vkm
         // Monotonic, unlike the slot index above. Wrapping after 2^32 frames is fine: it only
         // ever seeds hashes, and at 60 fps that is over two years of continuous running.
         ++_frameCounter;
+
+#if defined(ENABLE_CHROME_TRACING)
+        if (gv_profile_export_frame.get() != 0u && _frameCounter == gv_profile_export_frame.get())
+        {
+            static constexpr const char* kTracePath = "vkm_profile_trace.json";
+            if (_driver->getGpuProfiler()->exportProfileChromeTrace(kTracePath))
+            {
+                VKM_DEBUG_INFO("Wrote the profile to vkm_profile_trace.json");
+            }
+            else
+            {
+                VKM_DEBUG_ERROR("Failed to write vkm_profile_trace.json");
+            }
+        }
+#endif // ENABLE_CHROME_TRACING
     }
 
     uint32_t VkmEngine::findWindowIndex(const void* nativeHandle) const

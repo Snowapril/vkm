@@ -130,6 +130,15 @@ namespace vkm
         */
         virtual bool updateInstances(const std::vector<VkmAccelerationStructureInstance>& instances) = 0;
 
+        /*
+        * @brief Called once the submission carrying this structure's initial build has retired.
+        * @details The build is recorded into a shared setup command buffer that may not be
+        * submitted until several structures later, so anything that depends on the build having
+        * actually run -- notably freeing the scratch buffer, which the build reads -- belongs here
+        * rather than at the end of initialize().
+        */
+        virtual void onSetupBuildCompleted() {}
+
     protected:
         // Stores `info` and the handle. The vectors are kept because a rebuild is described by the
         // same geometry list, and because updateInstances validates its argument against the

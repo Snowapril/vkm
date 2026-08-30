@@ -37,7 +37,8 @@ namespace vkm
         uint64_t _cpuTrackedLiveCount = 0;
         // Tags with at least one live allocation, sorted by usable bytes descending. Tags are
         // never removed from the tracker, so the fully-freed ones are dropped here instead of
-        // padding the list with zero rows.
+        // padding the list with zero rows. Empty when the sample was taken without the tag table;
+        // the three totals above are filled either way.
         std::vector<TaggedAllocationSummary> _cpuTags;
 
         // --- tracked (GPU) ---
@@ -48,10 +49,14 @@ namespace vkm
     /*
     * @brief Sample every source at once. `driver` may be null (or not yet initialized), in
     * which case only the CPU/process halves are filled in.
-    * @details Takes MemoryTracker's global mutex and allocates while copying the tag table, so
-    * callers should sample at a low rate rather than per frame.
+    * @details Two tiers. Without the tag table the sample is a handful of counter reads and is
+    * cheap enough for the frame loop. With it, the tracker's whole tag table is copied under
+    * MemoryTracker's global mutex -- which every allocation in the process contends on -- then
+    * sorted and symbolized, so ask for it only when something is going to display it.
+    * @param driver Backend to read GPU figures from, or null.
+    * @param includeTagTable Whether to fill _cpuTags.
     */
-    VkmMemorySnapshot captureMemorySnapshot(VkmDriverBase* driver);
+    VkmMemorySnapshot captureMemorySnapshot(VkmDriverBase* driver, bool includeTagTable = true);
 
     // Multi-line VKM_DEBUG_INFO dump of a snapshot -- used at shutdown.
     void logMemoryReport(const VkmMemorySnapshot& snapshot);
@@ -63,17 +68,17 @@ namespace vkm
     * @brief "SceneMeshVertices" for a labelled tag, "gltf_importer.cpp:154" for a call-site tag.
     * @details Address-tagged rows (everything that reached global operator new without a
     * VKM_NEW tag) read from the symbol cache resolveMemoryTagCallSites() fills; an address
-    * that has never been resolved formats as a bare "0x...".
+    * with no name to show formats as a bare "0x...".
     */
     std::string formatMemoryTagName(const TaggedAllocationSummary& tag);
 
     /*
     * @brief Symbolizes the call site of every address-tagged row.
-    * @details Batched: symbolizing costs one child-process launch per loaded module, so resolving a
-    * whole snapshot at once is far cheaper than row by row. Results are cached process-wide and
-    * code addresses never move, so repeat calls only pay for addresses seen for the first time.
-    * Best-effort: it yields "function (file.cpp:123)" where the platform's symbol tooling and the
-    * build's debug info allow it, degrades to the function name alone, and falls back to the raw
+    * @details Resolution is in-process (dladdr plus __cxa_demangle) and its results are cached
+    * process-wide. Code addresses never move, and an address that cannot be named caches as such,
+    * so every address costs at most one resolution for the life of the process. Best-effort: it
+    * yields the enclosing function's demangled name where the dynamic symbol table carries one --
+    * a static or hidden-visibility function does not appear there -- and falls back to the raw
     * address. Never fails, never throws.
     * @param tags Rows to resolve in place.
     */

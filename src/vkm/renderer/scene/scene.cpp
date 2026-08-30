@@ -3,6 +3,7 @@
 #include <vkm/renderer/scene/scene.h>
 
 #include <vkm/base/common.h>
+#include <vkm/base/cpu_profiler.h>
 #include <vkm/renderer/backend/common/acceleration_structure.h>
 #include <vkm/renderer/backend/common/bindless_resource_manager.h>
 #include <vkm/renderer/backend/common/buffer.h>
@@ -25,6 +26,15 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <set>
+
+// The wasm build links no pthreads, and libc++ configured without thread support rejects these
+// two headers outright rather than degrading. Material textures decode serially there; see
+// uploadMaterialTextures.
+#if !defined(VKM_PLATFORM_WASM)
+#include <future>
+#include <thread>
+#endif
 
 namespace vkm
 {
@@ -534,6 +544,7 @@ namespace
 
     bool VkmScene::uploadMaterialTextures(VkmDriverBase* driver, std::string* outError)
     {
+        VKM_PROFILE_SCOPE("Scene::uploadMaterialTextures");
         if ((driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::TextureUpload) == 0u)
         {
             return true;
@@ -544,6 +555,10 @@ namespace
         {
             return true;
         }
+
+        // Every level of every material texture is its own staged copy, which unbatched is one
+        // submit and one full GPU wait each -- Sponza alone is around 760 of them.
+        driver->beginSetupBatch();
 
         // Two separate capabilities. WebGPU can upload pixels but has no set-0 texture array to
         // index them from, so there the textures are created and kept -- getMaterialTexture()
@@ -573,26 +588,80 @@ namespace
         std::map<std::pair<std::string, bool>, uint32_t> streamerEntries;
         bool slotsExhausted = false;
 
-        const auto slotFor = [&](const std::string& path, bool srgb) -> uint32_t {
-            if (path.empty() || slotsExhausted)
-            {
-                return INVALID_VALUE32;
-            }
-            const auto key = std::make_pair(path, srgb);
-            const auto existing = uploaded.find(key);
-            if (existing != uploaded.end())
-            {
-                return existing->second;
-            }
+        /*
+        * One image to decode and then upload. Decoding is the expensive half by a wide margin --
+        * a JPEG decode plus a CPU mip chain per image -- and it touches nothing shared, so it runs
+        * on a worker. Everything that reaches the driver stays on this thread: the setup batch
+        * holds one command buffer, and bindless slots have to be handed out in a fixed order.
+        */
+        struct PendingImage
+        {
+            std::string _path;
+            bool _srgb = false;
+            VkmImageData _image;
+            std::vector<VkmImageData> _mipLevels;
+            bool _decoded = false;
+            std::string _error;
+        };
 
-            VkmImageData image;
-            std::string imageError;
-            if (!loadImageFromFile(path, &image, &imageError))
+        // Collected in the order the material loop below first asks for each image, so slots are
+        // handed out in exactly the order a serial decode would have produced.
+        std::vector<PendingImage> pending;
+        {
+            std::set<std::pair<std::string, bool>> seen;
+            const auto want = [&](const std::string& path, bool srgb) {
+                if (path.empty() || !seen.emplace(path, srgb).second)
+                {
+                    return;
+                }
+                PendingImage entry;
+                entry._path = path;
+                entry._srgb = srgb;
+                pending.push_back(std::move(entry));
+            };
+            for (size_t i = 0; i < _materials.size(); ++i)
             {
-                VKM_DEBUG_WARN(("Material texture '" + path + "' could not be decoded (" + imageError +
-                                "); the material falls back to its factor").c_str());
+                const MaterialImageRefs& refs = _materialImages[i];
+                want(refs._baseColor, /*srgb=*/true);
+                want(refs._metallicRoughness, /*srgb=*/false);
+                want(refs._normal, /*srgb=*/false);
+                want(refs._emissive, /*srgb=*/true);
+            }
+        }
+
+        const auto decodeOne = [](PendingImage& entry) {
+            {
+                VKM_PROFILE_SCOPE("Scene::decodeImage");
+                entry._decoded = loadImageFromFile(entry._path, &entry._image, &entry._error);
+            }
+            if (!entry._decoded)
+            {
+                return;
+            }
+            // A full mip chain. Without one, a minified material texture samples a single texel
+            // per pixel and sparkles under any camera motion -- Sponza's roof tiles are the
+            // obvious case. The levels are built on the CPU and uploaded like any other level,
+            // which needs no new GPU path: uploadToTexture has always taken a mip index.
+            VKM_PROFILE_SCOPE("Scene::buildMipChain");
+            vkmBuildMipChain(entry._image, entry._srgb, &entry._mipLevels);
+        };
+
+        // Uploads one already-decoded image and returns its bindless slot. Driver-side only.
+        const auto uploadOne = [&](PendingImage& entry) {
+            const auto key = std::make_pair(entry._path, entry._srgb);
+            if (slotsExhausted)
+            {
+                // Every later registration would fail the same way; recording the slot as invalid
+                // is what the materials read below.
                 uploaded.emplace(key, INVALID_VALUE32);
-                return INVALID_VALUE32;
+                return;
+            }
+            if (!entry._decoded)
+            {
+                VKM_DEBUG_WARN(("Material texture '" + entry._path + "' could not be decoded (" +
+                                entry._error + "); the material falls back to its factor").c_str());
+                uploaded.emplace(key, INVALID_VALUE32);
+                return;
             }
 
             VkmTextureInfo info{};
@@ -600,26 +669,20 @@ namespace
                 static_cast<uint32_t>(VkmResourceCreateInfo::AllowShaderRead) |
                 static_cast<uint32_t>(VkmResourceCreateInfo::AllowTransferDst) |
                 ((bindlessAvailable && sparseAvailable) ? static_cast<uint32_t>(VkmResourceCreateInfo::Sparse) : 0u));
-            // A full mip chain. Without one, a minified material texture samples a single texel
-            // per pixel and sparkles under any camera motion -- Sponza's roof tiles are the
-            // obvious case. The levels are built on the CPU and uploaded like any other level,
-            // which needs no new GPU path: uploadToTexture has always taken a mip index.
-            std::vector<VkmImageData> mipLevels;
-            vkmBuildMipChain(image, srgb, &mipLevels);
-
-            info._extent = glm::uvec3(image._width, image._height, 1);
-            info._numMipLevels = 1u + static_cast<uint32_t>(mipLevels.size());
+            info._extent = glm::uvec3(entry._image._width, entry._image._height, 1);
+            info._numMipLevels = 1u + static_cast<uint32_t>(entry._mipLevels.size());
             info._numArrayLayers = 1;
             // The colour space belongs to the channel that references the image, not to the file:
             // base colour and emissive are sRGB-encoded, metallic-roughness and normal are linear
             // data that must not be de-gamma'd on the way in.
-            info._format = srgb ? VkmFormat::R8G8B8A8_SRGB : VkmFormat::R8G8B8A8_UNORM;
+            info._format = entry._srgb ? VkmFormat::R8G8B8A8_SRGB : VkmFormat::R8G8B8A8_UNORM;
             // Named per asset rather than all alike, so the texture browser lists one followable
             // row per image; a streamed rebuild reuses the same name. Held in a local because
             // _debugName is borrowed and newTexture copies it.
-            const std::string debugName = vkmMaterialTextureDebugName(path, srgb);
+            const std::string debugName = vkmMaterialTextureDebugName(entry._path, entry._srgb);
             info._debugName = debugName.c_str();
 
+            VKM_PROFILE_SCOPE("Scene::uploadTextureLevels");
             VkmTexture* texture = driver->newTexture(info);
             bool uploadedAllLevels = texture != nullptr;
             if (uploadedAllLevels && texture->isSparse())
@@ -635,25 +698,25 @@ namespace
             }
             if (uploadedAllLevels)
             {
-                uploadedAllLevels =
-                    driver->uploadToTexture(texture->getHandle(), image._pixels.data(), image.getByteSize());
-                for (size_t level = 0; uploadedAllLevels && level < mipLevels.size(); ++level)
+                uploadedAllLevels = driver->uploadToTexture(texture->getHandle(), entry._image._pixels.data(),
+                                                            entry._image.getByteSize());
+                for (size_t level = 0; uploadedAllLevels && level < entry._mipLevels.size(); ++level)
                 {
                     uploadedAllLevels = driver->uploadToTexture(
-                        texture->getHandle(), mipLevels[level]._pixels.data(), mipLevels[level].getByteSize(),
-                        static_cast<uint32_t>(level + 1));
+                        texture->getHandle(), entry._mipLevels[level]._pixels.data(),
+                        entry._mipLevels[level].getByteSize(), static_cast<uint32_t>(level + 1));
                 }
             }
             if (!uploadedAllLevels)
             {
-                VKM_DEBUG_WARN(("Material texture '" + path +
+                VKM_DEBUG_WARN(("Material texture '" + entry._path +
                                 "' could not be uploaded; the material falls back to its factor").c_str());
                 if (texture != nullptr)
                 {
                     driver->getRenderResourcePool()->releaseResource(texture->getHandle());
                 }
                 uploaded.emplace(key, INVALID_VALUE32);
-                return INVALID_VALUE32;
+                return;
             }
 
             uint32_t slot = INVALID_VALUE32;
@@ -664,15 +727,16 @@ namespace
                 {
                     driver->getRenderResourcePool()->releaseResource(texture->getHandle());
                     slotsExhausted = true;
-                    return INVALID_VALUE32;
+                    uploaded.emplace(key, INVALID_VALUE32);
+                    return;
                 }
                 // The streamer takes ownership of the texture and its slot from here: a rebuild
                 // replaces both, so a second record of either would name a released resource.
                 // Level 0 is what was just uploaded, and the first streaming ticks take it down
                 // from there -- build() has no camera to size it against.
                 const uint32_t entryIndex = _textureStreamer.addTexture(
-                    path, srgb, glm::uvec2(image._width, image._height), info._numMipLevels,
-                    /*residentBaseMip=*/0u, texture->getHandle(), slot);
+                    entry._path, entry._srgb, glm::uvec2(entry._image._width, entry._image._height),
+                    info._numMipLevels, /*residentBaseMip=*/0u, texture->getHandle(), slot);
                 streamerEntries.emplace(key, entryIndex);
             }
             else
@@ -681,7 +745,75 @@ namespace
             }
             textureHandles.emplace(key, texture->getHandle());
             uploaded.emplace(key, slot);
-            return slot;
+        };
+
+        /*
+        * Decoding runs ahead of the uploads on a sliding window. Two things shape it. A decoded
+        * image plus its mip chain is ~5.3 MB for one of Sponza's 1024x1024 textures, so decoding
+        * all 69 up front would trade half a second of CPU for ~370 MB of peak footprint, and a 4K
+        * scene would be far worse -- hence a window at all. And the images are not equally
+        * expensive, so decoding a fixed batch and waiting for all of it stalls every worker on the
+        * slowest member of that batch; a window lets whichever thread finishes first start the next
+        * image. The window is refilled from this thread as each image is consumed, which is also
+        * what keeps a decode from ever waiting on the consumer.
+        *
+        * Everything that reaches the driver stays on this thread. The setup batch holds one
+        * command buffer, and bindless slots have to be handed out in a fixed order, so uploads run
+        * here in `pending` order while the decodes run ahead of them.
+        */
+#if defined(VKM_PLATFORM_WASM)
+        // No pthreads in this build, so there is nothing to decode on but this thread.
+        for (size_t i = 0; i < pending.size(); ++i)
+        {
+            decodeOne(pending[i]);
+            uploadOne(pending[i]);
+            pending[i]._image = VkmImageData{};
+            pending[i]._mipLevels.clear();
+            pending[i]._mipLevels.shrink_to_fit();
+        }
+#else
+        {
+            std::vector<std::future<void>> decoding(pending.size());
+            // Enough concurrent decodes to keep every core fed with a little slack, and no more:
+            // this count is also how many decoded images are held in memory at once.
+            const size_t hardwareThreads = std::max(1u, std::thread::hardware_concurrency());
+            const size_t windowSize = std::min(pending.size(), hardwareThreads + 2u);
+
+            const auto startDecode = [&](size_t index) {
+                decoding[index] = std::async(std::launch::async, [&decodeOne, &pending, index] {
+                    decodeOne(pending[index]);
+                });
+            };
+
+            for (size_t i = 0; i < windowSize; ++i)
+            {
+                startDecode(i);
+            }
+
+            for (size_t i = 0; i < pending.size(); ++i)
+            {
+                {
+                    VKM_PROFILE_SCOPE("Scene::awaitDecode");
+                    decoding[i].get();
+                }
+                uploadOne(pending[i]);
+                // Freed as it is consumed, so the window's footprint stays the window's size.
+                pending[i]._image = VkmImageData{};
+                pending[i]._mipLevels.clear();
+                pending[i]._mipLevels.shrink_to_fit();
+
+                const size_t next = i + windowSize;
+                if (next < pending.size())
+                {
+                    startDecode(next);
+                }
+            }
+        }
+#endif // VKM_PLATFORM_WASM
+
+        const auto slotFor = [&](const std::string& path, bool srgb) -> uint32_t {
+            const auto existing = uploaded.find(std::make_pair(path, srgb));
+            return (existing != uploaded.end()) ? existing->second : INVALID_VALUE32;
         };
 
         // Per-material handles regardless of bindless: a set-3 table binds the texture itself
@@ -740,6 +872,10 @@ namespace
         _materialDirtyFirst = 0;
         _materialDirtyEnd = 0;
 
+        // Before the failure check below: the batch holds staging buffers the GPU is still reading,
+        // and this function must not return with one open either way.
+        driver->endSetupBatch();
+
         if (slotsExhausted)
         {
             return fail(outError, "The bindless texture array is exhausted while uploading material textures");
@@ -749,6 +885,7 @@ namespace
 
     bool VkmScene::build(VkmDriverBase* driver, VkmPipelineStateManager* pipelineStateManager, std::string* outError)
     {
+        VKM_PROFILE_SCOPE("Scene::build");
         VKM_ASSERT(driver != nullptr, "VkmScene::build requires a driver");
         VKM_ASSERT(pipelineStateManager != nullptr, "VkmScene::build requires a pipeline state manager");
 
@@ -1078,6 +1215,7 @@ namespace
 
     bool VkmScene::buildAccelerationStructures(VkmDriverBase* driver, std::string* outError)
     {
+        VKM_PROFILE_SCOPE("Scene::buildAccelerationStructures");
         VKM_ASSERT(driver != nullptr, "VkmScene::buildAccelerationStructures requires a driver");
 
         if ((driver->getDriverCapabilityFlags() & VkmDriverCapabilityFlags::RayTracing) == 0)
@@ -1094,6 +1232,10 @@ namespace
         }
 
         _meshStructures.assign(_meshEntries.size(), VKM_INVALID_RESOURCE_HANDLE);
+        // One structure per mesh, each of which is otherwise its own submit and its own full GPU
+        // wait. Closed before the top-level build below, which reads every one of them: ending the
+        // batch waits for the whole GPU, which is the ordering the top level needs.
+        driver->beginSetupBatch();
         for (size_t entry = 0; entry < _meshEntries.size(); ++entry)
         {
             const MeshEntry& meshEntry = _meshEntries[entry];
@@ -1118,6 +1260,7 @@ namespace
                 indexViewName.c_str());
             if (vertexView == VKM_INVALID_RESOURCE_HANDLE || indexView == VKM_INVALID_RESOURCE_HANDLE)
             {
+                driver->endSetupBatch();
                 releaseAccelerationStructures(driver);
                 return fail(outError, "Failed to view the geometry pool for " + debugName);
             }
@@ -1143,11 +1286,13 @@ namespace
             VkmAccelerationStructure* blas = driver->newAccelerationStructure(blasInfo);
             if (blas == nullptr)
             {
+                driver->endSetupBatch();
                 releaseAccelerationStructures(driver);
                 return fail(outError, "Failed to build " + debugName);
             }
             _meshStructures[entry] = blas->getHandle();
         }
+        driver->endSetupBatch();
 
         VkmAccelerationStructureInfo tlasInfo{};
         tlasInfo._type = VkmAccelerationStructureType::TopLevel;

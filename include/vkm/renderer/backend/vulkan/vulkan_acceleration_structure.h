@@ -30,6 +30,8 @@ namespace vkm
         bool initialize(VkmResourceHandle handle, const VkmAccelerationStructureInfo& info) override final;
         bool updateInstances(const std::vector<VkmAccelerationStructureInstance>& instances) override final;
 
+        void onSetupBuildCompleted() override final;
+
         /*
         * What a build needs to know about this structure, for the one caller that records one:
         * VkmCommandBufferVulkan::onBuildAccelerationStructure.

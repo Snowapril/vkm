@@ -3,6 +3,7 @@
 #include <vkm/renderer/scene/gltf_importer.h>
 
 #include <vkm/base/common.h>
+#include <vkm/base/cpu_profiler.h>
 
 #include <cgltf/cgltf.h>
 #include <glm/geometric.hpp>
@@ -320,6 +321,7 @@ namespace vkm
                          std::string* outError,
                          const VkmGltfImportOptions& options)
     {
+        VKM_PROFILE_SCOPE("Gltf::import");
         if (outModel == nullptr)
         {
             return fail(outError, "outModel must not be null");

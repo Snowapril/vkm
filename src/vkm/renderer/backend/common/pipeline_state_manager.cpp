@@ -3,6 +3,7 @@
 #include <vkm/renderer/backend/common/pipeline_state_manager.h>
 
 #include <vkm/base/common.h>
+#include <vkm/base/cpu_profiler.h>
 #include <vkm/base/subprocess.h>
 #include <vkm/renderer/backend/common/driver.h>
 #include <vkm/renderer/backend/common/pipeline_state_object.h>
@@ -73,6 +74,7 @@ namespace vkm
 
         for (const VkmPipelineStateDescriptor& variant : *variants)
         {
+            VKM_PROFILE_SCOPE("Driver::newPipelineState");
             VkmPipelineStateBase* pipelineState = _driver->newPipelineState(variant, shaderCacheDir, outError);
             if (pipelineState == nullptr)
             {

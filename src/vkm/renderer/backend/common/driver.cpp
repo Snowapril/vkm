@@ -448,6 +448,103 @@ namespace vkm
         return stagingBuffer;
     }
 
+    void VkmDriverBase::beginSetupBatch()
+    {
+        VKM_ASSERT(!_setupBatchOpen, "beginSetupBatch: a setup batch is already open");
+        _setupBatchOpen = true;
+    }
+
+    void VkmDriverBase::endSetupBatch()
+    {
+        _setupBatchOpen = false;
+        if (_setupCommandBuffer != nullptr)
+        {
+            flushSetupCommandBuffer();
+        }
+    }
+
+    VkmCommandBufferBase* VkmDriverBase::acquireSetupCommandBuffer()
+    {
+        if (_setupCommandBuffer != nullptr)
+        {
+            return _setupCommandBuffer;
+        }
+
+        VkmCommandQueueBase* commandQueue = getCommandQueue(VkmCommandQueueType::Graphics, 0);
+        VkmCommandBufferBase* commandBuffer = commandQueue->getCommandBufferPool()->allocate();
+        if (commandBuffer == nullptr)
+        {
+            VKM_DEBUG_ERROR("acquireSetupCommandBuffer: the command buffer pool is exhausted");
+            return nullptr;
+        }
+        commandBuffer->beginCommandBuffer();
+        _setupCommandBuffer = commandBuffer;
+        return commandBuffer;
+    }
+
+    void VkmDriverBase::retireAfterSetupSubmit(VkmResourceHandle handle)
+    {
+        _setupStagingBuffers.push_back(handle);
+    }
+
+    void VkmDriverBase::retireAfterSetupSubmit(VkmAccelerationStructure* structure)
+    {
+        _setupBuiltStructures.push_back(structure);
+    }
+
+    bool VkmDriverBase::submitSetupCommandBuffer(const uint64_t recordedBytes)
+    {
+        _setupPendingBytes += recordedBytes;
+        if (_setupBatchOpen && _setupPendingBytes < kSetupBatchFlushBytes)
+        {
+            return true;
+        }
+        return flushSetupCommandBuffer();
+    }
+
+    bool VkmDriverBase::flushSetupCommandBuffer()
+    {
+        if (_setupCommandBuffer == nullptr)
+        {
+            return true;
+        }
+
+        VkmCommandQueueBase* commandQueue = getCommandQueue(VkmCommandQueueType::Graphics, 0);
+        VkmCommandBufferBase* commandBuffer = _setupCommandBuffer;
+        // Cleared before the wait, so a reentrant call from anything the wait runs cannot see a
+        // command buffer that is already on its way to the queue.
+        _setupCommandBuffer = nullptr;
+        _setupPendingBytes = 0;
+
+        commandBuffer->endCommandBuffer();
+
+        CommandSubmitInfo submitInfo;
+        submitInfo.commandBuffers[0] = commandBuffer;
+        submitInfo.commandBufferCount = 1;
+        const VkmGpuEventTimelineObject submitResult = commandQueue->submit(submitInfo);
+        if (submitResult._gpuEventTimeline != nullptr)
+        {
+            submitResult._gpuEventTimeline->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
+        }
+        commandQueue->getCommandBufferPool()->release(commandBuffer);
+
+        // Only now: every staging buffer here was the source of a copy the submission just ran,
+        // and releasing one earlier would destroy memory the GPU was still reading.
+        for (const VkmResourceHandle staging : _setupStagingBuffers)
+        {
+            _renderResourcePool->releaseResource(staging);
+        }
+        _setupStagingBuffers.clear();
+
+        for (VkmAccelerationStructure* structure : _setupBuiltStructures)
+        {
+            structure->onSetupBuildCompleted();
+        }
+        _setupBuiltStructures.clear();
+
+        return true;
+    }
+
     bool VkmDriverBase::uploadToBuffer(VkmResourceHandle dstBuffer, const void* data, uint64_t size, uint64_t dstOffset, VkmResourceUploadMode mode)
     {
         VkmBuffer* buffer = _renderResourcePool->getResource<VkmBuffer>(dstBuffer);
@@ -507,24 +604,15 @@ namespace vkm
         stagingBuffer->unmap();
         stagingBuffer->flush(0, size);
 
-        VkmCommandQueueBase* commandQueue = getCommandQueue(VkmCommandQueueType::Graphics, 0);
-        VkmCommandBufferBase* commandBuffer = commandQueue->getCommandBufferPool()->allocate();
-        commandBuffer->beginCommandBuffer();
-        commandBuffer->copyBuffer(stagingBuffer->getHandle(), dstBuffer, 0, dstOffset, size);
-        commandBuffer->endCommandBuffer();
-
-        CommandSubmitInfo submitInfo;
-        submitInfo.commandBuffers[0] = commandBuffer;
-        submitInfo.commandBufferCount = 1;
-        VkmGpuEventTimelineObject submitResult = commandQueue->submit(submitInfo);
-        if (submitResult._gpuEventTimeline != nullptr)
+        VkmCommandBufferBase* commandBuffer = acquireSetupCommandBuffer();
+        if (commandBuffer == nullptr)
         {
-            submitResult._gpuEventTimeline->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
+            _renderResourcePool->releaseResource(stagingBuffer->getHandle());
+            return false;
         }
-        commandQueue->getCommandBufferPool()->release(commandBuffer);
-
-        _renderResourcePool->releaseResource(stagingBuffer->getHandle());
-        return true;
+        commandBuffer->copyBuffer(stagingBuffer->getHandle(), dstBuffer, 0, dstOffset, size);
+        retireAfterSetupSubmit(stagingBuffer->getHandle());
+        return submitSetupCommandBuffer(size);
     }
 
     bool VkmDriverBase::uploadToTexture(VkmResourceHandle dstTexture, const void* data, uint64_t size,
@@ -573,24 +661,15 @@ namespace vkm
         stagingBuffer->unmap();
         stagingBuffer->flush(0, size);
 
-        VkmCommandQueueBase* commandQueue = getCommandQueue(VkmCommandQueueType::Graphics, 0);
-        VkmCommandBufferBase* commandBuffer = commandQueue->getCommandBufferPool()->allocate();
-        commandBuffer->beginCommandBuffer();
-        commandBuffer->copyBufferToTexture(stagingBuffer->getHandle(), dstTexture, 0, mipLevel, arrayLayer);
-        commandBuffer->endCommandBuffer();
-
-        CommandSubmitInfo submitInfo;
-        submitInfo.commandBuffers[0] = commandBuffer;
-        submitInfo.commandBufferCount = 1;
-        VkmGpuEventTimelineObject submitResult = commandQueue->submit(submitInfo);
-        if (submitResult._gpuEventTimeline != nullptr)
+        VkmCommandBufferBase* commandBuffer = acquireSetupCommandBuffer();
+        if (commandBuffer == nullptr)
         {
-            submitResult._gpuEventTimeline->waitIdle(MAX_GPU_TIMEOUT_PER_FRAME);
+            _renderResourcePool->releaseResource(stagingBuffer->getHandle());
+            return false;
         }
-        commandQueue->getCommandBufferPool()->release(commandBuffer);
-
-        _renderResourcePool->releaseResource(stagingBuffer->getHandle());
-        return true;
+        commandBuffer->copyBufferToTexture(stagingBuffer->getHandle(), dstTexture, 0, mipLevel, arrayLayer);
+        retireAfterSetupSubmit(stagingBuffer->getHandle());
+        return submitSetupCommandBuffer(size);
     }
 
     VkmTextureReadbackResult VkmDriverBase::readbackTexture(VkmResourceHandle textureHandle, uint32_t arrayLayer)

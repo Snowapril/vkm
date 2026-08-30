@@ -28,6 +28,8 @@ namespace vkm
 
         bool initialize(VkmResourceHandle handle, const VkmAccelerationStructureInfo& info) override final;
         bool updateInstances(const std::vector<VkmAccelerationStructureInstance>& instances) override final;
+
+        void onSetupBuildCompleted() override final;
         uint64_t getAllocatedSize() const override final { return _structureSize; }
         void setDebugName(const char* name) override final;
 
