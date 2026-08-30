@@ -334,101 +334,6 @@ namespace vkmtest
     }
 
 
-    // CPU mirrors of deferred_lighting.hlsl's GGX terms. Shared with the shader on purpose: what
-    // the specular reference below tests is the representative-point APPROXIMATION, not the BRDF
-    // formula, so both sides must evaluate the same BRDF or the comparison measures the wrong
-    // thing.
-    inline float ggxDistribution(float nDotH, float roughness)
-    {
-        const float a = roughness * roughness;
-        const float a2 = a * a;
-        const float denom = nDotH * nDotH * (a2 - 1.0f) + 1.0f;
-        return a2 / std::max(3.14159265f * denom * denom, 1e-7f);
-    }
-
-    inline float ggxVisibility(float nDotV, float nDotL, float roughness)
-    {
-        const float a = roughness * roughness;
-        const float a2 = a * a;
-        const float lambdaV = nDotL * std::sqrt(nDotV * nDotV * (1.0f - a2) + a2);
-        const float lambdaL = nDotV * std::sqrt(nDotL * nDotL * (1.0f - a2) + a2);
-        return 0.5f / std::max(lambdaV + lambdaL, 1e-7f);
-    }
-
-    inline float schlick(float vDotH, float f0)
-    {
-        return f0 + (1.0f - f0) * std::pow(std::max(0.0f, 1.0f - vDotH), 5.0f);
-    }
-
-    /*
-    * @brief The specular response to one emissive triangle, by integrating over its AREA.
-    * @details Ground truth for the representative-point approximation: the exact
-    * integral of GGX * cos over the polygon, which is precisely what the shader cannot compute in
-    * closed form and stands in for with a single point. The residual between the two is the
-    * approximation's error, which is the number the gates report rather than assume.
-    *
-    * Same quadrature as numericFormFactor, and the same caveat: convergence degrades as the
-    * shading point approaches the emitter.
-    */
-    inline float numericAreaSpecular(const glm::vec3& p0, const glm::vec3& p1, const glm::vec3& p2,
-                                     const glm::vec3& point, const glm::vec3& normal,
-                                     const glm::vec3& viewDirection, float roughness, float f0,
-                                     uint32_t steps)
-    {
-        const glm::vec3 e1 = p1 - p0;
-        const glm::vec3 e2 = p2 - p0;
-        const glm::vec3 cross = glm::cross(e1, e2);
-        const float area = 0.5f * glm::length(cross);
-        if (area <= 0.0f)
-        {
-            return 0.0f;
-        }
-        const glm::vec3 lightNormal = cross / (2.0f * area);
-        const float nDotV = std::abs(glm::dot(normal, viewDirection)) + 1e-5f;
-
-        double sum = 0.0;
-        uint32_t accepted = 0;
-        for (uint32_t i = 0; i < steps; ++i)
-        {
-            for (uint32_t j = 0; j < steps; ++j)
-            {
-                const float u = (static_cast<float>(i) + 0.5f) / static_cast<float>(steps);
-                const float v = (static_cast<float>(j) + 0.5f) / static_cast<float>(steps);
-                if (u + v > 1.0f)
-                {
-                    continue;
-                }
-                ++accepted;
-                const glm::vec3 onLight = p0 + e1 * u + e2 * v;
-                const glm::vec3 toLight = onLight - point;
-                const float distanceSquared = glm::dot(toLight, toLight);
-                if (distanceSquared <= 1.0e-8f)
-                {
-                    continue;
-                }
-                const glm::vec3 direction = toLight / std::sqrt(distanceSquared);
-                const float nDotL = glm::dot(normal, direction);
-                if (nDotL <= 0.0f)
-                {
-                    continue;
-                }
-                const glm::vec3 half = glm::normalize(viewDirection + direction);
-                const float nDotH = std::max(0.0f, glm::dot(normal, half));
-                const float vDotH = std::max(0.0f, glm::dot(viewDirection, half));
-                const float brdf = ggxDistribution(nDotH, roughness) *
-                                   ggxVisibility(nDotV, nDotL, roughness) * schlick(vDotH, f0);
-                const float cosLight = std::abs(glm::dot(lightNormal, -direction));
-                sum += static_cast<double>(brdf) * static_cast<double>(nDotL) *
-                       static_cast<double>(cosLight) / static_cast<double>(distanceSquared);
-            }
-        }
-        if (accepted == 0)
-        {
-            return 0.0f;
-        }
-        return static_cast<float>(sum * (static_cast<double>(area) / static_cast<double>(accepted)));
-    }
-
     /*
     * Gate 1: emitters wholly above the receiver plane, checked against the Lambert edge-sum the
     * NEE gate already uses. Broad coverage -- thousands of texels -- but it cannot reach the
@@ -475,19 +380,6 @@ namespace vkmtest
                             needetail::projectedSolidAngle(needetail::kEmitterA, hit, up);
                 expected += needetail::kEmitterB._radiance * (needetail::kFloorAlbedo / 3.14159265f) *
                             needetail::projectedSolidAngle(needetail::kEmitterB, hit, up);
-                // The specular lobe, integrated exactly. Small on this fully rough dielectric
-                // floor, but not zero -- leaving it out would charge the shader for a term the
-                // reference simply did not model.
-                const glm::vec3 viewDirection = glm::normalize(render._eye - hit);
-                for (const vkm::VkmLightTableTriangle& tri : render._triangles)
-                {
-                    const float spec = numericAreaSpecular(
-                        glm::vec3(tri._p0[0], tri._p0[1], tri._p0[2]),
-                        glm::vec3(tri._p1[0], tri._p1[1], tri._p1[2]),
-                        glm::vec3(tri._p2[0], tri._p2[1], tri._p2[2]), hit, up, viewDirection,
-                        /*roughness=*/1.0f, /*f0=*/0.04f, /*steps=*/32u);
-                    expected += glm::vec3(tri._radiance[0], tri._radiance[1], tri._radiance[2]) * spec;
-                }
                 if (expected.x <= 1.0e-3f)
                 {
                     continue;
@@ -505,10 +397,8 @@ namespace vkmtest
         MESSAGE("area light: " << checked << " floor texels, worst relative error " << worstRelative);
         CHECK(checked > 200);
         /*
-        * The diffuse half is exact and the specular half is Karis's representative point, so what
-        * remains is that approximation's error against the exactly integrated lobe, plus the
-        * half-texel drift between the CPU's reconstructed floor point and the GPU's. Measured,
-        * then margined.
+        * The integral is exact, so what remains is the half-texel drift between the CPU's
+        * reconstructed floor point and the GPU's, plus fp16 storage.
         */
         CHECK(worstRelative < 0.03);
     }
@@ -559,20 +449,16 @@ namespace vkmtest
                 }
 
                 const glm::vec3 up(0.0f, 1.0f, 0.0f);
-                const glm::vec3 viewDirection = glm::normalize(render._eye - hit);
                 float formFactor = 0.0f;
-                float specular = 0.0f;
                 for (const vkm::VkmLightTableTriangle& tri : render._triangles)
                 {
                     const glm::vec3 a(tri._p0[0], tri._p0[1], tri._p0[2]);
                     const glm::vec3 b(tri._p1[0], tri._p1[1], tri._p1[2]);
                     const glm::vec3 c(tri._p2[0], tri._p2[1], tri._p2[2]);
                     formFactor += numericFormFactor(a, b, c, hit, up, /*steps=*/96u);
-                    specular += numericAreaSpecular(a, b, c, hit, up, viewDirection,
-                                                    /*roughness=*/1.0f, /*f0=*/0.04f, /*steps=*/32u);
                 }
                 const float radiance = render._triangles[0]._radiance[0];
-                const float expected = radiance * ((kFloorAlbedo / 3.14159265f) * formFactor + specular);
+                const float expected = radiance * (kFloorAlbedo / 3.14159265f) * formFactor;
                 if (expected <= 1.0e-3f)
                 {
                     continue;

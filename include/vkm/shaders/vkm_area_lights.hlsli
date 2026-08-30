@@ -14,15 +14,13 @@
 // receives radiance * (albedo/pi) * the polygon's PROJECTED SOLID ANGLE, and that is what
 // vkmAreaLightFormFactor returns.
 //
-// The specular half is NOT exact, and the difference is worth stating plainly. There is no closed
-// form for a GGX lobe over a polygon; LTC gets one by warping the polygon through a fitted M^-1,
-// and those fitted tables are data this tree does not have. What is here instead is Karis's
-// representative point: replace the emitter by the single point on it the mirror direction reaches,
-// evaluate ordinary punctual GGX there, and widen the lobe by the angle the emitter subtends. So
-// the diffuse term is the truth and the specular term is an approximation whose error is measured
-// rather than assumed -- see the area-light gates.
+// Diffuse only. There is no closed form for a GGX lobe over a polygon; LTC gets one by warping the
+// polygon through a fitted M^-1, and those tables are data this tree does not have. Karis's
+// representative point stood in for them briefly and is gone again: it measured 38.7% error against
+// exact integration outside its small-source regime, and the branchy closest-point-on-triangle it
+// needs crashed lavapipe's shader compiler. TODO.md carries both findings.
 //
-// Occlusion is not part of either. A polygon integral says how much of the hemisphere the emitter
+// Occlusion is not part of it. A polygon integral says how much of the hemisphere the emitter
 // covers, not what stands in the way -- shadowing an area light needs a separate visibility term
 // (the traced tier's shadow rays, or a soft-shadow technique the raster tier does not have).
 // TODO.md records that.
@@ -163,118 +161,6 @@ float vkmAreaLightFormFactor(VkmAreaLight light, float3 worldPosition, float3 no
     const float sum = vkmAreaLightEdge(na, nb) + vkmAreaLightEdge(nb, nc) +
                       vkmAreaLightEdge(nc, nd) + vkmAreaLightEdge(nd, na);
     return abs(sum) * 0.5;
-}
-
-/*
-* @brief Closest point to `target` inside a triangle. Named `target` because `point` is an
-* HLSL reserved word -- a geometry-stage input modifier, the same trap `triangle` is.
-* @details Ericson's barycentric region test: check the three vertex Voronoi regions, then the
-* three edge regions, and fall through to the face interior. Branchy rather than clever because
-* the alternative -- clamping barycentrics computed for the plane projection -- is simply wrong
-* outside the triangle, and the outside is the case this exists for.
-*/
-float3 vkmClosestPointOnTriangle(float3 p0, float3 p1, float3 p2, float3 target)
-{
-    const float3 ab = p1 - p0;
-    const float3 ac = p2 - p0;
-    const float3 ap = target - p0;
-    const float d1 = dot(ab, ap);
-    const float d2 = dot(ac, ap);
-    if (d1 <= 0.0 && d2 <= 0.0) { return p0; }
-
-    const float3 bp = target - p1;
-    const float d3 = dot(ab, bp);
-    const float d4 = dot(ac, bp);
-    if (d3 >= 0.0 && d4 <= d3) { return p1; }
-
-    const float vc = d1 * d4 - d3 * d2;
-    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0)
-    {
-        return p0 + ab * (d1 / max(d1 - d3, 1e-8));
-    }
-
-    const float3 cp = target - p2;
-    const float d5 = dot(ab, cp);
-    const float d6 = dot(ac, cp);
-    if (d6 >= 0.0 && d5 <= d6) { return p2; }
-
-    const float vb = d5 * d2 - d1 * d6;
-    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0)
-    {
-        return p0 + ac * (d2 / max(d2 - d6, 1e-8));
-    }
-
-    const float va = d3 * d6 - d5 * d4;
-    if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0)
-    {
-        return p1 + (p2 - p1) * ((d4 - d3) / max((d4 - d3) + (d5 - d6), 1e-8));
-    }
-
-    const float denom = 1.0 / max(va + vb + vc, 1e-8);
-    return p0 + ab * (vb * denom) + ac * (vc * denom);
-}
-
-/*
-* @brief The point on the emitter that stands in for the whole of it, for the specular lobe.
-* @details Karis's representative point (Real Shading in Unreal Engine 4). The specular response
-* of a polygon has no closed form the way the diffuse one does, so the polygon is replaced by the
-* single point on it that the mirror direction reflects towards -- the point that dominates the
-* lobe -- and the ordinary punctual GGX is evaluated there.
-*
-* Where the mirror ray misses the polygon, the plane hit is clamped back into it, so a surface
-* whose reflection points past the emitter still sees the nearest part of it rather than nothing.
-* A ray that runs parallel to the plane, or points away from it, falls back to the closest point
-* to the shading position, which is what the grazing case wants.
-*
-* This is an approximation, unlike vkmAreaLightFormFactor. It is exact only for a mirror; it
-* drifts as roughness rises and the true lobe stops being dominated by one direction, which is
-* what vkmAreaLightSpecularWidening compensates for.
-*/
-float3 vkmAreaLightRepresentativePoint(VkmAreaLight light, float3 worldPosition, float3 reflectionDir)
-{
-    const float3 p0 = light.p0.xyz;
-    const float3 edge1 = light.p1.xyz - p0;
-    const float3 edge2 = light.p2.xyz - p0;
-    const float3 planeNormal = cross(edge1, edge2);
-
-    const float denominator = dot(reflectionDir, planeNormal);
-    const float numerator = dot(p0 - worldPosition, planeNormal);
-    // Both signs are allowed: the emitter is two-sided, so a reflection reaching its back face is
-    // still reaching it. Only a ray running parallel to the plane has no hit at all.
-    float3 candidate = worldPosition;
-    if (abs(denominator) > 1e-8)
-    {
-        const float t = numerator / denominator;
-        candidate = t > 0.0 ? worldPosition + reflectionDir * t : worldPosition;
-    }
-    return vkmClosestPointOnTriangle(p0, light.p1.xyz, light.p2.xyz, candidate);
-}
-
-/*
-* @brief Roughness widened to stand in for the emitter's angular size, and its energy rescale.
-* @details A punctual light evaluated at the representative point concentrates all of the
-* emitter's energy into one direction, which on a smooth surface is a pinpoint highlight where
-* the truth is a broad one the size of the emitter. Karis's normalization widens the GGX lobe by
-* the angle the light subtends and rescales so the total energy is unchanged:
-*
-*     alpha' = saturate(alpha + r / (2 d)),  energy = (alpha / alpha')^2
-*
-* `r` is the radius of a disc of the triangle's area -- an emitter has no radius, so the
-* equivalent disc is the honest stand-in.
-* @param light The emitter.
-* @param distanceToLight Distance from the shading point to the representative point.
-* @param alpha Roughness squared, as the GGX terms here use it.
-* @return x = widened alpha, y = the energy rescale.
-*/
-float2 vkmAreaLightSpecularWidening(VkmAreaLight light, float distanceToLight, float alpha)
-{
-    const float3 edge1 = light.p1.xyz - light.p0.xyz;
-    const float3 edge2 = light.p2.xyz - light.p0.xyz;
-    const float area = 0.5 * length(cross(edge1, edge2));
-    const float radius = sqrt(area / 3.14159265);
-    const float widened = saturate(alpha + radius / max(2.0 * distanceToLight, 1e-6));
-    const float ratio = alpha / max(widened, 1e-6);
-    return float2(widened, ratio * ratio);
 }
 
 #endif // VKM_AREA_LIGHTS_HLSLI

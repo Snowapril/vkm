@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Snowapril
 //
 // Fullscreen deferred lighting: samples the G-buffer and shades it with every punctual light,
-// plus every emissive triangle as an area light -- exact diffuse, approximate specular.
+// plus every emissive triangle as an analytic area light (diffuse only).
 //
 // This is the first pass in the engine that reads the G-buffer, and it is deliberately built the
 // way the GI passes will be:
@@ -181,8 +181,6 @@ float4 PSMain(VSOutput input) : SV_TARGET0
     * not what stands between. An occluded area light still lights this surface here, which is
     * exactly the discrepancy against the traced tier that TODO.md records.
     */
-    const float3 reflectionDir = reflect(-viewDirection, shadingNormal);
-    const float alpha = roughness * roughness;
     for (uint areaIndex = 0; areaIndex < g_Light.areaLightCount.x; ++areaIndex)
     {
         const VkmAreaLight areaLight = g_Light.areaLights[areaIndex];
@@ -194,35 +192,6 @@ float4 PSMain(VSOutput input) : SV_TARGET0
         }
         shaded += areaLight.radiance.rgb * diffuseColor * (1.0 / 3.14159265) * formFactor;
 
-        const float3 representative =
-            vkmAreaLightRepresentativePoint(areaLight, worldPosition, reflectionDir);
-        const float3 toRepresentative = representative - worldPosition;
-        const float representativeDistance = length(toRepresentative);
-        if (representativeDistance <= 1e-6)
-        {
-            continue;
-        }
-        const float3 areaLightDir = toRepresentative / representativeDistance;
-        const float areaNDotL = saturate(dot(shadingNormal, areaLightDir));
-        if (areaNDotL <= 0.0)
-        {
-            continue;
-        }
-
-        const float2 widening =
-            vkmAreaLightSpecularWidening(areaLight, representativeDistance, alpha);
-        // The widened alpha is fed back as a roughness because the GGX helpers here square what
-        // they are given; passing alpha directly would square it twice.
-        const float widenedRoughness = sqrt(widening.x);
-
-        const float3 areaHalf = normalize(viewDirection + areaLightDir);
-        const float areaNDotH = saturate(dot(shadingNormal, areaHalf));
-        const float areaVDotH = saturate(dot(viewDirection, areaHalf));
-        const float3 areaFresnel = fresnelSchlick(areaVDotH, f0);
-        const float3 areaSpecular = distributionGGX(areaNDotH, widenedRoughness) *
-                                    visibilitySmithGGX(nDotV, areaNDotL, widenedRoughness) *
-                                    areaFresnel * widening.y;
-        shaded += areaLight.radiance.rgb * areaSpecular * formFactor;
     }
 
     // Emission is what the surface adds on its own, on top of what the lights reflect off it --
