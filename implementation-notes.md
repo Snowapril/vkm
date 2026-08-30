@@ -6069,11 +6069,72 @@ in full. The Debug profile's 3.6 s is `-O0` overhead across the whole filter, no
 
 ### Not addressed
 
-- `Scene::decodeImage` is 683 ms of a 1205 ms warm Release startup, the single largest item.
-  Parallelizing it needs a thread pool the repo does not have, which the plan explicitly scoped
-  out.
 - `VkmScene::uploadMaterialTextures` uploads every mip level of every texture and then lets the
   streamer immediately unmap the finer ones (`scene.cpp`'s "the first streaming ticks are what
   take the finer levels back off"). Uploading only the levels the streamer will keep would skip
   most of this work rather than making it faster.
 - Startup still runs entirely before `NSApplicationMain`, so it is all black-screen time.
+
+## 2026-08-30 — Parallel material-texture decode
+
+`Scene::decodeImage` was 683 ms of a 1046 ms warm Release gi startup once the setup batch landed,
+and the note above recorded it as blocked on "a thread pool the repo does not have". That was
+wrong: Taskflow 4.1.0 is vendored at `dependencies/src/taskflow` and `CMakeLists.txt:270` already
+puts it on the include path. Nothing used it.
+
+`VkmScene::uploadMaterialTextures` interleaved two unrelated halves in one lambda: a JPEG decode
+plus a CPU mip chain (expensive, touches nothing shared) and texture creation plus uploads
+(cheap, all driver state). Splitting them is what makes the first half parallelizable.
+
+- The unique `(path, sRGB)` images are collected first, in the order the material loop asks for
+  them, so bindless slots are still handed out in exactly the order a serial decode produced.
+- `decodeOne` runs on Taskflow workers. `uploadOne` runs on the calling thread and nowhere else:
+  the setup batch holds one command buffer, and Vulkan command pools want a single thread.
+- `slotFor` is now a map lookup, so the per-material loop is unchanged in shape.
+
+### The window, and why it is not a batch
+
+The first attempt decoded a fixed wave of `num_workers` images, waited for all of them, uploaded
+them, and repeated. It gave 1046 -> 829 ms, but the per-wave timings showed why that was most of
+the win left on the table: 39, 31, 45, 53, **127, 162**, 71 ms. Every worker waits on the slowest
+image in its wave, and this machine has 5 P-cores and 6 E-cores, so "slowest" is routine rather
+than exceptional.
+
+Replaced with a sliding window: `windowSize = num_workers + 2` decodes are in flight, and the
+upload loop starts one more each time it consumes one. A worker that finishes early takes the next
+image instead of idling, and the uploads overlap the decoding instead of following it.
+
+The window is refilled from the calling thread, deliberately. A bounded producer/consumer that
+blocks *inside* a task -- on a semaphore or a condition variable -- can deadlock here: every worker
+can end up holding a task that is waiting for the window to advance, leaving no worker to run the
+task the consumer is waiting for. Handing work out from the consumer side cannot get into that
+state, and it needs no synchronization primitive of its own.
+
+The window is also the memory bound. A decoded 1024x1024 image plus its mip chain is ~5.3 MB, so
+decoding Sponza's 69 images up front would cost ~370 MB of peak footprint (and a 4K scene far
+more). At 13 in flight it is ~69 MB; measured peak resident is 2.00 GiB against 1.86-2.16 GiB
+before, i.e. unchanged.
+
+### Result
+
+`Engine::initializeBackendDriver`, warm Release, six runs: 390, 399, 473, 504, 506, 620 ms --
+median ~490 ms, against **1046 ms** before this change and **1205 ms** before any of this session's
+work. `Scene::uploadMaterialTextures` goes 959 ms -> ~260-380 ms.
+
+Correctness rests on the shape of the change rather than on a screenshot compare. `decodeOne` runs
+the same `loadImageFromFile` and `vkmBuildMipChain` on the same file, per image, with nothing shared
+between images, so the decoded bytes are identical by construction; and `pending` is built in the
+order the material loop first asks for each image, so bindless slots and streamer entries are handed
+out in the order the serial path produced. Metal 354/354 (validation on) and Vulkan 338/338 pass.
+
+The gi sample's screenshot cannot serve as the oracle here, which is worth recording: **two runs of
+the same unmodified binary produce different PNGs**, at frame 6 and at frame 300 alike. Texture
+streaming residency follows wall-clock frame pacing, so what is resident when the capture happens
+varies run to run. An early compare that appeared byte-identical was coincidence -- two runs landing
+on the same streaming state -- not evidence.
+
+One thing the trace shows that is worth not misreading: summed `Scene::decodeImage` duration goes
+*up* under parallelism (683 ms -> ~2800 ms across 69 zones). Profile zones are wall-clock, so a
+zone on an E-core reports several times what the same work reports on a P-core, and eleven threads
+contending for memory bandwidth inflate all of them. Wall-clock time through the section is the
+number that fell.

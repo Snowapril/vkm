@@ -52,9 +52,9 @@
 - Metal's emit stage is the shared HLSL one (`scene_emit_draws.hlsl`) and its `drawIndirectCount` encodes one `drawPrimitives:indirectBuffer:` per candidate slot. The planned Metal-only variant — an MSL kernel filling an `MTLIndirectCommandBuffer` plus `executeCommandsInBuffer:indirectBuffer:` — is not implemented; it needs the emit dispatch to become a backend service (Vulkan/WebGPU dispatch the engine HLSL PSO, Metal dispatches an embedded metallib kernel) so `VkmScene` stays backend-free, and it needs `inheritBuffers` proven against an MTL4 argument table first.
 - WebGPU indirect batches encode `maxDrawCount` draws per frame; no render-bundle caching, so the per-draw encode cost is paid every frame.
 - The culling pass and the WebGPU emit path are compile-verified only: the GPU-driven path is pixel- and count-verified on Metal, and the WebGPU/wasm test path needs emsdk plus Chrome, which `run_tests.py` skips when they are absent.
-- `Scene::decodeImage` is 683 ms of a 1205 ms warm Release gi startup; parallelizing it needs a thread pool the engine does not have.
 - `VkmScene::uploadMaterialTextures` uploads every mip level, which the texture streamer's first ticks immediately unmap again.
 - The gi sample's whole scene load runs before `NSApplicationMain`, so all of it is black-screen time.
+- The gi sample's `--gv_gi_screenshot` capture is not reproducible: two runs of one binary differ at frame 6 and at frame 300, because texture streaming residency follows wall-clock frame pacing.
 - `VkmScene`'s dirty-range upload collapses to `[min, max]`, so two far-apart objects moving re-uploads every `VkmObjectData` that frame.
 - The culling pass tests one bounding sphere per object with no hierarchy, so a large object that straddles the frustum edge is never partially rejected, and there is no occlusion or LOD selection.
 - meshoptimizer clusterization is unused: `VkmSceneGeometryPool` is shaped to carry a meshlet pool (one more bindless slot, two more `MeshRange` fields) but nothing builds meshlets and there is no mesh-shader pipeline.
